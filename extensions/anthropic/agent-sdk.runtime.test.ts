@@ -190,7 +190,7 @@ afterEach(async () => {
 });
 
 describe("Anthropic Agent SDK runtime ownership", () => {
-  it("keeps selected SDK credentials on their private descriptor and isolates side questions", () => {
+  it("pins SDK identity, keeps selected credentials private, and isolates side questions", () => {
     const backend = buildAnthropicCliBackend();
     const base = {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -215,13 +215,19 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
     expect(credential).toEqual(
       expect.objectContaining({
-        env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+        env: {
+          CLAUDE_AGENT_SDK_VERSION: "0.3.232",
+          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+        },
         secretInput: expect.objectContaining({ fd: 3 }),
         execute: expect.any(Function),
       }),
     );
     expect(emptyCredential).toEqual(
-      expect.objectContaining({ env: {}, execute: expect.any(Function) }),
+      expect.objectContaining({
+        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.232" },
+        execute: expect.any(Function),
+      }),
     );
     expect(emptyCredential).not.toHaveProperty("secretInput");
     expect(sideQuestion).not.toHaveProperty("execute");

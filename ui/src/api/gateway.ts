@@ -294,9 +294,7 @@ export class GatewayBrowserClient {
               this.maxPayloadBytes !== undefined &&
               new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
             ) {
-              throw new Error(
-                "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-              );
+              throw new GatewayPayloadLimitError();
             }
             socket.send(data);
           },
@@ -745,5 +743,14 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
+  }
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
   }
 }

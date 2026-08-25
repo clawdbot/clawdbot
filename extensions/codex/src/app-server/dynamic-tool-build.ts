@@ -76,7 +76,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 
-/** Keeps paired-device filesystem and process ownership on its native exec-server. */
+/** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexNodePlacementToolConstructionPlan(
   sandbox: OpenClawSandboxContext | undefined,
   nativeToolSurfaceEnabled: boolean | undefined,
@@ -92,7 +92,7 @@ export function resolveCodexNodePlacementToolConstructionPlan(
   }
   if (!nativeToolSurfaceEnabled) {
     throw new Error(
-      "Codex paired-device remote execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
+      "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
     );
   }
   return {

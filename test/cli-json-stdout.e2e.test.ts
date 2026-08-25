@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +53,310 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
 }
 
 describe("cli json stdout contract", () => {
+  it.each([
+    {
+      name: "implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+    },
+    {
+      name: "explicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+    },
+    {
+      name: "automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+    },
+    {
+      name: "ordinary local validation failure",
+      args: ["cron", "edit", "job-1", "--command-cwd", "", "--json"],
+      message: "--command-cwd must not be blank",
+    },
+    {
+      name: "Gateway failure implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--port", "29793", "--token", "fixture-token"],
+      gatewayRequest: true,
+    },
+    {
+      name: "Gateway failure explicit JSON",
+      args: [
+        "cron",
+        "edit",
+        "job-1",
+        "--enable",
+        "--port",
+        "29793",
+        "--token",
+        "fixture-token",
+        "--json",
+      ],
+      gatewayRequest: true,
+    },
+    {
+      name: "forced Commander JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+      commander: true,
+    },
+    {
+      name: "dual-TTY implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY implicit JSON command sibling",
+      args: ["cron", "runs", "--id", "job-1", "--limit", "invalid"],
+      message: "Invalid --limit (must be a positive integer).",
+      tty: true,
+    },
+    {
+      name: "dual-TTY raw-output command sibling",
+      args: ["cron", "scratch", "job-1", "--set", "updated", "--unset"],
+      message: "choose only one of --set, --file, or --unset",
+      tty: true,
+    },
+    {
+      name: "dual-TTY explicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
+      tty: true,
+    },
+    {
+      name: "human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+    },
+    {
+      name: "dual-TTY human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+      tty: true,
+    },
+  ])("renders cron edit failures through the shared owner for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const stateDir = path.join(tempHome, "isolated-state");
+        const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+        const message =
+          "gatewayRequest" in testCase
+            ? gatewayError
+            : (testCase.message ?? "Choose --enable or --disable, not both");
+
+        expect(result.status, result.stderr).toBe(1);
+        if ("human" in testCase) {
+          if ("tty" in testCase) {
+            expect(result.stdout).toContain("OpenClaw");
+          } else {
+            expect(result.stdout).toBe("");
+          }
+        } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message },
+          });
+        }
+        expect(result.stderr).toContain(message);
+        if ("gatewayRequest" in testCase) {
+          expect(result.stderr).toContain(gatewayError);
+        } else {
+          expect(result.stderr).not.toContain(gatewayError);
+          await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        if ("tty" in testCase && !("human" in testCase)) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-cron-edit-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "invalid call params in JSON mode",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+    },
+    {
+      name: "invalid call params in human mode",
+      args: ["gateway", "call", "system-presence", "--params", "not-json"],
+      message: "--params must be valid JSON.",
+      human: true,
+    },
+    {
+      name: "invalid call params through forced Commander",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+      commander: true,
+    },
+    {
+      name: "invalid call params with dual TTYs",
+      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+      message: "--params must be valid JSON.",
+      tty: true,
+    },
+    {
+      name: "contradictory usage options in JSON mode",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+    },
+    {
+      name: "contradictory usage options in human mode",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents"],
+      message: "Use --agent or --all-agents, not both",
+      human: true,
+    },
+    {
+      name: "contradictory usage options through forced Commander",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+      commander: true,
+    },
+    {
+      name: "contradictory usage options with dual TTYs",
+      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
+      message: "Use --agent or --all-agents, not both",
+      tty: true,
+    },
+    {
+      name: "routed Gateway health config failure in JSON mode",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+    },
+    {
+      name: "Gateway health config failure in human mode",
+      args: ["gateway", "health", "--port", "29793"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      human: true,
+    },
+    {
+      name: "Gateway health config failure through forced Commander",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      commander: true,
+    },
+    {
+      name: "routed Gateway health config failure with dual TTYs",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      tty: true,
+    },
+    {
+      name: "specialized explicit Gateway authentication failure",
+      args: ["gateway", "call", "system-presence", "--url", "ws://127.0.0.1:29793", "--json"],
+      specializedAuth: true,
+    },
+  ])("renders Gateway query failures through the Gateway owner for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const stateDir = path.join(tempHome, "isolated-state");
+        const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("configReadFailure" in testCase
+              ? [
+                  'import fs from "node:fs";',
+                  "const originalExistsSync = fs.existsSync;",
+                  "fs.existsSync = function (target, ...args) {",
+                  '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
+                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  "  }",
+                  "  return originalExistsSync.call(this, target, ...args);",
+                  "};",
+                ]
+              : []),
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout).not.toContain(gatewayError);
+        expect(result.stderr).not.toContain(gatewayError);
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(testCase.message);
+        } else if ("specializedAuth" in testCase) {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: {
+              type: "gateway_credentials_required",
+              message: [
+                "gateway url override requires explicit credentials",
+                "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+                "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
+                `Config: ${configPath}`,
+              ].join("\n"),
+            },
+          });
+          expect(result.stderr).toBe("");
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.message },
+          });
+          if ("configReadFailure" in testCase && !("commander" in testCase)) {
+            expect(result.stderr).toContain(testCase.message);
+          } else {
+            expect(result.stderr).not.toContain(testCase.message);
+          }
+        }
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-gateway-query-json-failure-e2e-" },
+    );
+  });
+
   it.each([
     {
       name: "bare report with parent JSON",
@@ -226,6 +531,222 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).toBe("");
       },
       { prefix: "openclaw-hooks-json-success-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "piped stdout", tty: false },
+    { name: "dual TTYs", tty: true },
+  ])("writes successful telemetry show JSON to clean $name", async ({ tty }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const ttyPreload = Buffer.from(
+          [
+            'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+            'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, ["telemetry", "show", "--json"], {
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          ...(tty
+            ? {
+                NODE_OPTIONS: `--import=data:text/javascript;base64,${ttyPreload}`,
+                FORCE_COLOR: "1",
+              }
+            : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        const payload = JSON.parse(result.stdout);
+        expect(payload).toEqual({
+          featureStatsEnabled: false,
+          reason: "never-asked",
+          endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+          lastPingAt: null,
+          request: {
+            method: "GET",
+            userAgent: expect.stringMatching(/^openclaw\/[^ ]+ \(.+; gateway\)$/u),
+          },
+        });
+        expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
+        expect(result.stderr).not.toContain('"featureStatsEnabled"');
+      },
+      { prefix: "openclaw-telemetry-json-success-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "leaf JSON", args: ["models", "refresh", "--json"] },
+    { name: "parent JSON", args: ["models", "--json", "refresh"] },
+    { name: "human output", args: ["models", "refresh"], human: true },
+    {
+      name: "forced Commander JSON",
+      args: ["models", "refresh", "--json"],
+      commander: true,
+    },
+    {
+      name: "dual-TTY JSON",
+      args: ["models", "refresh", "--json"],
+      tty: true,
+    },
+  ])("renders model catalog refresh failures canonically for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+            "globalThis.fetch.mock = {};",
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+        const message = "Remote catalog refresh failed: Error: offline fixture";
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message },
+          });
+        }
+        expect(result.stderr).toContain(message);
+        expect(result.stderr.split(message)).toHaveLength(2);
+        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-models-refresh-json-failure-e2e-" },
+    );
+  });
+
+  it("preserves model catalog refresh success payloads and persisted rows", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "openclaw.json");
+        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        const generatedAt = Date.now() + 60_000;
+        const bundle = {
+          schemaVersion: 1,
+          generatedAt,
+          sourceCommit: "autoqa-model-catalog-fixture",
+          providers: { openai: { models: [{ id: "gpt-5.6-luna" }] } },
+        };
+        const updatedBundle = { ...bundle, generatedAt: generatedAt + 1_000 };
+        const preloadFor = (response: "initial" | "updated" | "unchanged" | "failure") => {
+          const fixture = response === "initial" ? bundle : updatedBundle;
+          const fetchResponse =
+            response === "failure"
+              ? 'throw new Error("offline fixture");'
+              : response === "unchanged"
+                ? "return new Response(null, { status: 304 });"
+                : `return new Response(JSON.stringify(${JSON.stringify(fixture)}), { headers: { etag: '\"fixture\"' } });`;
+          return Buffer.from(
+            [
+              'import net from "node:net";',
+              'import module from "node:module";',
+              'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+              "const createRequire = module.createRequire;",
+              'module.createRequire = (...args) => new Proxy(createRequire(...args), { apply(target, receiver, request) { return String(request[0]).endsWith("/build-info.json") ? { builtAt: "2020-01-01T00:00:00.000Z" } : Reflect.apply(target, receiver, request); } });',
+              "module.syncBuiltinESMExports();",
+              `globalThis.fetch = async () => { ${fetchResponse} };`,
+              "globalThis.fetch.mock = {};",
+            ].join("\n"),
+          ).toString("base64");
+        };
+        const runRefresh = (
+          args: string[],
+          response: "initial" | "updated" | "unchanged" | "failure",
+        ) =>
+          runBuiltCli(tempHome, ["models", ...args], {
+            NODE_OPTIONS: `--import=data:text/javascript;base64,${preloadFor(response)}`,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          });
+        const readCatalogRow = () => {
+          const database = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            return database.prepare("SELECT * FROM model_catalog_remote WHERE id = 1").get();
+          } finally {
+            database.close();
+          }
+        };
+
+        const human = runRefresh(["refresh"], "initial");
+        expect(human.status, human.stderr).toBe(0);
+        expect(human.stdout).toContain("Remote catalog refresh: updated (1 providers, 1 models;");
+        expect(human.stdout).toContain(
+          "A running Gateway applies the updated catalog after its next restart.",
+        );
+
+        const updated = runRefresh(["refresh", "--json"], "updated");
+        expect(updated.status, updated.stderr).toBe(0);
+        expect(JSON.parse(updated.stdout)).toEqual({
+          status: "updated",
+          generatedAt: updatedBundle.generatedAt,
+          providers: 1,
+          models: 1,
+        });
+
+        const unchanged = runRefresh(["--json", "refresh"], "unchanged");
+        expect(unchanged.status, unchanged.stderr).toBe(0);
+        expect(JSON.parse(unchanged.stdout)).toEqual({
+          status: "unchanged",
+          generatedAt: updatedBundle.generatedAt,
+          providers: 1,
+          models: 1,
+        });
+        const persistedRow = readCatalogRow();
+        expect(persistedRow).toMatchObject({
+          generated_at: updatedBundle.generatedAt,
+          bundle_json: JSON.stringify(updatedBundle),
+        });
+
+        const failure = runRefresh(["refresh", "--json"], "failure");
+        expect(failure.status, failure.stderr).toBe(1);
+        expect(JSON.parse(failure.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Remote catalog refresh failed: Error: offline fixture",
+          },
+        });
+        expect(readCatalogRow()).toEqual(persistedRow);
+
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({ models: { catalogRefresh: { enabled: false } } })}\n`,
+          "utf8",
+        );
+        const disabled = runRefresh(["refresh", "--json"], "failure");
+        expect(disabled.status, disabled.stderr).toBe(0);
+        expect(JSON.parse(disabled.stdout)).toEqual({
+          status: "disabled",
+          providers: 0,
+          models: 0,
+        });
+        expect(readCatalogRow()).toEqual(persistedRow);
+      },
+      { prefix: "openclaw-models-refresh-persistence-e2e-" },
     );
   });
 

@@ -80,23 +80,19 @@ export function registerBrowserInspectCommands(
         return;
       }
       try {
-        const result = await callBrowserRequest<{ path: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/screenshot",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId: normalizeOptionalString(targetId),
-              fullPage: Boolean(opts.fullPage),
-              ref: normalizeOptionalString(opts.ref),
-              element: normalizeOptionalString(opts.element),
-              labels: Boolean(opts.labels),
-              type,
-            },
+        const result = await callBrowserRequest<{ path: string }>(parent, {
+          method: "POST",
+          path: "/screenshot",
+          query: profile ? { profile } : undefined,
+          body: {
+            targetId: normalizeOptionalString(targetId),
+            fullPage: Boolean(opts.fullPage),
+            ref: normalizeOptionalString(opts.ref),
+            element: normalizeOptionalString(opts.element),
+            labels: Boolean(opts.labels),
+            type,
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (parent?.json) {
           defaultRuntime.writeJson(result);
           return;
@@ -170,15 +166,11 @@ export function registerBrowserInspectCommands(
           mode,
           profile,
         };
-        const result = await callBrowserRequest<SnapshotResult>(
-          parent,
-          {
-            method: "GET",
-            path: "/snapshot",
-            query,
-          },
-          { timeoutMs: 20000 },
-        );
+        const result = await callBrowserRequest<SnapshotResult>(parent, {
+          method: "GET",
+          path: "/snapshot",
+          query,
+        });
 
         if (opts.out) {
           const payload =

@@ -261,6 +261,7 @@ const hoisted = vi.hoisted(() => ({
   reloadEvents: [] as string[],
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
   resetModelCatalogCache: vi.fn(() => {}),
+  advancePreparedModelRuntimeConfig: vi.fn((_cfg: OpenClawConfig) => {}),
   markPreparedModelRuntimeSnapshotsStale: vi.fn(
     (
       _reason?: string,
@@ -372,6 +373,8 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
+  advancePreparedModelRuntimeConfig: (cfg: OpenClawConfig) =>
+    hoisted.advancePreparedModelRuntimeConfig(cfg),
   markPreparedModelRuntimeSnapshotsStale: (
     reason?: string,
     options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
@@ -931,6 +934,7 @@ afterEach(() => {
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.assertOpenClawDatabasesReadyForRestart.mockClear();
   hoisted.reloadEvents.length = 0;
+  hoisted.advancePreparedModelRuntimeConfig.mockClear();
   hoisted.markPreparedModelRuntimeSnapshotsStale.mockClear();
   hoisted.rejectPendingPreparedModelRuntimeReplacement.mockClear();
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
@@ -949,11 +953,18 @@ afterEach(() => {
 
 async function runManagedOwnershipScenario(params: {
   kind: "noop" | "hot" | "restart";
+  getPluginMetadataSnapshot?: ManagedReloaderParams["getPluginMetadataSnapshot"];
   loggingChanged?: boolean;
   queueRevert: boolean;
+  secretProviderChanged?: boolean;
+  /** Makes secrets activation resolve to a different object than it received. */
+  resolveToDistinctConfig?: boolean;
 }) {
   const initialConfig = {
     gateway: { reload: { mode: "off" as const } },
+    ...(params.secretProviderChanged
+      ? { secrets: { providers: { default: { source: "file" as const, path: "/old" } } } }
+      : {}),
     hooks: { enabled: true, token: "test-token", path: "/old" },
   } satisfies OpenClawConfig;
   const configA = {
@@ -967,6 +978,12 @@ async function runManagedOwnershipScenario(params: {
       token: "test-token",
       path: params.kind === "noop" ? "/old" : "/a",
     },
+    ...(params.kind === "noop"
+      ? { talk: { realtime: { instructions: "updated instructions" } } }
+      : {}),
+    ...(params.secretProviderChanged
+      ? { secrets: { providers: { default: { source: "file" as const, path: "/new" } } } }
+      : {}),
     ...(params.loggingChanged ? { logging: { level: "debug" as const } } : {}),
   } satisfies OpenClawConfig;
   const configB = structuredClone(initialConfig);
@@ -982,6 +999,7 @@ async function runManagedOwnershipScenario(params: {
   const reconcileTerminalSessions = vi.fn();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   let queuedB = false;
+  const resolvedConfigs: OpenClawConfig[] = [];
   const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => {
     if (params.queueRevert && !queuedB) {
       queuedB = true;
@@ -989,11 +1007,19 @@ async function runManagedOwnershipScenario(params: {
         createConfigWriteNotification(configB, "hash-b", 2, "runtime-b", "source-b"),
       );
     }
-    return snapshot(config);
+    if (!params.resolveToDistinctConfig) {
+      return snapshot(config);
+    }
+    // Real secret resolution returns a NEW config object. Returning the input
+    // unchanged is what let a rebuild against the source candidate look correct.
+    const resolved = { ...config } as OpenClawConfig;
+    resolvedConfigs.push(resolved);
+    return snapshot(resolved);
   });
   activateSecretsRuntimeSnapshot(snapshot(initialConfig));
   const reloader = startManagedGatewayConfigReloader({
     initialConfig,
+    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
     readSnapshot: vi.fn(async () => createValidConfigSnapshot(configB, "hash-b")) as never,
     subscribeToWrites: captureConfigWriteListener(writeListenerRef, false),
     activateRuntimeSecrets: activateRuntimeSecrets as never,
@@ -1015,6 +1041,7 @@ async function runManagedOwnershipScenario(params: {
       configA,
       configB,
       prepareTerminalConfig,
+      resolvedConfigs,
       reconcileTerminalSessions,
       requestRecoveryRestart,
     };
@@ -1024,9 +1051,74 @@ async function runManagedOwnershipScenario(params: {
 }
 
 describe("managed reload transaction ownership", () => {
+  it("advances prepared model config stamps for a no-op publication", async () => {
+    const result = await runManagedOwnershipScenario({ kind: "noop", queueRevert: false });
+
+    expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
+      result.configA,
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds prepared model owners for a no-op secret-provider publication", async () => {
+    const pluginMetadataSnapshot = {} as never;
+    const result = await runManagedOwnershipScenario({
+      kind: "noop",
+      queueRevert: false,
+      secretProviderChanged: true,
+      getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
+    });
+
+    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledExactlyOnceWith(
+      result.configA,
+      {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot,
+      },
+    );
+  });
+
+  it("rebuilds a no-op secret-provider publication from the resolved committed config", async () => {
+    // Regression: the rebuild used the source-derived candidate. When secret
+    // resolution yields a different object, the rebuilt owner carries an
+    // identity no reader supplies, so every strict catalog read rejects it --
+    // reviving the failure on the very fallback meant to be safe.
+    const pluginMetadataSnapshot = {} as never;
+    const result = await runManagedOwnershipScenario({
+      kind: "noop",
+      queueRevert: false,
+      secretProviderChanged: true,
+      resolveToDistinctConfig: true,
+      getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
+    });
+
+    const resolved = result.resolvedConfigs.at(-1);
+    expect(resolved).toBeDefined();
+    expect(resolved).not.toBe(result.configA);
+    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+    // Identity, not deep equality: the resolved config is a clone of the source
+    // candidate, so toHaveBeenCalledWith would match either object and prove
+    // nothing about which one the rebuild actually used.
+    const [rebuiltWith, options] = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0] ?? [];
+    expect(rebuiltWith).toBe(resolved);
+    expect(rebuiltWith).not.toBe(result.configA);
+    expect(options).toEqual({
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot,
+    });
+  });
+
   it("applies a current in-process hot config", async () => {
     const result = await runManagedOwnershipScenario({ kind: "hot", queueRevert: false });
 
+    // Hot plans rebuild prepared owners. Advancing the stamp in place is reserved for no-op plans.
+    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
     expect(result.activateRuntimeSecrets).toHaveBeenCalledOnce();
     expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
     expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();

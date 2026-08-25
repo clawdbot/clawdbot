@@ -66,6 +66,7 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  createSummaryQualityRetentionPlan,
   extractOpaqueIdentifiers,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -94,6 +95,8 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
+const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
@@ -338,8 +341,17 @@ type CompactionSuffix = {
   contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
 };
 
+type SummaryQualityRetention = {
+  auditSummary: string;
+  identifiers: string[];
+  latestAsk: string | null;
+  requiredAskContext: string;
+  identifierPolicy: "strict" | "off" | "custom";
+};
+
 function assembleSuffix(parts: {
   splitTurnSection?: ContextSection;
+  generatedSplitTurnSection?: string;
   preservedTurnsSection?: ContextSection;
   toolFailureSection?: string;
   fileOpsSummary?: string;
@@ -613,6 +625,7 @@ function budgetCompactionSummary(
   summaryBody: string,
   suffixInput: string | CompactionSuffix,
   maxChars: number,
+  qualityRetention?: SummaryQualityRetention,
 ) {
   const suffix = normalizeCompactionSuffix(suffixInput);
   const joined = `${summaryBody}${suffix.text}`;
@@ -623,13 +636,22 @@ function budgetCompactionSummary(
       bodyBudget: maxChars,
       bodyTrimmed: false,
       suffixTrimmed: false,
+      qualityRetentionInfeasible: false,
     };
   }
 
-  const bodyFloor = Math.min(summaryBody.length, Math.max(1, Math.ceil(maxChars / 2)));
+  const retentionPlan = qualityRetention
+    ? createSummaryQualityRetentionPlan(summaryBody, SUMMARY_TRUNCATED_MARKER, qualityRetention)
+    : null;
+  const bodyCapacity = retentionPlan ? maxChars : summaryBody.length;
+  const bodyFloor = Math.min(
+    bodyCapacity,
+    maxChars,
+    Math.max(1, Math.ceil(maxChars / 2), retentionPlan?.minimumChars ?? 0),
+  );
   const suffixReservation = Math.min(suffix.text.length, maxChars);
-  const bodySlot = Math.min(summaryBody.length, Math.max(bodyFloor, maxChars - suffixReservation));
-  const cappedBody = capCompactionSummary(summaryBody, bodySlot);
+  const bodySlot = Math.min(bodyCapacity, Math.max(bodyFloor, maxChars - suffixReservation));
+  const cappedBody = retentionPlan?.render(bodySlot) ?? capCompactionSummary(summaryBody, bodySlot);
   const suffixBudget = Math.max(0, maxChars - cappedBody.length);
   const cappedSuffix = capCompactionSuffix(suffix, suffixBudget);
   return {
@@ -638,6 +660,7 @@ function budgetCompactionSummary(
     bodyBudget: bodySlot,
     bodyTrimmed: cappedBody.length < summaryBody.length,
     suffixTrimmed: cappedSuffix.length < suffix.text.length,
+    qualityRetentionInfeasible: retentionPlan !== null && retentionPlan.minimumChars > maxChars,
   };
 }
 
@@ -912,6 +935,33 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => vo
   return `${heading}${cappedSummary}`;
 }
 
+function formatRequiredAskContext(summary: string): string {
+  const originalRequestHeading = "## Original Request";
+  const earlyProgressHeading = "## Early Progress";
+  const originalRequestStart = summary.indexOf(originalRequestHeading);
+  const originalRequestEnd =
+    originalRequestStart >= 0
+      ? summary.indexOf(earlyProgressHeading, originalRequestStart + originalRequestHeading.length)
+      : -1;
+  const source =
+    originalRequestStart >= 0
+      ? summary
+          .slice(
+            originalRequestStart + originalRequestHeading.length,
+            originalRequestEnd >= 0 ? originalRequestEnd : undefined,
+          )
+          .trim()
+      : summary.trim();
+  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
+    return source;
+  }
+  const contentBudget =
+    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
+  const headBudget = Math.floor(contentBudget / 2);
+  const tailBudget = contentBudget - headBudget;
+  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
+}
+
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
   for (const message of messages.toReversed()) {
     if (message.role !== "user") {
@@ -1069,6 +1119,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       identifierInstructions: runtime?.identifierInstructions,
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
+    const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
@@ -1079,23 +1130,35 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let workspaceContextPromise: Promise<string> | undefined;
     const finalizeSummaryText = async (
       body: string,
-      sections: { splitTurnSection?: ContextSection; preservedTurnsSection?: ContextSection },
+      sections: {
+        splitTurnSection?: ContextSection;
+        generatedSplitTurnSection?: string;
+        preservedTurnsSection?: ContextSection;
+      },
       producerLosses: ReadonlySet<CompactionLoss> = new Set(),
+      qualityRetention?: SummaryQualityRetention,
     ) => {
       workspaceContextPromise ??= readWorkspaceContextForSummary(
         runtime?.postCompactionSections,
         runtime?.workspaceDir,
       );
       const suffix = assembleSuffix({
-        ...sections,
+        splitTurnSection: sections.splitTurnSection,
+        generatedSplitTurnSection: sections.generatedSplitTurnSection,
+        preservedTurnsSection: sections.preservedTurnsSection,
         toolFailureSection,
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const finalized = budgetCompactionSummary(body, suffix, MAX_COMPACTION_SUMMARY_CHARS);
+      const finalized = budgetCompactionSummary(
+        body,
+        suffix,
+        MAX_COMPACTION_SUMMARY_CHARS,
+        qualityRetention,
+      );
       const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
-        if (section?.truncatedLoss) {
+        if (typeof section !== "string" && section?.truncatedLoss) {
           losses.add(section.truncatedLoss);
         }
       }
@@ -1213,7 +1276,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         thinkingLevel,
         streamFn,
       };
-      const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
@@ -1317,6 +1379,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let splitTurnSectionLocal = "";
+        let splitTurnAskContextLocal = "";
         let historySummary = "";
         const producerLosses = new Set<CompactionLoss>();
         try {
@@ -1342,6 +1405,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
               producerLosses.add("split-turn-tail");
             });
+            splitTurnAskContextLocal = formatRequiredAskContext(prefixSummary);
           }
         } catch (attemptError) {
           if (signal?.aborted) {
@@ -1360,16 +1424,31 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
           throw attemptError;
         }
-        const structuralSummary = appendSummarySection(
+        const unbudgetedSummary = appendSummarySection(
           historySummary,
           splitTurnSectionLocal ? `\n\n${splitTurnSectionLocal}` : "",
         );
+        const structuralSummary = qualityGuardEnabled ? historySummary : unbudgetedSummary;
         const finalized = await finalizeSummaryText(
           structuralSummary,
           {
+            generatedSplitTurnSection:
+              qualityGuardEnabled && splitTurnSectionLocal
+                ? `\n\n${splitTurnSectionLocal}`
+                : undefined,
             preservedTurnsSection: preservedTurnsSectionLocal,
           },
           producerLosses,
+          qualityGuardEnabled
+            ? {
+                auditSummary: unbudgetedSummary,
+                identifiers,
+                latestAsk: latestUserAsk,
+                requiredAskContext:
+                  splitTurnAskContextLocal || formatRequiredAskContext(latestUserAsk ?? ""),
+                identifierPolicy,
+              }
+            : undefined,
         );
 
         const canRegenerate =
@@ -1377,6 +1456,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
+        }
+        if (finalized.qualityRetentionInfeasible) {
+          log.warn(
+            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
+              `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
+          );
+          setCompactionSafeguardCancelReason(
+            ctx.sessionManager,
+            "Compaction safeguard required facts exceed the finalized summary budget.",
+          );
+          return { cancel: true };
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,

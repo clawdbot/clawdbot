@@ -29,7 +29,7 @@ import {
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
   selectSmallLiveItems,
-} from "./live-model-filter.js";
+} from "./test-helpers/live-model-dynamic-candidates.js";
 
 const baseModel = (): Model =>
   ({

@@ -1343,8 +1343,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),
@@ -2545,6 +2552,50 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       error: "UNAVAILABLE: gateway lost final output",
     });
     expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+    expect(result.terminal).toBeUndefined();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

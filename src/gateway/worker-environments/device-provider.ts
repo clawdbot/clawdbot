@@ -134,7 +134,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const provider: WorkerProvider<"internal"> = {
+  const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,

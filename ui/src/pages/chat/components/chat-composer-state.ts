@@ -5,24 +5,14 @@ import {
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
+import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
+import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
   return {
-    slashMenuOpen: false,
-    slashMenuItems: [],
-    slashMenuIndex: 0,
-    slashMenuMode: "command",
-    slashMenuCommand: null,
-    slashMenuArgItems: [],
-    slashCommandRefreshPending: false,
-    skillMenuOpen: false,
-    skillMenuItems: [],
-    skillMenuIndex: 0,
-    skillMenuTarget: null,
-    skillCommandRefreshPending: false,
-    skillCommandRefreshGeneration: 0,
-    skillCommandRefreshTargetStart: null,
+    ...createSlashMenuState(),
+    ...createSkillMenuState(),
     composerComposing: false,
     composingDraft: null,
     composerInputIntentKey: null,

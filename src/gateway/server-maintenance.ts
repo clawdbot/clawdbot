@@ -15,6 +15,7 @@ import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sql
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
+import { generateSecureInt } from "../infra/secure-random.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
@@ -136,8 +137,7 @@ export function startGatewayMaintenanceTimers(params: {
     logger: params.logHealth,
   });
 
-  let nextTelemetryCheckAtMs =
-    Date.now() + Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
+  let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
   // periodic keepalive
   const tickInterval = setInterval(() => {
     void hostThawRecovery.tick();
@@ -146,7 +146,7 @@ export function startGatewayMaintenanceTimers(params: {
       nextTelemetryCheckAtMs =
         now +
         TELEMETRY_MAINTENANCE_INTERVAL_MS +
-        Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
+        generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
       void checkTelemetryUpdate(params.getRuntimeConfig(), { surface: "gateway" }).catch(() => {});
     }
     const payload = { ts: now };

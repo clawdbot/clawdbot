@@ -72,6 +72,23 @@ describe("cron edit command", () => {
     });
   });
 
+  it("rethrows contradictory options in JSON mode without accessing the Gateway", async () => {
+    const originalArgv = process.argv;
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    process.argv = ["node", "openclaw", "cron", "edit", "job-1", "--json"];
+    try {
+      await expect(
+        createCronProgram()
+          .parseAsync(["edit", "job-1", "--enable", "--disable", "--json"], { from: "user" })
+          .then(() => undefined),
+      ).rejects.toThrow("Choose --enable or --disable, not both");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = originalArgv;
+      exitSpy.mockRestore();
+    }
+  });
+
   it("updates the human-readable display name without changing the job name", async () => {
     await createCronProgram().parseAsync(["edit", "job-1", "--display-name", "Daily summary"], {
       from: "user",

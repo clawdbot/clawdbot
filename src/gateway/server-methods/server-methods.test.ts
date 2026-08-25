@@ -35,7 +35,7 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
-  projectRecentChatDisplayMessages,
+  projectChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
@@ -1146,7 +1146,7 @@ describe("sanitizeChatHistoryMessages", () => {
   });
 });
 
-describe("projectRecentChatDisplayMessages", () => {
+describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
@@ -1333,7 +1333,7 @@ describe("projectRecentChatDisplayMessages", () => {
   ];
 
   it.each(displayErrorCases)("$name", ({ message, content, visibleText }) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       { role: "assistant", stopReason: "error", timestamp: 1, ...message },
     ]);
     expect(result).toEqual([
@@ -1387,7 +1387,7 @@ describe("projectRecentChatDisplayMessages", () => {
   ])(
     "projects empty context-overflow assistant errors with recovery guidance: $name",
     ({ fields }) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         {
           role: "assistant",
           content: [],
@@ -1421,7 +1421,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ["input_text", ""],
     ["input_text", "NO_REPLY"],
   ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [{ type, text }],
@@ -1439,7 +1439,7 @@ describe("projectRecentChatDisplayMessages", () => {
   it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         {
           role: "assistant",
           content: [{ type: "text", text }],
@@ -1489,7 +1489,7 @@ describe("projectRecentChatDisplayMessages", () => {
   it.each([undefined, ""])(
     "projects repaired stream errors with errorMessage %j as a generic safe failure",
     (errorMessage) => {
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
           stopReason: "error",
           ...(errorMessage === undefined ? {} : { errorMessage }),
@@ -1535,7 +1535,7 @@ describe("projectRecentChatDisplayMessages", () => {
       expected: [{ type: "text", text: "I'm running on ollama-cloud now." }],
     },
   ])("removes an internal stream-error prefix from same-message $name", ({ content, expected }) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content,
@@ -1559,7 +1559,7 @@ describe("projectRecentChatDisplayMessages", () => {
 
   it("keeps intentional mentions of the internal fallback inside a real assistant reply", () => {
     const text = `Diagnostic note: ${STREAM_ERROR_FALLBACK_TEXT}`;
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(text, { stopReason: "error" }),
     ]);
 
@@ -1570,7 +1570,7 @@ describe("projectRecentChatDisplayMessages", () => {
     "keeps literal fallback-prefixed assistant text without error provenance %j",
     (stopReason) => {
       const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
-      const result = projectRecentChatDisplayMessages([
+      const result = projectChatDisplayMessages([
         assistantHistoryMessage(text, stopReason ? { stopReason } : {}),
       ]);
 
@@ -1579,7 +1579,7 @@ describe("projectRecentChatDisplayMessages", () => {
   );
 
   it("removes a synthetic error prefix while preserving displayable image content", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [
@@ -1596,7 +1596,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("drops a repaired stream-error placeholder before same-turn assistant content", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("hello", { timestamp: 1 }),
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
         stopReason: "error",
@@ -1613,7 +1613,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a genuine failed turn before a new forwarded inter-session turn", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
         stopReason: "error",
         timestamp: 1,
@@ -1631,7 +1631,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps genuine stream-error failures when a hidden assistant row has text", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, { stopReason: "error" }),
       assistantHistoryMessage("internal-only assistant content", { display: false }),
     ]);
@@ -1644,7 +1644,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a stream-error placeholder when the next user turn starts first", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, { stopReason: "error", timestamp: 1 }),
       userHistoryMessage("retry", { timestamp: 2 }),
       assistantHistoryMessage("fresh answer", { timestamp: 3 }),
@@ -1661,7 +1661,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1691,13 +1691,13 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("projects empty sessions_send inter-session turns before empty user filtering", () => {
-    const result = projectRecentChatDisplayMessages([sessionsSendHistoryMessage("", 1)]);
+    const result = projectChatDisplayMessages([sessionsSendHistoryMessage("", 1)]);
 
     expect(result).toEqual([projectedSessionsSendHistoryMessage("", 1)]);
   });
 
   it("does not let sessions_send inter-session turns clear pending message-tool mirrors", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [
@@ -1762,7 +1762,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps forwarded sessions_send control-token text visible after stripping provenance", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1784,15 +1784,13 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps forwarded sessions_send heartbeat-looking text visible", () => {
-    const result = projectRecentChatDisplayMessages([
-      sessionsSendHistoryMessage("HEARTBEAT_OK", 1),
-    ]);
+    const result = projectChatDisplayMessages([sessionsSendHistoryMessage("HEARTBEAT_OK", 1)]);
 
     expect(result).toEqual([projectedSessionsSendHistoryMessage("HEARTBEAT_OK", 1)]);
   });
 
   it("keeps forwarded sessions_send heartbeat-looking text visible after a heartbeat prompt", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage(HEARTBEAT_PROMPT, { timestamp: 1 }),
       sessionsSendHistoryMessage("HEARTBEAT_OK", 2),
     ]);
@@ -1805,7 +1803,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("marks only the first visible message after each hidden heartbeat input", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage(HEARTBEAT_PROMPT, { __openclaw: { seq: 1 } }),
       assistantHistoryMessage("First run started.", { __openclaw: { seq: 2 } }),
       assistantHistoryMessage("First run finished.", { __openclaw: { seq: 3 } }),
@@ -1842,7 +1840,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("does not project user-authored sessions_send envelope text without provenance", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: [
@@ -1879,7 +1877,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const visibleText = "forwarded report";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       sessionsSendHistoryMessage(visibleText, 1),
       ttsSupplementHistoryMessage({ textSha256 }, 2),
     ]);
@@ -1891,7 +1889,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectRecentChatDisplayMessages(
+    const result = projectChatDisplayMessages(
       [
         userHistoryMessage("fix it", { timestamp: 1 }),
         {
@@ -1958,7 +1956,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("projects pure keyed commentary as a durable preamble", () => {
-    const result = projectRecentChatDisplayMessages(
+    const result = projectChatDisplayMessages(
       [
         userHistoryMessage("status", { timestamp: 1 }),
         {
@@ -1996,7 +1994,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("good morning", { timestamp: 1 }),
       assistantHistoryMessage("Good morning.", {
         provider: "openclaw",
@@ -2022,7 +2020,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "user",
         content: "yo big boy",
@@ -2053,7 +2051,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps a channel-final delivery mirror after a filtered user turn", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("Repeated reply", {
         provider: "openai",
         model: "gpt-5.5",
@@ -2078,7 +2076,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       deliveryMirrorHistoryMessage("Repeated reply", "message-1", 1),
       deliveryMirrorHistoryMessage("Repeated reply", "message-2", 2),
     ]);
@@ -2087,7 +2085,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps channel-final mirrors after unmarked assistant replies", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("Repeated reply", {
         provider: "openai",
         model: "gpt-5.5",
@@ -2100,7 +2098,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       sessionsSendHistoryMessage("Forwarded status", 1),
       deliveryMirrorHistoryMessage("Forwarded status", "message-forwarded", 2),
     ]);
@@ -2121,7 +2119,7 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage("First answer.", {
         provider: "openclaw",
         model: "acp-runtime",
@@ -2146,27 +2144,6 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 2,
       }),
     ]);
-  });
-
-  it("applies history limits after dropping display-hidden messages", () => {
-    const result = projectRecentChatDisplayMessages(
-      [
-        { role: "user", content: "older visible", timestamp: 1 },
-        { role: "assistant", content: "older answer", timestamp: 2 },
-        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
-        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
-        {
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          content: "hidden runtime context",
-          display: false,
-          timestamp: 5,
-        },
-      ],
-      { maxMessages: 1 },
-    );
-
-    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 
   it.each([
@@ -2202,7 +2179,7 @@ describe("projectRecentChatDisplayMessages", () => {
       expectedPath: undefined,
     },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       { role: "user", content: "", timestamp: 1, ...testCase.message },
       { role: "user", content: "", timestamp: 2 },
     ]);
@@ -2219,7 +2196,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const spokenText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       userHistoryMessage("first", { timestamp: 1 }),
       assistantHistoryMessage(visibleText, { timestamp: 2 }),
       userHistoryMessage("second", { timestamp: 3 }),
@@ -2237,7 +2214,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
-    const result = projectRecentChatDisplayMessages(
+    const result = projectChatDisplayMessages(
       [
         assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
@@ -2259,7 +2236,7 @@ describe("projectRecentChatDisplayMessages", () => {
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
     const ttsSupplement = { textSha256 };
 
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       assistantHistoryMessage(visibleText, { timestamp: 1 }),
       userHistoryMessage("again", { timestamp: 2 }),
       ttsSupplementHistoryMessage(ttsSupplement, 3, visibleText),

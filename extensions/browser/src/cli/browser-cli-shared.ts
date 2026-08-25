@@ -5,7 +5,6 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
@@ -128,27 +127,4 @@ export async function callBrowserRequest<T>(
     throw new Error("Unexpected browser.request response");
   }
   return payload as T;
-}
-
-/** Sends a Browser resize action through the shared request helper. */
-export async function callBrowserResize(
-  opts: BrowserParentOpts,
-  params: { profile?: string; width: number; height: number; targetId?: string },
-  extra?: { timeoutMs?: number },
-): Promise<unknown> {
-  return callBrowserRequest(
-    opts,
-    {
-      method: "POST",
-      path: "/act",
-      query: params.profile ? { profile: params.profile } : undefined,
-      body: {
-        kind: "resize",
-        width: params.width,
-        height: params.height,
-        targetId: normalizeOptionalString(params.targetId),
-      },
-    },
-    extra,
-  );
 }

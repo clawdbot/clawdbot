@@ -25,6 +25,7 @@ import {
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import anthropicPluginPackage from "./package.json" with { type: "json" };
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -42,6 +43,10 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+// Agent SDK query() writes this value into process.env. Seed it before core
+// fingerprints the child env so the first resumed turn keeps its warm query.
+const CLAUDE_AGENT_SDK_VERSION =
+  anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"];
 const CLAUDE_CLI_DEFAULT_ARGS = [
   "-p",
   "--output-format",
@@ -218,6 +223,7 @@ export function buildAnthropicCliBackend(
       sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
+      freshSessionRecovery: "invalidated-only",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
@@ -244,12 +250,6 @@ export function buildAnthropicCliBackend(
         };
         const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-        const env = {
-          ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
-          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
-          ...authInput?.env,
-        };
         const agentSdkExecution =
           !isolatedCompletion && context.executionMode === "agent"
             ? {
@@ -259,6 +259,13 @@ export function buildAnthropicCliBackend(
                 },
               }
             : undefined;
+        const env = {
+          ...(agentSdkExecution ? { CLAUDE_AGENT_SDK_VERSION } : {}),
+          ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...authInput?.env,
+        };
         return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
           ? {
               env,

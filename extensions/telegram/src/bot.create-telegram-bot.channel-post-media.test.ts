@@ -223,9 +223,10 @@ function expectTypeOnlyMediaPayload(kind: string, rawBody = "") {
     media: [expect.objectContaining({ kind })],
     RawBody: rawBody,
   });
-  const media = payload.media as Array<{ path?: string }>;
+  const media = payload.media as Array<{ path?: string; fileName?: string }>;
   expect(media).toHaveLength(1);
   expect(media[0]?.path).toBeUndefined();
+  expect(media[0]?.fileName).toBeUndefined();
 }
 
 function setTelegramIngestGroupConfig(

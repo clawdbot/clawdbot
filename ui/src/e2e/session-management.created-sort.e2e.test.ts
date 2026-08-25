@@ -28,7 +28,9 @@ suite.define(() => {
       ...sessionRow(newestKey, "External newest", baseTime + 1_000),
       createdAt: baseTime + 1_000,
     };
-    const expectedVisibleKeys = [newestKey, ...olderRows.slice(0, 9).map((row) => row.key)];
+    // Sticky membership: rows the operator already saw stay visible when a
+    // newer session enters the page, so the full prior page remains.
+    const expectedVisibleKeys = [newestKey, ...olderRows.map((row) => row.key)];
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -76,7 +78,7 @@ suite.define(() => {
         .toEqual(expectedVisibleKeys);
       await captureUiProof(page, "sidebar-created-sort-after-refresh.png");
 
-      expect(await rows.count()).toBe(10);
+      expect(await rows.count()).toBe(11);
       expect(
         await rows.evaluateAll((elements) =>
           elements.map((element) => element.getAttribute("data-session-key")),

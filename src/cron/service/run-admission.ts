@@ -1,4 +1,3 @@
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -17,6 +16,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { recomputeJobNextRunAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
+import { runWithCronAdmission } from "./run-admission-capacity.js";
 import {
   activateServiceCronRunReceiptInDatabase,
   claimServiceCronRunReceiptInDatabase,
@@ -27,7 +27,10 @@ import {
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
-import { tryCreateCronTaskRun } from "./task-runs.js";
+import {
+  createCronOwnerExecutionIdentityAdmission,
+  tryCreateCronTaskRunHandle,
+} from "./task-runs.js";
 import {
   runsDetachedFromMainSession,
   type TimedCronRunOutcome,
@@ -35,88 +38,13 @@ import {
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
 
-export function resolveRunConcurrency(): number {
-  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
-}
-
-function acquireCronRunSlot(state: CronServiceState): () => void {
-  state.runAdmission.active += 1;
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    state.runAdmission.active -= 1;
-    dispatchWaiters(state);
-  };
-}
-
-function dispatchWaiters(state: CronServiceState): void {
-  const admission = state.runAdmission;
-  if (state.stopped) {
-    cancelCronRunAdmissionWaiters(state);
-    return;
-  }
-  const maxConcurrentRuns = resolveRunConcurrency();
-  while (admission.active < maxConcurrentRuns) {
-    const waiter = admission.waiters.shift();
-    if (!waiter) {
-      break;
-    }
-    waiter(acquireCronRunSlot(state));
-  }
-  if (admission.active < maxConcurrentRuns && admission.waiters.length === 0) {
-    const listener = admission.capacityListener;
-    admission.capacityListener = null;
-    if (listener) {
-      queueMicrotask(listener);
-    }
-  }
-}
-
-/**
- * Acquire only the slots currently available to scheduled work. Unlike the
- * waiter-based path used by direct runs, this never retains a timer batch while
- * the pool is saturated.
- */
-export function tryAcquireCronRunSlots(
-  state: CronServiceState,
-  requested: number,
-): Array<() => void> {
-  if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
-    return [];
-  }
-  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
-  return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
-}
-
-/** Keep the first wake-up until capacity release consumes or cancellation clears it. */
-export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
-  state.runAdmission.capacityListener ??= listener;
-}
-
-async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
-  const admission = state.runAdmission;
-  if (state.stopped) {
-    return null;
-  }
-  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
-    return acquireCronRunSlot(state);
-  }
-  return await new Promise<(() => void) | null>((resolve) => {
-    admission.waiters.push(resolve);
-  });
-}
-
-/** Wake queued work on stop so each caller can release its durable reservation. */
-export function cancelCronRunAdmissionWaiters(state: CronServiceState): void {
-  state.runAdmission.capacityListener = null;
-  const waiters = state.runAdmission.waiters.splice(0);
-  for (const waiter of waiters) {
-    waiter(null);
-  }
-}
+export {
+  cancelCronRunAdmissionWaiters,
+  resolveRunConcurrency,
+  runWithCronAdmission,
+  setCronRunCapacityListener,
+  tryAcquireCronRunSlots,
+} from "./run-admission-capacity.js";
 
 /** Track a persisted marker through shared admission and payload execution. */
 export function reserveQueuedCronRun(
@@ -543,25 +471,6 @@ export async function activateQueuedCronRun(params: {
   return { kind: "unavailable", reason: "stopped" };
 }
 
-/** Apply one service-level cap to every cron execution source. Queue waiters
- * keep their job reservation, then recheck scheduler state before execution.
- */
-export async function runWithCronAdmission<T>(
-  state: CronServiceState,
-  execute: () => Promise<T>,
-  acquiredRelease?: () => void,
-): Promise<{ kind: "admitted"; value: T } | { kind: "stopped" }> {
-  const release = acquiredRelease ?? (await acquireCronRunAdmission(state));
-  if (!release) {
-    return { kind: "stopped" };
-  }
-  try {
-    return { kind: "admitted", value: await execute() };
-  } finally {
-    release();
-  }
-}
-
 export async function executeQueuedCronRun(params: {
   state: CronServiceState;
   jobId: string;
@@ -663,12 +572,13 @@ export async function executeQueuedCronRun(params: {
     const executionJob = structuredClone(started.job);
     executionJob.state.runningAtMs = started.startedAt;
     executionJob.state.lastError = undefined;
-    const taskRunId = tryCreateCronTaskRun({
+    const taskRun = tryCreateCronTaskRunHandle({
       state,
       job: executionJob,
       startedAt: started.startedAt,
       publicRunId: started.runReceipt.receiptId,
     });
+    const taskRunId = taskRun?.runId;
     const activeJobMarker = markCronJobActive(executionJob.id, {
       preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(executionJob),
     });
@@ -694,6 +604,12 @@ export async function executeQueuedCronRun(params: {
           runId: taskRunId,
           activeJobMarker,
           runReceipt: started.runReceipt,
+          executionIdentity: createCronOwnerExecutionIdentityAdmission({
+            state,
+            runReceipt: started.runReceipt,
+            taskId: taskRun?.taskId,
+            flowId: taskRun?.flowId,
+          }),
         });
       const result = state.deps.runSchedulerOwned
         ? await state.deps.runSchedulerOwned(execute)

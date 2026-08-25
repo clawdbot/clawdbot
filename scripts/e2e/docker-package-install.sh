@@ -86,7 +86,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/bun-runtime bun@1.3.14 --no-fund --no-audit
+    npm install -g --prefix /tmp/bun-runtime bun@1.4.0 --no-fund --no-audit
     cd /repo
     BUN_BIN=/tmp/bun-runtime/bin/bun \
       OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0 \

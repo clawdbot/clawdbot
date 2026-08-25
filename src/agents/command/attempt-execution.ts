@@ -28,6 +28,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
+  loadSessionEntry,
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -1078,7 +1079,18 @@ export async function runAgentAttempt(params: {
                 ? {
                     onBeforeFreshCliSessionRetry: async (retry) => {
                       if (
-                        hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                        hasNewGeneratedMediaTaskForSessionKey(
+                          params.sessionKey,
+                          mediaTaskIdsBefore,
+                        ) ||
+                        getCliSessionBinding(
+                          loadSessionEntry({
+                            sessionKey: mutableCliSessionStore.sessionKey,
+                            storePath: mutableCliSessionStore.storePath,
+                            readConsistency: "latest",
+                          }),
+                          cliExecutionProvider,
+                        )?.sessionId !== retry.sessionId
                       ) {
                         return false;
                       }

@@ -471,21 +471,22 @@ describe("environment gateway methods", () => {
     expect(worker?.worker).not.toHaveProperty("sshEndpoint");
     expect(worker?.worker).not.toHaveProperty("keyRef");
     expect(service.list).toHaveBeenCalledOnce();
+    for (const profile of (payload as { profiles: Array<Record<string, unknown>> }).profiles) {
+      expect(profile).not.toHaveProperty("executionMode");
+      expect(profile).not.toHaveProperty("executionModes");
+    }
   });
 
   it("adds known provider capabilities to configured profile summaries", async () => {
+    const standardMachine = {
+      id: "standard",
+      label: "Standard",
+      cpu: 32,
+      memoryGb: 64,
+      default: true,
+    };
     const listMachineOptions = vi.fn(async (profileId: string) =>
-      profileId === "aws"
-        ? [
-            {
-              id: "standard",
-              label: "Standard",
-              cpu: 32,
-              memoryGb: 64,
-              default: true,
-            },
-          ]
-        : undefined,
+      profileId === "aws" ? [standardMachine] : undefined,
     );
     const [ok, payload] = await callEnvironmentMethod(
       "environments.list",
@@ -494,7 +495,7 @@ describe("environment gateway methods", () => {
         service: workerService({
           listMachineOptions,
           supportsExecutionMode: vi.fn(
-            (profileId, mode) => profileId === "aws" && mode === "remote-exec",
+            (profileId, mode) => profileId === "aws" || mode === "remote-exec",
           ),
         }),
       },
@@ -506,26 +507,19 @@ describe("environment gateway methods", () => {
         {
           id: "aws",
           providerId: "crabbox",
-          executionMode: "remote-exec",
-          machines: [
-            {
-              id: "standard",
-              label: "Standard",
-              cpu: 32,
-              memoryGb: 64,
-              default: true,
-            },
-          ],
+          executionMode: "worker-turn",
+          executionModes: ["worker-turn", "remote-exec"],
+          machines: [standardMachine],
         },
-        { id: "zeta", providerId: "static-ssh" },
+        {
+          id: "zeta",
+          providerId: "static-ssh",
+          executionMode: "remote-exec",
+          executionModes: ["remote-exec"],
+        },
       ],
     });
     expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
-    expect(
-      (payload as { profiles: Array<Record<string, unknown>> }).profiles.find(
-        (profile) => profile.id === "zeta",
-      ),
-    ).not.toHaveProperty("executionMode");
   });
 
   it("projects trust from recorded worker isolation without guessing unknown leases", () => {

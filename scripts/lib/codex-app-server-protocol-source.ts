@@ -284,6 +284,27 @@ export async function validateCodexProtocolSourceVersion(params: {
       `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
     );
   }
+  const expectedTag = `rust-v${expectedVersion}`;
+  const headCommit = readGitCommit(params.codexRepo, "HEAD");
+  const tagCommit = readGitCommit(params.codexRepo, `refs/tags/${expectedTag}`);
+  if (headCommit !== tagCommit) {
+    throw new Error(
+      `Codex protocol source HEAD ${headCommit} does not match peeled ${expectedTag} commit ${tagCommit}. Check out the exact tag in ${params.codexRepo}.`,
+    );
+  }
+}
+
+function readGitCommit(cwd: string, ref: string): string {
+  const result = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+    cwd,
+    encoding: "utf8",
+  });
+  const commit = result.stdout.trim();
+  if (result.status !== 0 || !commit) {
+    const detail = result.stderr.trim() || `exit ${result.status ?? "unknown"}`;
+    throw new Error(`Could not resolve Codex protocol source ${ref}: ${detail}`);
+  }
+  return commit;
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {

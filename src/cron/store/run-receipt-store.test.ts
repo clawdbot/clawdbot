@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -9,6 +11,7 @@ import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import {
   assertCronRunReceiptCurrent,
+  bindCronRunReceiptExecution,
   claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -127,14 +130,56 @@ describe("cron run receipt store", () => {
     ]);
   });
 
+  it("rejects a delayed binding after a successor replaces its exact owner", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("stale-binding");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const abandoned = claim(storePath, job, 230);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?")
+      .run(2_147_483_647, abandoned.receiptId);
+    const replacement = claim(storePath, job, 240);
+    const admitted: AdmittedRunContext = {
+      operationalRunInstance: { instanceId: "instance-stale", runId: "run-stale" },
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-stale", {
+        contextId: "context-stale",
+        executionId: "execution-stale",
+      }),
+    };
+
+    expect(bindCronRunReceiptExecution({ admitted, handle: abandoned })).toBe("missing");
+    expect(bindCronRunReceiptExecution({ admitted, handle: replacement })).toBe("bound");
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT owner_id
+           FROM execution_owner_lifecycle_bindings
+           WHERE owner_kind = 'cron'`,
+        )
+        .all(),
+    ).toEqual([{ owner_id: replacement.receiptId }]);
+
+    finishCronRunReceipt({ handle: replacement, status: "ok", finishedAtMs: 250 });
+  });
+
   it("prunes old terminal receipts while preserving the active and 64 newest rows", async () => {
     const { storePath } = await makeStorePath();
     const job = makeJob("retention");
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const admitted: AdmittedRunContext = {
+      operationalRunInstance: { instanceId: "instance-retention", runId: "run-retention" },
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-retention", {
+        contextId: "context-retention",
+        executionId: "execution-retention",
+      }),
+    };
     const finishedReceiptIds: string[] = [];
     for (let index = 0; index < 70; index += 1) {
       const handle = claim(storePath, job, 1_000 + index * 2);
       finishedReceiptIds.push(handle.receiptId);
+      if (index === 0 || index === 69) {
+        expect(bindCronRunReceiptExecution({ admitted, handle })).toBe("bound");
+      }
       finishCronRunReceipt({
         handle,
         status: "ok",
@@ -142,6 +187,7 @@ describe("cron run receipt store", () => {
       });
     }
     const active = claim(storePath, job, 2_000);
+    expect(bindCronRunReceiptExecution({ admitted, handle: active })).toBe("bound");
 
     const retained = receipts(storePath, job.id);
     const retainedIds = new Set(retained.map((receipt) => receipt.receiptId));
@@ -158,6 +204,21 @@ describe("cron run receipt store", () => {
     for (const receiptId of finishedReceiptIds.slice(-64)) {
       expect(retainedIds.has(receiptId)).toBe(true);
     }
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT binding.owner_id
+           FROM execution_owner_lifecycle_bindings AS binding
+           JOIN cron_run_receipts AS receipt ON receipt.receipt_id = binding.owner_id
+           WHERE binding.owner_kind = 'cron' AND receipt.job_id = ?
+           ORDER BY owner_id`,
+        )
+        .all(job.id),
+    ).toEqual(
+      [active.receiptId, finishedReceiptIds.at(-1)]
+        .toSorted((left, right) => (left ?? "").localeCompare(right ?? ""))
+        .map((owner_id) => ({ owner_id })),
+    );
 
     finishCronRunReceipt({ handle: active, status: "skipped", finishedAtMs: 2_001 });
   });

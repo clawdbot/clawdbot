@@ -2733,16 +2733,20 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain("/tmp/openclaw-channel-add.log");
   });
 
-  it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
+  it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
       "send $'y\\r'",
+      'wait_for_log "Help make OpenClaw better?"',
+      "send $'\\r'",
       'wait_for_log "What should we call your first agent?"',
       "send $'\\r'",
       'wait_for_log "to search"',
       "send $'ollama\\r'",
     ]);
     expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "Help make OpenClaw better?"',
+      "send $'\\r'",
       'wait_for_log "What should we call your first agent?"',
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
@@ -4516,7 +4520,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "npm install -g --prefix /tmp/openclaw-proof",
       "corepack prepare pnpm@11.22.0 --activate",
       "pnpm add --global --allow-build=openclaw",
-      "bun@1.3.14",
+      "bun@1.4.0",
       'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",

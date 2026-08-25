@@ -140,6 +140,7 @@ export class ReefMessageFlow {
       replay: ReplayStore;
       reviews: ReviewApprovalStore;
       delivered: ReefDeliveredStore;
+      authoritySignal?: AbortSignal;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
     },
@@ -157,6 +158,8 @@ export class ReefMessageFlow {
       onPlatformSendDispatch?: () => Promise<void>;
     } = {},
   ): Promise<string> {
+    const signal = this.options.authoritySignal;
+    signal?.throwIfAborted();
     const friend = this.options.trust.get(peer);
     if (
       !friend ||
@@ -185,6 +188,7 @@ export class ReefMessageFlow {
       policyVersion: this.requireGuardConfig().policyVersion,
       reviewGate: (request) => this.options.reviews.request(request),
     });
+    signal?.throwIfAborted();
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
@@ -205,7 +209,9 @@ export class ReefMessageFlow {
     // Guard/review/encryption are local and may reject safely. Mark ambiguity
     // only at the relay boundary so recovery never treats those failures as sent.
     await context.onPlatformSendDispatch?.();
-    await this.options.transport.sendEnvelope(peer, result.envelope);
+    signal?.throwIfAborted();
+    await this.options.transport.sendEnvelope(peer, result.envelope, signal);
+    signal?.throwIfAborted();
     return id;
   }
 

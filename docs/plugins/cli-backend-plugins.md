@@ -215,7 +215,22 @@ model-alias, session, image, and watchdog fields as the bundled
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
+| `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+`freshSessionRecovery` is a backend-owned compatibility contract:
+
+- Leave it undefined or set it to `"replace-binding"` to preserve the legacy
+  clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
+  with a fresh session when the failure is eligible for recovery.
+- Set it to `"invalidated-only"` to suppress fresh replacement unless the
+  canonical invalidation predicate proves the old session is dead. Currently,
+  only `session_expired` does so.
+
+Choose the value from the CLI or SDK session contract, not from a provider id
+or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
+its Agent SDK contract does not treat non-expiration failures as proof that the
+conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.

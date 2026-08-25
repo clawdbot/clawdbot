@@ -198,7 +198,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
-    clientToolLoopDetection,
+    replaySafeToolNames,
     replaySafeTools,
     sideEffectToolOwners,
     sessionToolAllowlist,

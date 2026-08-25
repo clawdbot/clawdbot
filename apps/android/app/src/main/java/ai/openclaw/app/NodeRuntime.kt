@@ -8328,10 +8328,10 @@ internal fun gatewayRegistryEntry(
     )
   }
 
-/** HTTP(S) origin serving the connected gateway's Control UI pages. */
+/** HTTP(S) base URL serving the connected gateway's Control UI pages. */
 internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
   val scheme = if (endpoint.tlsEnabled) "https" else "http"
-  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
+  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}"
 }
 
 data class GatewayModelSummary(

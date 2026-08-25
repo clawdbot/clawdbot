@@ -20,6 +20,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -238,7 +239,7 @@ import {
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { armTimer } from "../cron/service/timer.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronJobCreate } from "../cron/types.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -273,6 +274,132 @@ function createCronConfig(name: string): OpenClawConfig {
       store: path.join(tmpDir, "cron.json"),
     },
   } as OpenClawConfig;
+}
+
+type CronServiceOverrides = Partial<
+  Omit<Parameters<typeof buildGatewayCronService>[0], "cfg" | "deps">
+>;
+
+function createCronService(cfg: OpenClawConfig, overrides: CronServiceOverrides = {}) {
+  return buildGatewayCronService({
+    cfg,
+    deps: {} as CliDeps,
+    broadcast: () => {},
+    ...overrides,
+  });
+}
+
+function loadCronService(cfg: OpenClawConfig, overrides: CronServiceOverrides = {}) {
+  loadConfigMock.mockReturnValue(cfg);
+  return createCronService(cfg, overrides);
+}
+
+type CronJobOverrides = Partial<Omit<CronJobCreate, "name" | "payload">>;
+
+function cronJob(
+  name: string,
+  payload: CronJobCreate["payload"],
+  overrides: CronJobOverrides = {},
+): CronJobCreate {
+  return {
+    name,
+    enabled: true,
+    schedule: { kind: "at", at: new Date(1).toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload,
+    ...overrides,
+  };
+}
+
+type CronServiceFixture = ReturnType<typeof createCronService>;
+
+function getCronState(service: CronServiceFixture): CronServiceState {
+  return (service.cron as unknown as { state: CronServiceState }).state;
+}
+
+type CronTestDeps = Omit<
+  CronServiceState["deps"],
+  "enqueueSystemEvent" | "requestHeartbeat" | "runHeartbeatOnce"
+> & {
+  enqueueSystemEvent?: (
+    text: string,
+    opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["enqueueSystemEvent"]>>[1]>,
+  ) => unknown;
+  requestHeartbeat?: (
+    opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["requestHeartbeat"]>>[0]>,
+  ) => void;
+  runHeartbeatOnce?: (
+    opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["runHeartbeatOnce"]>>[0]>,
+  ) => Promise<unknown>;
+};
+
+function getCronDeps(service: CronServiceFixture): CronTestDeps {
+  return getCronState(service).deps as CronTestDeps;
+}
+
+function addCronJob(
+  service: CronServiceFixture,
+  name: string,
+  payload: CronJobCreate["payload"],
+  overrides: CronJobOverrides = {},
+) {
+  return service.cron.add(cronJob(name, payload, overrides));
+}
+
+function addSystemEventJob(
+  service: CronServiceFixture,
+  name: string,
+  text: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
+}
+
+function addAgentTurnJob(
+  service: CronServiceFixture,
+  name: string,
+  message: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
+}
+
+function addCommandJob(
+  service: CronServiceFixture,
+  name: string,
+  source: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(
+    service,
+    name,
+    { kind: "command", argv: [process.execPath, "-e", source] },
+    overrides,
+  );
+}
+
+function addScriptJob(
+  service: CronServiceFixture,
+  name: string,
+  script: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "script", script }, overrides);
+}
+
+function runExit(overrides: Partial<RunExit> = {}): RunExit {
+  return {
+    reason: "manual-cancel",
+    exitCode: null,
+    exitSignal: null,
+    durationMs: 1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+    ...overrides,
+  };
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -367,12 +494,7 @@ describe("buildGatewayCronService", () => {
     "forwards authority options through the %s lifecycle wrapper",
     async (method) => {
       const cfg = createCronConfig(`server-cron-update-authority-${method}`);
-      loadConfigMock.mockReturnValue(cfg);
-      const state = buildGatewayCronService({
-        cfg,
-        deps: {} as CliDeps,
-        broadcast: () => {},
-      });
+      const state = loadCronService(cfg);
       const owner = {
         agentId: "main",
         sessionKey: "agent:main:discord:group:ops",
@@ -387,15 +509,17 @@ describe("buildGatewayCronService", () => {
       let restarted: ReturnType<typeof buildGatewayCronService> | undefined;
 
       try {
-        const job = await state.cron.add({
-          name: `authority ${method}`,
-          enabled: true,
-          owner,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: "run" },
-        });
+        const job = await addCronJob(
+          state,
+          `authority ${method}`,
+          { kind: "systemEvent", text: "run" },
+          {
+            owner,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "main",
+            wakeMode: "now",
+          },
+        );
         const commitGuard = vi.fn();
         const patch = {
           sessionTarget: "isolated" as const,
@@ -411,11 +535,7 @@ describe("buildGatewayCronService", () => {
 
         expect.soft(commitGuard).toHaveBeenCalledOnce();
         state.cron.stop();
-        restarted = buildGatewayCronService({
-          cfg,
-          deps: {} as CliDeps,
-          broadcast: () => {},
-        });
+        restarted = createCronService(cfg);
         expect((await restarted.cron.readJob(job.id))?.scheduledToolPolicy).toEqual(
           scheduledToolPolicy,
         );
@@ -434,28 +554,18 @@ describe("buildGatewayCronService", () => {
       agents: { entries: { ops: {} } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(opsCfg);
-    const initial = buildGatewayCronService({
-      cfg: opsCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const initial = createCronService(opsCfg);
     await initial.cron.start();
-    const job = await initial.cron.add({
-      name: "dynamic sole owner",
-      enabled: true,
-      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "follow the live owner" },
-    });
+    const job = await addCronJob(
+      initial,
+      "dynamic sole owner",
+      { kind: "agentTurn", message: "follow the live owner" },
+      { schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() } },
+    );
     expect(job.agentId).toBeUndefined();
     initial.cron.stop();
 
-    const restarted = buildGatewayCronService({
-      cfg: opsCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const restarted = createCronService(opsCfg);
     try {
       await restarted.cron.start();
       expect((await restarted.cron.readJob(job.id))?.agentId).toBeUndefined();
@@ -479,23 +589,16 @@ describe("buildGatewayCronService", () => {
     vi.setSystemTime(new Date("2026-08-14T12:00:00.000Z"));
     const cfg = createCronConfig("server-cron-system-agent-owner");
     cfg.agents = { entries: { main: {} } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
       await state.cron.start();
-      const job = await state.cron.add({
-        name: "scheduled system owner",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "run on schedule" },
-      });
+      const job = await addCronJob(
+        state,
+        "scheduled system owner",
+        { kind: "agentTurn", message: "run on schedule" },
+        { schedule: { kind: "every", everyMs: 60_000 } },
+      );
       expect(job.agentId).toBeUndefined();
       loadConfigMock.mockReturnValue({
         ...cfg,
@@ -533,30 +636,22 @@ describe("buildGatewayCronService", () => {
       "ops",
     );
     loadConfigMock.mockReturnValue(cfg);
-    const initial = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const initial = createCronService(cfg);
     await initial.cron.start();
-    const job = await initial.cron.add({
-      name: "legacy retained owner",
-      enabled: true,
-      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "pin once" },
-    });
+    const job = await addCronJob(
+      initial,
+      "legacy retained owner",
+      { kind: "agentTurn", message: "pin once" },
+      {
+        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+      },
+    );
     expect(job.agentId).toBe("ops");
     initial.cron.stop();
 
     const restartedCfg = structuredClone(cfg);
     loadConfigMock.mockReturnValue(restartedCfg);
-    const restarted = buildGatewayCronService({
-      cfg: restartedCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const restarted = createCronService(restartedCfg);
     try {
       await restarted.cron.start();
       expect((await restarted.cron.readJob(job.id))?.agentId).toBe("ops");
@@ -573,27 +668,20 @@ describe("buildGatewayCronService", () => {
       ...cfg.cron,
       triggers: { enabled: true },
     };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      const job = await state.cron.add({
-        name: "restricted trigger",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-        trigger: { script: "json({ fire: false })" },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: {
-          kind: "systemEvent",
-          text: "wake",
-          toolsAllow: ["read", "cron"],
+      const job = await addCronJob(
+        state,
+        "restricted trigger",
+        { kind: "systemEvent", text: "wake", toolsAllow: ["read", "cron"] },
+        {
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+          trigger: { script: "json({ fire: false })" },
+          sessionTarget: "main",
+          wakeMode: "now",
         },
-      });
+      );
       vi.setSystemTime(job.state.nextRunAtMs ?? 0);
 
       expect(await state.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
@@ -621,21 +709,17 @@ describe("buildGatewayCronService", () => {
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
     const cfg = createCronConfig("server-cron-stop-exit-watchers");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
-    const job = await state.cron.add({
-      name: "watch build",
-      enabled: true,
-      schedule: { kind: "on-exit", command: "sleep 60" },
-      payload: { kind: "systemEvent", text: "done" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-    });
+    const job = await addCronJob(
+      state,
+      "watch build",
+      { kind: "systemEvent", text: "done" },
+      {
+        schedule: { kind: "on-exit", command: "sleep 60" },
+        sessionTarget: "main",
+      },
+    );
     await state.reconcileExitWatchers?.();
 
     try {
@@ -654,52 +738,28 @@ describe("buildGatewayCronService", () => {
 
   it("restarts on-exit watchers only after their scheduler successfully restarts", async () => {
     const spawn = vi.fn(async () => {
-      const runDone = createDeferred<{
-        reason: "manual-cancel";
-        exitCode: null;
-        exitSignal: null;
-        durationMs: number;
-        stdout: string;
-        stderr: string;
-        timedOut: false;
-        noOutputTimedOut: false;
-      }>();
+      const runDone = createDeferred<RunExit>();
       return {
         runId: `run-on-exit-restart-${spawn.mock.calls.length}`,
         startedAtMs: Date.now(),
-        cancel: vi.fn(() =>
-          runDone.resolve({
-            reason: "manual-cancel",
-            exitCode: null,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          }),
-        ),
+        cancel: vi.fn(() => runDone.resolve(runExit())),
         wait: () => runDone.promise,
       };
     });
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-restart-exit-watchers");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      await state.cron.add({
-        name: "restart watched build",
-        enabled: true,
-        schedule: { kind: "on-exit", command: "sleep 60" },
-        payload: { kind: "systemEvent", text: "done" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-      });
+      await addCronJob(
+        state,
+        "restart watched build",
+        { kind: "systemEvent", text: "done" },
+        {
+          schedule: { kind: "on-exit", command: "sleep 60" },
+          sessionTarget: "main",
+        },
+      );
       await state.reconcileExitWatchers?.();
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
 
@@ -718,28 +778,8 @@ describe("buildGatewayCronService", () => {
   it.each(["add", "remove"] as const)(
     "does not apply a stale on-exit watcher snapshot after a concurrent %s",
     async (mutation) => {
-      const runDone = createDeferred<{
-        reason: "manual-cancel";
-        exitCode: null;
-        exitSignal: null;
-        durationMs: number;
-        stdout: string;
-        stderr: string;
-        timedOut: false;
-        noOutputTimedOut: false;
-      }>();
-      const cancel = vi.fn(() =>
-        runDone.resolve({
-          reason: "manual-cancel",
-          exitCode: null,
-          exitSignal: null,
-          durationMs: 1,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        }),
-      );
+      const runDone = createDeferred<RunExit>();
+      const cancel = vi.fn(() => runDone.resolve(runExit()));
       const cancelScope = vi.fn();
       const spawn = vi.fn(async () => ({
         runId: `run-on-exit-${mutation}-race`,
@@ -749,25 +789,21 @@ describe("buildGatewayCronService", () => {
       }));
       getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
       const cfg = createCronConfig(`server-cron-on-exit-${mutation}-race`);
-      loadConfigMock.mockReturnValue(cfg);
-      const state = buildGatewayCronService({
-        cfg,
-        deps: {} as CliDeps,
-        broadcast: () => {},
-      });
+      const state = loadCronService(cfg);
       const captured = createDeferred();
       const release = createDeferred();
 
       try {
         const addJob = async () =>
-          await state.cron.add({
-            name: "Watch concurrent mutation",
-            enabled: true,
-            schedule: { kind: "on-exit", command: "sleep 60" },
-            payload: { kind: "systemEvent", text: "done" },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-          });
+          await addCronJob(
+            state,
+            "Watch concurrent mutation",
+            { kind: "systemEvent", text: "done" },
+            {
+              schedule: { kind: "on-exit", command: "sleep 60" },
+              sessionTarget: "main",
+            },
+          );
         const existing = mutation === "remove" ? await addJob() : undefined;
         if (existing) {
           await state.reconcileExitWatchers?.();
@@ -836,22 +872,19 @@ describe("buildGatewayCronService", () => {
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-on-exit-fire");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      const job = await state.cron.add({
-        name: "watch and fire",
-        enabled: true,
-        schedule: { kind: "on-exit", command: "true" },
-        payload: { kind: "systemEvent", text: "done" },
-        sessionTarget: "main",
-        wakeMode: "now",
-      });
+      const job = await addCronJob(
+        state,
+        "watch and fire",
+        { kind: "systemEvent", text: "done" },
+        {
+          schedule: { kind: "on-exit", command: "true" },
+          sessionTarget: "main",
+          wakeMode: "now",
+        },
+      );
       await state.reconcileExitWatchers?.();
       resolveWait({
         reason: "exit",
@@ -881,12 +914,7 @@ describe("buildGatewayCronService", () => {
     trackActiveCronTaskRunSettlement(trackedRun);
 
     const cfg = createCronConfig("server-cron-active-run-shutdown");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
       await state.cron.stopAndDrain?.();
@@ -899,31 +927,11 @@ describe("buildGatewayCronService", () => {
   });
 
   it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    let resolveWait!: (result: {
-      reason: "manual-cancel";
-      exitCode: null;
-      exitSignal: null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: false;
-      noOutputTimedOut: false;
-    }) => void;
+    let resolveWait!: (result: RunExit) => void;
     const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
       resolveWait = resolve;
     });
-    const cancel = vi.fn(() =>
-      resolveWait({
-        reason: "manual-cancel",
-        exitCode: null,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
+    const cancel = vi.fn(() => resolveWait(runExit()));
     const detachOutput = vi.fn();
     const spawn = vi.fn(async () => ({
       runId: "run-stream",
@@ -935,21 +943,12 @@ describe("buildGatewayCronService", () => {
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-rejected-update");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      const added = await state.cron.add({
-        name: "stream source",
-        enabled: true,
+      const added = await addSystemEventJob(state, "stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       const streamJob = "job" in added ? added.job : added;
       const sourceIdentity = streamJob.state.streamSourceIdentity;
@@ -979,31 +978,11 @@ describe("buildGatewayCronService", () => {
   });
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
-    let resolveWait!: (result: {
-      reason: "manual-cancel";
-      exitCode: null;
-      exitSignal: null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: false;
-      noOutputTimedOut: false;
-    }) => void;
+    let resolveWait!: (result: RunExit) => void;
     const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
       resolveWait = resolve;
     });
-    const cancel = vi.fn(() =>
-      resolveWait({
-        reason: "manual-cancel",
-        exitCode: null,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
+    const cancel = vi.fn(() => resolveWait(runExit()));
     const detachOutput = vi.fn();
     const spawn = vi.fn(async () => ({
       runId: "run-stale-snapshot",
@@ -1015,12 +994,7 @@ describe("buildGatewayCronService", () => {
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-stale-snapshot");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
       // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
@@ -1044,13 +1018,9 @@ describe("buildGatewayCronService", () => {
       };
 
       const reconciling = state.reconcileStreamWatchers?.();
-      const added = await state.cron.add({
-        name: "stale snapshot stream source",
-        enabled: true,
+      const added = await addSystemEventJob(state, "stale snapshot stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       const streamJob = "job" in added ? added.job : added;
       const sourceIdentity = streamJob.state.streamSourceIdentity;
@@ -1085,36 +1055,18 @@ describe("buildGatewayCronService", () => {
       detachOutput: vi.fn(),
       wait: async () => {
         await wait;
-        return {
-          reason: "manual-cancel" as const,
-          exitCode: null,
-          exitSignal: null,
-          durationMs: 1,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        };
+        return runExit();
       },
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-single-drain");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      await state.cron.add({
-        name: "single drain stream source",
-        enabled: true,
+      await addSystemEventJob(state, "single drain stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       // cron.stop launches the asynchronous teardown; stopAndDrain must await
       // that same drain instead of queueing every owner a second shutdown stop.
@@ -1147,36 +1099,18 @@ describe("buildGatewayCronService", () => {
       detachOutput: vi.fn(),
       wait: async () => {
         await wait;
-        return {
-          reason: "manual-cancel" as const,
-          exitCode: null,
-          exitSignal: null,
-          durationMs: 10_000,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        };
+        return runExit({ durationMs: 10_000 });
       },
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-retry-drain");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      await state.cron.add({
-        name: "retry drain stream source",
-        enabled: true,
+      await addSystemEventJob(state, "retry drain stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
 
       const firstFailure = expect(state.cron.stopAndDrain?.()).rejects.toThrow(
@@ -1213,36 +1147,18 @@ describe("buildGatewayCronService", () => {
       detachOutput: vi.fn(),
       wait: async () => {
         await wait;
-        return {
-          reason: "manual-cancel" as const,
-          exitCode: null,
-          exitSignal: null,
-          durationMs: 10_000,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        };
+        return runExit({ durationMs: 10_000 });
       },
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-update-teardown-failure");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      const added = await state.cron.add({
-        name: "stubborn update stream source",
-        enabled: true,
+      const added = await addSystemEventJob(state, "stubborn update stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       const streamJob = "job" in added ? added.job : added;
       // The durable disable commits before teardown settles; a stop timeout
@@ -1281,36 +1197,18 @@ describe("buildGatewayCronService", () => {
       detachOutput,
       wait: async () => {
         await wait;
-        return {
-          reason: "manual-cancel" as const,
-          exitCode: null,
-          exitSignal: null,
-          durationMs: 10_000,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        };
+        return runExit({ durationMs: 10_000 });
       },
     }));
     getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
     const cfg = createCronConfig("server-cron-stream-remove-failure");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      const added = await state.cron.add({
-        name: "stubborn stream source",
-        enabled: true,
+      const added = await addSystemEventJob(state, "stubborn stream source", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        payload: { kind: "systemEvent", text: "event" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       const streamJob = "job" in added ? added.job : added;
       const removal = state.cron.remove(streamJob.id);
@@ -1349,21 +1247,14 @@ describe("buildGatewayCronService", () => {
     vi.useFakeTimers();
     const runnerEntered = createDeferred();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "isolated setup timeout",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
-      });
+      const job = await addCronJob(
+        state,
+        "isolated setup timeout",
+        { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
+        { schedule: { kind: "at", at: new Date(Date.now()).toISOString() } },
+      );
       runCronIsolatedAgentTurnMock.mockImplementationOnce(
         async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
           abortSignal?.addEventListener("abort", () => undefined, { once: true });
@@ -1387,21 +1278,11 @@ describe("buildGatewayCronService", () => {
 
   it("emits cron_changed hooks with computed next run state", async () => {
     const cfg = createCronConfig("server-cron-hook");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "scheduler-hook",
-        enabled: true,
+      const job = await addSystemEventJob(state, "scheduler-hook", "sync external wake", {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "sync external wake" },
       });
 
       const event = requireRecord(
@@ -1427,20 +1308,11 @@ describe("buildGatewayCronService", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00.000Z"));
     const cfg = createCronConfig("server-cron-hook-scheduled");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "scheduled-hook",
-        enabled: true,
+      const job = await addSystemEventJob(state, "scheduled-hook", "advance external wake", {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "advance external wake" },
       });
       const dueAtMs = job.state.nextRunAtMs;
       if (dueAtMs === undefined) {
@@ -1483,21 +1355,12 @@ describe("buildGatewayCronService", () => {
     const deferred = createDeferred();
     runCronChangedMock.mockImplementationOnce(async () => await deferred.promise);
     const cfg = createCronConfig("server-cron-hook-admission");
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
 
     try {
-      await state.cron.add({
-        name: "held hook",
-        enabled: true,
+      await addSystemEventJob(state, "held hook", "hello", {
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
       });
       await vi.waitFor(() => expect(runCronChangedMock).toHaveBeenCalledTimes(1));
       expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -1513,21 +1376,11 @@ describe("buildGatewayCronService", () => {
 
   it("cron_changed removed events include the deleted job snapshot", async () => {
     const cfg = createCronConfig("server-cron-hook-removed");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "to-be-removed",
-        enabled: true,
+      const job = await addSystemEventJob(state, "to-be-removed", "will be removed", {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "will be removed" },
       });
 
       runCronChangedMock.mockClear();
@@ -1553,22 +1406,12 @@ describe("buildGatewayCronService", () => {
   it("cron_changed hook event includes agentId from the job", async () => {
     const cfg = createCronConfig("server-cron-hook-agentId");
     cfg.agents = { entries: { main: { default: true }, yinze: {} } };
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "agent-scoped-job",
-        enabled: true,
+      const job = await addAgentTurnJob(state, "agent-scoped-job", "agent check", {
         agentId: "yinze",
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
         sessionTarget: "session:project-alpha",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "agent check" },
       });
 
       const event = requireRecord(
@@ -1594,19 +1437,11 @@ describe("buildGatewayCronService", () => {
     const runtimeCfg = { ...startupCfg, _marker: "runtime" };
     loadConfigMock.mockReturnValue(runtimeCfg);
 
-    const state = buildGatewayCronService({
-      cfg: startupCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(startupCfg);
     try {
-      await state.cron.add({
-        name: "runtime-cfg-check",
-        enabled: true,
+      await addSystemEventJob(state, "runtime-cfg-check", "cfg check", {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "cfg check" },
       });
 
       // The hook context should use getRuntimeConfig() (runtimeCfg), not startupCfg
@@ -1622,22 +1457,11 @@ describe("buildGatewayCronService", () => {
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
     const cfg = createCronConfig("server-cron");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "canonicalize-session-key",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
+      const job = await addSystemEventJob(state, "canonicalize-session-key", "hello", {
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         sessionKey: "discord:channel:ops",
-        payload: { kind: "systemEvent", text: "hello" },
       });
 
       await state.cron.run(job.id, "force");
@@ -1662,31 +1486,21 @@ describe("buildGatewayCronService", () => {
 
   it("suppresses command cron NO_REPLY output before announce delivery", async () => {
     const cfg = createCronConfig("server-cron-command-no-reply");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "silent-command",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+      const job = await addCommandJob(
+        state,
+        "silent-command",
+        "process.stdout.write('NO_REPLY\\n')",
+        {
+          deleteAfterRun: false,
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+          },
         },
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "123",
-        },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -1718,28 +1532,22 @@ describe("buildGatewayCronService", () => {
         }),
       );
 
-      const state = buildGatewayCronService({
-        cfg,
-        deps: {} as CliDeps,
-        broadcast: () => {},
-      });
+      const state = createCronService(cfg);
       try {
-        const job = await state.cron.add({
-          name: `${payloadKind} announce retry`,
-          enabled: true,
-          deleteAfterRun: true,
-          schedule: { kind: "at", at: new Date(1).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload:
-            payloadKind === "command"
-              ? {
-                  kind: "command" as const,
-                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
-                }
-              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
-        });
+        const job = await addCronJob(
+          state,
+          `${payloadKind} announce retry`,
+          payloadKind === "command"
+            ? {
+                kind: "command" as const,
+                argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+              }
+            : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          {
+            deleteAfterRun: true,
+            delivery: { mode: "announce", channel: "telegram", to: "123" },
+          },
+        );
 
         await state.cron.run(job.id, "force");
 
@@ -1811,29 +1619,27 @@ describe("buildGatewayCronService", () => {
         };
       });
 
-      const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+      const state = createCronService(cfg);
       try {
-        const job = await state.cron.add({
-          name: `${payloadKind} ${reason} ${policy}`,
-          enabled: true,
-          deleteAfterRun: true,
-          schedule: { kind: "at", at: new Date(1).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload:
-            payloadKind === "command"
-              ? {
-                  kind: "command" as const,
-                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
-                }
-              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "123",
-            ...(policy === "default" ? {} : { bestEffort: policy === "optional" }),
+        const job = await addCronJob(
+          state,
+          `${payloadKind} ${reason} ${policy}`,
+          payloadKind === "command"
+            ? {
+                kind: "command" as const,
+                argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+              }
+            : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          {
+            deleteAfterRun: true,
+            delivery: {
+              mode: "announce",
+              channel: "telegram",
+              to: "123",
+              ...(policy === "default" ? {} : { bestEffort: policy === "optional" }),
+            },
           },
-        });
+        );
 
         await state.cron.run(job.id, "force");
 
@@ -1907,28 +1713,22 @@ describe("buildGatewayCronService", () => {
         throw deliveryError;
       });
 
-      const state = buildGatewayCronService({
-        cfg,
-        deps: {} as CliDeps,
-        broadcast: () => {},
-      });
+      const state = createCronService(cfg);
       try {
-        const job = await state.cron.add({
-          name: `${payloadKind} partial announcement`,
-          enabled: true,
-          deleteAfterRun: false,
-          schedule: { kind: "at", at: new Date(1).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload:
-            payloadKind === "command"
-              ? {
-                  kind: "command" as const,
-                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
-                }
-              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
-        });
+        const job = await addCronJob(
+          state,
+          `${payloadKind} partial announcement`,
+          payloadKind === "command"
+            ? {
+                kind: "command" as const,
+                argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+              }
+            : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          {
+            deleteAfterRun: false,
+            delivery: { mode: "announce", channel: "telegram", to: "123" },
+          },
+        );
 
         await state.cron.run(job.id, "force");
 
@@ -1961,25 +1761,17 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockReturnValue(cfg);
     sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(error);
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "command no unsafe retry",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+      const job = await addCommandJob(
+        state,
+        "command no unsafe retry",
+        "process.stdout.write('scheduled result')",
+        {
+          deleteAfterRun: false,
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2012,25 +1804,17 @@ describe("buildGatewayCronService", () => {
       });
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "cancelled command announcement",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+      const job = await addCommandJob(
+        state,
+        "cancelled command announcement",
+        "process.stdout.write('scheduled result')",
+        {
+          deleteAfterRun: false,
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2049,24 +1833,17 @@ describe("buildGatewayCronService", () => {
     const deliveryError = "Channel is required (no configured channels detected)";
     sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "successful-headless-command",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+      const job = await addCommandJob(
+        state,
+        "successful-headless-command",
+        "process.stdout.write('ok')",
+        {
+          deleteAfterRun: false,
+          schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
         },
-      });
+      );
       const normalNextRunAtMs = job.state.nextRunAtMs;
       expect(job.delivery).toEqual({ mode: "announce" });
 
@@ -2090,24 +1867,17 @@ describe("buildGatewayCronService", () => {
     const deliveryError = "Channel is required (no configured channels detected)";
     sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "failed-headless-command",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stderr.write('failed'); process.exit(7)"],
+      const job = await addCommandJob(
+        state,
+        "failed-headless-command",
+        "process.stderr.write('failed'); process.exit(7)",
+        {
+          deleteAfterRun: false,
+          schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
         },
-      });
+      );
 
       const dueAtMs = job.state.nextRunAtMs;
       expect(dueAtMs).toBeTypeOf("number");
@@ -2138,25 +1908,17 @@ describe("buildGatewayCronService", () => {
     const deliveryError = "network unavailable while delivering command output";
     sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "successful-command-required-delivery",
-        enabled: true,
-        deleteAfterRun: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+      const job = await addCommandJob(
+        state,
+        "successful-command-required-delivery",
+        "process.stdout.write('ok')",
+        {
+          deleteAfterRun: true,
+          delivery: { mode: "announce", bestEffort: false },
         },
-        delivery: { mode: "announce", bestEffort: false },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2189,25 +1951,18 @@ describe("buildGatewayCronService", () => {
     const deliveryError = "Channel is required (no configured channels detected)";
     sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error(deliveryError));
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "successful-command-best-effort-delivery",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
+      const job = await addCommandJob(
+        state,
+        "successful-command-best-effort-delivery",
+        "process.stdout.write('ok')",
+        {
+          deleteAfterRun: false,
+          schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
+          delivery: { mode: "announce", bestEffort: true },
         },
-        delivery: { mode: "announce", bestEffort: true },
-      });
+      );
       const normalNextRunAtMs = job.state.nextRunAtMs;
 
       await state.cron.run(job.id, "force");
@@ -2231,24 +1986,14 @@ describe("buildGatewayCronService", () => {
       new Error("Channel is required (no configured channels detected)"),
     );
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "successful-delete-after-run-command",
-        enabled: true,
-        deleteAfterRun: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('ok')"],
-        },
-      });
+      const job = await addCommandJob(
+        state,
+        "successful-delete-after-run-command",
+        "process.stdout.write('ok')",
+        { deleteAfterRun: true },
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2268,22 +2013,17 @@ describe("buildGatewayCronService", () => {
       stateChanged: false,
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "script-announce",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "script", script: "return { notify: 'queue changed' }" },
-        delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
-      });
+      const job = await addScriptJob(
+        state,
+        "script-announce",
+        "return { notify: 'queue changed' }",
+        {
+          deleteAfterRun: false,
+          delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
+        },
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2325,17 +2065,11 @@ describe("buildGatewayCronService", () => {
       release: vi.fn(async () => {}),
     });
     const broadcast = vi.fn();
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast });
+    const state = createCronService(cfg, { broadcast });
 
     try {
-      const job = await state.cron.add({
-        name: "script failure detail",
-        enabled: true,
+      const job = await addScriptJob(state, "script failure detail", "return invalid", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "script", script: "return invalid" },
         failureAlert: { after: 1 },
         delivery: {
           mode: "announce",
@@ -2418,27 +2152,22 @@ describe("buildGatewayCronService", () => {
       });
       sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(new Error("delivery rejected"));
 
-      const state = buildGatewayCronService({
-        cfg,
-        deps: {} as CliDeps,
-        broadcast: () => {},
-      });
+      const state = createCronService(cfg);
       try {
-        const job = await state.cron.add({
-          name: `script ${name}`,
-          enabled: true,
-          deleteAfterRun: true,
-          schedule: { kind: "at", at: new Date(1).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "script", script: "return { notify: 'queue changed' }" },
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "123",
-            ...(bestEffort === undefined ? {} : { bestEffort }),
+        const job = await addScriptJob(
+          state,
+          `script ${name}`,
+          "return { notify: 'queue changed' }",
+          {
+            deleteAfterRun: true,
+            delivery: {
+              mode: "announce",
+              channel: "telegram",
+              to: "123",
+              ...(bestEffort === undefined ? {} : { bestEffort }),
+            },
           },
-        });
+        );
 
         await state.cron.run(job.id, "force");
 
@@ -2486,22 +2215,17 @@ describe("buildGatewayCronService", () => {
       release: vi.fn(async () => {}),
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "script-webhook",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "script", script: "return { notify: 'queue changed' }" },
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
-      });
+      const job = await addScriptJob(
+        state,
+        "script-webhook",
+        "return { notify: 'queue changed' }",
+        {
+          deleteAfterRun: false,
+          delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+        },
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2525,20 +2249,10 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockReturnValue(cfg);
     cronScriptExecutorMock.mockResolvedValueOnce({ kind: "completed", stateChanged: false });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "silent-script-webhook",
-        enabled: true,
+      const job = await addScriptJob(state, "silent-script-webhook", "return {}", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "script", script: "return {}" },
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
 
@@ -2557,20 +2271,10 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockReturnValue(cfg);
     cronScriptExecutorMock.mockResolvedValueOnce({ kind: "completed", stateChanged: false });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "silent-script",
-        enabled: true,
+      const job = await addScriptJob(state, "silent-script", "return {}", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "script", script: "return {}" },
         delivery: { mode: "announce", channel: "telegram", to: "123" },
       });
 
@@ -2585,30 +2289,20 @@ describe("buildGatewayCronService", () => {
 
   it("suppresses command cron NO_REPLY output before webhook delivery", async () => {
     const cfg = createCronConfig("server-cron-command-webhook-no-reply");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "silent-command-webhook",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+      const job = await addCommandJob(
+        state,
+        "silent-command-webhook",
+        "process.stdout.write('NO_REPLY\\n')",
+        {
+          deleteAfterRun: false,
+          delivery: {
+            mode: "webhook",
+            to: "https://example.invalid/cron-finished",
+          },
         },
-        delivery: {
-          mode: "webhook",
-          to: "https://example.invalid/cron-finished",
-        },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2621,30 +2315,14 @@ describe("buildGatewayCronService", () => {
 
   it("redacts command summary before cron_changed hook delivery", async () => {
     const cfg = createCronConfig("server-cron-command-hook-redaction");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "hook-redacted-command",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [
-            process.execPath,
-            "-e",
-            "process.stdout.write('Visit www.example.com/device and enter code 123456; Log in with token=opaque-secret-value\\n')",
-          ],
-        },
-      });
+      const job = await addCommandJob(
+        state,
+        "hook-redacted-command",
+        "process.stdout.write('Visit www.example.com/device and enter code 123456; Log in with token=opaque-secret-value\\n')",
+        { deleteAfterRun: false },
+      );
 
       runCronChangedMock.mockClear();
       await state.cron.run(job.id, "force");
@@ -2671,35 +2349,21 @@ describe("buildGatewayCronService", () => {
 
   it("redacts command summary secrets before announce delivery", async () => {
     const cfg = createCronConfig("server-cron-command-announce-redaction");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "announce-redacted-command",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "command",
-          argv: [
-            process.execPath,
-            "-e",
-            "process.stdout.write('Log in with token=opaque-secret-value\\n')",
-          ],
+      const job = await addCommandJob(
+        state,
+        "announce-redacted-command",
+        "process.stdout.write('Log in with token=opaque-secret-value\\n')",
+        {
+          deleteAfterRun: false,
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+          },
         },
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "123",
-        },
-      });
+      );
 
       await state.cron.run(job.id, "force");
 
@@ -2724,20 +2388,10 @@ describe("buildGatewayCronService", () => {
     const summary = "Visit https://example.com/report and enter code ABCD-EFGH";
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({ status: "ok", summary });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "non-command-summary",
-        enabled: true,
+      const job = await addAgentTurnJob(state, "non-command-summary", "report", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "report" },
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -2769,21 +2423,10 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-global-queued"),
       session: { mainKey: "main", scope: "global" },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "global-queued",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
+      const job = await addSystemEventJob(state, "global-queued", "hello global", {
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello global" },
       });
 
       await state.cron.run(job.id, "force");
@@ -2811,21 +2454,11 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-global-now"),
       session: { mainKey: "main", scope: "global" },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "global-now",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
+      const job = await addSystemEventJob(state, "global-now", "hello now", {
         sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "hello now" },
       });
 
       await state.cron.run(job.id, "force");
@@ -2855,32 +2488,9 @@ describe("buildGatewayCronService", () => {
 
   it("forwards heartbeat overrides through the cron wake adapter", () => {
     const cfg = createCronConfig("server-cron-heartbeat-override");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              requestHeartbeat?: (opts?: {
-                agentId?: string;
-                sessionKey?: string | null;
-                reason?: string;
-                source?: string;
-                intent?: string;
-                heartbeat?: { target?: string };
-                scheduledEveryMs?: number;
-                scheduledAnchorMs?: number;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       cronDeps?.requestHeartbeat?.({
         source: "cron",
@@ -2923,33 +2533,9 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              runHeartbeatOnce?: (opts?: {
-                agentId?: string;
-                sessionKey?: string | null;
-                reason?: string;
-                owningCronLaneTaskMarker?: {
-                  lane: string;
-                  taskId: number;
-                  generation: number;
-                };
-                heartbeat?: { target?: string };
-              }) => Promise<unknown>;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       const owningCronLaneTaskMarker = { lane: "cron", taskId: 7, generation: 3 };
       await cronDeps?.runHeartbeatOnce?.({
@@ -2994,22 +2580,11 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "queued-heartbeat-route",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
+      const job = await addSystemEventJob(state, "queued-heartbeat-route", "hello", {
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         sessionKey: "telegram:group:123:topic:456",
-        payload: { kind: "systemEvent", text: "hello" },
       });
 
       await state.cron.run(job.id, "force");
@@ -3041,27 +2616,9 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              requestHeartbeat?: (opts?: {
-                source?: string;
-                intent?: string;
-                reason?: string;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       cronDeps?.requestHeartbeat?.({
         source: "cron",
@@ -3097,27 +2654,9 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              requestHeartbeat?: (opts?: {
-                source?: string;
-                agentId?: string;
-                sessionKey?: string | null;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       cronDeps?.requestHeartbeat?.({
         source: "interval",
@@ -3204,33 +2743,9 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              enqueueSystemEvent?: (
-                text: string,
-                opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
-              ) => void;
-              requestHeartbeat?: (opts?: {
-                agentId?: string;
-                sessionKey?: string | null;
-                source?: string;
-                intent?: string;
-                reason?: string;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       const foreignKey = "agent:ops:cron:nightly:run:abc-123";
 
@@ -3267,40 +2782,11 @@ describe("buildGatewayCronService", () => {
   });
 
   it("routes relative cron wake session keys to the configured default agent", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-      cron: {
-        store: path.join(os.tmpdir(), `server-cron-relative-default-${Date.now()}`, "cron.json"),
-      },
-      agents: {
-        entries: {
-          primary: { model: "test/primary" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const cfg = createCronConfig("server-cron-relative-default");
+    cfg.agents = { entries: { primary: { model: "test/primary" } } };
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              enqueueSystemEvent?: (text: string, opts?: { sessionKey?: string }) => void;
-              requestHeartbeat?: (opts?: {
-                sessionKey?: string | null;
-                source?: string;
-                intent?: string;
-                reason?: string;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
@@ -3326,41 +2812,16 @@ describe("buildGatewayCronService", () => {
   });
 
   it("rejects unknown agent-prefixed keys instead of rebinding them to the default agent", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-      cron: {
-        store: path.join(os.tmpdir(), `server-cron-unknown-agent-${Date.now()}`, "cron.json"),
+    const cfg = createCronConfig("server-cron-unknown-agent");
+    cfg.agents = {
+      entries: {
+        primary: { default: true, model: "test/primary" },
+        ops: { model: "test/ops" },
       },
-      agents: {
-        entries: {
-          primary: { default: true, model: "test/primary" },
-          ops: { model: "test/ops" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    };
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              enqueueSystemEvent?: (text: string, opts?: { sessionKey?: string }) => void;
-              requestHeartbeat?: (opts?: {
-                sessionKey?: string | null;
-                source?: string;
-                intent?: string;
-                reason?: string;
-              }) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       expect(() =>
         cronDeps?.enqueueSystemEvent?.("hello", {
@@ -3395,13 +2856,7 @@ describe("buildGatewayCronService", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
       const sessionKey = "agent:ops:cron:nightly:run:abc-123";
       expect(
@@ -3445,9 +2900,7 @@ describe("buildGatewayCronService", () => {
         entries: { main: { default: true }, ops: {} },
       },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const state = loadCronService(cfg);
     try {
       expect(state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
@@ -3466,30 +2919,9 @@ describe("buildGatewayCronService", () => {
 
   it("forwards cron system events to the resolved session", () => {
     const cfg = createCronConfig("server-cron-system-event");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              enqueueSystemEvent?: (
-                optsText: string,
-                opts?: {
-                  agentId?: string;
-                  sessionKey?: string;
-                  contextKey?: string;
-                },
-              ) => void;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
 
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
@@ -3550,20 +2982,11 @@ describe("buildGatewayCronService", () => {
     );
     fetchWithSsrFGuardMock.mockImplementationOnce(actualFetchGuard.fetchWithSsrFGuard);
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "ssrf-webhook-blocked",
-        enabled: true,
+      const job = await addSystemEventJob(state, "ssrf-webhook-blocked", "hello", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
         delivery: {
           mode: "webhook",
           to: `http://127.0.0.1:${address.port}/cron-finished`,
@@ -3594,31 +3017,12 @@ describe("buildGatewayCronService", () => {
   });
 
   it("passes opaque custom session targets through to isolated cron runs", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
-    const cfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-    } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const cfg = createCronConfig("server-cron-custom-session");
+    const state = loadCronService(cfg);
     try {
       const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-      const job = await state.cron.add({
-        name: "custom-session",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
+      const job = await addAgentTurnJob(state, "custom-session", "hello", {
         sessionTarget: `session:${sessionKey}`,
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello" },
       });
 
       await state.cron.run(job.id, "force");
@@ -3632,25 +3036,12 @@ describe("buildGatewayCronService", () => {
 
   it("uses a dedicated cron session key for isolated jobs with model overrides", async () => {
     const cfg = createCronConfig("server-cron-isolated-key");
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "isolated-model-override",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "agentTurn",
-          message: "run report",
-          model: "ollama/kimi-k2.5:cloud",
-        },
+      const job = await addCronJob(state, "isolated-model-override", {
+        kind: "agentTurn",
+        message: "run report",
+        model: "ollama/kimi-k2.5:cloud",
       });
 
       await state.cron.run(job.id, "force");
@@ -3671,54 +3062,23 @@ describe("buildGatewayCronService", () => {
   });
 
   it("does not resurrect a startup agent missing from the runtime roster", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-agent-workspace-${Date.now()}`);
-    const startupCfg = {
-      session: {
-        mainKey: "main",
+    const startupCfg = createCronConfig("server-cron-agent-workspace");
+    const tmpDir = path.dirname((startupCfg.cron as { store: string }).store);
+    startupCfg.agents = {
+      defaults: { workspace: path.join(tmpDir, "workspace") },
+      entries: {
+        main: { default: true },
+        yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-      agents: {
-        defaults: {
-          workspace: path.join(tmpDir, "workspace"),
-        },
-        entries: {
-          main: { default: true },
-          yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
-        },
-      },
-    } as OpenClawConfig;
+    };
     const reloadedCfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-      agents: {
-        defaults: {
-          workspace: path.join(tmpDir, "workspace"),
-        },
-        entries: { main: { default: true } },
-      },
+      ...startupCfg,
+      agents: { ...startupCfg.agents, entries: { main: { default: true } } },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(startupCfg);
-
-    const state = buildGatewayCronService({
-      cfg: startupCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(startupCfg);
     try {
-      const job = await state.cron.add({
-        name: "isolated-subagent-workspace",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
+      const job = await addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
         agentId: "yinze",
-        payload: { kind: "agentTurn", message: "read SOW.md" },
       });
 
       loadConfigMock.mockReturnValue(reloadedCfg);
@@ -3744,17 +3104,11 @@ describe("buildGatewayCronService", () => {
         entries: { main: { default: true }, yinze: {}, other: {} },
       },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const state = loadCronService(cfg);
     const addJob = async (agentId: string, name: string) =>
-      await state.cron.add({
-        name,
-        enabled: true,
+      await addAgentTurnJob(state, name, name, {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         agentId,
-        payload: { kind: "agentTurn", message: name },
       });
     try {
       await addJob("yinze", "deleted-one");
@@ -3785,21 +3139,15 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: { entries: { main: { default: true }, yinze: {}, other: {} } },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const state = loadCronService(cfg);
     try {
       for (const [agentId, name] of [
         ["yinze", "deleted"],
         ["other", "kept"],
       ] as const) {
-        await state.cron.add({
-          name,
-          enabled: true,
+        await addAgentTurnJob(state, name, name, {
           schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           agentId,
-          payload: { kind: "agentTurn", message: name },
         });
       }
 
@@ -3826,20 +3174,10 @@ describe("buildGatewayCronService", () => {
       ...startupCfg,
       agents: { entries: { other: {} } },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(startupCfg);
-    const state = buildGatewayCronService({
-      cfg: startupCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = loadCronService(startupCfg);
     try {
-      await state.cron.add({
-        name: "follows-runtime-default",
-        enabled: true,
+      await addAgentTurnJob(state, "follows-runtime-default", "keep", {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "keep" },
       });
       loadConfigMock.mockReturnValue(runtimeCfg);
 
@@ -3869,17 +3207,10 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: { entries: { main: { default: true }, yinze: {} } },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const state = loadCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "fenced-job",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
+      const job = await addAgentTurnJob(state, "fenced-job", "must not run", {
         agentId: "yinze",
-        payload: { kind: "agentTurn", message: "must not run" },
       });
       isAgentDeletionBlockedMock.mockImplementation((agentId: string) => agentId === "yinze");
 
@@ -3909,28 +3240,17 @@ describe("buildGatewayCronService", () => {
       ...cfg,
       agents: { ...cfg.agents, entries: { main: { default: true } } },
     } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+    const state = loadCronService(cfg);
     const commitStarted = createDeferred();
     const releaseCommit = createDeferred();
     try {
-      await state.cron.add({
-        name: "old-job",
-        enabled: true,
+      await addAgentTurnJob(state, "old-job", "old", {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         agentId: "yinze",
-        payload: { kind: "agentTurn", message: "old" },
       });
-      const retained = await state.cron.add({
-        name: "retained-job",
-        enabled: true,
+      const retained = await addAgentTurnJob(state, "retained-job", "retained", {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         agentId: "main",
-        payload: { kind: "agentTurn", message: "retained" },
       });
       const removal = state.cron.removeAgentJobsTransactional("yinze", async () => {
         commitStarted.resolve();
@@ -3938,14 +3258,9 @@ describe("buildGatewayCronService", () => {
       });
       await commitStarted.promise;
       loadConfigMock.mockReturnValue(deletedCfg);
-      const lateAdd = state.cron.add({
-        name: "late-job",
-        enabled: true,
+      const lateAdd = addAgentTurnJob(state, "late-job", "late", {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         agentId: "yinze",
-        payload: { kind: "agentTurn", message: "late" },
       });
       const lateUpdate = state.cron.update(retained.id, { agentId: "yinze" });
       releaseCommit.resolve();
@@ -4011,25 +3326,9 @@ describe("buildGatewayCronService", () => {
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(reloadedCfg);
 
-    const state = buildGatewayCronService({
-      cfg: startupCfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(startupCfg);
     try {
-      const cronDeps = (
-        state.cron as unknown as {
-          state?: {
-            deps?: {
-              runHeartbeatOnce?: (opts?: {
-                agentId?: string;
-                sessionKey?: string | null;
-                heartbeat?: Record<string, unknown>;
-              }) => Promise<unknown>;
-            };
-          };
-        }
-      ).state?.deps;
+      const cronDeps = getCronDeps(state);
       await expect(
         cronDeps?.runHeartbeatOnce?.({
           agentId: "yinze",
@@ -4062,19 +3361,15 @@ describe("buildGatewayCronService", () => {
     );
     loadConfigMock.mockReturnValue(cfg);
     const broadcast = vi.fn();
-    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast });
+    const state = createCronService(cfg, { broadcast });
     try {
       // The automation source registers on start (stale-reload safety).
       await state.cron.start();
       const sessionsChanged = () =>
         broadcast.mock.calls.filter((call) => call[0] === "sessions.changed");
-      const job = await state.cron.add({
-        name: "bound schedule",
-        enabled: true,
+      const job = await addAgentTurnJob(state, "bound schedule", "ping", {
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
         sessionTarget: "session:agent:main:probe",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "ping" },
       });
       // Payload row fields depend on shared-process session-store state, so
       // this test pins only the broadcast mechanism; hasAutomation projection
@@ -4118,24 +3413,14 @@ describe("buildGatewayCronService", () => {
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-      resolveGatewayContext: () => gatewayContext,
-    });
+    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
     try {
       await state.cron.start();
-      await state.cron.add({
-        name: "scheduled-isolated",
-        enabled: true,
+      await addAgentTurnJob(state, "scheduled-isolated", "run it", {
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "run it" },
       });
-      const cronState = (state.cron as unknown as { state: CronServiceState }).state;
+      const cronState = getCronState(state);
       withPluginRuntimeGatewayRequestScope(
         {
           context: retiredRequestContext,
@@ -4166,20 +3451,10 @@ describe("buildGatewayCronService", () => {
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
+    const state = createCronService(cfg);
     try {
-      const job = await state.cron.add({
-        name: "scheduled-isolated-no-resolver",
-        enabled: true,
+      const job = await addAgentTurnJob(state, "scheduled-isolated-no-resolver", "run it", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "run it" },
       });
 
       await state.cron.run(job.id, "force");
@@ -4211,22 +3486,12 @@ describe("buildGatewayCronService", () => {
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-      resolveGatewayContext: () => retiredContext,
-    });
+    const state = createCronService(cfg, { resolveGatewayContext: () => retiredContext });
     try {
       await state.cron.start();
-      await state.cron.add({
-        name: "retired-context",
-        enabled: true,
+      await addAgentTurnJob(state, "retired-context", "run it", {
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "run it" },
       });
 
       await vi.advanceTimersByTimeAsync(60_000);
@@ -4258,22 +3523,14 @@ describe("buildGatewayCronService", () => {
       return { status: "ran", durationMs: 1 };
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-      resolveGatewayContext: () => gatewayContext,
-    });
+    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
     try {
       await state.cron.start();
-      await state.cron.add({
-        name: "scheduled-heartbeat",
-        enabled: true,
+      await addSystemEventJob(state, "scheduled-heartbeat", "run it", {
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
         sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "systemEvent", text: "run it" },
       });
       await vi.advanceTimersByTimeAsync(60_000);
       await ran.promise;
@@ -4300,21 +3557,10 @@ describe("buildGatewayCronService", () => {
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-      resolveGatewayContext,
-    });
+    const state = createCronService(cfg, { resolveGatewayContext });
     try {
-      const job = await state.cron.add({
-        name: "rpc-isolated",
-        enabled: true,
+      const job = await addAgentTurnJob(state, "rpc-isolated", "run it", {
         deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "run it" },
       });
 
       await withPluginRuntimeGatewayRequestScope(

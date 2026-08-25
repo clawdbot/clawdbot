@@ -6,6 +6,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -22,7 +23,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getActiveSessionWorkAdmissionCount,
+} from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -438,6 +442,87 @@ describe("gateway server chat", () => {
         interruptedActiveRun: true,
       });
       await waitForAgentRunDrained("idem-chat-interrupt-active");
+    });
+  });
+
+  test("chat.send interrupt releases its admission when backend cancellation throws", async () => {
+    await withMainSessionStore(async () => {
+      const activeRunStarted = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        activeRunStarted.resolve(undefined);
+        if (!opts?.abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        return undefined;
+      });
+      const active = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "captured active turn",
+        idempotencyKey: "idem-chat-interrupt-throw-old",
+      });
+      expect(active.ok).toBe(true);
+      await activeRunStarted.promise;
+
+      const operation = replyRunRegistry.get("agent:main:main");
+      expect(operation).toBeDefined();
+      operation?.attachBackend({
+        kind: "embedded",
+        cancel: () => {
+          throw new Error("cancel failed");
+        },
+        isStreaming: () => true,
+      });
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "replace the captured turn",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-throw-new",
+      });
+      expect(res.ok).toBe(false);
+      await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+      const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+      expect(reset.ok).toBe(true);
+    });
+  });
+
+  test("chat.send interrupt releases its admission when session interruption throws", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const activeAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          activeAdmission.release();
+          throw new Error("session interruption failed");
+        },
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply-throw",
+        });
+
+        expect(res.ok).toBe(false);
+        await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+        const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+        expect(reset.ok).toBe(true);
+      } finally {
+        activeAdmission.release();
+      }
     });
   });
 
@@ -2572,13 +2657,19 @@ describe("gateway server chat", () => {
         });
         expectAgentWaitTimeout(waitWhileChatActive);
 
+        // Match the published ownership fact, not the `reason` label: sessions.changed
+        // coalesces bursts per session key and keeps only the newest payload, so any
+        // same-key mutation inside that window legitimately replaces the label while
+        // the row (activeRunIds/lastRunId) is still rebuilt at broadcast time.
         const settledSessionChange = onceMessage(
           ws,
           (event) =>
             event.type === "event" &&
             event.event === "sessions.changed" &&
-            event.payload?.reason === "chat.run.settled" &&
             event.payload?.sessionKey === "agent:main:main" &&
+            event.payload?.hasActiveRun === false &&
+            Array.isArray(event.payload?.activeRunIds) &&
+            event.payload.activeRunIds.length === 0 &&
             event.payload?.lastRunId === runId,
           8_000,
         );

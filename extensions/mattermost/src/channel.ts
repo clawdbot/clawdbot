@@ -68,8 +68,13 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
 import type { MattermostSendResult } from "./mattermost/send.js";
-import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import {
+  looksLikeMattermostTargetId,
+  normalizeMattermostMessagingTarget,
+  requiresMattermostMediaUpload,
+} from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupContract } from "./setup-core.js";
@@ -636,7 +641,7 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     throw new Error("Mattermost react requires messageId (post id)");
   }
 
-  const emojiName = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
+  const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
   if (!emojiName) {
     throw new Error("Mattermost react requires emoji");
   }
@@ -699,11 +704,6 @@ function readMattermostStringArrayParam(params: Record<string, unknown>, key: st
     return normalized ? [normalized] : [];
   }
   return [];
-}
-
-function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
-  const normalized = normalizeOptionalString(mediaUrl);
-  return Boolean(normalized && !/^https?:\/\//i.test(normalized));
 }
 
 function collectMattermostAttachmentMedia(params: Record<string, unknown>): {

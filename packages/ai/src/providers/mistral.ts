@@ -593,6 +593,11 @@ async function consumeChatStream(
     // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
     // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
     output.responseId ||= chunk.id;
+    // Retain the provider-returned model when it differs from the requested id so
+    // routed responses are not misattributed, matching the OpenAI sibling stream.
+    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+      output.responseModel ||= chunk.model;
+    }
 
     if (chunk.usage) {
       const promptTokens = chunk.usage.promptTokens || 0;

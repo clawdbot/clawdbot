@@ -891,6 +891,7 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(observedMachineOutputStdoutIsTTY).toBe(false);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,

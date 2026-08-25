@@ -23,6 +23,7 @@ export const FIRST_USE_STATE_TABLES = [
   "delegate_artifact_claims",
   "delegate_artifact_policies",
   "delegate_artifact_recipient_outcomes",
+  "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
   "outbound_message_progress",
 ] as const;

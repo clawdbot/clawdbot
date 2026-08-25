@@ -168,18 +168,70 @@ describe("Gemini embedding provider", () => {
     },
   );
 
-  it("rejects unsupported Gemini 2 output dimensions through provider creation", async () => {
+  it.each(
+    ["gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview"].flatMap((model) =>
+      [128, 512, 1024, 3072].map((dimensions) => [model, dimensions] as const),
+    ),
+  )("supports %s with %i output dimensions", async (model, dimensions) => {
+    const fetchMock = installFetchMock((input) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      return url.endsWith(":batchEmbedContents")
+        ? { embeddings: [{ values: axisVector(dimensions) }] }
+        : { embedding: { values: axisVector(dimensions) } };
+    });
+    const { provider, client } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "placeholder" },
+      model,
+      outputDimensionality: dimensions,
+      fallback: "none",
+    });
+
+    expect(client.outputDimensionality).toBe(dimensions);
+    await expect(provider.embedQuery("query")).resolves.toHaveLength(dimensions);
+    await expect(provider.embedBatch(["document"])).resolves.toEqual([axisVector(dimensions)]);
+    expect(fetchJsonBody(fetchMock, 0)).toMatchObject({ outputDimensionality: dimensions });
+    expect(fetchJsonBody(fetchMock, 1)).toMatchObject({
+      requests: [{ outputDimensionality: dimensions }],
+    });
+  });
+
+  it.each(
+    ["gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview"].flatMap((model) =>
+      [127, 512.5, 3073].map((dimensions) => [model, dimensions] as const),
+    ),
+  )("rejects unsupported %s dimension %i before making a request", async (model, dimensions) => {
     await expect(
       createGeminiEmbeddingProvider({
         config: {} as never,
         provider: "gemini",
         remote: { apiKey: "placeholder" },
-        model: "gemini-embedding-2",
-        outputDimensionality: 1024,
+        model,
+        outputDimensionality: dimensions,
         fallback: "none",
       }),
-    ).rejects.toThrow(/Valid values: 768, 1536, 3072/);
+    ).rejects.toThrow(/integer between 128 and 3072/);
   });
+
+  it.each([
+    ["gemini-embedding-001", undefined],
+    ["gemini-embedding-2", 3072],
+    ["gemini-embedding-2-preview", 3072],
+  ] as const)(
+    "preserves the existing default dimension identity for %s",
+    async (model, dimensions) => {
+      const { client } = await createGeminiEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: { apiKey: "placeholder" },
+        model,
+        fallback: "none",
+      });
+
+      expect(client.outputDimensionality).toBe(dimensions);
+    },
+  );
 
   it("handles legacy and v2 request/response behavior", async () => {
     const fetchMock = installFetchMock((input) => {

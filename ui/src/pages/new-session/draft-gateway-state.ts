@@ -134,9 +134,7 @@ export class DraftGatewayState {
         this.callbacks.requestUpdate();
       },
       onError: () => {
-        // Keep the last environment catalog across a transient client refresh on this Gateway.
-        this.cloudProfilesValue = [];
-        this.cloudProfilesReadyValue = false;
+        // A failed refresh cannot invalidate this Gateway's last successful place catalog.
         this.scheduleCloudProfileRetry();
         this.callbacks.requestUpdate();
       },
@@ -497,8 +495,10 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      this.applyCloudProfiles([]);
-      this.cloudProfilesReadyValue = true;
+      if (!this.cloudProfilesReadyValue) {
+        this.applyCloudProfiles([]);
+        this.cloudProfilesReadyValue = true;
+      }
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];
