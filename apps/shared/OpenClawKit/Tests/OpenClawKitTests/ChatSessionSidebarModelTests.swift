@@ -313,10 +313,10 @@ struct ChatSessionSidebarModelTests {
             key: "agent:main:roadmap",
             displayName: "Planning",
             label: "Summer holiday",
-            category: "client-work",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "client-work")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
