@@ -36,14 +36,7 @@ export type SharedMatrixClientLease = {
   release: (params?: { mode?: MatrixClientReleaseMode }) => Promise<void>;
 };
 
-type SharedMatrixClientPhase =
-  | "open"
-  | "quiescing"
-  | "closing"
-  | "late-drain"
-  | "late-drain-stopped";
-
-type PoisonDisposition = "replace-after-stop" | "replace-after-late-drain" | "retain";
+type SharedMatrixClientPhase = "open" | "quiescing" | "closing" | "late-drain";
 
 type SharedMatrixClientLeaseState = {
   abortController: AbortController;
@@ -138,12 +131,6 @@ function deleteSharedClientState(state: SharedMatrixClientState): void {
     sharedClientStates.delete(state.key);
   }
   sharedClientPromises.delete(state.key);
-}
-
-function deleteSharedClientStateAfterLateDrain(state: SharedMatrixClientState): void {
-  if (state.phase === "late-drain-stopped" && state.leases.size === 0) {
-    deleteSharedClientState(state);
-  }
 }
 
 async function ensureSharedClientStarted(
@@ -354,25 +341,6 @@ async function waitForRetirementDrain(
   }
 }
 
-async function continueLateGenerationRetirement(
-  state: SharedMatrixClientState,
-  startup: Promise<void>,
-  monitorLeases: SharedMatrixClientLeaseState[],
-): Promise<void> {
-  const outcomes = await Promise.allSettled([
-    retireMonitorLeases(state, monitorLeases),
-    startup.catch(() => undefined).then(() => state.client.stopWithoutPersist()),
-  ]);
-  const failure = outcomes.find((outcome) => outcome.status === "rejected");
-  if (failure?.status === "rejected") {
-    state.poisonError = toRetirementError(failure.reason);
-    return;
-  }
-  state.started = false;
-  state.phase = "late-drain-stopped";
-  deleteSharedClientStateAfterLateDrain(state);
-}
-
 function beginGenerationRetirement(params: {
   state: SharedMatrixClientState;
   monitorLeases?: SharedMatrixClientLeaseState[];
@@ -382,8 +350,9 @@ function beginGenerationRetirement(params: {
     return state.retirementPromise;
   }
   state.phase = "quiescing";
-  state.retirementPromise = Promise.resolve().then(async () => {
-    let poisonDisposition: PoisonDisposition = "replace-after-stop";
+  const result = createDeferred<void>();
+  state.retirementPromise = result.promise;
+  const owner = Promise.resolve().then(async () => {
     const startup = state.startPromise;
     if (startup) {
       try {
@@ -395,9 +364,23 @@ function beginGenerationRetirement(params: {
         );
       } catch (error) {
         state.poisonError = toRetirementError(error);
-        // The SDK cannot cancel crypto initialization. Keep this generation keyed
-        // and stop it without persistence as soon as the owned startup settles.
-        void continueLateGenerationRetirement(state, startup, params.monitorLeases ?? []);
+        result.reject(state.poisonError);
+        const outcomes = await Promise.allSettled([
+          startup
+            .catch(() => undefined)
+            .then(async () => {
+              state.started = false;
+              await state.client.stopWithoutPersist();
+            }),
+          retireMonitorLeases(state, params.monitorLeases ?? []),
+          state.noLeases.promise,
+        ]);
+        const failure = outcomes.find((outcome) => outcome.status === "rejected");
+        if (failure) {
+          state.poisonError = toRetirementError(failure.reason);
+        } else {
+          deleteSharedClientState(state);
+        }
         throw state.poisonError;
       }
     }
@@ -409,14 +392,16 @@ function beginGenerationRetirement(params: {
       state.poisonError = toRetirementError(error);
     }
 
+    let monitorRetired = true;
     try {
       await retireMonitorLeases(state, params.monitorLeases ?? []);
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
-      poisonDisposition = "retain";
+      monitorRetired = false;
     }
 
     state.phase = "closing";
+    let lateLeaseDrain: Promise<void> | null = null;
     try {
       await waitForRetirementDrain(
         state,
@@ -426,55 +411,52 @@ function beginGenerationRetirement(params: {
       );
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
-      if (poisonDisposition !== "retain") {
-        poisonDisposition = "replace-after-late-drain";
-      }
+      result.reject(state.poisonError);
+      lateLeaseDrain = state.noLeases.promise;
     }
 
-    if (state.poisonError) {
-      const decryptionsDrained = await state.client
-        .drainPendingDecryptions("matrix poisoned client shutdown")
-        .then(
+    let failure = state.poisonError;
+    let canDelete = monitorRetired;
+    if (failure) {
+      canDelete =
+        (await state.client.drainPendingDecryptions("matrix poisoned client shutdown").then(
           () => true,
           () => false,
-        );
-      await state.client.stopWithoutPersist();
-      if (decryptionsDrained) {
-        if (poisonDisposition === "replace-after-stop") {
-          deleteSharedClientState(state);
-        } else if (poisonDisposition === "replace-after-late-drain") {
-          // The timeout cannot revoke ownership. Keep the stopped generation keyed
-          // until every operation that crossed the deadline genuinely returns.
-          state.phase = "late-drain-stopped";
-          deleteSharedClientStateAfterLateDrain(state);
-        }
+        )) && canDelete;
+    } else {
+      try {
+        await state.client.drainPendingDecryptions("matrix shared client final shutdown");
+      } catch (error) {
+        failure = state.poisonError = toRetirementError(error);
       }
-      throw state.poisonError;
     }
 
-    try {
-      await state.client.drainPendingDecryptions("matrix shared client final shutdown");
-    } catch (error) {
-      state.poisonError = toRetirementError(error);
+    let discard = failure !== null || state.releaseMode === "discard";
+    if (!discard) {
       try {
-        await state.client.stopWithoutPersist();
-      } finally {
-        deleteSharedClientState(state);
-      }
-      throw state.poisonError;
-    }
-    try {
-      if (state.releaseMode === "persist") {
         await state.client.stopAndPersist();
-      } else if (state.releaseMode === "discard") {
-        await state.client.stopWithoutPersist();
-      } else {
-        await state.client.stopAndPersist().catch(() => state.client.stopWithoutPersist());
+      } catch (error) {
+        discard = true;
+        if (state.releaseMode === "persist") {
+          failure = state.poisonError = toRetirementError(error);
+        }
       }
-    } finally {
+    }
+    if (discard) {
+      await state.client.stopWithoutPersist().catch((error: unknown) => {
+        failure = state.poisonError = toRetirementError(error);
+        canDelete = false;
+      });
+    }
+    await lateLeaseDrain;
+    if (canDelete) {
       deleteSharedClientState(state);
     }
+    if (failure) {
+      throw failure;
+    }
   });
+  void owner.then(result.resolve, result.reject);
   abortTransientLeases(state);
   return state.retirementPromise;
 }
@@ -535,9 +517,8 @@ function createSharedMatrixClientLease(
         state.noLeases.resolve();
       }
 
-      if (state.phase === "late-drain" || state.phase === "late-drain-stopped") {
+      if (state.phase === "late-drain") {
         leaseState.releasePromise = Promise.resolve();
-        deleteSharedClientStateAfterLateDrain(state);
         return leaseState.releasePromise;
       }
 
@@ -583,7 +564,7 @@ export async function acquireSharedMatrixClient(
 }
 
 async function forceRetireState(state: SharedMatrixClientState): Promise<void> {
-  if (state.phase === "late-drain" || state.phase === "late-drain-stopped") {
+  if (state.phase === "late-drain") {
     throw state.poisonError ?? new Error("Matrix client generation is still retiring");
   }
   state.releaseMode = mergeReleaseMode(state.releaseMode, "stop");
@@ -592,16 +573,12 @@ async function forceRetireState(state: SharedMatrixClientState): Promise<void> {
     monitorLeases: Array.from(state.leases).filter((lease) => lease.role === "monitor"),
   });
   forceReleaseLeases(state, retirementPromise);
-  await retirementPromise.catch((error: unknown) => {
-    if (state.phase === "late-drain" || state.phase === "late-drain-stopped") {
-      throw error;
+  try {
+    await retirementPromise;
+  } catch (error) {
+    if (sharedClientStates.get(state.key) === state) {
+      throw state.poisonError ?? error;
     }
-    if (!state.poisonError) {
-      throw error;
-    }
-  });
-  if (state.poisonError) {
-    deleteSharedClientState(state);
   }
 }
 

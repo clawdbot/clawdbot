@@ -148,6 +148,7 @@ export abstract class MatrixClientBase {
   protected transactionScopePromise: Promise<string> | null = null;
   private readonly messageWireDispatchGuards = new Map<string, MatrixMessageWireDispatchGuard>();
   private sdkStopped = false;
+  private stopDiscardPromise: Promise<void> | null = null;
   private idbPersistPromise: Promise<void> | null = null;
   private idbPersistAbortController: AbortController | null = null;
 
@@ -615,16 +616,14 @@ export abstract class MatrixClientBase {
     await this.stopPersistPromise;
   }
 
-  async stopWithoutPersist(): Promise<void> {
-    const alreadyStopped = await this.stopPersistPromise?.then(
-      () => true,
-      () => false,
-    );
-    if (alreadyStopped) {
-      return;
+  stopWithoutPersist(): Promise<void> {
+    // Memoization closes concurrent callers; durable failure still requires discard cleanup.
+    if (!this.stopPersistPromise) {
+      this.stopPersistPromise = this.stopDiscardPromise = this.stopClientGeneration(false);
     }
-    this.stopPersistPromise = this.stopClientGeneration(false);
-    await this.stopPersistPromise;
+    return (this.stopDiscardPromise ??= this.stopPersistPromise.catch(() =>
+      this.stopClientGeneration(false),
+    ));
   }
 
   protected async bootstrapCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {

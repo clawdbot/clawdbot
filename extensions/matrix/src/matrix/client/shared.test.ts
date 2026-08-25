@@ -87,6 +87,13 @@ async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void
   });
 }
 
+async function expectPending(promise: Promise<unknown>): Promise<void> {
+  const settled = vi.fn();
+  void promise.then(settled, settled);
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+}
+
 describe("shared Matrix client generations", () => {
   beforeAll(async () => {
     ({ acquireSharedMatrixClient, stopSharedClientForAccount } = await import("./shared.js"));
@@ -231,12 +238,7 @@ describe("shared Matrix client generations", () => {
     });
     const lateRelease = monitor.release({ mode: "persist" });
     expect(monitor.release({ mode: "discard" })).toBe(lateRelease);
-    let lateReleaseSettled = false;
-    void lateRelease.then(() => {
-      lateReleaseSettled = true;
-    });
-    await Promise.resolve();
-    expect(lateReleaseSettled).toBe(false);
+    await expectPending(lateRelease);
 
     waitForTasks.resolve();
     await Promise.all([forcedRetirement, lateRelease]);
@@ -437,18 +439,10 @@ describe("shared Matrix client generations", () => {
     await expect(retirementError).resolves.toMatchObject({
       message: "Matrix transient leases did not drain within 5000ms",
     });
-    expect(firstTransient.abortSignal.aborted).toBe(true);
     expect(finalTransient.abortSignal.aborted).toBe(true);
     expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
     expect(client.stopAndPersist).not.toHaveBeenCalled();
     await expect(acquireSharedMatrixClient({ auth })).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
-    await expect(stopSharedClientForAccount(auth)).rejects.toMatchObject({
-      message: "Matrix transient leases did not drain within 5000ms",
-    });
-    await expect(stopSharedClientForAccount(auth)).rejects.toMatchObject({
       message: "Matrix transient leases did not drain within 5000ms",
     });
 
@@ -456,17 +450,19 @@ describe("shared Matrix client generations", () => {
     const duplicateLateRelease = firstTransient.release({ mode: "persist" });
     expect(duplicateLateRelease).toBe(firstLateRelease);
     await firstLateRelease;
-    expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
     await expect(acquireSharedMatrixClient({ auth })).rejects.toMatchObject({
       message: "Matrix transient leases did not drain within 5000ms",
     });
     await expect(stopSharedClientForAccount(auth)).rejects.toMatchObject({
       message: "Matrix transient leases did not drain within 5000ms",
     });
-    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
 
-    await finalTransient.release({ mode: "persist" });
+    const finalLateRelease = finalTransient.release({ mode: "persist" });
+    const finalRepeatedForce = stopSharedClientForAccount(auth);
+    await finalLateRelease;
+    await expect(finalRepeatedForce).rejects.toMatchObject({
+      message: "Matrix transient leases did not drain within 5000ms",
+    });
 
     const [firstReplacement, secondReplacement] = await Promise.all([
       acquireSharedMatrixClient({ auth, startClient: false }),
@@ -770,6 +766,8 @@ describe("shared Matrix client generations", () => {
     await expect(monitor.release({ mode: "persist" })).rejects.toBe(cause);
     expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
     await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
+    await expect(stopSharedClientForAccount(auth)).rejects.toBe(cause);
+    await expect(acquireSharedMatrixClient({ auth })).rejects.toBe(cause);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
   });
 
@@ -843,26 +841,76 @@ describe("shared Matrix client generations", () => {
     await replacement.release({ mode: "discard" });
   });
 
-  it("preserves and propagates an earlier persist requirement when final lease discards", async () => {
-    const cause = new Error("crypto persist failed");
+  it.each([
+    {
+      name: "normal discard",
+      mode: "discard" as const,
+      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
+        client.stopWithoutPersist.mockRejectedValue(failure);
+      },
+    },
+    {
+      name: "strict persistence fallback",
+      mode: "persist" as const,
+      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
+        client.stopAndPersist.mockRejectedValue(new Error("crypto persist failed"));
+        client.stopWithoutPersist.mockRejectedValue(failure);
+      },
+    },
+    {
+      name: "final-drain discard",
+      mode: "persist" as const,
+      configure: (client: ReturnType<typeof createMockClient>, failure: Error) => {
+        client.drainPendingDecryptions
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new Error("final decryption drain timed out"));
+        client.stopWithoutPersist.mockRejectedValue(failure);
+      },
+    },
+  ])("retains a generation when $name shutdown fails", async ({ name, mode, configure }) => {
+    const failure = new Error(`${name} shutdown failed`);
+    const client = createMockClient("main");
+    configure(client, failure);
+    createMatrixClientMock.mockResolvedValue(client);
+    const auth = authFor(`${name}-failure`);
+    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+
+    await expect(lease.release({ mode })).rejects.toBe(failure);
+    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toBe(failure);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits discard fallback before surfacing strict persistence failure", async () => {
+    const persistFailure = new Error("crypto persist failed");
+    const persist = createDeferred<void>();
+    const discard = createDeferred<void>();
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
-    firstClient.stopAndPersist.mockRejectedValue(cause);
+    firstClient.stopAndPersist.mockReturnValue(persist.promise);
+    firstClient.stopWithoutPersist.mockReturnValue(discard.promise);
     createMatrixClientMock
       .mockResolvedValueOnce(firstClient)
       .mockResolvedValueOnce(replacementClient);
-    const auth = authFor("main");
-    const first = await acquireSharedMatrixClient({ auth, startClient: false });
-    const final = await acquireSharedMatrixClient({ auth, startClient: false });
+    const auth = authFor("strict-persist-failure");
+    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
 
-    await first.release({ mode: "persist" });
-    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
-    await expect(final.release({ mode: "discard" })).rejects.toBe(cause);
-    expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
+    const releaseError = expect(lease.release({ mode: "persist" })).rejects.toBe(persistFailure);
+    persist.reject(persistFailure);
+    await vi.waitFor(() => {
+      expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    });
+    const blockedAcquire = acquireSharedMatrixClient({ auth, startClient: false });
+    await expect(blockedAcquire).rejects.toBe(persistFailure);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+    const forcedRetirement = stopSharedClientForAccount(auth);
+    await expectPending(forcedRetirement);
 
+    discard.resolve();
+    await releaseError;
+    await expect(forcedRetirement).resolves.toBeUndefined();
     const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
     expect(replacement.client).toBe(replacementClient);
-    await replacement.release();
+    await replacement.release({ mode: "discard" });
   });
 
   it("discards and replaces a generation when the final decryption drain fails", async () => {
@@ -921,12 +969,7 @@ describe("shared Matrix client generations", () => {
     expect(waiter.abortSignal.aborted).toBe(true);
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
 
-    let retirementSettled = false;
-    void retirement.then(() => {
-      retirementSettled = true;
-    });
-    await Promise.resolve();
-    expect(retirementSettled).toBe(false);
+    await expectPending(retirement);
 
     start.resolve();
     await retirement;
