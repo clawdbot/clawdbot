@@ -560,11 +560,7 @@ export function summarizeToolParams(params: unknown): DiagnosticToolParamsSummar
   return { kind: "other" };
 }
 
-export function shouldEmitLoopWarning(
-  state: SessionState,
-  warningKey: string,
-  count: number,
-): boolean {
+function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
   }
@@ -695,39 +691,43 @@ export async function recordLoopOutcome(args: {
       ...(args.ctx.runId && { runId: args.ctx.runId }),
       cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
     });
-    const scopedHistory = record
-      ? (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId)
-      : [];
-    const churn = record
-      ? getToolArgumentChurnStreak(
-          record.outcomeKind === "write-mutation"
-            ? scopedHistory.filter((call) => call !== record)
-            : scopedHistory,
-          record,
-        )
-      : { count: 0, variantCount: 0 };
-    const warningThreshold = resolveToolLoopWarningThreshold();
-    const writeMutationAtWarning =
-      churn.kind === "write_mutation" && churn.count >= warningThreshold;
-    const churnContinues =
-      churn.count > 0 && (churn.kind !== "write_mutation" || writeMutationAtWarning);
-    if (record && writeMutationAtWarning) {
-      const warning = buildArgumentChurnWarning(record.toolName, churn);
-      emitLoopWarning({
-        ctx: args.ctx,
-        sessionState,
-        toolName: record.toolName,
-        warning,
-        logToolLoopAction,
+    if (args.ctx.loopDetection?.enabled === true) {
+      const scopedHistory = record
+        ? (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId)
+        : [];
+      const churn = record
+        ? getToolArgumentChurnStreak(
+            record.outcomeKind === "write-mutation"
+              ? scopedHistory.filter((call) => call !== record)
+              : scopedHistory,
+            record,
+          )
+        : { count: 0, variantCount: 0 };
+      const warningThreshold = resolveToolLoopWarningThreshold();
+      const writeMutationAtWarning =
+        churn.kind === "write_mutation" && churn.count >= warningThreshold;
+      const churnContinues =
+        churn.count > 0 && (churn.kind !== "write_mutation" || writeMutationAtWarning);
+      if (record && writeMutationAtWarning) {
+        const warning = buildArgumentChurnWarning(record.toolName, churn);
+        emitLoopWarning({
+          ctx: args.ctx,
+          sessionState,
+          toolName: record.toolName,
+          warning,
+          logToolLoopAction,
+        });
+      }
+      // Parallel batches first gain mutation-threshold evidence from completed
+      // outcomes; stable no-progress reconciliation still requires an existing lease.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: churnContinues,
+        existingOnly: !writeMutationAtWarning,
       });
     }
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churnContinues,
-      existingOnly: true,
-    });
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {
         toolName: record.toolName,

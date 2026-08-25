@@ -2,7 +2,7 @@ import type { ToolCallRecord } from "../logging/diagnostic-session-state.js";
 
 const MIN_STABLE_CALLS_PER_VARIANT = 3;
 
-export function getArgumentChurnNoProgressStreak(
+function getArgumentChurnNoProgressStreak(
   history: readonly ToolCallRecord[],
   toolName: string,
   currentArgsHash: string,
@@ -54,7 +54,7 @@ export function getArgumentChurnNoProgressStreak(
     : { count: 0, variantCount: 0 };
 }
 
-export function getWriteMutationChurnStreak(
+function getWriteMutationChurnStreak(
   history: readonly ToolCallRecord[],
   current: Pick<ToolCallRecord, "argsHash" | "mutationTargetHash" | "outcomeKind" | "resultHash">,
 ): { count: number; variantCount: number } {
