@@ -180,9 +180,15 @@ export function createMattermostMonitorResources(params: {
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
         let contentType: string | undefined;
+        let fileName: string | undefined;
         try {
-          const info = await client.request<{ mime_type?: string | null }>(`/files/${fileId}/info`);
+          const info = await client.request<{ mime_type?: string | null; name?: string | null }>(
+            `/files/${fileId}/info`,
+          );
           contentType = info.mime_type?.trim() || undefined;
+          // The download failed, so the server-side file name is the only context
+          // the model gets about this attachment; dropping it repeats #128956.
+          fileName = info.name?.trim() || undefined;
         } catch (infoErr) {
           logger.debug?.(
             `mattermost: failed to resolve metadata for file ${fileId}: ${String(infoErr)}`,
@@ -190,6 +196,7 @@ export function createMattermostMonitorResources(params: {
         }
         out.push({
           contentType,
+          ...(fileName ? { fileName } : {}),
           kind: mediaKindFromMime(contentType) ?? "unknown",
         });
       }

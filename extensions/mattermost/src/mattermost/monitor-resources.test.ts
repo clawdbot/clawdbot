@@ -186,7 +186,11 @@ describe("mattermost monitor resources", () => {
 
     await expect(resources.resolveMattermostMedia(["file-image", "file-audio"])).resolves.toEqual([
       { path: "/tmp/file.png", contentType: "image/png", kind: "image" },
-      { contentType: "audio/mpeg", kind: "audio" },
+      {
+        contentType: "audio/mpeg",
+        fileName: "private-unavailable-recording.mp3",
+        kind: "audio",
+      },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -195,6 +199,8 @@ describe("mattermost monitor resources", () => {
     const saveRemoteMedia = vi.fn().mockRejectedValue(new Error("download failed"));
     const request = vi.fn(async (requestPath: string) => ({
       mime_type: requestPath.includes("video") ? "video/mp4" : "application/pdf",
+      // Blank server-side names must be omitted, not forwarded as empty strings.
+      name: requestPath.includes("video") ? "   " : undefined,
     }));
     const resources = createMattermostMonitorResources({
       accountId: "default",
