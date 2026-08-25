@@ -1882,7 +1882,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -1911,7 +1910,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -4735,7 +4733,6 @@ function buildLiveGatewayConfig(params: {
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
   const configuredAgents = {
     [GATEWAY_LIVE_AGENT_ID]: {
-      default: true,
       agentDir: params.liveAgentDir,
       workspace: params.liveAgentWorkspaceDir,
       sandbox: { mode: "off" },
