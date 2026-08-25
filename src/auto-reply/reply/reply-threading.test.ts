@@ -145,6 +145,19 @@ describe("createReplyToModeFilterForChannel", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
+  it.each(["first", "batched"] as const)(
+    "previews the %s transport without consuming its single reply slot",
+    (mode) => {
+      const filter = createReplyToModeFilterForChannel(mode, "discord");
+      const first = { text: "discarded", replyToId: "parent" };
+      const actual = { text: "actual", replyToId: "parent" };
+
+      expect(filter.preview(first).replyToId).toBe("parent");
+      expect(filter(actual).replyToId).toBe("parent");
+      expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
+    },
+  );
+
   it("strips explicit Slack reply tags upstream when replyToMode is off", () => {
     setActivePluginRegistry(
       createTestRegistry([
