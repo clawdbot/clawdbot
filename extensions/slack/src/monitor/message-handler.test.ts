@@ -676,7 +676,7 @@ describe("createSlackMessageHandler", () => {
       "agent:main:slack:channel:C111",
     );
     expect(turnAdoptionLifecycle.onSessionRouted.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchPreparedSlackMessageMock.mock.invocationCallOrder[0],
+      dispatchPreparedSlackMessageMock.mock.invocationCallOrder[0] ?? 0,
     );
     const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
       turnAdoptionLifecycle?: typeof turnAdoptionLifecycle;

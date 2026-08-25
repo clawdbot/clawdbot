@@ -326,7 +326,7 @@ describe("Slack durable ingress", () => {
         for (const [eventId, threadTs, ts] of [
           ["Ev-thread-one", "1700000000.000100", "1700000000.000101"],
           ["Ev-thread-two", "1700000000.000200", "1700000000.000201"],
-        ]) {
+        ] as const) {
           await receive(
             createReceiverEvent(eventId, undefined, {
               event: {
@@ -352,7 +352,11 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    firstEvent: Record<string, PluginJsonValue> & { ts: string };
+    secondEvent: Record<string, PluginJsonValue> & { ts: string };
+  }>([
     {
       name: "top-level channel messages",
       firstEvent: { ts: "1700000000.000100" },
