@@ -751,7 +751,7 @@ async function buildGatewayInstallEnvironment(params: {
     valueSource: ({ normalizedKey }) =>
       readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
-  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, {});
+  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
@@ -762,7 +762,6 @@ async function buildGatewayInstallEnvironment(params: {
   );
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
-      ...ambientProviderApiKeyEnvironment,
       ...durableEnvironment,
       ...configSecretRefKeyEnvironment,
       ...configSecretRefEnvironment,
@@ -789,10 +788,7 @@ async function buildGatewayInstallEnvironment(params: {
     platform: params.platform,
     existingEnvironmentFileEnvironment: existingEnvironmentFileRenderEnvironment,
     stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
-    configSecretRefEnvironment: {
-      ...ambientProviderApiKeyEnvironment,
-      ...configSecretRefEnvironment,
-    },
+    configSecretRefEnvironment,
   });
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
     includeRawKeys: true,
