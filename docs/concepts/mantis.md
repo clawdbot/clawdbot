@@ -101,16 +101,19 @@ each checkout (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
 plus a `<scenario-id>-timeline.html`/`.png` pair. Before asking Git to remove
-the checkout, the runner copies the lane evidence into the stable top-level
-`<output-dir>/baseline/` or `<output-dir>/candidate/` directory.
+the checkout, the runner copies the lane evidence into a private staging
+directory under `<output-dir>`.
 
-After both lanes finish, the runner writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` directly in `<output-dir>`.
-Existing automation continues reading those stable paths. Use a distinct
-output directory for each concurrently running command; publication to one
-shared output directory is not serialized. Existing unrelated top-level files
-are preserved. The command exits nonzero if the comparison did not pass
-(baseline `fail` and candidate `pass`).
+After both lanes and their cleanup finish, the runner adds `comparison.json`,
+`mantis-report.md`, and `mantis-evidence.json` to the staged set, then replaces
+the five stable entries together with rollback on publication failure. A failed
+attempt preserves the preceding complete evidence set and writes `error.txt`;
+a successful attempt removes an older `error.txt`. Existing automation
+continues reading the stable paths directly. Use a distinct output directory
+for each concurrently running command; publication to one shared output
+directory is not serialized. Existing unrelated top-level files are preserved.
+The command exits nonzero if the comparison did not pass (baseline `fail` and
+candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's

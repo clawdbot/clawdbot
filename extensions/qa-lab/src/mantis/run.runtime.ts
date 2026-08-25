@@ -8,8 +8,14 @@ import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-p
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyMantisLaneArtifact,
+  createMantisRunStaging,
+  publishMantisRunOutput,
   readMantisLaneResult,
+  remapMantisLaneResult,
+  removeMantisRunStaging,
+  stageMantisLaneOutput,
   type LaneResult,
+  type MantisRunStaging,
 } from "./run-artifacts.runtime.js";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import {
@@ -157,12 +163,6 @@ async function throwMantisRunFailure(params: {
   throw attachMantisFailureArtifact(params.error, errorPath);
 }
 
-async function copyMantisLaneOutput(sourceDir: string, targetDir: string): Promise<void> {
-  await fs.rm(targetDir, { force: true, recursive: true });
-  await fs.mkdir(targetDir, { recursive: true });
-  await fs.cp(sourceDir, targetDir, { recursive: true });
-}
-
 async function runLane(params: {
   lane: "baseline" | "candidate";
   outputDir: string;
@@ -172,6 +172,7 @@ async function runLane(params: {
   runner: MantisCommandRunner;
   scenario: string;
   signal?: AbortSignal;
+  stagingDir: string;
   commandTimeouts: MantisCommandTimeouts;
   worktreeRoot: string;
   opts: Required<
@@ -189,6 +190,7 @@ async function runLane(params: {
   const worktreeDir = path.join(params.worktreeRoot, `${params.lane}-${params.runId}`);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   const publishedLaneDir = path.join(params.outputDir, params.lane);
+  const stagedLaneDir = path.join(params.stagingDir, params.lane);
   const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
   const worktreeAddExecution = {
     cwd: params.repoRoot,
@@ -298,7 +300,7 @@ async function runLane(params: {
       runner: params.runner,
     });
     // Git owns worktree removal, so preserve the lane artifacts before cleanup.
-    await copyMantisLaneOutput(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
+    await stageMantisLaneOutput(path.join(worktreeDir, worktreeOutputDir), stagedLaneDir);
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -340,7 +342,7 @@ async function runLane(params: {
   }
   const result = await readMantisLaneResult({
     laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-    publishedLaneDir,
+    publishedLaneDir: stagedLaneDir,
     scenario: params.scenario,
   });
   const copiedScreenshot = await copyMantisLaneArtifact({
@@ -353,11 +355,17 @@ async function runLane(params: {
     lane: params.lane,
     result,
   });
-  return {
-    ...result,
-    screenshotPath: copiedScreenshot ?? result.screenshotPath,
-    videoPath: copiedVideo ?? result.videoPath,
-  } satisfies LaneResult;
+  // Reports are rendered before publication, so expose final stable paths while
+  // the bytes remain in this run's private staging directory.
+  return remapMantisLaneResult({
+    publishedLaneDir,
+    result: {
+      ...result,
+      screenshotPath: copiedScreenshot ?? result.screenshotPath,
+      videoPath: copiedVideo ?? result.videoPath,
+    },
+    stagedLaneDir,
+  }) satisfies LaneResult;
 }
 
 export async function runMantisBeforeAfter(
@@ -402,6 +410,7 @@ export async function runMantisBeforeAfter(
   const comparisonPath = path.join(outputDir, "comparison.json");
   const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
+  let staging: MantisRunStaging | undefined;
 
   try {
     await removeLegacyMantisWorktrees({
@@ -410,6 +419,8 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
     });
+    staging = await createMantisRunStaging({ outputDir, outputRoot, runId });
+    const stagingRoot = await root(staging.dir);
     const commonOpts = {
       credentialRole: trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE,
       credentialSource: trimToValue(opts.credentialSource) ?? DEFAULT_CREDENTIAL_SOURCE,
@@ -427,6 +438,7 @@ export async function runMantisBeforeAfter(
       runner,
       scenario,
       signal: opts.signal,
+      stagingDir: staging.dir,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
@@ -440,6 +452,7 @@ export async function runMantisBeforeAfter(
       runner,
       scenario,
       signal: opts.signal,
+      stagingDir: staging.dir,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
@@ -468,8 +481,8 @@ export async function runMantisBeforeAfter(
     if (opts.signal?.aborted) {
       throw new Error("Mantis artifact processing aborted", { cause: opts.signal.reason });
     }
-    await outputRoot.write("comparison.json", `${JSON.stringify(comparison, null, 2)}\n`);
-    await outputRoot.write(
+    await stagingRoot.write("comparison.json", `${JSON.stringify(comparison, null, 2)}\n`);
+    await stagingRoot.write(
       "mantis-report.md",
       renderReport({
         baseline: baselineResult,
@@ -479,7 +492,7 @@ export async function runMantisBeforeAfter(
         scenarioConfig,
       }),
     );
-    await outputRoot.write(
+    await stagingRoot.write(
       "mantis-evidence.json",
       `${JSON.stringify(
         buildEvidenceManifest({
@@ -493,6 +506,7 @@ export async function runMantisBeforeAfter(
         2,
       )}\n`,
     );
+    await publishMantisRunOutput({ outputRoot, runId, staging });
     return {
       comparisonPath,
       manifestPath,
@@ -501,8 +515,20 @@ export async function runMantisBeforeAfter(
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
+    let failure = error;
+    if (staging) {
+      try {
+        await removeMantisRunStaging({ outputRoot, staging });
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [error, cleanupError],
+          "Mantis run failed and artifact staging cleanup failed",
+          { cause: error },
+        );
+      }
+    }
     return throwMantisRunFailure({
-      error,
+      error: failure,
       outputDir,
       outputRoot,
     });

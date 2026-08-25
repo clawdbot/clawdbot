@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-summary.js";
+import { publishMantisRunOutput } from "./run-artifacts.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import {
   failedCommandResult,
@@ -27,6 +29,9 @@ describe("mantis before/after runtime", () => {
 
   it("runs baseline and candidate worktrees and writes stable comparison artifacts", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "test-run");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, "error.txt"), "stale failure", "utf8");
+    await fs.writeFile(path.join(outputDir, "unrelated.txt"), "preserve me", "utf8");
     const commands: { args: readonly string[]; command: string; stage: string }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       commands.push({ command, args, stage: execution.stage });
@@ -173,6 +178,17 @@ describe("mantis before/after runtime", () => {
     await expect(
       fs.readFile(path.join(result.outputDir, "candidate", "candidate.mp4"), "utf8"),
     ).resolves.toBe("candidate video");
+    await expect(fs.stat(path.join(result.outputDir, "error.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.readFile(path.join(result.outputDir, "unrelated.txt"), "utf8")).resolves.toBe(
+      "preserve me",
+    );
+    expect(
+      (await fs.readdir(result.outputDir)).filter(
+        (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
+      ),
+    ).toEqual([]);
     await expect(fs.stat(baselineWorktreeDir)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -489,6 +505,13 @@ describe("mantis before/after runtime", () => {
 
   it("writes top-level failure diagnostics when the candidate lane fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "candidate-failure");
+    await fs.mkdir(path.join(outputDir, "baseline"), { recursive: true });
+    await fs.mkdir(path.join(outputDir, "candidate"), { recursive: true });
+    await fs.writeFile(path.join(outputDir, "baseline", "old.txt"), "old baseline", "utf8");
+    await fs.writeFile(path.join(outputDir, "candidate", "old.txt"), "old candidate", "utf8");
+    for (const fileName of ["comparison.json", "mantis-report.md", "mantis-evidence.json"]) {
+      await fs.writeFile(path.join(outputDir, fileName), `old ${fileName}`, "utf8");
+    }
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
         if (path.basename(String(args[4])).startsWith("candidate-")) {
@@ -525,7 +548,77 @@ describe("mantis before/after runtime", () => {
     await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
       "candidate worktree-add",
     );
-    await expect(fs.stat(path.join(outputDir, "baseline"))).resolves.toBeDefined();
+    await expect(fs.readFile(path.join(outputDir, "baseline", "old.txt"), "utf8")).resolves.toBe(
+      "old baseline",
+    );
+    await expect(fs.readFile(path.join(outputDir, "candidate", "old.txt"), "utf8")).resolves.toBe(
+      "old candidate",
+    );
+    for (const fileName of ["comparison.json", "mantis-report.md", "mantis-evidence.json"]) {
+      await expect(fs.readFile(path.join(outputDir, fileName), "utf8")).resolves.toBe(
+        `old ${fileName}`,
+      );
+    }
+    expect(
+      (await fs.readdir(outputDir)).filter((entry) => entry.startsWith(".mantis-staged-")),
+    ).toEqual([]);
+  });
+
+  it("rolls the complete stable artifact set back when publication fails", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "rollback");
+    const staging = {
+      dir: path.join(outputDir, ".mantis-staged-test"),
+      relative: ".mantis-staged-test",
+    };
+    const stableFiles = ["comparison.json", "mantis-report.md", "mantis-evidence.json"];
+    for (const lane of ["baseline", "candidate"]) {
+      await fs.mkdir(path.join(outputDir, lane), { recursive: true });
+      await fs.writeFile(path.join(outputDir, lane, "old.txt"), `old ${lane}`, "utf8");
+      await fs.mkdir(path.join(staging.dir, lane), { recursive: true });
+      await fs.writeFile(path.join(staging.dir, lane, "new.txt"), `new ${lane}`, "utf8");
+    }
+    for (const fileName of stableFiles) {
+      await fs.writeFile(path.join(outputDir, fileName), `old ${fileName}`, "utf8");
+      await fs.writeFile(path.join(staging.dir, fileName), `new ${fileName}`, "utf8");
+    }
+    const outputRoot = await root(outputDir);
+    const publicationError = new Error("candidate publication failed");
+
+    await expect(
+      publishMantisRunOutput({
+        outputRoot: {
+          exists: outputRoot.exists.bind(outputRoot),
+          list: outputRoot.list.bind(outputRoot),
+          mkdir: outputRoot.mkdir.bind(outputRoot),
+          move: vi.fn(async (from, to, options) => {
+            if (from === `${staging.relative}/candidate` && to === "candidate") {
+              throw publicationError;
+            }
+            await outputRoot.move(from, to, options);
+          }),
+          remove: outputRoot.remove.bind(outputRoot),
+          stat: outputRoot.stat.bind(outputRoot),
+        },
+        runId: "test",
+        staging,
+      }),
+    ).rejects.toBe(publicationError);
+
+    for (const lane of ["baseline", "candidate"]) {
+      await expect(fs.readFile(path.join(outputDir, lane, "old.txt"), "utf8")).resolves.toBe(
+        `old ${lane}`,
+      );
+    }
+    for (const fileName of stableFiles) {
+      await expect(fs.readFile(path.join(outputDir, fileName), "utf8")).resolves.toBe(
+        `old ${fileName}`,
+      );
+    }
+    expect(
+      (await fs.readdir(outputDir)).filter(
+        (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
+      ),
+    ).toEqual([]);
   });
 
   it("retains the owned worktree and writes diagnostics when cleanup fails", async () => {
