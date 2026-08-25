@@ -13,6 +13,7 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
+  getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
@@ -4364,10 +4365,12 @@ describe("agent event handler", () => {
   });
 
   it("forwards restart recovery provenance to terminal persistence", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const { handler } = createHarness({
       resolveSessionKeyForRun: () => "session-recovery",
     });
     registerAgentRunContext("run-recovery", {
+      lifecycleGeneration,
       mainSessionRestartRecovery: true,
       sessionKey: "session-recovery",
     });
@@ -4385,6 +4388,7 @@ describe("agent event handler", () => {
       "persist lifecycle params",
     );
     expect(requireRecord(persistParams.event, "persist lifecycle event")).toMatchObject({
+      lifecycleGeneration,
       mainSessionRestartRecovery: true,
       runId: "run-recovery",
     });
@@ -4481,7 +4485,11 @@ describe("agent event handler", () => {
       expect(agentRunSeq.has(runId)).toBe(false);
       expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
         agentId: "work",
-        event: received,
+        event: expect.objectContaining({
+          data,
+          lifecycleGeneration: received.lifecycleGeneration,
+          runId,
+        }),
         sessionKey: "agent:work:shared",
       });
       await waitForFast(() => {

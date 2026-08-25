@@ -645,6 +645,8 @@ describe("session lifecycle state", () => {
     );
 
     expect(persisted.status).toBe("failed");
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
     expect(loggerMocks.warn).toHaveBeenCalledWith(
       "main-session restart recovery terminal: session=agent:main:main run=recovery-run status=error reason=failed",
     );

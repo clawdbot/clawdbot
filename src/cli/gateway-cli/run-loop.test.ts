@@ -149,6 +149,16 @@ const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>
   async (_reason: string) => null,
 );
 const abortPendingChannelReloads = vi.fn();
+const abortEmbeddedAgentRun = vi.fn(
+  (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
+);
+const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
+const listActiveEmbeddedRunSessionKeys = vi.fn(() => [] as string[]);
+const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
+  marked: 1,
+  skipped: 0,
+}));
+const loadConfig = vi.fn(() => ({}));
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const gatewayLog = {
   debug: vi.fn(),
@@ -252,6 +262,24 @@ vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
   getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
+}));
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  abortEmbeddedAgentRun: (
+    sessionId?: string,
+    opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  ) => abortEmbeddedAgentRun(sessionId, opts),
+  listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
+  listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
+}));
+
+vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
+  markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
+  loadConfig: () => loadConfig(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -1021,16 +1049,27 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("leaves recovery marking and abort to server close after an unbounded drain", async () => {
+  it("does not mark drain-start runs before server close revalidates them", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
-    createGatewayActiveWorkSnapshot
-      .mockReturnValueOnce(
-        createActiveWorkSnapshot({ embeddedRuns: 1 }, [
-          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
-        ]),
-      )
-      .mockReturnValue(idleActiveWorkSnapshot);
+    const drainStart = createActiveWorkSnapshot({ embeddedRuns: 2 }, [
+      { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
+    ]);
+    let releaseDrain: (() => void) | undefined;
+    const pendingDrain = new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    });
+    createGatewayActiveWorkSnapshot.mockReturnValueOnce(drainStart);
+    listActiveEmbeddedRunSessionIds.mockReturnValue(["session-finished", "session-active"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValue(["agent:main:finished", "agent:main:active"]);
+    waitForGatewayActiveWork.mockImplementationOnce(async () => {
+      // One run settles while the other keeps the restart drain open. Recovery
+      // ownership must be collected later by server close, after this window.
+      listActiveEmbeddedRunSessionIds.mockReturnValue(["session-active"]);
+      listActiveEmbeddedRunSessionKeys.mockReturnValue(["agent:main:active"]);
+      await pendingDrain;
+      return { drained: true, snapshot: idleActiveWorkSnapshot };
+    });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -1038,16 +1077,17 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await vi.waitFor(() => expect(waitForGatewayActiveWork).toHaveBeenCalledOnce());
+
+      expect(markRestartAbortedMainSessions).not.toHaveBeenCalled();
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+
+      releaseDrain?.();
+      await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
 
       expect(waitForGatewayActiveWork).toHaveBeenCalledWith(undefined, expect.any(Object));
       expectRestartCloseCall(close, 15_000);
-      expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
       await expect(exited).resolves.toBe(0);
