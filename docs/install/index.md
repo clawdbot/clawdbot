@@ -159,6 +159,13 @@ openclaw onboard --install-daemon
 
 Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
+### OS packages and application bundles
+
+Distributors that bundle OpenClaw and own its updates should follow the
+[external package ownership contract](/install/external-packages). It defines
+the required environment, foreground Gateway lifecycle, update ordering, and
+state-preservation boundary.
+
 ### Install from the GitHub main checkout
 
 ```bash

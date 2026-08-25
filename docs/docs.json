@@ -1084,6 +1084,7 @@
                 "pages": [
                   "install/index",
                   "install/installer",
+                  "install/external-packages",
                   "install/node"
                 ]
               },
