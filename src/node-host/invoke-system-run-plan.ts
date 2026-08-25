@@ -94,16 +94,15 @@ export function hardenApprovedExecutionPaths(params: {
     };
   }
 
-  let hardenedCwd = params.cwd;
-  let approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
-  if (hardenedCwd) {
-    const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd);
-    if (!canonicalCwd.ok) {
-      return canonicalCwd;
-    }
-    hardenedCwd = canonicalCwd.snapshot.cwd;
-    approvedCwdSnapshot = canonicalCwd.snapshot;
+  // Capture an omitted cwd once on the execution host. Approval, persistence,
+  // revalidation, and process launch must all bind the same directory identity.
+  let hardenedCwd = params.cwd ?? process.cwd();
+  const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd);
+  if (!canonicalCwd.ok) {
+    return canonicalCwd;
   }
+  hardenedCwd = canonicalCwd.snapshot.cwd;
+  const approvedCwdSnapshot = canonicalCwd.snapshot;
 
   const resolution = resolveCommandResolutionFromArgv(params.argv, hardenedCwd);
   if (

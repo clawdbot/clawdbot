@@ -31,7 +31,7 @@ import {
 } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
-  buildHashedArgPatternFromArgv,
+  buildCwdBoundHashedArgPattern,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
 import {
@@ -1807,7 +1807,10 @@ describe("processGatewayAllowlist", () => {
       env,
       autoReview: false,
     });
-    const expectedGitArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/git", "status"]);
+    const expectedGitArgPattern = buildCwdBoundHashedArgPattern(
+      ["/usr/bin/git", "status"],
+      process.cwd(),
+    );
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({

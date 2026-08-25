@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { isPathInside, safeStatSync } from "../infra/path-guards.js";
@@ -60,7 +61,7 @@ function unavailable(requestedCwd: string): ExecWorkdirResolution {
 
 function resolveExistingHostWorkdir(workdir: string): string | null {
   const stats = safeStatSync(workdir);
-  return stats?.isDirectory() ? workdir : null;
+  return stats?.isDirectory() ? (safeRealpathSync(workdir) ?? path.resolve(workdir)) : null;
 }
 
 function safeCurrentCwd(): string | null {

@@ -2002,6 +2002,7 @@ export const en: TranslationMap = {
     agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
     reviewOnly: "Review only. Sign in with approval access to record a decision.",
     deny: "Deny",

@@ -737,7 +737,7 @@ enum ExecApprovalsPromptPresenter {
         case .allowOnce:
             "Allow Once"
         case .allowAlways:
-            "Always Allow"
+            "Always Allow Here"
         case .deny:
             "Don't Allow"
         }
@@ -890,12 +890,14 @@ private enum ExecHostExecutor {
         case let .failure(error):
             return self.errorResponse(error)
         }
+        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(request.cwd)
 
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
             rawCommand: validatedRequest.evaluationRawCommand,
-            displayCommand: validatedRequest.displayCommand)
+            displayCommand: validatedRequest.displayCommand,
+            cwd: effectiveCwd)
         let approvalSource = validatedRequest.approvalSource
         let security = ExecHostRequestEvaluator.effectiveSecurity(
             context: context,
@@ -918,7 +920,7 @@ private enum ExecHostExecutor {
             guard let decision = await ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
-                    cwd: request.cwd,
+                    cwd: effectiveCwd,
                     host: "node",
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
@@ -996,7 +998,7 @@ private enum ExecHostExecutor {
             persistAllowlist: persistAllowlist,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
-        let cwd = request.cwd
+        let cwd = effectiveCwd
         let env = context.env
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
@@ -1018,13 +1020,14 @@ private enum ExecHostExecutor {
         request: ExecHostRequest,
         command: [String],
         rawCommand: String?,
-        displayCommand: String) async -> ExecApprovalEvaluation
+        displayCommand: String,
+        cwd: String) async -> ExecApprovalEvaluation
     {
         await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: rawCommand,
             displayCommand: displayCommand,
-            cwd: request.cwd,
+            cwd: cwd,
             envOverrides: request.env,
             agentId: request.agentId)
     }
