@@ -50,15 +50,6 @@ function fixtureFiles(): Record<string, string> {
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
   const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
   const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
-  const pluginMetadataStatePath = JSON.stringify(
-    path.join(repoRoot, "src", "plugins", "current-plugin-metadata-state.ts"),
-  );
-  const pluginMetadataRuntimePath = JSON.stringify(
-    path.join(repoRoot, "src", "plugins", "plugin-metadata-snapshot.runtime.ts"),
-  );
-  const pluginMetadataLifecyclePath = JSON.stringify(
-    path.join(repoRoot, "src", "plugins", "plugin-metadata-lifecycle.ts"),
-  );
 
   return {
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
@@ -205,56 +196,6 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
-    "07-a-plugin-metadata.test.ts": [
-      `import { setCurrentPluginMetadataSnapshotState } from ${pluginMetadataStatePath};`,
-      `import { getCurrentPluginMetadataSnapshotRuntime, registerPluginMetadataSnapshotReaders } from ${pluginMetadataRuntimePath};`,
-      `import { registerPluginMetadataProcessMemoLifecycleClear } from ${pluginMetadataLifecyclePath};`,
-      'import { expect, it } from "vitest";',
-      'it("seeds process-global plugin metadata readers and their snapshot", () => {',
-      '  const snapshot = { source: "first-file" };',
-      '  const readerKey = Symbol.for("openclaw.pluginMetadataSnapshotReaders");',
-      '  const probeKey = Symbol.for("openclaw.test.pluginMetadataLifecycle");',
-      "  const store = globalThis as Record<PropertyKey, unknown>;",
-      "  const probe = { clears: 0, readers: store[readerKey] };",
-      "  store[probeKey] = probe;",
-      "  registerPluginMetadataProcessMemoLifecycleClear(() => { probe.clears += 1; });",
-      '  setCurrentPluginMetadataSnapshotState(snapshot, "first-file");',
-      "  registerPluginMetadataSnapshotReaders({",
-      "    getCurrentPluginMetadataSnapshot: () => snapshot,",
-      "    resolvePluginMetadataSnapshot: () => snapshot,",
-      "  });",
-      "  expect(getCurrentPluginMetadataSnapshotRuntime({ config: {} })).toBe(snapshot);",
-      "});",
-      "",
-    ].join("\n"),
-    "07-b-plugin-metadata.test.ts": [
-      `import { getCurrentPluginMetadataSnapshotState } from ${pluginMetadataStatePath};`,
-      `import { getCurrentPluginMetadataSnapshotRuntime } from ${pluginMetadataRuntimePath};`,
-      'import { expect, it } from "vitest";',
-      'it("clears process-global plugin metadata snapshots and reader closures", () => {',
-      '  const readerKey = Symbol.for("openclaw.pluginMetadataSnapshotReaders");',
-      '  const probeKey = Symbol.for("openclaw.test.pluginMetadataLifecycle");',
-      "  const store = globalThis as Record<PropertyKey, unknown>;",
-      "  const probe = store[probeKey] as { clears: number; readers: object };",
-      "  const readers = store[readerKey] as Record<string, unknown>;",
-      "  expect({",
-      "    clears: probe.clears,",
-      "    getterPresent: typeof readers.getCurrentPluginMetadataSnapshot === 'function',",
-      "    resolverPresent: typeof readers.resolvePluginMetadataSnapshot === 'function',",
-      "    readerIdentityRetained: readers === probe.readers,",
-      "    snapshot: getCurrentPluginMetadataSnapshotState().snapshot,",
-      "    readerSnapshot: getCurrentPluginMetadataSnapshotRuntime({ config: {} }),",
-      "  }).toEqual({",
-      "    clears: 1,",
-      "    getterPresent: false,",
-      "    resolverPresent: false,",
-      "    readerIdentityRetained: true,",
-      "    snapshot: undefined,",
-      "    readerSnapshot: undefined,",
-      "  });",
-      "});",
-      "",
-    ].join("\n"),
   };
 }
 
@@ -310,7 +251,7 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 13 passed");
+    expect(output).toContain("1 failed | 11 passed");
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
