@@ -416,6 +416,7 @@ describe("resolveMediaList", () => {
         {
           path: "/tmp/voice.ogg",
           contentType: undefined,
+          fileName: "voice.ogg",
           kind: "audio",
         },
       ]);
@@ -465,6 +466,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "image.ogg",
       },
     ]);
   });
@@ -481,6 +483,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/voice",
         contentType: "audio/ogg",
+        fileName: "voice",
         kind: "audio",
       },
     ]);
@@ -516,6 +519,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "voice.ogg",
       },
     ]);
   });
@@ -574,6 +578,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/good.png",
         contentType: "image/png",
+        fileName: "good.png",
       },
       {
         contentType: "application/pdf",
