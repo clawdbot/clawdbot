@@ -10,6 +10,7 @@ import {
   peekChatMetadata,
   rememberChatMetadata,
   revalidateChatMetadata,
+  subscribeChatMetadata,
   type ChatMetadataResult,
 } from "./chat-metadata-store.ts";
 
@@ -98,6 +99,21 @@ describe("chat metadata store", () => {
     expect(peekChatMetadata(client, "main")).toBe(result);
     await expect(loadChatMetadata(client, "main")).resolves.toBe(result);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("notifies subscribers across publication and invalidation", () => {
+    const client = clientWith(vi.fn());
+    const listener = vi.fn();
+    const unsubscribe = subscribeChatMetadata(client, "main", listener);
+
+    rememberChatMetadata(client, "main", metadata("first-model"));
+    invalidateChatMetadataStore(client);
+    rememberChatMetadata(client, "main", metadata("second-model"));
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    rememberChatMetadata(client, "main", metadata("ignored-model"));
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("drops every agent snapshot when the client store is invalidated", async () => {

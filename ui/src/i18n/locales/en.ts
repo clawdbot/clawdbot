@@ -5774,6 +5774,7 @@ export const en: TranslationMap = {
       refreshingModels: "Refreshing models…",
       modelsUnavailable: "Models unavailable",
       noModelsAvailable: "No models available",
+      emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
       fastResponsesAria: "Fast responses: {state}",
     },
