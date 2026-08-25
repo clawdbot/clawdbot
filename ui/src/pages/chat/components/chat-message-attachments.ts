@@ -319,6 +319,26 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
+function retryManagedAttachmentAvailability(
+  attachment: AttachmentItem["attachment"],
+  onRequestUpdate: (() => void) | undefined,
+): void {
+  if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
+    return;
+  }
+  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+    "managed-media",
+    `${attachment.url}::${attachment.artifactId}`,
+    onRequestUpdate,
+    attachment.url,
+  );
+  resource.value = undefined;
+  resource.retryAttempted = false;
+  resource.unavailableAt = undefined;
+  notifyChatMediaResourceSubscribers(resource);
+  onRequestUpdate?.();
+}
+
 export function renderAssistantAttachments(
   attachments: AttachmentItem[],
   options: ImageRenderOptions,
@@ -387,8 +407,7 @@ export function renderAssistantAttachments(
       (isManagedOutgoingMediaSource(attachment.url) &&
         Boolean(attachment.artifactId && resolveArtifactDownload));
     const retryUnavailableAttachment =
-      availability.status === "unavailable" &&
-      (!("recoverable" in availability) || availability.recoverable)
+      assistantAvailability.status === "unavailable" && assistantAvailability.recoverable
         ? () =>
             retryAssistantAttachmentAvailability(
               attachment.url,
@@ -396,6 +415,9 @@ export function renderAssistantAttachments(
               authToken,
               onRequestUpdate,
             )
+        : managedAvailability?.status === "unavailable" &&
+            Boolean(attachment.artifactId && resolveArtifactDownload)
+          ? () => retryManagedAttachmentAvailability(attachment, onRequestUpdate)
         : undefined;
     const openAttachmentSidebar = attachmentUrl
       ? () =>

@@ -38,6 +38,43 @@ afterEach(() => {
 });
 
 describe("attachment sidebar source ownership", () => {
+  it("retries a failed managed attachment resolution", async () => {
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_document_${attachmentId}`;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${source}?mediaTicket=recovered`;
+    const resolveArtifactDownload = vi
+      .fn<() => Promise<{ url: string } | null>>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ url: ticketedUrl });
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () =>
+      render(
+        renderAssistantAttachments([managedAttachment(source, artifactId)], {
+          onRequestUpdate: rerender,
+          resolveArtifactDownload,
+        }),
+        container,
+      );
+    subscribers.add(rerender);
+
+    rerender();
+    await flushAttachmentResolution();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry")?.click();
+    await flushAttachmentResolution();
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(ticketedUrl);
+    container.remove();
+  });
+
   it("keeps static attachment URLs as static sidebar sources", async () => {
     const source = "https://example.com/clip.mp4";
     const container = document.body.appendChild(document.createElement("div"));
