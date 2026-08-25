@@ -162,7 +162,7 @@ describe("extractToolResultMediaArtifact", () => {
                 sizeBytes: Infinity,
                 durationMs: -1,
                 width: "1920",
-                height: NaN,
+                height: Number.NaN,
                 trustedLocalMedia: true,
               },
               {

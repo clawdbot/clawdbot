@@ -331,7 +331,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       blockReplyBreak: "message_end",
       builtinToolNames: new Set(["music_generate"]),
     });
-    const path = "/tmp/generated-song.mp3";
+    const mediaPath = "/tmp/generated-song.mp3";
 
     emitToolRun({
       emit,
@@ -342,8 +342,10 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [{ type: "text", text: "Generated media." }],
         details: {
           media: {
-            mediaUrls: [path],
-            attachments: [{ type: "audio", path, name: 1, mimeType: null, durationMs: -1 }],
+            mediaUrls: [mediaPath],
+            attachments: [
+              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
+            ],
           },
         },
       },
@@ -356,8 +358,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onBlockReply).toHaveBeenCalledOnce();
     expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
       text: "Here is your generated song.",
-      mediaUrls: [path],
-      attachments: [{ type: "audio", path }],
+      mediaUrls: [mediaPath],
+      attachments: [{ type: "audio", path: mediaPath }],
     });
   });
 
