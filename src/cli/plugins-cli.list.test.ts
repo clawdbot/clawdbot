@@ -73,7 +73,8 @@ describe("plugins cli list", () => {
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
-  it("shows plugin load errors and healthy descriptions in the default list", async () => {
+  it("distinguishes plugin load errors from disabled reasons across list formats", async () => {
+    const disabledReason = "workspace plugin (disabled by default)";
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       registrySource: "persisted",
@@ -91,7 +92,8 @@ describe("plugins cli list", () => {
           description: "Disabled plugin description",
           enabled: false,
           status: "disabled",
-          error: "workspace plugin (disabled by default)",
+          error: disabledReason,
+          activationReason: disabledReason,
         }),
       ],
       diagnostics: [],
@@ -103,6 +105,13 @@ describe("plugins cli list", () => {
     expect(output).toContain("missing plugin module");
     expect(output).toContain("Healthy plugin");
     expect(output).toContain("Disabled plugin description");
+
+    await runPluginsCommand(["plugins", "list", "--verbose"]);
+
+    const verboseOutput = pluginsCliRuntimeLogs.at(-1) ?? "";
+    expect(verboseOutput).toContain(`activation reason: ${disabledReason}`);
+    expect(verboseOutput).not.toContain(`error: ${disabledReason}`);
+    expect(verboseOutput).toContain("error: missing plugin module");
   });
 
   it.each([
@@ -876,7 +885,7 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
 
-  it("keeps inspect on the static snapshot by default", async () => {
+  it("keeps inspect on the static snapshot and distinguishes disabled reasons from errors", async () => {
     setInstalledPluginIndexInstallRecords({
       "openclaw-mem0": {
         source: "clawhub",
@@ -900,7 +909,7 @@ describe("plugins cli list", () => {
       plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
       diagnostics: [],
     });
-    buildPluginInspectReportMock.mockReturnValue({
+    const inspectReport = {
       workspaceDir: "/workspace",
       plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
       shape: "hook-only",
@@ -930,7 +939,8 @@ describe("plugins cli list", () => {
       },
       usesLegacyBeforeAgentStart: false,
       compatibility: [],
-    });
+    };
+    buildPluginInspectReportMock.mockReturnValue(inspectReport);
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
@@ -948,6 +958,42 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("remote");
     expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
+
+    for (const { id, status, detail, label } of [
+      {
+        id: "workspace-disabled",
+        status: "disabled" as const,
+        detail: "workspace plugin (disabled by default)",
+        label: "Reason",
+      },
+      { id: "broken", status: "error" as const, detail: "missing plugin module", label: "Error" },
+    ]) {
+      const plugin = createPluginRecord({
+        id,
+        enabled: status !== "disabled",
+        status,
+        error: detail,
+        ...(status === "disabled" ? { activationReason: detail } : {}),
+      });
+      buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
+      buildPluginInspectReportMock.mockReturnValue({ ...inspectReport, plugin });
+
+      await runPluginsCommand(["plugins", "inspect", id]);
+
+      const inspectOutput = pluginsCliRuntimeLogs.at(-1) ?? "";
+      expect(inspectOutput).toContain(`Status: ${status}`);
+      expect(inspectOutput).toContain(`${label}: ${detail}`);
+      expect(inspectOutput).not.toContain(`${label === "Reason" ? "Error" : "Reason"}: ${detail}`);
+
+      if (status === "disabled") {
+        await runPluginsCommand(["plugins", "inspect", id, "--json"]);
+        expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null").plugin).toMatchObject({
+          status: "disabled",
+          error: detail,
+          activationReason: detail,
+        });
+      }
+    }
   });
 
   it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {

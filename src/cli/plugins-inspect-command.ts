@@ -415,7 +415,9 @@ export async function runPluginsInspectCommand(
   );
   lines.push(...formatInspectSection("Install", formatInstallLines(install)));
   if (inspect.plugin.error) {
-    lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
+    const label =
+      inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
+    lines.push("", `${label} ${inspect.plugin.error}`);
   }
   defaultRuntime.log(lines.join("\n"));
 }
