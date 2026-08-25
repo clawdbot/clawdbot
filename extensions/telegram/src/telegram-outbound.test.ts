@@ -33,6 +33,29 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.pollMaxOptions).toBe(12);
   });
 
+  it("uses the rich-message limit before the shared outbound chunker", () => {
+    const resolveLimit = telegramOutbound.resolveEffectiveTextChunkLimit;
+    expect(resolveLimit?.({ cfg: {}, accountId: "default", fallbackLimit: 4000 })).toBe(4000);
+    expect(
+      resolveLimit?.({
+        cfg: { channels: { telegram: { richMessages: true } } },
+        accountId: "default",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(32768);
+  });
+
+  it("preserves an explicitly configured lower rich-message limit", () => {
+    expect(
+      telegramOutbound.resolveEffectiveTextChunkLimit?.({
+        cfg: {
+          channels: { telegram: { richMessages: true, textChunkLimit: 1200 } },
+        },
+        accountId: "default",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(1200);
+  });
   it("strips assistant-visible tool traces before outbound delivery", () => {
     clearTelegramRuntime();
     const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';

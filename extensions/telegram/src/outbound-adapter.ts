@@ -10,7 +10,10 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  resolveTextChunkLimit,
+  chunkMarkdownTextWithMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequenceOrFallback,
@@ -33,6 +36,7 @@ import {
   resolveTelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
+import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
@@ -572,8 +576,18 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) => {
+      const richMessages =
+        mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+          .richMessages === true;
+      const platformLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
+      return Math.min(
+        resolveTextChunkLimit(cfg, "telegram", accountId ?? undefined, {
+          fallbackLimit: platformLimit,
+        }),
+        platformLimit,
+      );
+    },
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,
