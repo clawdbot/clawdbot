@@ -1,8 +1,14 @@
 import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliSubscriptionRateLimit,
+  CliTerminalFailure,
+  CliUsage,
+} from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -501,6 +507,49 @@ export function parseClaudeCliJsonlResult(params: {
     return { text: "", sessionId: params.sessionId, usage: params.usage };
   }
   return null;
+}
+
+const rateLimitStatusSchema = z.enum(["allowed", "allowed_warning", "rejected"]);
+const claudeCliRateLimitRecordSchema = z.object({
+  type: z.literal("rate_limit_event"),
+  rate_limit_info: z.object({
+    status: rateLimitStatusSchema,
+    rateLimitType: z.string().optional(),
+    utilization: z.number().min(0).max(1).optional(),
+    resetsAt: z.number().nonnegative().optional(),
+    overageStatus: rateLimitStatusSchema.optional(),
+    overageDisabledReason: z.string().optional(),
+    isUsingOverage: z.boolean().optional(),
+    errorCode: z.string().optional(),
+    unifiedWindows: z
+      .record(
+        z.string(),
+        z.object({ utilization: z.number().min(0).max(1), resetsAt: z.number().nonnegative() }),
+      )
+      .optional(),
+  }),
+});
+
+export function parseClaudeCliRateLimit(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): CliSubscriptionRateLimit | undefined {
+  if (!isClaudeStreamJsonDialect(params) || params.parsed.type !== "rate_limit_event") {
+    return undefined;
+  }
+  // A malformed optional field drops the whole diagnostic record instead of partially recording it.
+  const result = claudeCliRateLimitRecordSchema.safeParse(params.parsed);
+  if (!result.success) {
+    return undefined;
+  }
+  const { unifiedWindows, utilization, resetsAt, ...rateLimit } = result.data.rate_limit_info;
+  // The SDK-typed shape carries only the binding window at top level; fold it into the window map.
+  const bindingWindow =
+    rateLimit.rateLimitType !== undefined && utilization !== undefined && resetsAt !== undefined
+      ? { [rateLimit.rateLimitType]: { utilization, resetsAt } }
+      : {};
+  return { ...rateLimit, windows: unifiedWindows ?? bindingWindow };
 }
 
 // A tool-split turn streams pre-tool answer text the terminal result envelope

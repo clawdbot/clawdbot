@@ -9,6 +9,7 @@ import type {
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
+  CliSubscriptionRateLimit,
   CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
@@ -35,6 +36,7 @@ import {
   isStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
+  parseClaudeCliRateLimit,
   parseClaudeCliStreamingDelta,
   pickCliResumeCheckpointId,
   pickCliSessionId,
@@ -131,6 +133,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
+  let rateLimit: CliSubscriptionRateLimit | undefined;
   let parseErrorText = "";
   let rawChars = 0;
   let rawLines = 0;
@@ -301,6 +304,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     if (parseErrorText) {
       return;
+    }
+    const parsedRateLimit = parseClaudeCliRateLimit({ ...params, parsed });
+    if (parsedRateLimit) {
+      rateLimit = parsedRateLimit;
     }
     const parsedSessionId = pickCliSessionId(parsed, params.backend);
     if (parsed.type === "result" && isStreamJsonDialect(params)) {
@@ -650,47 +657,53 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return sawTerminalResult;
     },
     getOutput() {
-      if (parseErrorText) {
-        return {
-          text: "",
-          sessionId,
-          usage,
-          ...(diagnosticUsage ? { diagnosticUsage } : {}),
-          errorText: parseErrorText,
-        };
-      }
-      if (output) {
-        return output;
-      }
-      if (rawLines === 0) {
-        return null;
-      }
-      if (sawCustomJsonlEvent) {
-        return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
-      }
-      if (isStreamJsonDialect(params) && assistantText.trim()) {
-        return {
-          text: assistantText.trim(),
-          sessionId,
-          usage,
-          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
-        };
-      }
-      if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
-        return { text: "", sessionId, usage };
-      }
-      if (isStreamJsonDialect(params)) {
-        return {
-          text: "",
-          sessionId,
-          usage,
-          errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
-        };
-      }
-      const text = texts.join("\n").trim();
-      return text
-        ? { text, sessionId, usage, ...(resumeCheckpointId ? { resumeCheckpointId } : {}) }
-        : null;
+      const buildOutput = (): CliOutput | null => {
+        if (parseErrorText) {
+          return {
+            text: "",
+            sessionId,
+            usage,
+            ...(diagnosticUsage ? { diagnosticUsage } : {}),
+            errorText: parseErrorText,
+          };
+        }
+        if (output) {
+          return output;
+        }
+        if (rawLines === 0) {
+          return null;
+        }
+        if (sawCustomJsonlEvent) {
+          return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
+        }
+        if (isStreamJsonDialect(params) && assistantText.trim()) {
+          return {
+            text: assistantText.trim(),
+            sessionId,
+            usage,
+            ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          };
+        }
+        if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
+          return { text: "", sessionId, usage };
+        }
+        if (isStreamJsonDialect(params)) {
+          return {
+            text: "",
+            sessionId,
+            usage,
+            errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
+          };
+        }
+        const text = texts.join("\n").trim();
+        return text
+          ? { text, sessionId, usage, ...(resumeCheckpointId ? { resumeCheckpointId } : {}) }
+          : null;
+      };
+      const builtOutput = buildOutput();
+      return rateLimit && builtOutput
+        ? { ...builtOutput, diagnostics: { ...builtOutput.diagnostics, rateLimit } }
+        : builtOutput;
     },
   };
 }

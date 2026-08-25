@@ -2,6 +2,7 @@ import type { CliOutput } from "../cli-output-contracts.js";
 import { formatCliOutputError } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { formatCliSubscriptionRateLimitDigest } from "./log.js";
 
 export function createCliOutputFailoverError(params: {
   output: CliOutput;
@@ -22,6 +23,10 @@ export function createCliOutputFailoverError(params: {
   const reason = syntheticNoResponse
     ? "format"
     : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
+  const messageWithRateLimit =
+    params.output.diagnostics?.rateLimit && (reason === "billing" || reason === "rate_limit")
+      ? `${message} Subscription rate limit: ${formatCliSubscriptionRateLimitDigest(params.output.diagnostics.rateLimit)}.`
+      : message;
   const code =
     params.output.terminalFailure?.reason === "max_turns"
       ? "cli_max_turns"
@@ -30,7 +35,7 @@ export function createCliOutputFailoverError(params: {
         : reason === "context_overflow"
           ? "cli_context_overflow"
           : undefined;
-  return new FailoverError(message, {
+  return new FailoverError(messageWithRateLimit, {
     reason,
     provider: params.provider,
     model: params.model,

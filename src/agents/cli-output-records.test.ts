@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseClaudeCliRateLimit } from "./cli-output-records.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
 
@@ -542,6 +543,32 @@ describe("parseCliOutput", () => {
 });
 
 describe("parseCliJsonl record usage", () => {
+  it("synthesizes a window from the SDK-typed top-level shape", () => {
+    expect(
+      parseClaudeCliRateLimit({
+        backend: {
+          command: "claude",
+          output: "jsonl",
+          jsonlDialect: "claude-stream-json",
+        },
+        providerId: "claude-cli",
+        parsed: {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            utilization: 0.5,
+            resetsAt: 1787680200,
+          },
+        },
+      }),
+    ).toEqual({
+      status: "allowed",
+      rateLimitType: "five_hour",
+      windows: { five_hour: { utilization: 0.5, resetsAt: 1787680200 } },
+    });
+  });
+
   it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
     const parser = createCliJsonlStreamingParser({
       backend: {

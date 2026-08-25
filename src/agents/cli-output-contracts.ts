@@ -35,6 +35,18 @@ export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
 };
 
+export type CliSubscriptionRateLimit = {
+  status: "allowed" | "allowed_warning" | "rejected";
+  /** Wire id of the binding window (`five_hour`, `seven_day`); Anthropic may add ids without notice. */
+  rateLimitType?: string;
+  /** Utilization 0..1 and unix-second reset per wire window id, in wire order. */
+  windows: Record<string, { utilization: number; resetsAt: number }>;
+  overageStatus?: "allowed" | "allowed_warning" | "rejected";
+  overageDisabledReason?: string;
+  isUsingOverage?: boolean;
+  errorCode?: string;
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
@@ -52,6 +64,7 @@ export type CliOutput = {
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
     process?: CliProcessDiagnostics;
+    rateLimit?: CliSubscriptionRateLimit;
   };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;

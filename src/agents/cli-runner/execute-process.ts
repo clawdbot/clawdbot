@@ -24,7 +24,11 @@ import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
-import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
+import {
+  cliBackendLog,
+  formatCliBackendOutputDigest,
+  formatCliSubscriptionRateLimitDigest,
+} from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import {
   createCliTimeoutError,
@@ -501,8 +505,11 @@ export async function executeCliProcess(params: {
     throw parsedError;
   }
   const rawText = parsed.text;
+  const rateLimitDigest = parsed.diagnostics?.rateLimit
+    ? ` ${formatCliSubscriptionRateLimitDigest(parsed.diagnostics.rateLimit)}`
+    : "";
   cliBackendLog.info(
-    `cli turn: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - params.cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
+    `cli turn: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - params.cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}${rateLimitDigest}`,
   );
   return {
     ...parsed,

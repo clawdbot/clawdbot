@@ -109,7 +109,96 @@ function claudeSyntheticNoResponse(text = "No response requested.") {
   };
 }
 
+const CLAUDE_RATE_LIMIT_EVENT = {
+  type: "rate_limit_event",
+  rate_limit_info: {
+    status: "allowed",
+    rateLimitType: "five_hour",
+    overageStatus: "rejected",
+    overageDisabledReason: "org_level_disabled",
+    isUsingOverage: false,
+    unifiedWindows: {
+      five_hour: { utilization: 0.36, resetsAt: 1787680200 },
+      seven_day: { utilization: 0.28, resetsAt: 1788138000 },
+    },
+  },
+  uuid: "rate-limit-event",
+  session_id: "session-rate-limit",
+};
+
+const CLAUDE_RATE_LIMIT = {
+  status: "allowed" as const,
+  rateLimitType: "five_hour",
+  overageStatus: "rejected" as const,
+  overageDisabledReason: "org_level_disabled",
+  isUsingOverage: false,
+  windows: {
+    five_hour: { utilization: 0.36, resetsAt: 1787680200 },
+    seven_day: { utilization: 0.28, resetsAt: 1788138000 },
+  },
+};
+
 describe("createCliJsonlStreamingParser", () => {
+  it.each([
+    {
+      name: "success result",
+      result: { type: "result", result: "done" },
+      expected: {
+        text: "done",
+        sessionId: "session-rate-limit",
+        usage: undefined,
+        diagnostics: { rateLimit: CLAUDE_RATE_LIMIT },
+      },
+    },
+    {
+      name: "error result",
+      result: {
+        type: "result",
+        is_error: true,
+        result:
+          "API Error: 400 Third-party apps now draw from your extra usage, not your plan limits.",
+      },
+      expected: {
+        text: "",
+        sessionId: "session-rate-limit",
+        usage: undefined,
+        errorText:
+          "API Error: 400 Third-party apps now draw from your extra usage, not your plan limits.",
+        diagnostics: { rateLimit: CLAUDE_RATE_LIMIT },
+      },
+    },
+  ])("retains rate-limit facts with a $name", ({ result, expected }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(joinJsonlFrames(CLAUDE_RATE_LIMIT_EVENT, result, ""));
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual(expected);
+  });
+
+  it("ignores malformed rate-limit records without throwing", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        { type: "rate_limit_event", rate_limit_info: { status: "allowed", utilization: 7 } },
+        { type: "result", result: "done" },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({ text: "done", sessionId: undefined, usage: undefined });
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
     ({ raw, normalized }) => {
