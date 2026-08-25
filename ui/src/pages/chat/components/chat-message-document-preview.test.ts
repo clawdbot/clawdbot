@@ -43,8 +43,8 @@ describe("parseDelimitedPreview", () => {
 
   it("bounds the rendered CSV grid separately from the parse budget", () => {
     const container = document.createElement("div");
-    const wideCsv = Array.from({ length: 8 }, (_, row) =>
-      Array.from({ length: 24 }, (_, column) => `${row}:${column}`).join(","),
+    const wideCsv = Array.from({ length: 8 }, (_row, row) =>
+      Array.from({ length: 24 }, (_column, column) => `${row}:${column}`).join(","),
     ).join("\n");
 
     render(
