@@ -4706,6 +4706,9 @@ button.chat-pr__diff {
   --chat-voice-hover-color: var(--text);
   --chat-microphone-picker-width: 28px;
   display: inline-flex;
+  /* The action row is right-anchored. Keeping the mic on this trailing edge lets
+     the picker grow toward the transcript without replacing the hovered target. */
+  flex-direction: row-reverse;
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
@@ -4739,7 +4742,7 @@ button.chat-pr__diff {
   display: inline-flex;
 }
 
-/* The chevron owns the trailing slot of the microphone control while remaining
+/* The chevron owns the leading slot of the microphone control while remaining
    out of the resting composer until approach. The host and trigger both
    collapse to zero: hiding only the trigger leaves an invisible gap beside the
    mic. Width is animated instead of clipping the dropdown host, so its projected
@@ -4799,9 +4802,9 @@ button.chat-pr__diff {
   overflow: hidden;
   pointer-events: none;
   /* Collapsed, the glyph is parked under the microphone and slides into its
-     trailing slot; without that it appeared in place while the box widened, which
+     leading slot; without that it appeared in place while the box widened, which
      read as a stutter rather than a reveal. */
-  transform: translateX(-6px);
+  transform: translateX(6px);
   /* Width carries the layout, so it takes the longer, decelerating curve and the
      paint follows it: opacity waits out the first half of the movement so the
      chevron fades in as it settles instead of flashing at full strength while
