@@ -143,7 +143,9 @@ describe("renderSessionProgressCard", () => {
     );
     expect(card?.open).toBe(true);
     expect(card?.dataset.complete).toBe("false");
-    expect(card?.querySelector("summary")?.getAttribute("aria-label")).toBe("1 of 3 completed");
+    expect(card?.querySelector("summary")?.getAttribute("aria-label")).toMatch(
+      /^1 of 3 completed\. Last activity: /,
+    );
     expect(card?.querySelector("[role=region]")?.getAttribute("aria-label")).toBe(
       "1 of 3 completed",
     );
