@@ -49,6 +49,7 @@ interface EmbeddedGatewayRuntime {
     key: string,
     entry: SessionEntry,
     status: GatewaySessionRow["status"],
+    agentId?: string,
   ) => SessionRunListProjection;
   resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
   resolveStoredSessionKeyForAgentStore: (params: {
@@ -99,6 +100,7 @@ interface EmbeddedGatewayRuntime {
       key: string,
       entry: SessionEntry,
       status: GatewaySessionRow["status"],
+      agentId?: string,
     ) => SessionRunListProjection;
   }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGatewayCore: (

@@ -91,6 +91,7 @@ type ListSessionsFromStoreParams = {
     key: string,
     entry: SessionEntry,
     status: GatewaySessionRow["status"],
+    agentId?: string,
   ) => SessionRunListProjection;
 };
 
@@ -256,7 +257,9 @@ function filterSessionEntries(params: {
         key,
         rowContext: resolveSessionListRowContext(params),
       });
-      const projection = params.projectRun?.(key, entry, storedStatus) ?? { status: storedStatus };
+      const projection = params.projectRun?.(key, entry, storedStatus, agentId) ?? {
+        status: storedStatus,
+      };
       runProjectionByKey.set(key, projection);
       if (projection.status !== opts.status) {
         continue;
@@ -438,6 +441,9 @@ function selectSessionEntries(params: {
       selectedRunProjectionByKey.set(key, projection);
       continue;
     }
+    if (!params.projectRun) {
+      continue;
+    }
     const storedStatus = resolveSessionListEntryStatus({
       entry,
       key,
@@ -445,7 +451,7 @@ function selectSessionEntries(params: {
     });
     selectedRunProjectionByKey.set(
       key,
-      params.projectRun?.(key, entry, storedStatus) ?? { status: storedStatus },
+      params.projectRun(key, entry, storedStatus, params.opts.agentId),
     );
   }
   const nextOffset = offset + entries.length;

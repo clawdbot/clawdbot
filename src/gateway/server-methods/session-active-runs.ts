@@ -211,16 +211,17 @@ export function createSessionRunListProjector(params: {
   key: string,
   entry: SessionEntry,
   status: GatewaySessionRow["status"],
+  agentId?: string,
 ) => SessionRunListProjection {
   const trackedActiveRuns = collectTrackedActiveSessionRuns(params.context);
   const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-  return (key, entry, status) => {
+  return (key, entry, status, agentId) => {
     const activeRunState = resolveVisibleActiveSessionRunState({
       context: params.context,
       requestedKey: key,
       canonicalKey: key,
       sessionId: entry.sessionId,
-      agentId: parseAgentSessionKey(key)?.agentId,
+      agentId: parseAgentSessionKey(key)?.agentId ?? agentId,
       defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, key),
       trackedActiveRuns,
       projectedAgentRunIndex,

@@ -222,8 +222,16 @@ async function expectListedGlobalSessionActiveRun(params: {
     globalScope: true,
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
-  listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
+  listSessionsFromStoreAsyncMock.mockImplementationOnce(async (options) => {
+    const row = { key: "global", agentId: params.agentId, hasActiveRun: false };
+    return {
+      sessions: [
+        {
+          ...row,
+          ...options.projectRun(row.key, { updatedAt: 1 }, undefined, row.agentId),
+        },
+      ],
+    };
   });
   const respond = await callSessions(
     "sessions.list",
@@ -289,8 +297,19 @@ describe("sessions.abort agent scope", () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
-    listSessionsFromStoreAsyncMock.mockResolvedValue({
-      sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    listSessionsFromStoreAsyncMock.mockImplementationOnce(async (options) => {
+      const row = {
+        key: "agent:main:openclaw-weixin:direct:user",
+        sessionId: "sess-weixin",
+      };
+      return {
+        sessions: [
+          {
+            ...row,
+            ...options.projectRun(row.key, { ...row, updatedAt: 1 }, undefined),
+          },
+        ],
+      };
     });
     isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",
