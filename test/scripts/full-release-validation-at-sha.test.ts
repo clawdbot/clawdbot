@@ -669,6 +669,34 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
+  it.each([
+    "no valid artifacts found to download",
+    "no artifact matches any of the names provided",
+    "no artifact matches any of the names or patterns provided",
+  ])("treats missing named Release Decision artifacts as unavailable: %s", (stderr) => {
+    expect(
+      tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+        error: undefined,
+        signal: null,
+        status: 1,
+        stderr,
+        stdout: "",
+      })),
+    ).toBeUndefined();
+  });
+
+  it("keeps an invalid parent run fatal when artifact lookup returns HTTP 404", () => {
+    expect(() =>
+      tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+        error: undefined,
+        signal: null,
+        status: 1,
+        stderr: "error fetching artifacts: HTTP 404: Not Found",
+        stdout: "",
+      })),
+    ).toThrow("Release Decision artifact download failed");
+  });
+
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");

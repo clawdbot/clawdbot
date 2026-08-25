@@ -14,6 +14,7 @@ import {
 import {
   artifactDownloadArgs,
   artifactDownloadTimeoutMs,
+  createReleaseEvidenceClient,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
   githubRestArgs,
@@ -364,8 +365,50 @@ describe("runReleaseCiGh", () => {
   });
 });
 
+describe("Release execution plan artifact reads", () => {
+  it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-plan-missing-artifact-"));
+    const ghPath = join(root, "gh");
+    writeFileSync(
+      ghPath,
+      `#!${process.execPath}
+console.error("no artifact matches any of the names or patterns provided");
+process.exit(1);
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${root}:${previousPath ?? ""}`;
+    try {
+      expect(createReleaseEvidenceClient("openclaw/openclaw").loadExecutionPlan("123")).toBe(
+        undefined,
+      );
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+});
+
 describe("Release Decision artifact polling", () => {
   const parent = { attempt: 1, headSha: "a".repeat(40) };
+
+  it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
+    expect(
+      tryReadReleaseDecisionArtifact(parent, "123", "openclaw/openclaw", () => {
+        throw Object.assign(
+          new Error("no artifact matches any of the names or patterns provided"),
+          {
+            stderr: "no artifact matches any of the names or patterns provided",
+          },
+        );
+      }),
+    ).toBeUndefined();
+  });
 
   it("treats transient download transport failures as unavailable this poll", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

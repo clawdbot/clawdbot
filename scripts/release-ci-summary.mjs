@@ -16,6 +16,7 @@ import {
   formatReleaseStateOutcome,
   HISTORICAL_CONTINUATION_SOURCE_MODE,
   isCanonicalReleaseContinuationWorkflowRef,
+  isReleaseGhArtifactMissingError,
   releaseCompositeJobsSha256,
   selectHistoricalReleaseChecksResolveJob,
   selectHistoricalReusableInputJob,
@@ -404,11 +405,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(
-          message,
-        )
-      ) {
+      if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
       }
       throw new Error(`release execution plan artifact read failed: ${message}`, {
@@ -2586,11 +2583,7 @@ export function tryReadReleaseDecisionArtifact(
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(
-          message,
-        )
-      ) {
+      if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
       }
       if (classifyReleaseGhTransportError(error) === "transient") {

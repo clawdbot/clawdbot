@@ -14,6 +14,7 @@ import { isRecord as isJsonRecord } from "../packages/normalization-core/src/rec
 import {
   classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
+  isReleaseGhArtifactMissingError,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import {
@@ -603,11 +604,7 @@ export function tryReadReleaseDecision(
     );
     if (result.status !== 0) {
       const stderr = stringValue(result.stderr);
-      if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts|no artifact matches any of the names or patterns provided/iu.test(
-          stderr,
-        )
-      ) {
+      if (isReleaseGhArtifactMissingError({ cause: result.error, stderr })) {
         return undefined;
       }
       const downloadError = Object.assign(

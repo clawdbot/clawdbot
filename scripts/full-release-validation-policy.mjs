@@ -33,9 +33,13 @@ const HISTORICAL_INPUT_ALIASES = Object.freeze({
   target_context_ref: "targetContextRef",
 });
 const HARD_GH_TRANSPORT_PATTERN =
-  /HTTP (?:400|401|403|404|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
+  /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
-  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
+  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|timed out|\btimeout\b|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
+const RELEASE_GH_ARTIFACT_MISSING_LINE_PATTERN =
+  /^(?:no valid artifacts found(?: to download)?|no artifact matches any of the names(?: or patterns)? provided|could not find any artifacts|artifact .+ not found)$/iu;
+const RELEASE_GH_ARTIFACT_CONTENT_ERROR_PATTERN =
+  /unexpected end of JSON|\b(?:artifact|archive|JSON)\b.{0,80}\b(?:malformed|invalid|oversized|too large|exceeds? (?:the )?size limit)\b|\b(?:malformed|invalid|oversized)\b.{0,80}\b(?:artifact|archive|JSON)\b/iu;
 
 const RELEASE_DECISION_STATES = Object.freeze([
   "qualifying",
@@ -185,6 +189,19 @@ export function classifyReleaseGhTransportError(error) {
     return "hard";
   }
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
+}
+
+export function isReleaseGhArtifactMissingError(error) {
+  if (classifyReleaseGhTransportError(error) !== "ambiguous") {
+    return false;
+  }
+  const text = releaseGhTransportErrorText(error);
+  if (RELEASE_GH_ARTIFACT_CONTENT_ERROR_PATTERN.test(text)) {
+    return false;
+  }
+  return text
+    .split(/\r?\n/u)
+    .some((line) => RELEASE_GH_ARTIFACT_MISSING_LINE_PATTERN.test(line.trim()));
 }
 
 function stringValue(value, fallback = "") {

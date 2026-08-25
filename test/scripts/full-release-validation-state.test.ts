@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   composeReleaseAttemptJobs,
+  isReleaseGhArtifactMissingError,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -162,13 +163,49 @@ describe("full release execution plan", () => {
     ["HTTP 401: Bad credentials", "hard"],
     ["HTTP 403: secondary rate limit", "hard"],
     ["HTTP 404: workflow not found", "hard"],
+    ["HTTP 410: artifact expired", "hard"],
     ["HTTP 422: invalid workflow input", "hard"],
     ["unknown flag: --name\nUsage: gh run download", "hard"],
+    ["operation timed out", "transient"],
     ["gh exited after sending the request", "ambiguous"],
   ] as const)("classifies GitHub transport error %s as %s", (message, expected) => {
     expect(
       classifyReleaseGhTransportError(Object.assign(new Error(message), { stderr: message })),
     ).toBe(expected);
+  });
+
+  it.each([
+    "no valid artifacts found to download",
+    "no artifact matches any of the names or patterns provided",
+    "no artifact matches any of the names provided",
+    "could not find any artifacts",
+    "artifact full-release-execution-plan-123 not found",
+  ])("recognizes recursive missing-artifact output: %s", (message) => {
+    const error = Object.assign(new Error("gh run download failed"), {
+      cause: Object.assign(new Error("download command failed"), { stderr: message }),
+    });
+    expect(isReleaseGhArtifactMissingError(error)).toBe(true);
+  });
+
+  it.each([
+    "error fetching artifacts: HTTP 401: Bad credentials",
+    "error fetching artifacts: HTTP 403: forbidden",
+    "error fetching artifacts: HTTP 404: Not Found",
+    "error fetching artifacts: HTTP 410: Gone",
+    "error fetching artifacts: HTTP 422: invalid run",
+    "HTTP 429: API rate limit exceeded",
+    "HTTP 503: Server Error",
+    "unknown flag: --name\nUsage: gh run download",
+    "artifact request timed out",
+    "artifact archive is malformed",
+    "Unexpected end of JSON input",
+    "artifact archive exceeds the size limit",
+  ])("does not turn fatal artifact errors into absence: %s", (message) => {
+    const error = Object.assign(new Error(message), {
+      cause: new Error("no artifact matches any of the names or patterns provided"),
+      stderr: message,
+    });
+    expect(isReleaseGhArtifactMissingError(error)).toBe(false);
   });
 
   it("keeps required coverage selected when dispatch output is missing", () => {

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -41,6 +41,14 @@ const VALIDATION_INPUTS = {
   skipPackageTelegramE2e: "false",
   targetContextRef: "",
 };
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 function candidate(parentRunId = "77", parentRunAttempt = "1") {
   return {
@@ -88,6 +96,36 @@ function continuation() {
     validationInputs: VALIDATION_INPUTS,
   };
 }
+
+describe("FRV artifact absence", () => {
+  it("treats GitHub CLI 2.93 missing named artifacts as absent for plans and source manifests", async () => {
+    const root = tempDirs.make("frv-missing-artifact-");
+    const ghPath = join(root, "gh");
+    writeFileSync(
+      ghPath,
+      `#!${process.execPath}
+console.error("no artifact matches any of the names or patterns provided");
+process.exit(1);
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const previousBin = process.env.OPENCLAW_GH_BIN;
+    const previousToken = process.env.GH_TOKEN;
+    process.env.OPENCLAW_GH_BIN = ghPath;
+    process.env.GH_TOKEN = "test-token";
+    try {
+      await expect(loadPlan({ repository: "openclaw/openclaw", runId: "77" })).rejects.toThrow(
+        "run predates immutable FRV plans; provide --legacy-plan",
+      );
+      await expect(
+        createClient("openclaw/openclaw").loadSourceManifest("77", 1),
+      ).resolves.toBeUndefined();
+    } finally {
+      restoreEnv("OPENCLAW_GH_BIN", previousBin);
+      restoreEnv("GH_TOKEN", previousToken);
+    }
+  });
+});
 
 function sealedContinuationPlan(selected = child("normalCi", "101"), parentRunId = "88") {
   const source = continuation();

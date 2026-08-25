@@ -10,6 +10,7 @@ import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
   HISTORICAL_CONTINUATION_SOURCE_MODE,
+  isReleaseGhArtifactMissingError,
   normalizeReleaseCandidate,
   normalizeReleaseValidationInputs,
   releaseChildSpec,
@@ -203,11 +204,7 @@ async function downloadExecutionPlan(repository, runId) {
         directory,
       ]);
     } catch (error) {
-      if (
-        /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(
-          error instanceof Error ? error.message : String(error),
-        )
-      ) {
+      if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
       }
       throw error;
@@ -246,11 +243,7 @@ async function downloadSourceManifest(repository, runId, runAttempt) {
           directory,
         ]);
       } catch (error) {
-        if (
-          /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(
-            error instanceof Error ? error.message : String(error),
-          )
-        ) {
+        if (isReleaseGhArtifactMissingError(error)) {
           continue;
         }
         throw error;
