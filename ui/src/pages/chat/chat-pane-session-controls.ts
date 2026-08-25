@@ -17,6 +17,7 @@ import {
   switchChatModel,
   switchChatThinkingLevel,
 } from "./chat-session.ts";
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
@@ -162,13 +163,30 @@ export function renderChatPaneComposerControls(params: {
         const runWasActive =
           Boolean(state.chatRunId) ||
           Boolean(selectedSession && isSessionRunActive(selectedSession));
+        const sessionKey = state.sessionKey;
+        const client = state.client;
+        const connectionEpoch = state.connectionEpoch;
+        const agentScope = scopedAgentParamsForSession(state, sessionKey);
+        const ownsSelection = () =>
+          state.connected &&
+          state.sessionKey === sessionKey &&
+          state.client === client &&
+          state.connectionEpoch === connectionEpoch &&
+          scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
         try {
           state.chatError = null;
-          await state.sessions.patch(
-            state.sessionKey,
+          const patched = await patchChatSessionSettings(
+            state,
+            sessionKey,
             { permissionMode },
-            scopedAgentParamsForSession(state, state.sessionKey),
+            agentScope,
           );
+          if (!ownsSelection()) {
+            return;
+          }
+          if (!patched) {
+            throw new Error("Session capability is unavailable");
+          }
           if (runWasActive) {
             const topbarHeight = toastAnchor
               .querySelector(".chat-pane__header")
@@ -182,6 +200,9 @@ export function renderChatPaneComposerControls(params: {
             });
           }
         } catch (error) {
+          if (!ownsSelection()) {
+            return;
+          }
           state.chatError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });

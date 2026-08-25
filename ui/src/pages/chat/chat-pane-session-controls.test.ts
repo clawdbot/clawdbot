@@ -2,10 +2,12 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   renderChatPaneComposerControls,
   resolveChatModelCatalogState,
 } from "./chat-pane-session-controls.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
 
@@ -169,7 +171,7 @@ describe("chat pane composer controls", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:permission-test",
       { permissionMode: "guarded" },
-      {},
+      expect.objectContaining({ agentId: undefined }),
     );
 
     dropdown?.setAttribute("open", "");
@@ -178,7 +180,7 @@ describe("chat pane composer controls", () => {
     expect(patch).toHaveBeenLastCalledWith(
       "agent:main:permission-test",
       { permissionMode: null },
-      {},
+      expect.objectContaining({ agentId: undefined }),
     );
   });
 
@@ -240,6 +242,175 @@ describe("chat pane composer controls", () => {
         }),
       );
     }
+  });
+
+  it("holds the session send barrier until a Full Access selection settles", async () => {
+    const pending = createDeferred<Record<string, never>>();
+    const state = {
+      chatRunId: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: { state: { modelOverrides: {} }, patch: vi.fn(() => pending.promise) },
+      chatModelSwitchPromises: {},
+      sessionKey: "agent:main:remote-worker",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: { key: state.sessionKey, kind: "direct" },
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      toastAnchor: document.createElement("div"),
+      onModelSetup: vi.fn(),
+    });
+
+    const selection = controls.permissionPicker.onSelect("full");
+    expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeDefined();
+
+    pending.resolve({});
+    await selection;
+    expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "successful update after switching sessions",
+      result: "success",
+      invalidate: (state: ChatPageHost) => {
+        state.sessionKey = "agent:main:other-session";
+      },
+    },
+    {
+      label: "failed update after switching sessions",
+      result: "failure",
+      invalidate: (state: ChatPageHost) => {
+        state.sessionKey = "agent:main:other-session";
+      },
+    },
+    {
+      label: "successful global-session update after switching agents",
+      result: "success",
+      initialSessionKey: "global",
+      invalidate: (state: ChatPageHost) => {
+        state.assistantAgentId = "research";
+      },
+    },
+    {
+      label: "successful update after reconnecting",
+      result: "success",
+      invalidate: (state: ChatPageHost) => {
+        state.connectionEpoch += 1;
+      },
+    },
+    {
+      label: "successful update after replacing the Gateway client",
+      result: "success",
+      invalidate: (state: ChatPageHost) => {
+        state.client = {} as ChatPageHost["client"];
+      },
+    },
+    {
+      label: "unavailable update after switching sessions",
+      result: "null",
+      invalidate: (state: ChatPageHost) => {
+        state.sessionKey = "agent:main:other-session";
+      },
+    },
+  ] as const)("suppresses alerts for a $label", async (lifecycleCase) => {
+    const { invalidate, result } = lifecycleCase;
+    showToastMock.mockClear();
+    const pending = createDeferred<Record<string, never> | null>();
+    const state = {
+      assistantAgentId: "main",
+      chatRunId: "remote-worker-run",
+      chatError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: { state: { modelOverrides: {} }, patch: vi.fn(() => pending.promise) },
+      chatModelSwitchPromises: {},
+      sessionKey:
+        "initialSessionKey" in lifecycleCase
+          ? lifecycleCase.initialSessionKey
+          : "agent:main:remote-worker",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: { key: state.sessionKey, kind: "direct", hasActiveRun: true },
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      toastAnchor: document.createElement("div"),
+      onModelSetup: vi.fn(),
+    });
+
+    const selection = controls.permissionPicker.onSelect("full");
+    invalidate(state);
+    if (result === "failure") {
+      pending.reject(new Error("original remote worker disconnected"));
+    } else {
+      pending.resolve(result === "null" ? null : {});
+    }
+    await selection;
+
+    expect(showToastMock).not.toHaveBeenCalled();
+    expect(state.chatError).toBeNull();
+  });
+
+  it("reports an unavailable permission update on the current session", async () => {
+    showToastMock.mockClear();
+    const state = {
+      chatRunId: "remote-worker-run",
+      chatError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: { state: { modelOverrides: {} }, patch: vi.fn(async () => null) },
+      chatModelSwitchPromises: {},
+      sessionKey: "agent:main:remote-worker",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: { key: state.sessionKey, kind: "direct", hasActiveRun: true },
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      toastAnchor: document.createElement("div"),
+      onModelSetup: vi.fn(),
+    });
+
+    await controls.permissionPicker.onSelect("full");
+
+    expect(showToastMock).not.toHaveBeenCalled();
+    expect(state.chatError).toContain("Failed to update permissions");
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("refreshes the configured model catalog when the picker opens", async () => {
