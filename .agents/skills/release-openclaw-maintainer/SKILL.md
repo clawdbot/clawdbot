@@ -1132,8 +1132,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     it. Give the task this explicit prompt with the real tag substituted:
     `Run $openclaw-release-validation in update campaign mode for <tag>.`
     For a beta, the updater creates or refreshes the one stable-train campaign
-    issue with the latest overall and since-previous-beta priorities. It updates
-    the existing issue in place for later betas. For a stable tag, it comments
+    issue with release-wide priorities through the recorded guidance-main SHA
+    and priorities for changes landed on main since the current beta was cut.
+    It updates the existing issue in place for later betas. For a stable tag, it comments
     with the shipped release and closes that train's campaign. Record the task
     id, then let publication and postpublish verification continue in parallel.
     Campaign updating is not a publication blocker; before inviting humans to
