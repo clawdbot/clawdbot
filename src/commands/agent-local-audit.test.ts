@@ -2,11 +2,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { recordAdmittedModelRoutingDecision } from "../agents/model-routing-decision.js";
 import {
-  createExecutionIdentityAdmissionToken,
-  enqueueExecutionIdentityContextAtAdmission,
-} from "../audit/execution-identity-admission.js";
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import { recordAdmittedModelRoutingDecision } from "../agents/model-routing-decision.js";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,13 +20,18 @@ describe("agent local audit writer", () => {
   it("persists runtime receipts for an opted-in direct CLI run and clears its sink", async () => {
     const root = tempDirs.make("openclaw-agent-exec-audit-");
     const admittedAt = Date.now();
-    const token = createExecutionIdentityAdmissionToken("agent-exec-run", {
-      contextId: "agent-exec-context",
-      executionId: "agent-exec-execution",
-      now: admittedAt,
-    });
-    const recordRuntimeReceipt = () =>
-      recordRuntimeActionDecision({
+    let modelAdmission: PreparedAgentRunAdmission | undefined;
+    let admittedRunContext: AdmittedRunContext | undefined;
+    const requireToken = () => {
+      const token = admittedRunContext?.executionIdentityToken;
+      if (!token) {
+        throw new Error("expected direct-local execution identity token");
+      }
+      return token;
+    };
+    const recordRuntimeReceipt = () => {
+      const token = requireToken();
+      return recordRuntimeActionDecision({
         token,
         family: "plugin",
         operation: "runtime",
@@ -37,6 +44,7 @@ describe("agent local audit writer", () => {
         remediation: [],
         occurredAt: admittedAt + 1,
       });
+    };
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
@@ -46,28 +54,23 @@ describe("agent local audit writer", () => {
     try {
       const result = await agentExecCommand("inspect", { stateDir: root }, runtime, {
         runAgent: vi.fn(async () => {
-          expect(
-            enqueueExecutionIdentityContextAtAdmission(
-              {
-                runId: token.runId,
-                agentId: "main",
-                ingress: {
-                  kind: "local-cli",
-                  boundary: "agent-command.local",
-                  state: "present",
-                },
-                runtime: { kind: "embedded" },
+          modelAdmission = prepareAgentRunAdmission({
+            cfg: { logging: { audit: { executionIdentity: true } } },
+            operationalRunInstance: createOperationalRunInstanceRef("agent-exec-run"),
+            facts: {
+              runId: "agent-exec-run",
+              agentId: "main",
+              ingress: {
+                kind: "local-cli",
+                boundary: "agent-command.local",
+                state: "present",
               },
-              {
-                enabled: true,
-                token,
-                runtimeInstanceId: "agent-exec-runtime",
-              },
-            ),
-          ).toMatchObject({ accepted: true });
+            },
+          });
+          admittedRunContext = await modelAdmission.admit("embedded", "agent-exec-runtime");
           expect(
             recordAdmittedModelRoutingDecision({
-              token,
+              admittedRunContext,
               requestedProvider: "openai",
               requestedModel: "gpt-5.6",
               selectedProvider: "openai",
@@ -96,7 +99,7 @@ describe("agent local audit writer", () => {
       expect(recordRuntimeReceipt()).toBe(false);
       expect(
         recordAdmittedModelRoutingDecision({
-          token,
+          admittedRunContext,
           requestedProvider: "openai",
           requestedModel: "gpt-5.6",
           selectedProvider: "openai",
@@ -104,6 +107,7 @@ describe("agent local audit writer", () => {
           selectionMode: "automatic",
         }),
       ).toBe(false);
+      const token = requireToken();
       const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
         readOnly: true,
       });
@@ -147,6 +151,7 @@ describe("agent local audit writer", () => {
         database.close();
       }
     } finally {
+      modelAdmission?.close();
       clearRuntimeConfigSnapshot();
     }
   });

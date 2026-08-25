@@ -4,7 +4,6 @@ import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -84,9 +83,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   } = runInput.progressController;
   const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
     runInput.laneController;
-  const assertAdmittedRunActive = params.admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
-    : undefined;
   const {
     requestedModelId,
     expectedHarnessArtifact,
@@ -209,15 +205,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     startupStagesEmitted = true;
   }
   const fallbackReason = input.resolveRuntimeFallbackReason();
-  const executionIdentityToken = params.admittedRunContext?.executionIdentityToken;
-  if (executionIdentityToken) {
-    if (!assertAdmittedRunActive) {
-      throw new Error("admitted run authority is no longer active");
-    }
-    assertAdmittedRunActive();
-  }
   recordAdmittedModelRoutingDecision({
-    token: executionIdentityToken,
+    admittedRunContext: params.admittedRunContext,
+    abortSignal: params.abortSignal,
     requestedProvider: params.modelRoutingProvenance?.requestedProvider ?? runInput.provider,
     requestedModel:
       params.modelRoutingProvenance?.requestedModel ?? requestedModelId ?? runInput.modelId,
