@@ -1,5 +1,6 @@
 // Gateway hook test fixtures.
 // Builds resolved hook config and IncomingMessage-like requests for tests.
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { HooksConfigResolved } from "./hooks.js";
 
@@ -40,10 +41,10 @@ export function createGatewayRequest(params: {
   if (params.authorization) {
     headers.authorization = params.authorization;
   }
-  return {
+  return Object.assign(new EventEmitter(), {
     method: params.method ?? "GET",
     url: params.path,
     headers,
     socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
-  } as IncomingMessage;
+  }) as IncomingMessage;
 }

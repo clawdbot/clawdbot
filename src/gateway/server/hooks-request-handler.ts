@@ -58,6 +58,7 @@ type HookDispatchers = {
   ) => void;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
+    context: { abortSignal: AbortSignal },
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
 };
 
@@ -68,6 +69,13 @@ export type HookAgentDispatchResult =
 type HookReplayEntry = {
   ts: number;
   runId: string;
+};
+
+type PendingHookReplay = {
+  promise: Promise<HookAgentDispatchResult>;
+  abortController?: AbortController;
+  key?: string;
+  waiters: number;
 };
 
 type HookReplayScope = {
@@ -95,7 +103,7 @@ export function createHooksRequestHandler(
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const pendingHookReplays = new Map<string, Promise<HookAgentDispatchResult>>();
+  const pendingHookReplays = new Map<string, PendingHookReplay>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -177,7 +185,7 @@ export function createHooksRequestHandler(
   const resolveHookReplay = (
     key: string | undefined,
     now: number,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> | undefined => {
+  ): HookAgentDispatchResult | PendingHookReplay | undefined => {
     if (!key) {
       return undefined;
     }
@@ -188,34 +196,87 @@ export function createHooksRequestHandler(
     return pendingHookReplays.get(key);
   };
 
-  const dispatchAgentHookWithReplay = (
+  const awaitHookReplay = async (
+    replay: HookAgentDispatchResult | PendingHookReplay,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<HookAgentDispatchResult> => {
+    if (!("promise" in replay)) {
+      return replay;
+    }
+    const pending = replay;
+    let attached = true;
+    pending.waiters += 1;
+    const detach = (disconnected: boolean) => {
+      if (!attached) {
+        return;
+      }
+      attached = false;
+      pending.waiters -= 1;
+      // Shared replay owns cancellation: one disconnected caller cannot cancel
+      // admission while another same-key request is still waiting for that run.
+      if (disconnected && pending.waiters === 0) {
+        const abortController = pending.abortController;
+        pending.abortController = undefined;
+        if (pending.key && pendingHookReplays.get(pending.key) === pending) {
+          pendingHookReplays.delete(pending.key);
+        }
+        abortController?.abort(new Error("hook request disconnected"));
+      }
+    };
+    const disconnect = () => detach(true);
+    req.once("aborted", disconnect);
+    res.once("close", disconnect);
+    if (req.aborted || res.destroyed) {
+      disconnect();
+    }
+    try {
+      return await pending.promise;
+    } finally {
+      req.off("aborted", disconnect);
+      res.off("close", disconnect);
+      detach(false);
+    }
+  };
+
+  const dispatchAgentHookWithReplay = async (
     key: string | undefined,
     now: number,
-    dispatch: () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> => {
-    if (!key) {
-      return dispatch();
-    }
-    const existing = resolveHookReplay(key, now);
+    req: IncomingMessage,
+    res: ServerResponse,
+    dispatch: (
+      abortSignal: AbortSignal,
+    ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
+  ): Promise<HookAgentDispatchResult> => {
+    const existing = key ? resolveHookReplay(key, now) : undefined;
     if (existing) {
-      return existing;
+      return await awaitHookReplay(existing, req, res);
     }
-    const pending = Promise.resolve()
-      .then(dispatch)
-      .then((result) => {
-        if (result.ok) {
-          rememberHookRunId(key, result.runId, now);
-        }
-        return result;
-      })
-      .finally(() => {
-        // Failed admission stays retryable; identity guards against deleting a newer replay.
-        if (pendingHookReplays.get(key) === pending) {
-          pendingHookReplays.delete(key);
-        }
-      });
-    pendingHookReplays.set(key, pending);
-    return pending;
+    const abortController = new AbortController();
+    const pending: PendingHookReplay = {
+      abortController,
+      key,
+      waiters: 0,
+      promise: Promise.resolve()
+        .then(() => dispatch(abortController.signal))
+        .then((result) => {
+          if (result.ok) {
+            rememberHookRunId(key, result.runId, now);
+          }
+          return result;
+        })
+        .finally(() => {
+          pending.abortController = undefined;
+          // Failed admission stays retryable; identity guards against deleting a newer replay.
+          if (key && pendingHookReplays.get(key) === pending) {
+            pendingHookReplays.delete(key);
+          }
+        }),
+    };
+    if (key) {
+      pendingHookReplays.set(key, pending);
+    }
+    return await awaitHookReplay(pending, req, res);
   };
 
   const sendAgentDispatchResult = (res: ServerResponse, result: HookAgentDispatchResult) => {
@@ -311,6 +372,10 @@ export function createHooksRequestHandler(
       headers,
     });
     const now = Date.now();
+    const dispatchAgentHookForRequest = (
+      value: HookAgentDispatchPayload,
+      abortSignal: AbortSignal,
+    ) => dispatchAgentHook(value, { abortSignal });
     const resolveDispatchSessionKeyOrRespond = (
       sessionKeyValue: string,
       targetAgentId: string,
@@ -451,7 +516,7 @@ export function createHooksRequestHandler(
       });
       const replay = resolveHookReplay(replayKey, now);
       if (replay) {
-        sendAgentDispatchResult(res, await replay);
+        sendAgentDispatchResult(res, await awaitHookReplay(replay, req, res));
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -461,16 +526,24 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-        dispatchAgentHook({
-          ...normalized.value,
-          effectiveAgentId: target.effectiveAgentId,
-          idempotencyKey,
-          sessionKey: dispatchSessionKey,
-          sourcePath: `${basePath}/agent`,
-          agentId: target.selectedAgentId,
-          externalContentSource: "webhook",
-        }),
+      const dispatched = await dispatchAgentHookWithReplay(
+        replayKey,
+        now,
+        req,
+        res,
+        (abortSignal) =>
+          dispatchAgentHookForRequest(
+            {
+              ...normalized.value,
+              effectiveAgentId: target.effectiveAgentId,
+              idempotencyKey,
+              sessionKey: dispatchSessionKey,
+              sourcePath: `${basePath}/agent`,
+              agentId: target.selectedAgentId,
+              externalContentSource: "webhook",
+            },
+            abortSignal,
+          ),
       );
       sendAgentDispatchResult(res, dispatched);
       return true;
@@ -577,33 +650,41 @@ export function createHooksRequestHandler(
           });
           const replay = resolveHookReplay(replayKey, now);
           if (replay) {
-            sendAgentDispatchResult(res, await replay);
+            sendAgentDispatchResult(res, await awaitHookReplay(replay, req, res));
             return true;
           }
-          const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-            dispatchAgentHook({
-              message: action.message,
-              name: action.name ?? "Hook",
-              idempotencyKey,
-              agentId: target.selectedAgentId,
-              effectiveAgentId: target.effectiveAgentId,
-              wakeMode: action.wakeMode,
-              sessionKey: dispatchSessionKey,
-              sessionMode: action.sessionMode,
-              sourcePath: `${basePath}/${subPath}`,
-              deliver,
-              channel,
-              to: action.to,
-              delivery,
-              model: action.model,
-              thinking: action.thinking,
-              timeoutSeconds: action.timeoutSeconds,
-              allowUnsafeExternalContent: action.allowUnsafeExternalContent,
-              externalContentSource: resolveMappedHookExternalContentSource({
-                subPath,
-                sessionKey: sessionKey.value,
-              }),
-            }),
+          const dispatched = await dispatchAgentHookWithReplay(
+            replayKey,
+            now,
+            req,
+            res,
+            (abortSignal) =>
+              dispatchAgentHookForRequest(
+                {
+                  message: action.message,
+                  name: action.name ?? "Hook",
+                  idempotencyKey,
+                  agentId: target.selectedAgentId,
+                  effectiveAgentId: target.effectiveAgentId,
+                  wakeMode: action.wakeMode,
+                  sessionKey: dispatchSessionKey,
+                  sessionMode: action.sessionMode,
+                  sourcePath: `${basePath}/${subPath}`,
+                  deliver,
+                  channel,
+                  to: action.to,
+                  delivery,
+                  model: action.model,
+                  thinking: action.thinking,
+                  timeoutSeconds: action.timeoutSeconds,
+                  allowUnsafeExternalContent: action.allowUnsafeExternalContent,
+                  externalContentSource: resolveMappedHookExternalContentSource({
+                    subPath,
+                    sessionKey: sessionKey.value,
+                  }),
+                },
+                abortSignal,
+              ),
           );
           sendAgentDispatchResult(res, dispatched);
           return true;

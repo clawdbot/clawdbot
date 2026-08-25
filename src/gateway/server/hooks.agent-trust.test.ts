@@ -71,7 +71,9 @@ let capturedDispatchWakeHook: ((...args: unknown[]) => unknown) | undefined;
 
 vi.mock("./hooks-request-handler.js", () => ({
   createHooksRequestHandler: vi.fn((opts: Record<string, unknown>) => {
-    capturedDispatchAgentHook = opts.dispatchAgentHook as typeof capturedDispatchAgentHook;
+    const capturedHandler = opts.dispatchAgentHook as (...args: unknown[]) => unknown;
+    capturedDispatchAgentHook = (value, context) =>
+      capturedHandler(value, context ?? { abortSignal: new AbortController().signal });
     capturedDispatchWakeHook = opts.dispatchWakeHook as typeof capturedDispatchWakeHook;
     return vi.fn();
   }),
@@ -634,6 +636,77 @@ describe("dispatchAgentHook trust handling", () => {
     releaseFirstRun.resolve();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start same-session work after its hook request disconnects", async () => {
+    const firstRunStarted = createDeferred();
+    const releaseFirstRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
+
+    const firstAdmission = dispatchAgentHook({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    await firstRunStarted.promise;
+    await expect(firstAdmission).resolves.toMatchObject({ ok: true });
+
+    const request = new AbortController();
+    const disconnectedAdmission = resolveDispatchAgentHook()(
+      {
+        ...buildAgentPayload("Second"),
+        message: "second",
+        sessionKey: "shared-session",
+      },
+      { abortSignal: request.signal },
+    );
+    request.abort(new Error("client disconnected"));
+
+    await expect(disconnectedAdmission).resolves.toMatchObject({
+      ok: false,
+      statusCode: 503,
+      error: "hook request disconnected before agent run started",
+    });
+    releaseFirstRun.resolve();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps accepted hook work after its request disconnects", async () => {
+    const runStarted = createDeferred();
+    const releaseRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        runStarted.resolve();
+        await releaseRun.promise;
+        return { status: "ok", summary: "done", delivered: false };
+      },
+    );
+    const request = new AbortController();
+    const admission = resolveDispatchAgentHook()(buildAgentPayload("Accepted"), {
+      abortSignal: request.signal,
+    });
+
+    await runStarted.promise;
+    await expect(admission).resolves.toMatchObject({ ok: true });
+    request.abort(new Error("client disconnected after acceptance"));
+    releaseRun.resolve();
+
+    await waitForFast(() =>
+      expect(logHooksInfoMock).toHaveBeenCalledWith(
+        "hook agent run completed without announcement",
+        expect.objectContaining({ name: "Accepted" }),
+      ),
+    );
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("does not announce successful deliver:false hook results", async () => {

@@ -46,6 +46,41 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
     .toBe(count);
 }
 
+function startAbortableHookRequest(
+  port: number,
+  path: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+) {
+  const payload = JSON.stringify(body);
+  let req!: ReturnType<typeof httpRequest>;
+  const response = new Promise<{ status: number; body: string }>((resolve, reject) => {
+    req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${HOOK_TOKEN}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          "Idempotency-Key": idempotencyKey,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+        );
+      },
+    );
+    req.once("error", reject);
+    req.end(payload);
+  });
+  return { response, abort: () => req.destroy() };
+}
 async function waitForDuplicateRequest(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 25);
@@ -141,6 +176,199 @@ describe("gateway hook admission", () => {
         ok: false,
         error: "sessionKey requires mode=now",
       });
+    });
+  });
+
+  test("real HTTP disconnect cancels queued admission but not accepted work", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const occupied = createDeferred();
+      const targetQueued = createDeferred();
+      const targetAborted = createDeferred();
+      const accepted = createDeferred();
+      const acceptedCompletion = createDeferred();
+      const acceptedFinished = createDeferred();
+      const mapSet = Reflect.get(Map.prototype, "set") as typeof Map.prototype.set;
+      let queueEntries = 0;
+      vi.spyOn(Map.prototype, "set").mockImplementation(
+        function (this: Map<unknown, unknown>, key, value) {
+          const result = Reflect.apply(mapSet, this, [key, value]);
+          if (
+            key === "agent:main:hook:proof:disconnect" &&
+            value instanceof Promise &&
+            ++queueEntries === 2
+          ) {
+            targetQueued.resolve();
+          }
+          return result;
+        },
+      );
+      const abort = Reflect.get(
+        AbortController.prototype,
+        "abort",
+      ) as typeof AbortController.prototype.abort;
+      vi.spyOn(AbortController.prototype, "abort").mockImplementation(
+        function (this: AbortController, reason) {
+          Reflect.apply(abort, this, [reason]);
+          const message =
+            typeof reason === "object" && reason !== null && "message" in reason
+              ? String(reason.message)
+              : String(reason);
+          if (message === "hook request disconnected") {
+            targetAborted.resolve();
+          }
+        },
+      );
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun
+        .mockImplementationOnce(async (params: unknown) => {
+          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+          await occupied.promise;
+          return { status: "ok", summary: "blocker complete" };
+        })
+        .mockImplementationOnce(async (params: unknown) => {
+          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+          return { status: "ok", summary: "retry complete" };
+        })
+        .mockImplementationOnce(async (params: unknown) => {
+          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+          accepted.resolve();
+          await acceptedCompletion.promise;
+          acceptedFinished.resolve();
+          return { status: "ok", summary: "accepted complete" };
+        });
+      const body = {
+        message: "Proof dispatch",
+        sessionKey: "hook:proof:disconnect",
+        sessionMode: "persistent",
+      };
+
+      let abandoned: ReturnType<typeof startAbortableHookRequest> | undefined;
+      let surviving: ReturnType<typeof startAbortableHookRequest> | undefined;
+      try {
+        const blocker = postHook(port, "/hooks/agent", body, "proof-blocker");
+        await waitForCronIsolatedRuns(1);
+        expect((await blocker).status).toBe(200);
+
+        abandoned = startAbortableHookRequest(port, "/hooks/agent", body, "proof-stable-id");
+        await targetQueued.promise;
+        abandoned.abort();
+        await expect(abandoned.response).rejects.toThrow();
+        await targetAborted.promise;
+        occupied.resolve();
+
+        const retry = await postHook(port, "/hooks/agent", body, "proof-stable-id");
+        expect(retry.status).toBe(200);
+        await waitForCronIsolatedRuns(2);
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+
+        surviving = startAbortableHookRequest(port, "/hooks/agent", body, "proof-accepted-id");
+        void surviving.response.catch(() => undefined);
+        await accepted.promise;
+        surviving.abort();
+        acceptedCompletion.resolve();
+        await acceptedFinished.promise;
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(3);
+        console.info(
+          "GATEWAY_HTTP_PROOF",
+          JSON.stringify({
+            authenticated: true,
+            stableIdempotencyKey: true,
+            queuedByServerMapSignal: true,
+            disconnectedByServerSignal: true,
+            abandonedBeforeAdmission: true,
+            abandonedExecutions: 0,
+            retryExecutions: 1,
+            acceptedDisconnectCompleted: true,
+            acceptedExecutions: 1,
+          }),
+        );
+      } finally {
+        abandoned?.abort();
+        surviving?.abort();
+        occupied.resolve();
+        acceptedCompletion.resolve();
+      }
+    });
+  });
+
+  test.each([
+    {
+      name: "direct",
+      path: "/hooks/agent",
+      body: { message: "Dispatch" },
+      hooksConfig: { enabled: true, token: HOOK_TOKEN },
+    },
+    {
+      name: "mapped",
+      path: "/hooks/mapped-overlap",
+      body: { subject: "Email" },
+      hooksConfig: {
+        enabled: true,
+        token: HOOK_TOKEN,
+        mappings: [
+          {
+            match: { path: "mapped-overlap" },
+            action: "agent" as const,
+            messageTemplate: "Mapped: {{payload.subject}}",
+          },
+        ],
+      },
+    },
+  ])("keeps one $name pending replay alive when its creator disconnects", async (testCase) => {
+    testState.hooksConfig = testCase.hooksConfig;
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      const duplicateFoundPending = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        await runnerAdmission.promise;
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+
+      let creator: ReturnType<typeof startAbortableHookRequest> | undefined;
+      try {
+        creator = startAbortableHookRequest(
+          port,
+          testCase.path,
+          testCase.body,
+          `overlap-${testCase.name}`,
+        );
+        await waitForCronIsolatedRuns(1);
+        const mapGet = Reflect.get(Map.prototype, "get") as typeof Map.prototype.get;
+        vi.spyOn(Map.prototype, "get").mockImplementation(
+          function (this: Map<unknown, unknown>, key) {
+            const value = Reflect.apply(mapGet, this, [key]);
+            if (
+              typeof value === "object" &&
+              value !== null &&
+              "waiters" in value &&
+              value.waiters === 1
+            ) {
+              duplicateFoundPending.resolve();
+            }
+            return value;
+          },
+        );
+
+        const duplicate = postHook(port, testCase.path, testCase.body, `overlap-${testCase.name}`);
+        await duplicateFoundPending.promise;
+        creator.abort();
+        await expect(creator.response).rejects.toThrow();
+        runnerAdmission.resolve();
+
+        expect((await duplicate).status).toBe(200);
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      } finally {
+        creator?.abort();
+        runnerAdmission.resolve();
+      }
     });
   });
 

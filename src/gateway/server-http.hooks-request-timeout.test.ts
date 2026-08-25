@@ -4,6 +4,8 @@
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import type { HookMappingResolved } from "./hooks-mapping.js";
+import { createHooksConfig } from "./hooks-test-helpers.js";
 import {
   createHookRequest,
   createHooksHandler,
@@ -94,6 +96,154 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(statusCode);
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error, runId: "run-1" }));
+  });
+
+  test.each(["request abort", "response close"] as const)(
+    "cancels pending agent admission on %s",
+    async (disconnect) => {
+      readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
+      let dispatchSignal: AbortSignal | undefined;
+      const dispatchAgentHook = vi.fn(
+        async (_value: unknown, context: { abortSignal: AbortSignal }) => {
+          dispatchSignal = context.abortSignal;
+          await new Promise<void>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve());
+          });
+          return {
+            ok: false as const,
+            statusCode: 503 as const,
+            error: "hook request disconnected before agent run started",
+          };
+        },
+      );
+      const handler = createHooksHandler({ dispatchAgentHook });
+      const req = createHookRequest({ url: "/hooks/agent" });
+      const { res } = createResponse();
+
+      const handled = handler(req, res);
+      await vi.waitFor(() => expect(dispatchSignal).toBeDefined());
+      if (disconnect === "request abort") {
+        req.emit("aborted");
+      } else {
+        res.emit("close");
+      }
+
+      await expect(handled).resolves.toBe(true);
+      expect(dispatchSignal?.aborted).toBe(true);
+    },
+  );
+
+  test("retries one disconnected idempotent request without duplicating execution", async () => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
+    let releaseAdmission!: () => void;
+    const admissionReleased = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    let executionCount = 0;
+    const dispatchAgentHook = vi.fn(
+      async (_value: unknown, context: { abortSignal: AbortSignal }) => {
+        const admitted = await Promise.race([
+          admissionReleased.then(() => true),
+          new Promise<false>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve(false));
+          }),
+        ]);
+        if (!admitted) {
+          return {
+            ok: false as const,
+            statusCode: 503 as const,
+            error: "hook request disconnected before agent run started",
+          };
+        }
+        executionCount += 1;
+        return { ok: true as const, runId: "run-retry" };
+      },
+    );
+    const handler = createHooksHandler({ dispatchAgentHook });
+    const headers = { "idempotency-key": "gmail-message-1" };
+    const firstReq = createHookRequest({ url: "/hooks/agent", headers });
+    const { res: firstRes } = createResponse();
+
+    const firstHandled = handler(firstReq, firstRes);
+    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    firstReq.emit("aborted");
+    await expect(firstHandled).resolves.toBe(true);
+    expect(executionCount).toBe(0);
+
+    releaseAdmission();
+    const retryReq = createHookRequest({ url: "/hooks/agent", headers });
+    const { res: retryRes, end: retryEnd } = createResponse();
+    await expect(handler(retryReq, retryRes)).resolves.toBe(true);
+
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
+    expect(executionCount).toBe(1);
+    expect(retryEnd).toHaveBeenCalledWith(JSON.stringify({ ok: true, runId: "run-retry" }));
+  });
+
+  test.each([
+    { name: "direct", path: "/hooks/agent", body: { message: "Dispatch" }, mappings: [] },
+    {
+      name: "mapped",
+      path: "/hooks/mapped-retry",
+      body: { subject: "Email" },
+      mappings: [
+        {
+          id: "mapped-retry",
+          matchPath: "mapped-retry",
+          action: "agent" as const,
+          wakeMode: "now" as const,
+          messageTemplate: "Mapped: {{payload.subject}}",
+        },
+      ],
+    },
+  ])("retires an aborted $name replay before its provider settles", async (testCase) => {
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: testCase.body });
+    let releaseFirst!: () => void;
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstAborted!: () => void;
+    const firstAbortObserved = new Promise<void>((resolve) => {
+      firstAborted = resolve;
+    });
+    const dispatchAgentHook = vi
+      .fn()
+      .mockImplementationOnce(async (_value, context: { abortSignal: AbortSignal }) => {
+        context.abortSignal.addEventListener("abort", firstAborted, { once: true });
+        await firstReleased;
+        return {
+          ok: false as const,
+          statusCode: 503 as const,
+          error: "first request disconnected",
+        };
+      })
+      .mockResolvedValueOnce({ ok: true as const, runId: "run-retry" });
+    const hooksConfig = {
+      ...createHooksConfig(),
+      mappings: testCase.mappings as HookMappingResolved[],
+    };
+    const handler = createHooksHandler({ dispatchAgentHook, getHooksConfig: () => hooksConfig });
+    const headers = { "idempotency-key": `retry-${testCase.name}` };
+    const firstReq = createHookRequest({ url: testCase.path, headers });
+    const { res: firstRes } = createResponse();
+    const firstHandled = handler(firstReq, firstRes);
+
+    try {
+      await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+      firstReq.emit("aborted");
+      await firstAbortObserved;
+
+      const retryReq = createHookRequest({ url: testCase.path, headers });
+      const { res: retryRes, end: retryEnd } = createResponse();
+      const retryHandled = handler(retryReq, retryRes);
+      await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(2));
+      await expect(retryHandled).resolves.toBe(true);
+      expect(retryEnd).toHaveBeenCalledWith(JSON.stringify({ ok: true, runId: "run-retry" }));
+    } finally {
+      releaseFirst();
+      await firstHandled;
+    }
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {

@@ -234,6 +234,9 @@ describe("hook request delivery normalization", () => {
         channel: "delivery-test",
         delivery: { mode: "none" },
       }),
+      expect.objectContaining({
+        abortSignal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -272,6 +275,7 @@ describe("hook request delivery normalization", () => {
     expect(mapping.res.statusCode).toBe(200);
     expect(dispatchAgentHook).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main", effectiveAgentId: "main" }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
     );
   });
 
