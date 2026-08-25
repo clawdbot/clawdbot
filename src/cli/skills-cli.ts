@@ -415,7 +415,6 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
 async function withOfflineGatewayLock<T>(
   config: ReturnType<typeof getRuntimeConfig>,
   gatewayError: unknown,
-  role: "skill-curator-mutation" | "skill-workshop-apply",
   action: () => T | Promise<T>,
 ): Promise<T> {
   const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
@@ -424,7 +423,7 @@ async function withOfflineGatewayLock<T>(
     lock = await acquireGatewayLock({
       allowInTests: true,
       port: resolveGatewayPort(config, process.env),
-      role,
+      role: "skill-workshop-apply",
       timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
     });
   } catch {
@@ -433,7 +432,7 @@ async function withOfflineGatewayLock<T>(
   if (!lock) {
     throw gatewayError;
   }
-  // Transport loss cannot prove the Gateway stopped; hold ownership throughout the mutation.
+  // Timeout/close may follow dispatch; exclusive ownership proves the Gateway is gone.
   try {
     return await action();
   } finally {
@@ -472,7 +471,7 @@ async function callSkillCurator<T>(
     }
     return method === "status"
       ? loadLocal()
-      : await withOfflineGatewayLock(config, error, "skill-curator-mutation", loadLocal);
+      : await withOfflineGatewayLock(config, error, loadLocal);
   }
 }
 
@@ -518,7 +517,7 @@ async function runSkillProposalApply(
       throw err;
     }
 
-    return await withOfflineGatewayLock(resolved.config, err, "skill-workshop-apply", async () => {
+    return await withOfflineGatewayLock(resolved.config, err, async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
         workspaceDir: resolved.workspaceDir,

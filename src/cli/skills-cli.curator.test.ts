@@ -206,10 +206,14 @@ describe("skills curator cli", () => {
     },
   );
 
-  it.each(["closed", "timeout"] as const)(
-    "retains local curator status and mutations after an implicit-local transport %s",
-    async (kind) => {
-      mocks.callGateway.mockRejectedValue(createGatewayTransportError(kind));
+  it.each([
+    { label: "close", error: createGatewayTransportError("closed") },
+    { label: "timeout", error: createGatewayTransportError("timeout") },
+    { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
+  ])(
+    "retains local curator status and mutations after an implicit-local transport $label",
+    async ({ error }) => {
+      mocks.callGateway.mockRejectedValue(error);
 
       for (const action of curatorActions) {
         await createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
@@ -225,7 +229,7 @@ describe("skills curator cli", () => {
       expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
         allowInTests: true,
         port: 18789,
-        role: "skill-curator-mutation",
+        role: "skill-workshop-apply",
         timeoutMs: 250,
       });
       expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(3);
@@ -252,6 +256,29 @@ describe("skills curator cli", () => {
     expect(mocks.unpinCuratedSkill).not.toHaveBeenCalled();
     expect(mocks.restoreCuratedSkill).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pending-request timeout when the Gateway still owns the lock", async () => {
+    const gatewayError = new Error("gateway timeout after 1500ms");
+    mocks.callGateway.mockRejectedValue(gatewayError);
+    mocks.acquireGatewayLock.mockRejectedValue(new Error("gateway already running"));
+
+    for (const action of curatorActions.slice(1)) {
+      await expect(
+        createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
+          from: "user",
+        }),
+        action.label,
+      ).rejects.toThrow("__exit__:1");
+    }
+
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
+    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.pinCuratedSkill).not.toHaveBeenCalled();
+    expect(mocks.unpinCuratedSkill).not.toHaveBeenCalled();
+    expect(mocks.restoreCuratedSkill).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(3);
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(gatewayError.message);
   });
 
   it("releases offline Gateway ownership when the local curator mutation fails", async () => {

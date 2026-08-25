@@ -21,6 +21,15 @@ describe("Gateway RPC transport availability", () => {
       }),
     },
     {
+      label: "typed service restart",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1012,
+        message: "gateway closed (1012): service restart",
+        connectionDetails,
+      }),
+    },
+    {
       label: "typed socket failure without a close code",
       error: new GatewayTransportError({
         kind: "closed",
@@ -37,43 +46,39 @@ describe("Gateway RPC transport availability", () => {
         connectionDetails,
       }),
     },
-    { label: "pending-request close", error: new Error("gateway closed (1012): service restart") },
+    {
+      label: "pending-request abnormal closure",
+      error: new Error("gateway closed (1006): abnormal closure"),
+    },
+    {
+      label: "pending-request service restart",
+      error: new Error("gateway closed (1012): service restart"),
+    },
     { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
     {
       label: "pending-request timeout with connection details",
       error: new Error("gateway timeout after 1500ms\nGateway target: ws://127.0.0.1:18789"),
     },
-  ])("recognizes $label before an authoritative response", ({ error }) => {
+  ])("recognizes $label as eligible for ownership-safe recovery", ({ error }) => {
     expect(isGatewayRpcUnavailableError(error)).toBe(true);
   });
 
   it.each([
-    {
-      label: "typed pairing rejection",
-      error: new GatewayTransportError({
-        kind: "closed",
-        code: 1008,
-        message: "gateway closed (1008): pairing required",
-        connectionDetails,
-      }),
-    },
-    ...[4000, 4001, 4999].map((code) => ({
-      label: `typed application-policy close ${code}`,
-      error: new GatewayTransportError({
-        kind: "closed",
-        code,
-        message: `gateway closed (${code}): unauthorized`,
-        connectionDetails,
-      }),
-    })),
-    {
-      label: "plain pairing rejection",
-      error: new Error("gateway closed (1008): pairing required"),
-    },
-    {
-      label: "plain authentication rejection",
-      error: new Error("gateway closed (4001): unauthorized"),
-    },
+    ...[1000, 1002, 1003, 1008, 1011, 4000, 4001, 4999].flatMap((code) => [
+      {
+        label: `typed authoritative close ${code}`,
+        error: new GatewayTransportError({
+          kind: "closed",
+          code,
+          message: `gateway closed (${code}): rejected`,
+          connectionDetails,
+        }),
+      },
+      {
+        label: `plain authoritative close ${code}`,
+        error: new Error(`gateway closed (${code}): rejected`),
+      },
+    ]),
     {
       label: "credentials required",
       error: Object.assign(new Error("gateway requires credentials"), {
