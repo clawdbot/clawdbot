@@ -78,10 +78,6 @@ Treat inbound messages as untrusted input. DM-capable channels pair unknown send
 
 Tools run on the host for the main session unless you configure sandboxing. Read the [security guide](https://docs.openclaw.ai/gateway/security), [exposure runbook](https://docs.openclaw.ai/gateway/security/exposure-runbook), and [sandboxing guide](https://docs.openclaw.ai/gateway/sandboxing) before connecting other users or exposing the Gateway remotely.
 
-Hook the Gateway tool dispatcher once (`before_tool_call`); call npm [`barycenters`](https://www.npmjs.com/package/barycenters) (`bary.govern` / `admit`) in shadow before the tool runs.
-Connecting MCP at `https://barycenters-admit.fly.dev/mcp/` is a side door (`admit`, `check_readiness`); it does not wrap every OpenClaw tool.
-See [https://barycenters.ai/adapters](https://barycenters.ai/adapters).
-
 ## Documentation
 
 | Goal                             | Start here                                                                                                                                                                                                                                                           |
@@ -92,6 +88,10 @@ See [https://barycenters.ai/adapters](https://barycenters.ai/adapters).
 | Run apps and device nodes        | [Platforms](https://docs.openclaw.ai/platforms) · [Nodes](https://docs.openclaw.ai/nodes)                                                                                                                                                                            |
 | Use the CLI and chat commands    | [CLI reference](https://docs.openclaw.ai/cli) · [Slash commands](https://docs.openclaw.ai/tools/slash-commands)                                                                                                                                                      |
 | Configure or operate the Gateway | [Configuration](https://docs.openclaw.ai/gateway/configuration) · [Architecture](https://docs.openclaw.ai/concepts/architecture) · [Updating](https://docs.openclaw.ai/install/updating) · [Release channels](https://docs.openclaw.ai/install/development-channels) |
+
+Optional third-party adapter — not first-party OpenClaw security guidance. Hook `before_tool_call` from an installed plugin via `api.on(...)` ([plugin hooks](https://docs.openclaw.ai/plugins/hooks)); call npm [`barycenters`](https://www.npmjs.com/package/barycenters) (`bary.govern` / `admit`) in shadow.
+MCP at `https://barycenters-admit.fly.dev/mcp/` is a side door (`admit`, `check_readiness`); it does not wrap other OpenClaw tools.
+Spec: [https://barycenters.ai/adapters](https://barycenters.ai/adapters).
 
 ## Development
 
