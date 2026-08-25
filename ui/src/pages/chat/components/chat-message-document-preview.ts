@@ -16,6 +16,8 @@ const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
 const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
+const HTML_PREVIEW_CONTENT_SECURITY_POLICY =
+  "default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 export type DocumentFramePreviewState = "failed" | "loading" | { src: string } | undefined;
 export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
 
@@ -122,9 +124,23 @@ export function parseAttachmentDelimitedPreview(
   );
 }
 
+function blockHtmlPreviewNetwork(documentText: string): string {
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CONTENT_SECURITY_POLICY}">`;
+  const head = /<head(?:\s[^>]*)?>/iu.exec(documentText);
+  if (head) {
+    return documentText.replace(head[0], `${head[0]}${policy}`);
+  }
+  const root = /<html(?:\s[^>]*)?>/iu.exec(documentText);
+  if (root) {
+    return documentText.replace(root[0], `${root[0]}<head>${policy}</head>`);
+  }
+  return `<head>${policy}</head>${documentText}`;
+}
+
 async function fetchDocumentPreviewObjectUrl(
   source: string,
   signal: AbortSignal,
+  blockNetwork: boolean,
 ): Promise<string | null> {
   const url = source.replace(/#.*$/u, "");
   const response = await fetch(url, {
@@ -136,17 +152,27 @@ async function fetchDocumentPreviewObjectUrl(
     await response.body?.cancel().catch(() => undefined);
     return null;
   }
-  return URL.createObjectURL(await response.blob());
+  if (!blockNetwork) {
+    return URL.createObjectURL(await response.blob());
+  }
+  return URL.createObjectURL(
+    new Blob([blockHtmlPreviewNetwork(await response.text())], { type: "text/html" }),
+  );
+}
+
+function documentFramePreviewCacheKey(source: string, blockNetwork: boolean): string {
+  return `${source.replace(/#.*$/u, "")}::${blockNetwork ? "network-blocked" : "native"}`;
 }
 
 export function resolveDocumentFramePreviewState(
   attachmentUrl: string,
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
+  blockNetwork = false,
 ): DocumentFramePreviewState {
   return observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
-    attachmentUrl.replace(/#.*$/u, ""),
+    documentFramePreviewCacheKey(attachmentUrl, blockNetwork),
     onRequestUpdate,
     sourceIdentity,
   ).value;
@@ -156,8 +182,9 @@ function startDocumentFramePreview(
   source: string,
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
+  blockNetwork: boolean,
 ) {
-  const cacheKey = source.replace(/#.*$/u, "");
+  const cacheKey = documentFramePreviewCacheKey(source, blockNetwork);
   const resource = observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
     cacheKey,
@@ -174,7 +201,7 @@ function startDocumentFramePreview(
     () => controller.abort(new DOMException("document preview fetch timed out", "TimeoutError")),
     DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS,
   );
-  const pending = fetchDocumentPreviewObjectUrl(source, controller.signal)
+  const pending = fetchDocumentPreviewObjectUrl(source, controller.signal, blockNetwork)
     .then((previewUrl) => {
       if (!isChatMediaResourceCurrent(resource)) {
         if (previewUrl) {
@@ -214,8 +241,9 @@ export function loadDocumentFramePreview(
   source: string,
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
+  blockNetwork = false,
 ): DocumentFramePreviewState {
-  return startDocumentFramePreview(source, sourceIdentity, onRequestUpdate).value;
+  return startDocumentFramePreview(source, sourceIdentity, onRequestUpdate, blockNetwork).value;
 }
 
 function renderAttachmentTablePreview(

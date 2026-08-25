@@ -602,7 +602,12 @@ export function renderAssistantAttachments(
         : null;
     const framePreviewState =
       previewKind === "html" || previewKind === "page"
-        ? resolveDocumentFramePreviewState(attachmentUrl, attachment.url, onRequestUpdate)
+        ? resolveDocumentFramePreviewState(
+            attachmentUrl,
+            attachment.url,
+            onRequestUpdate,
+            previewKind === "html",
+          )
         : undefined;
     const tablePreviewFailed =
       previewKind === "table" &&

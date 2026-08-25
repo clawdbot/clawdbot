@@ -54,6 +54,8 @@ function renderSidebarAttachment(
     : (content.authToken ?? null);
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   const extension = content.title.split(".").pop()?.toLowerCase() ?? "";
+  const isHtml = mimeType === "text/html" || extension === "html" || extension === "htm";
+  const isPdf = mimeType === "application/pdf" || extension === "pdf";
   if (!src) {
     return html`<div class="sidebar-attachment-preview__unavailable">
       ${t("chat.attachments.previewUnavailable")}
@@ -98,13 +100,14 @@ function renderSidebarAttachment(
       src,
       content.sourceIdentity ?? content.src ?? src,
       onRequestUpdate,
+      isHtml,
     );
     if (typeof frameState === "object") {
       return html`<iframe
         class="sidebar-attachment-preview__frame"
         src=${frameState.src}
         title=${content.title}
-        sandbox=${mimeType === "application/pdf" || extension === "pdf" ? "allow-scripts" : ""}
+        sandbox=${isPdf ? "allow-scripts" : ""}
       ></iframe>`;
     }
     if (frameState === "loading") {

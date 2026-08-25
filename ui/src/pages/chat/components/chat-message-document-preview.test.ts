@@ -153,11 +153,17 @@ describe("parseDelimitedPreview", () => {
   ])("loads %s directly when its card reaches the viewport", async (label, mimeType, sandbox) => {
     const intersectPreview = stubPreviewIntersection();
     const previewObjectUrl = `blob:document-preview-${label}`;
+    let previewBlob: Blob | undefined;
     const NativeUrl = URL;
     vi.stubGlobal(
       "URL",
       class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => previewObjectUrl);
+        static override createObjectURL = vi.fn((object: Blob | MediaSource) => {
+          if (object instanceof Blob) {
+            previewBlob = object;
+          }
+          return previewObjectUrl;
+        });
         static override revokeObjectURL = vi.fn();
       },
     );
@@ -197,6 +203,11 @@ describe("parseDelimitedPreview", () => {
       `/__openclaw__/media/${label}`,
       expect.objectContaining({ method: "GET" }),
     );
+    if (mimeType === "text/html") {
+      expect(await previewBlob?.text()).toContain(
+        'http-equiv="Content-Security-Policy" content="default-src \'none\'',
+      );
+    }
   });
 
   it("resets an activated frame when its resolved source changes", async () => {

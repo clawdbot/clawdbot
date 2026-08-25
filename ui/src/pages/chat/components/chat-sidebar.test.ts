@@ -434,10 +434,16 @@ describe("markdown sidebar", () => {
 
   it("frames same-origin documents from an isolated fetched object URL", async () => {
     const NativeUrl = URL;
+    let previewBlob: Blob | undefined;
     vi.stubGlobal(
       "URL",
       class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => "blob:sidebar-document-preview");
+        static override createObjectURL = vi.fn((object: Blob | MediaSource) => {
+          if (object instanceof Blob) {
+            previewBlob = object;
+          }
+          return "blob:sidebar-document-preview";
+        });
         static override revokeObjectURL = vi.fn();
       },
     );
@@ -470,6 +476,9 @@ describe("markdown sidebar", () => {
     );
     expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
       "blob:sidebar-document-preview",
+    );
+    expect(await previewBlob?.text()).toContain(
+      'http-equiv="Content-Security-Policy" content="default-src \'none\'',
     );
     panel.remove();
   });
