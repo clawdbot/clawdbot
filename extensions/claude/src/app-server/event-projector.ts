@@ -28,6 +28,8 @@ import {
   type EmbeddedRunAttemptParams,
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readTurn, readTurnCompletedNotification } from "./protocol-validators.js";
+import type { JsonValue, RpcNotification, Turn } from "./types.js";
 
 /**
  * Emit an agent event to BOTH the global agent-event bus (with
@@ -65,8 +67,32 @@ function emitProjectedAgentEvent(
     embeddedAgentLog.debug("claude-bridge: per-attempt onAgentEvent threw", { error });
   }
 }
-import { readTurn, readTurnCompletedNotification } from "./protocol-validators.js";
-import type { JsonValue, RpcNotification, Turn } from "./types.js";
+
+/** Transport prefix the Claude CLI uses for our loopback OpenClaw MCP tools. */
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+
+/**
+ * Whether dynamic-tools.ts already dispatched this call — and therefore already
+ * fired AfterToolCall for it.
+ *
+ * `dynamicToolCall` is the obvious case. The subtle one is that the bridge serves
+ * OpenClaw tools as an IN-PROCESS MCP SERVER, so the CLI reports them as ordinary
+ * `mcpToolCall` items carrying the raw `mcp__openclaw__*` transport name. Those are
+ * bridge-owned too: treating them as native fires AfterToolCall a SECOND time for a
+ * call dynamic-tools.ts already reported, which is precisely the double-count the
+ * guard in recordToolCompletion exists to prevent. Field evidence: across 3 days of
+ * gateway logs, prefixed and unprefixed after_tool_call counts pair off exactly
+ * (heartbeat_respond 99/99, vestige_dream 9/9, sessions_spawn 8/8, vestige_search
+ * 3/3) while before_tool_call is never prefixed (0/118) — one population counted
+ * twice, not two populations.
+ */
+function isBridgeOwnedToolCall(item: Record<string, unknown>): boolean {
+  if (item.type === "dynamicToolCall") {
+    return true;
+  }
+  const name = extractItemName(item);
+  return typeof name === "string" && name.startsWith(OPENCLAW_MCP_TOOL_PREFIX);
+}
 
 /**
  * The normalized stop-reason vocabulary openclaw's AgentMessage uses
@@ -399,7 +425,7 @@ export class ClaudeAppServerEventProjector {
         name: toolName,
         args: item.arguments ?? item.input,
         startedAt: Date.now(),
-        isDynamic: item.type === "dynamicToolCall",
+        isDynamic: isBridgeOwnedToolCall(item),
       });
     }
     // Mirror codex's stream:"tool" phase:"start" emission so Discord/Slack/
@@ -428,7 +454,7 @@ export class ClaudeAppServerEventProjector {
     // Fire AfterToolCall for NATIVE tools only. Dynamic tool calls already
     // fire AfterToolCall inside dynamic-tools.ts when the openclaw bridge
     // invokes the AnyAgentTool, so firing here too would double-count.
-    if (!merged.isDynamic) {
+    if (!merged.isDynamic && !isBridgeOwnedToolCall(item)) {
       const args =
         merged.args && typeof merged.args === "object" && !Array.isArray(merged.args)
           ? (merged.args as Record<string, unknown>)

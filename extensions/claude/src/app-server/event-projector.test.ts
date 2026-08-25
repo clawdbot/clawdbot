@@ -845,3 +845,72 @@ describe("commentary vs final agentMessage split", () => {
     expect(acc.assistantTexts).toEqual(["The answer is foo."]);
   });
 });
+
+describe("bridge-owned tool calls (MCP-routed OpenClaw tools)", () => {
+  it("treats an mcp__openclaw__* mcpToolCall as bridge-owned, not native", () => {
+    // The regression. The bridge serves OpenClaw tools as an in-process MCP
+    // server, so the CLI reports them as ordinary mcpToolCall items rather than
+    // dynamicToolCall. Before the fix isDynamic was false here, so
+    // recordToolCompletion's "native tools only" guard let AfterToolCall fire a
+    // second time for a call dynamic-tools.ts had already reported.
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: {
+          type: "mcpToolCall",
+          id: "call_mcp_1",
+          name: "mcp__openclaw__message",
+          arguments: { action: "send" },
+        },
+      }),
+    );
+    expect(acc.toolCalls.get("call_mcp_1")?.isDynamic).toBe(true);
+  });
+
+  it("still treats a genuine native toolCall as native", () => {
+    // Guards the fix against over-broadening: native tools must keep firing
+    // AfterToolCall here, since nothing else fires it for them.
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "toolCall", id: "call_native", name: "Read", arguments: { path: "x" } },
+      }),
+    );
+    expect(acc.toolCalls.get("call_native")?.isDynamic).toBe(false);
+  });
+
+  it("leaves a third-party MCP server's tool native", () => {
+    // Only OUR loopback namespace is bridge-owned. A different MCP server's tool
+    // is dispatched by the CLI, not by dynamic-tools.ts, so it must still fire.
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: {
+          type: "mcpToolCall",
+          id: "call_third_party",
+          name: "mcp__othersrv__lookup",
+          arguments: {},
+        },
+      }),
+    );
+    expect(acc.toolCalls.get("call_third_party")?.isDynamic).toBe(false);
+  });
+
+  it("keeps recognizing a plain dynamicToolCall", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "dynamicToolCall", id: "call_dyn", name: "image", arguments: {} },
+      }),
+    );
+    expect(acc.toolCalls.get("call_dyn")?.isDynamic).toBe(true);
+  });
+});
