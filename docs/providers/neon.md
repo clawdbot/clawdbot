@@ -69,9 +69,11 @@ same isolation your Neon database already has.
     openclaw models list --provider neon
     ```
 
-    `openclaw models set` writes the reference into your config without checking that the provider
-    exists, so a typo or a missing provider entry surfaces later as an unresolved model rather than
-    as an error here. `openclaw models list --provider neon` confirms the entry loaded.
+    Because you added the `models.providers.neon` entry in the previous step, `openclaw models set`
+    recognizes the provider and saves the selection. If you run it before adding that entry or you
+    misspell the provider, it fails with `Unknown model provider "neon"` and leaves your config
+    unchanged. A model ID the local catalog does not know still saves under a configured provider,
+    with a warning to check the ID, so confirm the result with `openclaw models list --provider neon`.
 
   </Step>
 </Steps>
