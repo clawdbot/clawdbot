@@ -35,6 +35,7 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it("keeps one live card placement and a compact transcript receipt", async () => {
     const sessionKey = "agent:main:progress-placement";
+    const updatedAt = Date.now() - 5 * 60_000;
     const plan = [
       { step: "Inspect", status: "completed" },
       { step: "Implement", status: "in_progress" },
@@ -79,7 +80,7 @@ suite.define(() => {
                 revision: 2,
                 sessionKey,
                 steps: plan,
-                updatedAt: 2,
+                updatedAt,
               },
             },
             "sessions.list": chatSessionListResponse([
@@ -87,7 +88,7 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
-                updatedAt: 2,
+                updatedAt,
               },
             ]),
           },
@@ -98,6 +99,28 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        const expectVisibleLastActivity = async (placement: "composer" | "dock" | "rail") => {
+          const card = visiblePane.locator(`[data-progress-card-placement="${placement}"]`);
+          const timestamp = card.locator("time");
+          await expect
+            .poll(() => timestamp.getAttribute("datetime"))
+            .toBe(new Date(updatedAt).toISOString());
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Last activity: /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+          await expect.poll(() => timestamp.isVisible()).toBe(true);
+          const accessibleCard = placement === "composer" ? card.locator("summary") : card;
+          await expect
+            .poll(() => accessibleCard.getAttribute("aria-label"))
+            .toContain("Last activity:");
+          const timestampBounds = await timestamp.boundingBox();
+          const cardBounds = await card.boundingBox();
+          if (!timestampBounds || !cardBounds) {
+            throw new Error("The progress card and last activity time must both remain visible");
+          }
+          expect(timestampBounds.x + timestampBounds.width).toBeLessThanOrEqual(
+            cardBounds.x + cardBounds.width,
+          );
+        };
         // Wide enough for the composer gutter to hold the card: it docks beside
         // the composer instead of stacking inside it.
         await page.setViewportSize({ height: 900, width: 1600 });
@@ -123,6 +146,7 @@ suite.define(() => {
             );
           })
           .toBe(true);
+        await expectVisibleLastActivity("dock");
         await captureProof(page, "dock-beside-composer.png");
 
         await page.setViewportSize({ height: 900, width: 1280 });
@@ -143,6 +167,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator(".chat-thread").textContent())
           .not.toContain("Implementation is moving.");
+        await expectVisibleLastActivity("rail");
         await captureProof(page, "rail-visible.png");
 
         await page.setViewportSize({ height: 900, width: 560 });
@@ -161,6 +186,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())
           .toBe(true);
+        await expectVisibleLastActivity("composer");
         await captureProof(page, "composer-adjacent.png");
       },
     );
