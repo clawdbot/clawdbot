@@ -47,6 +47,30 @@ describe("Workboard dispatcher ownership", () => {
     });
   });
 
+  it("keeps an automatically dispatched unassigned card ownerless", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Unassigned worker",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-unassigned" });
+
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1 },
+    });
+
+    expect(run).toHaveBeenCalledOnce();
+    const persisted = await store.get(card.id);
+    expect(persisted).toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "workboard-dispatcher" } },
+    });
+    expect(persisted?.agentId).toBeUndefined();
+  });
+
   it("falls back to one default owner for persisted blank and unassigned agents", async () => {
     const keyed = createMemoryStore();
     const store = new WorkboardStore(keyed);

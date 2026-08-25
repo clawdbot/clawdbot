@@ -467,6 +467,7 @@ async function runWorkboardDispatch(
             workspaceAccess: card.metadata?.automation?.workspaceAccess,
           },
           adoptWorkspaceAccess: persistWorkspaceAccess ? workspaceAccess : undefined,
+          preserveUnassignedAgent: true,
         },
       );
       claimValue = claimed.token;
