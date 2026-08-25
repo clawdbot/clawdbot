@@ -52,15 +52,15 @@ function extractMessageId(payload: unknown): string | undefined {
 
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const messageId = extractMessageId(result.payload);
-  const sendOutcome =
-    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : undefined;
+  const sendResult = result.kind === "send" ? result.sendResult : undefined;
+  const sendOutcome = result.kind === "send" ? resolveMessageSendOutcome(sendResult) : undefined;
   return {
     ...(result.kind === "broadcast"
       ? { ok: isMessageActionSuccessful(result) }
       : sendOutcome && !sendOutcome.ok && !result.dryRun
         ? {
             ...formatCliJsonFailure(sendOutcome.error),
-            deliveryStatus: result.sendResult?.deliveryStatus,
+            deliveryStatus: sendResult?.deliveryStatus,
             ...(sendOutcome.sentBeforeError ? { sentBeforeError: true } : {}),
           }
         : {}),
