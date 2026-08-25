@@ -1266,27 +1266,15 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
-      const repeatedRequestAttention =
-        state.state === "processing" &&
-        (activity.repeatedRequestNoProgressAgeMs ?? 0) > stuckSessionWarnMs;
-      // logMessageQueuedWithBacklogPolicy refreshes state.lastActivity per queued
-      // inbound, so a wedged lane that keeps receiving messages never ages past the
-      // threshold. classifySessionAttention, the is*RecoveryEligible rules and the
-      // ownerless-lane release window all measure staleness on the progress clock,
-      // so owned work reaches and is handed that clock rather than the session touch.
-      const ownedWorkProgressAgeMs =
-        activity.activeWorkKind === undefined ? 0 : (activity.lastProgressAgeMs ?? 0);
-      const ownedWorkAttention =
-        state.state === "processing" && ownedWorkProgressAgeMs > stuckSessionWarnMs;
+      // Inbound traffic refreshes session age; owned work stalls on its progress clock.
+      const ownedWorkAgeMs = activity.activeWorkKind ? (activity.lastProgressAgeMs ?? 0) : 0;
+      const attentionAgeMs = idleQueuedRecoverableStall
+        ? (activity.lastProgressAgeMs ?? ageMs)
+        : Math.max(ageMs, activity.repeatedRequestNoProgressAgeMs ?? 0, ownedWorkAgeMs);
       if (
-        (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
-        repeatedRequestAttention ||
-        ownedWorkAttention ||
+        (state.state === "processing" && attentionAgeMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall
       ) {
-        const attentionAgeMs = idleQueuedRecoverableStall
-          ? (activity.lastProgressAgeMs ?? ageMs)
-          : Math.max(ageMs, activity.repeatedRequestNoProgressAgeMs ?? 0, ownedWorkProgressAgeMs);
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
