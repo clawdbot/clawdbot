@@ -167,6 +167,13 @@ export class NewSessionModelControl {
       }
       const result = peekChatMetadata(client, agentId);
       if (!result) {
+        const snapshot = this.pendingContext?.gateway.snapshot;
+        if (snapshot?.phase !== "connected" || snapshot.client !== client) {
+          this.cancelMetadataRequest();
+          this.restoringPreference = false;
+          this.updateMetadataState({ ...this.metadataState, status: "offline" });
+          return;
+        }
         this.startMetadataRequest(client, agentId);
         return;
       }
@@ -433,11 +440,23 @@ export class NewSessionModelControl {
     this.restoringPreference = Boolean(
       options.preference?.model || options.preference?.thinkingLevel,
     );
-    if (
+    const activeRequestMatches =
       this.activeMetadataRequest?.client === client &&
-      this.activeMetadataRequest.agentId === normalizedAgentId
-    ) {
-      this.notify();
+      this.activeMetadataRequest.agentId === normalizedAgentId;
+    const cached = peekChatMetadata(client, normalizedAgentId);
+    if (activeRequestMatches) {
+      if (cached) {
+        this.publishMetadataCatalog(
+          Array.isArray(cached.models) ? cached.models : [],
+          "refreshing",
+        );
+      } else {
+        this.notify();
+      }
+      return;
+    }
+    if (cached && this.metadataState.status !== "error") {
+      this.publishMetadataCatalog(Array.isArray(cached.models) ? cached.models : [], "ready");
       return;
     }
     this.startMetadataRequest(client, normalizedAgentId);

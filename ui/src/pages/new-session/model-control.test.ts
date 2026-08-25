@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { rememberChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  invalidateChatMetadataStore,
+  rememberChatMetadata,
+  revalidateChatMetadata,
+} from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
@@ -299,7 +303,7 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("does not auth-block a cached all-cold catalog until revalidation completes", async () => {
+  it("keeps a ready catalog authoritative across control teardown", async () => {
     const models: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -309,32 +313,25 @@ describe("new-session model runtime", () => {
       },
     ];
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
-    const refresh = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith(models);
     const firstControl = new NewSessionModelControl(() => undefined);
     firstControl.load(context, "main", true, { agent });
     await vi.waitFor(() => expect(firstControl.isModelUnavailable(agent)).toBe(true));
-    request.mockReturnValueOnce(refresh.promise);
+    firstControl.reset();
 
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true, { agent });
 
-    let container = renderControl(remountedControl, context, "main", agent);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
-    expect(remountedControl.isModelUnavailable(agent)).toBe(false);
-    expect(container.textContent).not.toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    const container = renderControl(remountedControl, context, "main", agent);
+    expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
+    expect(remountedControl.isModelUnavailable(agent)).toBe(true);
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
     ).not.toBeNull();
-    refresh.resolve({ models });
-    await vi.waitFor(() => expect(remountedControl.isModelUnavailable(agent)).toBe(true));
-    container = renderControl(remountedControl, context, "main", agent);
-    expect(container.querySelector('[data-chat-model-catalog-state="ready"]')).not.toBeNull();
     expect(container.textContent).toContain(
       "Authentication failed. Review the provider credential or sign-in, then retry.",
     );
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("keeps a shared metadata request alive when its first control is torn down", async () => {
@@ -587,6 +584,7 @@ describe("new-session model runtime", () => {
     );
     request.mockReturnValueOnce(refresh.promise);
 
+    control.invalidate(false);
     control.load(context, "main", true);
     expect(renderControl(control, context).textContent).toContain("No models available");
     expect(renderControl(control, context).textContent).not.toContain("Authentication failed");
@@ -644,7 +642,7 @@ describe("new-session model runtime", () => {
         available: false,
       },
     ];
-    const { context } = contextWith(coldModels);
+    const { context, request } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
@@ -654,16 +652,19 @@ describe("new-session model runtime", () => {
       ...context,
       gateway: {
         ...context.gateway,
-        snapshot: { ...context.gateway.snapshot, client: null, phase: "reconnecting" },
+        snapshot: { ...context.gateway.snapshot, phase: "reconnecting" },
       },
     } as unknown as ApplicationContext;
-    control.load(offlineContext, "main", true, { agent });
+    (context.gateway as { snapshot: ApplicationContext["gateway"]["snapshot"] }).snapshot =
+      offlineContext.gateway.snapshot;
+    invalidateChatMetadataStore(context.gateway.snapshot.client!);
 
     const container = renderControl(control, offlineContext, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
     expect(container.textContent).toContain("Offline");
     expect(container.textContent).not.toContain("Authentication failed");
     expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("drops the stale auth gate on refresh error and restores selection after recovery", async () => {
@@ -685,6 +686,7 @@ describe("new-session model runtime", () => {
     await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
 
     request.mockRejectedValueOnce(new Error("refresh failed"));
+    control.invalidate(false);
     control.load(context, "main", true, { agent });
     await vi.waitFor(() =>
       expect(
@@ -733,7 +735,7 @@ describe("new-session model runtime", () => {
     expect(control.thinkingLevel).toBe("high");
   });
 
-  it("preserves a live selection when an ordinary metadata refresh fails", async () => {
+  it("preserves a live selection when an invalidated metadata refresh fails", async () => {
     const { context, request } = contextWith([]);
     const notify = vi.fn();
     const control = new NewSessionModelControl(notify);
@@ -744,6 +746,7 @@ describe("new-session model runtime", () => {
     });
     control.selected = "anthropic/claude-sonnet-4-6";
     control.thinkingLevel = "high";
+    control.invalidate(false);
     request.mockRejectedValueOnce(new Error("metadata unavailable"));
 
     control.load(context, "main", true);
@@ -777,6 +780,7 @@ describe("new-session model runtime", () => {
     );
     request.mockReturnValueOnce(refresh.promise);
 
+    control.invalidate(false);
     control.load(context, "main", true, {
       agent,
       preference: { model: "openai/gpt-5.6-luna" },
@@ -839,8 +843,9 @@ describe("new-session model runtime", () => {
       ).not.toBeNull(),
     );
 
-    control.invalidate(false);
     request.mockReturnValueOnce(reconnect.promise);
+    invalidateChatMetadataStore(context.gateway.snapshot.client!);
+    control.invalidate(false);
     control.load(context, "main", true);
 
     expect(
@@ -915,6 +920,48 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
+  it("reapplies an updated preference against the attached ready snapshot", async () => {
+    const models: ModelCatalogEntry[] = [
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [{ id: "high", label: "high" }],
+      },
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [{ id: "low", label: "low" }],
+      },
+    ];
+    const refresh = deferred<{ models: ModelCatalogEntry[] }>();
+    const { context, request } = contextWith([]);
+    const client = context.gateway.snapshot.client!;
+    rememberChatMetadata(client, "main", { commands: [], models });
+    request.mockReturnValueOnce(refresh.promise);
+    const pendingRefresh = revalidateChatMetadata(client, "main");
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true, {
+      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+    });
+    expect(control.selected).toBe("openai/gpt-5.6-sol");
+    expect(control.thinkingLevel).toBe("high");
+
+    control.load(context, "main", true, {
+      preference: { model: "openai/gpt-5.6-luna", thinkingLevel: "low" },
+    });
+
+    expect(control.selected).toBe("openai/gpt-5.6-luna");
+    expect(control.thinkingLevel).toBe("low");
+    expect(request).toHaveBeenCalledOnce();
+    refresh.resolve({ models });
+    await pendingRefresh;
+  });
+
   it("drops a stored model and its reasoning override when the model is unavailable", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -933,8 +980,8 @@ describe("new-session model runtime", () => {
       preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
     });
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(control.selected).toBe(""));
+    expect(request).toHaveBeenCalledOnce();
+    expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
     expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
   });
@@ -965,8 +1012,8 @@ describe("new-session model runtime", () => {
       preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "retired" },
     });
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(control.thinkingLevel).toBe(""));
+    expect(request).toHaveBeenCalledOnce();
+    expect(control.thinkingLevel).toBe("");
     expect(control.selected).toBe("openai/gpt-5.6-sol");
     expect(onSelectionChange).toHaveBeenLastCalledWith({
       model: "openai/gpt-5.6-sol",

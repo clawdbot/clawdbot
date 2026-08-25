@@ -116,6 +116,20 @@ describe("chat metadata store", () => {
     expect(listener).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a ready snapshot after its last subscriber releases", async () => {
+    const result = metadata("cached-after-release");
+    const request = vi.fn();
+    const client = clientWith(request);
+    const unsubscribe = subscribeChatMetadata(client, "main", () => undefined);
+    rememberChatMetadata(client, "main", result);
+
+    unsubscribe();
+
+    expect(peekChatMetadata(client, "main")).toBe(result);
+    await expect(loadChatMetadata(client, "main")).resolves.toBe(result);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("drops every agent snapshot when the client store is invalidated", async () => {
     const main = metadata("main-model");
     const worker = metadata("worker-model");
