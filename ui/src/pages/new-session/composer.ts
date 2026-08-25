@@ -9,7 +9,6 @@ import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -48,16 +47,14 @@ import {
 } from "../chat/components/chat-composer-slash-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
-import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
   renderNewSessionDraftVisibility,
   renderNewSessionPlusMenu,
   renderNewSessionSelectionStatus,
 } from "./composer-capability-controls.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import type { NewSessionModelControl } from "./model-control.ts";
 
-type NewSessionComposerOptions = {
+export type NewSessionComposerOptions = {
   attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
@@ -74,7 +71,7 @@ type NewSessionComposerOptions = {
   blockedSubmitNotice?: string;
   dictationActive?: boolean;
   dictationPreview?: string;
-  dictationStatus?: TemplateResult;
+  dictationStatus?: TemplateResult | typeof nothing;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -82,7 +79,7 @@ type NewSessionComposerOptions = {
   };
   submitting: boolean;
   textareaController: NewSessionComposerTextareaController;
-  voiceControl?: TemplateResult;
+  voiceControl?: TemplateResult | typeof nothing;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
@@ -428,7 +425,7 @@ function handleComposerKeydown(
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
-function renderNewSessionComposer(options: NewSessionComposerOptions) {
+export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const skillMenuState = options.textareaController.skillMenuState;
   const slashMenuState = options.textareaController.slashMenuState;
   const skillMenuHost: SkillMenuHost = {
@@ -498,10 +495,8 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         options.message,
         options.requestUpdate,
       );
-  const skillMenuVisible =
-    !composerLocked && isSkillMenuVisible(skillMenuState);
-  const slashMenuVisible =
-    !composerLocked && isSlashMenuVisible(slashMenuState);
+  const skillMenuVisible = !composerLocked && isSkillMenuVisible(skillMenuState);
+  const slashMenuVisible = !composerLocked && isSlashMenuVisible(slashMenuState);
   const menuVisible = skillMenuVisible || slashMenuVisible;
   const menuListboxId = paneDomId(
     skillMenuHost.paneId,
@@ -620,106 +615,4 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         : nothing}
     </div>
   `;
-}
-
-export function renderNewSessionDraftComposer(options: {
-  agent?: import("../../api/types.ts").GatewayAgentRow;
-  agentId: string;
-  attachmentDraft: NewSessionAttachmentDraft;
-  canSubmit: boolean;
-  context: import("../../app/context.ts").ApplicationContext | undefined;
-  draftOwnerKey: string;
-  isCatalogTarget: boolean;
-  message: string;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
-  capabilityMenu?: CapabilityMenuProps;
-  toolOverrides?: SessionToolOverrides | null;
-  modelControl: NewSessionModelControl;
-  permissionControl?: TemplateResult;
-  textareaController: NewSessionComposerTextareaController;
-  voiceControl?: TemplateResult;
-  requiresModifier: boolean;
-  requestUpdate: () => void;
-  submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
-  dictationActive?: boolean;
-  dictationPreview?: string;
-  dictationStatus?: TemplateResult;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
-  submitting: boolean;
-  messageLocked?: boolean;
-  onInput: (message: string) => void;
-  onOpenImage?: (item: ImageLightboxItem) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
-  onSubmit: () => void;
-}) {
-  const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client ?? null;
-  options.textareaController.syncSkillCommandOwner(
-    commandClient,
-    options.agentId,
-    options.draftOwnerKey,
-  );
-  return renderNewSessionComposer({
-    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
-    attachments: options.attachmentDraft.attachments,
-    canSubmit: options.canSubmit,
-    getAttachments: () => options.attachmentDraft.attachments,
-    message: options.message,
-    visibility: options.visibility,
-    draftAvailable: options.draftAvailable,
-    capabilityMenu: options.capabilityMenu,
-    toolOverrides: options.toolOverrides,
-    modelControl: options.isCatalogTarget
-      ? nothing
-      : options.modelControl.render({
-          agent: options.agent,
-          agentId: options.agentId,
-          context: options.context,
-          sending: options.submitting,
-        }),
-    permissionControl: options.permissionControl,
-    pendingAttachmentReads: options.attachmentDraft.pendingReads,
-    readSignal,
-    requiresModifier: options.requiresModifier,
-    requestUpdate: options.requestUpdate,
-    refreshCommands: commandClient
-      ? () =>
-          refreshSlashCommands({
-            client: commandClient,
-            agentId: options.agentId,
-            shouldApply: () =>
-              options.textareaController.ownsSkillCommands(
-                commandClient,
-                options.agentId,
-                options.draftOwnerKey,
-              ),
-          })
-      : undefined,
-    submitDisabledReason: options.submitDisabledReason,
-    blockedSubmitNotice: options.blockedSubmitNotice,
-    dictationActive: options.dictationActive,
-    dictationPreview: options.dictationPreview,
-    dictationStatus: options.dictationStatus,
-    terminalAction: options.terminalAction,
-    submitting: options.submitting,
-    textareaController: options.textareaController,
-    voiceControl: options.voiceControl,
-    messageLocked: options.messageLocked,
-    onAttachmentsChange: (attachments) => {
-      if (!options.submitting && !options.messageLocked) {
-        options.attachmentDraft.replace(attachments);
-      }
-    },
-    onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
-    onInput: options.onInput,
-    onOpenImage: options.onOpenImage,
-    onVisibilityChange: options.onVisibilityChange,
-    onSubmit: options.onSubmit,
-  });
 }

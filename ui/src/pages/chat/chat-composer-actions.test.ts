@@ -9,7 +9,10 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatPrimaryActions } from "./components/chat-composer-controls.ts";
+import {
+  renderChatPrimaryActions,
+  type ChatRunControlsProps,
+} from "./components/chat-composer-controls.ts";
 import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
@@ -37,12 +40,12 @@ function pressComposerEnter(
 describe("renderChatComposer controls", () => {
   function renderActiveDictationActions(overrides: {
     finishActive: ReturnType<typeof vi.fn>;
-    onSend?: ReturnType<typeof vi.fn>;
+    onSend?: ChatRunControlsProps["onSend"];
   }) {
     const container = document.createElement("div");
     const cancelActive = vi.fn();
     const handleClick = vi.fn();
-    const onSend = overrides.onSend ?? vi.fn();
+    const onSend = overrides.onSend ?? vi.fn<ChatRunControlsProps["onSend"]>();
     const dictation = {
       active: true,
       connecting: false,

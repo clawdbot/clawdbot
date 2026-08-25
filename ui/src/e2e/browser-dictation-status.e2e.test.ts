@@ -70,7 +70,6 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       await page.getByRole("button", { name: "Start voice input" }).click();
-      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
       await expect.poll(() => page.locator('[data-status="unavailable"]').count()).toBe(2);
       await expect.poll(() => page.getByRole("button", { name: "Talk settings" }).count()).toBe(1);
       await expect

@@ -10,7 +10,7 @@ const dictationHarness = vi.hoisted(() => ({
   },
   controllers: [] as Array<{
     active: boolean;
-    locksComposer: boolean;
+    finalizing: boolean;
     partial: string;
     finishActive: ReturnType<typeof vi.fn>;
     handleClick: ReturnType<typeof vi.fn>;
@@ -225,27 +225,4 @@ describe("NewSessionDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it("publishes whether dictation currently locks draft submission", () => {
-    const control = new NewSessionDictationControl({
-      textarea: { captureSelection: vi.fn(), insertTranscript: vi.fn() } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage: vi.fn(),
-      onError: vi.fn(),
-      onClearError: vi.fn(),
-      requestUpdate: vi.fn(),
-    });
-
-    control.render("agent-a");
-    expect(control.locked).toBe(false);
-
-    const controller = dictationHarness.controllers[0];
-    if (!controller) {
-      throw new Error("expected dictation controller");
-    }
-    controller.locksComposer = true;
-
-    expect(control.locked).toBe(true);
-  });
 });

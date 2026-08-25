@@ -235,7 +235,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       state,
       sidebarLayout,
       paneWidth: this.paneWidth,
-      composerGutter: this.composerGutter.width,
       presentationId: this.presentationId,
       presented: this.presented,
       gatewaySnapshot,
@@ -322,9 +321,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard:
-        progressCardPlacement === "rail" || !this.progressCard.card
-          ? null
-          : { card: this.progressCard.card, placement: progressCardPlacement },
+        progressCardPlacement === "rail" || !this.progressCard.card ? null : this.progressCard.card,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {

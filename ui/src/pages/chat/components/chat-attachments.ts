@@ -525,7 +525,7 @@ export function renderChatAttachmentMenuTrigger(
         : ""}"
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
-      title=${selection?.active ? selection.label : t("chat.composer.addAttachment")}
+      title=${t("chat.composer.addAttachment")}
     >
       ${icons.plus}
     </button>

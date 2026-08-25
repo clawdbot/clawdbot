@@ -5792,6 +5792,7 @@ export const en: TranslationMap = {
       noModelsAvailable: "No models available",
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
+      useDefaultReasoning: "Use default reasoning ({level})",
       fastResponsesAria: "Fast responses: {state}",
     },
     permissionControls: {

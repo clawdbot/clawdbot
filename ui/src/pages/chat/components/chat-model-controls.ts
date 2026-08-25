@@ -246,14 +246,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
         ? agentRuntime.id.trim()
         : undefined;
-    return {
+    const pickerOption: ChatModelPickerOption = {
       commitValue: isDefault ? "" : option.value,
-      ...(agentRuntimeId ? { agentRuntimeId } : {}),
-      ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
-      ...(typeof catalogEntry?.supportsTools === "boolean"
-        ? { supportsTools: catalogEntry.supportsTools }
-        : {}),
-      ...(option.disabled ? { disabled: true } : {}),
       isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
@@ -268,6 +262,19 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             : "",
       ),
     };
+    if (agentRuntimeId) {
+      pickerOption.agentRuntimeId = agentRuntimeId;
+    }
+    if (catalogEntry?.contextWindow) {
+      pickerOption.contextWindow = catalogEntry.contextWindow;
+    }
+    if (typeof catalogEntry?.supportsTools === "boolean") {
+      pickerOption.supportsTools = catalogEntry.supportsTools;
+    }
+    if (option.disabled) {
+      pickerOption.disabled = true;
+    }
+    return pickerOption;
   });
   const explicitOverride = props.modelOverrides?.[props.sessionKey];
   const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
@@ -425,6 +432,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
                 },
               }
             : undefined,
+        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         mobileSecondary,

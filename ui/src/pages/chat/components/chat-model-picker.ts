@@ -28,6 +28,7 @@ export type ChatModelCatalogState = {
 
 type ChatModelPickerParams = {
   contextWindow?: ChatContextWindowControlParams;
+  defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   mobileSecondary?: { disabled: boolean; label: string; value: string };

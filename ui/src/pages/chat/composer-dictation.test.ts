@@ -204,7 +204,7 @@ describe("ComposerDictationController", () => {
   });
 
   it("commits and unlocks immediately while remote close finishes in background", async () => {
-    let resolveClose = () => undefined;
+    let resolveClose: () => void = () => {};
     const close = new Promise<void>((resolve) => {
       resolveClose = resolve;
     });
