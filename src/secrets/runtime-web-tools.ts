@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type {
@@ -110,6 +111,8 @@ function createUnavailableWebProviderOwner(params: {
     RuntimeWebUnavailableProvider,
     "providerId" | "path" | "refKey" | "reason" | "providerFailure"
   >;
+  relatedUnavailable?: RuntimeWebUnavailableProvider[];
+  owner?: RuntimeWebSecretOwner;
   degradationState?: "cold" | "stale";
 }): DegradedSecretOwner {
   return {
@@ -117,8 +120,10 @@ function createUnavailableWebProviderOwner(params: {
     ownerId: runtimeWebSecretOwnerId(params.kind, params.unavailable.providerId),
     state: "unavailable",
     degradationState: params.degradationState ?? "cold",
-    paths: [params.unavailable.path],
-    refKeys: [params.unavailable.refKey],
+    paths: (params.relatedUnavailable ?? [params.unavailable]).map((entry) => entry.path),
+    refKeys: sortUniqueStrings(
+      (params.owner?.refs ?? [params.unavailable]).map((entry) => entry.refKey),
+    ),
     reason: params.unavailable.reason,
     ...(params.unavailable.providerFailure
       ? { providerFailures: [params.unavailable.providerFailure] }
@@ -144,11 +149,18 @@ function collectUnavailableWebProviders(params: {
   degradedOwners: DegradedSecretOwner[];
   forceColdRefKeys?: ReadonlySet<string>;
 }): void {
-  for (const unavailable of params.result.unavailableProviders) {
+  for (const owner of params.result.secretOwners) {
+    const relatedUnavailable = params.result.unavailableProviders.filter(
+      (unavailable) => unavailable.providerId === owner.providerId,
+    );
+    const unavailable = relatedUnavailable[0];
+    if (!unavailable) {
+      continue;
+    }
     let degradationState = classifySecretOwnerDegradationState({
       ownerKind: "capability",
       ownerId: runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
-      refs: [unavailable.ref],
+      refs: owner.refs.map((secret) => secret.ref),
       config: params.sourceConfig,
       contractDigest: unavailable.contractDigest,
       forceColdRefKeys: params.forceColdRefKeys,
@@ -160,21 +172,23 @@ function collectUnavailableWebProviders(params: {
           entry.ownerKind === "capability" &&
           entry.ownerId === runtimeWebSecretOwnerId(params.kind, unavailable.providerId),
       );
-      const value = activeOwner?.resolvedValues?.find(
-        (entry) => entry.refKey === unavailable.refKey,
-      )?.value;
       try {
-        if (typeof value !== "string" || !unavailable.restoreResolvedValue) {
-          throw new Error("last-known-good web credential is unavailable");
-        }
-        unavailable.restoreResolvedValue(value);
-        unavailable.resolvedValue = value;
-        const selectedOwner = params.result.secretOwners.find(
-          (entry) =>
-            entry.providerId === unavailable.providerId && entry.refKey === unavailable.refKey,
-        );
-        if (selectedOwner) {
-          selectedOwner.resolvedValue = value;
+        const restored = owner.refs.map((secret) => {
+          const value = activeOwner?.resolvedValues?.find(
+            (entry) => entry.refKey === secret.refKey,
+          )?.value;
+          if (typeof value !== "string" || !secret.restoreResolvedValue) {
+            throw new Error("last-known-good web credential is unavailable");
+          }
+          return { secret, value, restore: secret.restoreResolvedValue };
+        });
+        for (const { secret, value, restore } of restored) {
+          restore(value);
+          secret.resolvedValue = value;
+          const failure = relatedUnavailable.find((entry) => entry.refKey === secret.refKey);
+          if (failure) {
+            failure.resolvedValue = value;
+          }
         }
         const activeMetadata =
           params.kind === "search" ? active?.webTools.search : active?.webTools.fetch;
@@ -189,13 +203,15 @@ function collectUnavailableWebProviders(params: {
         degradationState = "cold";
       }
     }
-    const owner = createUnavailableWebProviderOwner({
+    const degradedOwner = createUnavailableWebProviderOwner({
       kind: params.kind,
       unavailable,
+      relatedUnavailable,
+      owner,
       degradationState,
     });
-    params.degradedOwners.push(owner);
-    warnDegradedSecretOwner(params.context, owner);
+    params.degradedOwners.push(degradedOwner);
+    warnDegradedSecretOwner(params.context, degradedOwner);
   }
 }
 
@@ -203,13 +219,20 @@ function toWebSecretOwnerRefState(
   kind: "search" | "fetch",
   owner: RuntimeWebSecretOwner,
 ): SecretOwnerRefState {
+  const resolvedValues = new Map(
+    owner.refs.flatMap((entry) =>
+      entry.resolvedValue ? [[entry.refKey, entry.resolvedValue] as const] : [],
+    ),
+  );
   return {
     ownerKind: "capability",
     ownerId: runtimeWebSecretOwnerId(kind, owner.providerId),
-    refKeys: [owner.refKey],
+    refKeys: sortUniqueStrings(owner.refs.map((entry) => entry.refKey)),
     contractDigest: owner.contractDigest,
-    ...(owner.resolvedValue
-      ? { resolvedValues: [{ refKey: owner.refKey, value: owner.resolvedValue }] }
+    ...(resolvedValues.size > 0
+      ? {
+          resolvedValues: [...resolvedValues].map(([refKey, value]) => ({ refKey, value })),
+        }
       : {}),
   };
 }
@@ -539,6 +562,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   }
 
   if (resolvedFromRef) {
+    registerSecretValueForRedaction(resolvedFromRef);
     return {
       value: resolvedFromRef,
       source: "secretRef",
@@ -925,6 +949,8 @@ export async function resolveRuntimeWebTools(params: {
           config,
           search: toolConfig,
         }),
+      getConfiguredSecretInputs: ({ provider, config }) =>
+        provider.getConfiguredSecretInputs?.(config) ?? [],
       resolveSecretInput: ({ providerId, value, path, envVars, contractDigest }) =>
         resolveSecretInputWithEnvFallback({
           kind: "search",

@@ -5,9 +5,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
-import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
-import { applyResolvedAssignments, createResolverContext } from "./runtime-shared.js";
+import { createResolverContext } from "./runtime-shared.js";
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
@@ -144,7 +143,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
-  it("resolves only explicitly referenced Google web-search headers", async () => {
+  it("leaves Google web-search headers to their selected capability owner", () => {
     expect(
       findBundledPluginMetadataById("google", {
         includeChannelConfigs: false,
@@ -169,8 +168,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
-    const env = { GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
-    const context = createResolverContext({ sourceConfig: config, env });
+    const context = createResolverContext({ sourceConfig: config, env: {} });
 
     collectPluginConfigAssignments({
       config,
@@ -179,22 +177,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       loadablePluginOrigins: new Map([["google", "bundled"]]),
     });
 
-    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
-      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
-    ]);
-    const resolved = await resolveSecretRefValues(
-      context.assignments.map((assignment) => assignment.ref),
-      { config, env, cache: context.cache },
-    );
-    applyResolvedAssignments({ assignments: context.assignments, resolved });
-    expect(config.plugins?.entries?.google?.config).toMatchObject({
-      webSearch: {
-        headers: {
-          "X-Routing-Target": "staging",
-          "X-Gateway-Token": "resolved-gateway-token",
-        },
-      },
-    });
+    expect(context.assignments).toEqual([]);
   });
 
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {

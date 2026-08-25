@@ -6,6 +6,11 @@ import {
 import { normalizeGoogleApiBaseUrl } from "./google-api-base-url.js";
 
 const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
+const GEMINI_PROVIDER_OWNED_HEADER_NAMES = new Set([
+  "content-type",
+  "x-goog-api-client",
+  "x-goog-api-key",
+]);
 
 export type GeminiConfig = {
   apiKey?: unknown;
@@ -29,4 +34,8 @@ export function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
   return normalizeGoogleApiBaseUrl(
     trimToUndefined(gemini?.baseUrl) ?? trimToUndefined(gemini?.providerBaseUrl),
   );
+}
+
+export function isGeminiProviderOwnedHeader(name: string): boolean {
+  return GEMINI_PROVIDER_OWNED_HEADER_NAMES.has(name.toLowerCase());
 }

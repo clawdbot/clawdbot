@@ -9,6 +9,10 @@ import {
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isGeminiProviderOwnedHeader,
+  resolveGeminiBaseUrl,
+} from "./gemini-web-search-provider.shared.js";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
@@ -129,6 +133,30 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     credentialPath: GEMINI_CREDENTIAL_PATH,
     ...contractFields,
     getConfiguredCredentialFallback: getGoogleModelProviderCredentialFallback,
+    getSecretOwnerContract: (config) => ({
+      baseUrl: resolveGeminiBaseUrl({
+        baseUrl: resolveProviderWebSearchPluginConfig(config, "google")?.baseUrl,
+        providerBaseUrl: resolveGoogleModelProviderConfig(config)?.baseUrl,
+      }),
+    }),
+    getConfiguredSecretInputs: (config) => {
+      const headers = resolveProviderWebSearchPluginConfig(config, "google")?.headers;
+      if (!isRecord(headers)) {
+        return [];
+      }
+      return Object.entries(headers)
+        .filter(([name]) => !isGeminiProviderOwnedHeader(name))
+        .map(([name, value]) => ({
+          path: `plugins.entries.google.config.webSearch.headers[${JSON.stringify(name)}]`,
+          value,
+          setResolvedValue: (target: OpenClawConfig, resolved: string) => {
+            const targetHeaders = resolveProviderWebSearchPluginConfig(target, "google")?.headers;
+            if (isRecord(targetHeaders)) {
+              targetHeaders[name] = resolved;
+            }
+          },
+        }));
+    },
     createTool: (ctx) =>
       createGeminiToolDefinition(
         withGoogleModelProviderFallbacks(

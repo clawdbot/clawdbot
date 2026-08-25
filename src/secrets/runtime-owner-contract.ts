@@ -50,7 +50,11 @@ export function digestRuntimeWebOwnerContract(params: {
   scopePath: string;
   configuredProvider?: string;
   toolConfig: unknown;
-  providers: Array<{ id: string; pluginId?: string }>;
+  providers: Array<{
+    id: string;
+    pluginId?: string;
+    getSecretOwnerContract?: (config?: OpenClawConfig) => unknown;
+  }>;
   providerId: string;
   sourceConfig: OpenClawConfig;
 }): string {
@@ -63,6 +67,7 @@ export function digestRuntimeWebOwnerContract(params: {
         configuredProvider: params.configuredProvider,
         toolConfig: params.toolConfig,
         provider,
+        providerContract: provider?.getSecretOwnerContract?.(params.sourceConfig),
         pluginConfig: pluginId
           ? params.sourceConfig.plugins?.entries?.[pluginId]?.config
           : undefined,

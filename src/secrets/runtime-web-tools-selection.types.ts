@@ -1,4 +1,5 @@
 /** Typed credential ownership and unavailable-provider results for runtime web tools. */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import type { SecretResolverWarningCode } from "./runtime-shared.js";
@@ -24,25 +25,36 @@ export type SecretResolutionResult<TSource extends string> = {
   fallbackEnvVar?: string;
 };
 
-export type RuntimeWebSecretOwner = {
-  providerId: string;
+export type RuntimeWebSecretRef = {
   path: string;
   ref: SecretRef;
   refKey: string;
-  contractDigest: string;
   resolvedValue?: string;
-  reason?: SecretDegradationReason;
-  providerFailure?: { source: SecretRefSource; provider: string };
   restoreResolvedValue?: (value: string) => void;
 };
 
-export type RuntimeWebUnavailableProvider = RuntimeWebSecretOwner & {
+export type RuntimeWebSecretOwner = {
+  providerId: string;
+  contractDigest: string;
+  refs: RuntimeWebSecretRef[];
+};
+
+export type RuntimeWebUnavailableProvider = RuntimeWebSecretRef & {
+  providerId: string;
+  contractDigest: string;
   reason: SecretDegradationReason;
+  providerFailure?: { source: SecretRefSource; provider: string };
 };
 
 export type RuntimeWebProviderSelectionResult = {
   secretOwners: RuntimeWebSecretOwner[];
   unavailableProviders: RuntimeWebUnavailableProvider[];
+};
+
+export type RuntimeWebConfiguredSecretInput = {
+  path: string;
+  value: unknown;
+  setResolvedValue: (configTarget: OpenClawConfig, value: string) => void;
 };
 
 /** Carries typed web-provider ownership through strict reload failures. */

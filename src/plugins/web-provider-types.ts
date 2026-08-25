@@ -51,6 +51,12 @@ type WebSearchProviderConfiguredCredentialFallback = {
   value: unknown;
 };
 
+type WebSearchProviderConfiguredSecretInput = {
+  path: string;
+  value: unknown;
+  setResolvedValue: (configTarget: OpenClawConfig, value: string) => void;
+};
+
 type WebFetchProviderConfiguredCredentialFallback = {
   path: string;
   value: unknown;
@@ -113,6 +119,12 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialFallback?: (
     config?: OpenClawConfig,
   ) => WebSearchProviderConfiguredCredentialFallback | undefined;
+  /** Additional provider-owned SecretRefs resolved only after this search provider wins selection. */
+  getConfiguredSecretInputs?: (
+    config?: OpenClawConfig,
+  ) => readonly WebSearchProviderConfiguredSecretInput[];
+  /** Non-secret provider-owned routing facts that bind last-known-good credential reuse. */
+  getSecretOwnerContract?: (config?: OpenClawConfig) => unknown;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (

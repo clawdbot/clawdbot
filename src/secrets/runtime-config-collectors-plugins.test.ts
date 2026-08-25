@@ -242,6 +242,46 @@ describe("collectPluginConfigAssignments", () => {
     expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("keeps unrelated web-search SecretRefs with the generic plugin owner", () => {
+    const config = createPluginConfig("custom-search", {
+      webSearch: {
+        headers: { "X.Routing.Token": envRef("CUSTOM_ROUTING_TOKEN") },
+        proxyToken: envRef("CUSTOM_PROXY_TOKEN"),
+      },
+    });
+    const context = makeContext(config, {
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "config",
+          contracts: { webSearchProviders: [{ id: "custom-search" }] },
+          configContracts: {
+            secretInputs: {
+              paths: [
+                { path: "webSearch.headers.*", expected: "string" },
+                { path: "webSearch.proxyToken", expected: "string" },
+              ],
+            },
+          },
+        } as never,
+      ],
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["custom-search", "config"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.custom-search.config.webSearch.proxyToken",
+        ownerKind: "unknown",
+      },
+    ]);
+  });
+
   it("resolves assignments via apply callback", () => {
     const config = createPluginConfig("acpx", {
       mcpServers: {

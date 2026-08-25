@@ -30,6 +30,7 @@ import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
+  isGeminiProviderOwnedHeader,
   type GeminiConfig,
 } from "./gemini-web-search-provider.shared.js";
 
@@ -62,12 +63,6 @@ type GeminiGroundingResponse = {
     status?: string;
   };
 };
-
-const GEMINI_PROVIDER_OWNED_HEADER_NAMES = new Set([
-  "content-type",
-  "x-goog-api-client",
-  "x-goog-api-key",
-]);
 
 // Headers validates field syntax, but Undici does not implement Fetch's
 // forbidden-request-header checks. These names can otherwise be consumed,
@@ -214,6 +209,9 @@ function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, st
   }
   const headers = new Headers();
   for (const [name, input] of Object.entries(gemini.headers)) {
+    if (isGeminiProviderOwnedHeader(name)) {
+      continue;
+    }
     const path = `plugins.entries.google.config.webSearch.headers[${JSON.stringify(name)}]`;
     const value =
       typeof input === "string"
@@ -236,9 +234,6 @@ function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, st
     }
     if (GEMINI_UNSAFE_REQUEST_HEADER_NAMES.has(normalizedName)) {
       throw new Error(`${path} uses a reserved or framing HTTP header.`);
-    }
-    if (GEMINI_PROVIDER_OWNED_HEADER_NAMES.has(normalizedName)) {
-      continue;
     }
     headers.set(normalizedName, normalizedValue);
   }

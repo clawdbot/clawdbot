@@ -72,7 +72,15 @@ export function collectPluginConfigAssignments(params: {
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
       const secretInputs = metadata.configContracts.secretInputs;
-      if (!secretInputs?.paths.length) {
+      const ownsWebSearch = manifestRegistry.plugins.some(
+        (plugin) =>
+          plugin.id === pluginId && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0,
+      );
+      // Selection owns only supplemental headers; other declared plugin secrets remain generic.
+      const paths = secretInputs?.paths.filter(
+        ({ path }) => !ownsWebSearch || path !== "webSearch.headers.*",
+      );
+      if (!paths?.length) {
         return [];
       }
       return [
@@ -80,8 +88,8 @@ export function collectPluginConfigAssignments(params: {
           pluginId,
           {
             origin: metadata.origin,
-            bundledDefaultEnabled: secretInputs.bundledDefaultEnabled,
-            paths: secretInputs.paths,
+            bundledDefaultEnabled: secretInputs?.bundledDefaultEnabled,
+            paths,
           },
         ] as const,
       ];

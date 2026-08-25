@@ -166,8 +166,23 @@ describe("google web search provider", () => {
     const mockFetch = installGeminiFetch();
     const tool = createGeminiToolWithHeaders({
       "X-Routing-Target": "staging",
+      "X.Routing.Token": "resolved-dotted-token",
       "X-Gateway-Token": "resolved-gateway-token",
-      "X-Goog-Api-Key": "operator-value",
+      "X-Goog-Api-Key": {
+        source: "env",
+        provider: "default",
+        id: "MISSING_IGNORED_GOOGLE_API_KEY",
+      },
+      "X-Goog-Api-Client": {
+        source: "env",
+        provider: "default",
+        id: "MISSING_IGNORED_GOOGLE_API_CLIENT",
+      },
+      "Content-Type": {
+        source: "env",
+        provider: "default",
+        id: "MISSING_IGNORED_CONTENT_TYPE",
+      },
     });
 
     await tool?.execute({ query: "OpenClaw operator headers" });
@@ -177,6 +192,7 @@ describe("google web search provider", () => {
       "x-gateway-token": "resolved-gateway-token",
       "x-goog-api-key": "AIza-plugin-test",
       "x-routing-target": "staging",
+      "x.routing.token": "resolved-dotted-token",
     });
   });
 

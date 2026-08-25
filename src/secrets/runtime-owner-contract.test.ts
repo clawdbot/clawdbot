@@ -38,4 +38,39 @@ describe("runtime owner contracts", () => {
 
     expect(digestWebContract(shorthand)).toBe(digestWebContract(canonical));
   });
+
+  it("binds only the selected provider's canonical owner contribution", () => {
+    const digest = (sourceConfig: OpenClawConfig) =>
+      digestRuntimeWebOwnerContract({
+        scopePath: "tools.web.search",
+        configuredProvider: "first",
+        toolConfig: sourceConfig.tools?.web?.search,
+        providers: ["first", "other"].map((id) => ({
+          id,
+          getSecretOwnerContract: (config?: OpenClawConfig) => config?.models?.providers?.[id],
+        })),
+        providerId: "first",
+        sourceConfig,
+      });
+    const config = (firstUrl: string, otherUrl: string, apiKey: unknown): OpenClawConfig =>
+      ({
+        models: {
+          providers: {
+            first: { baseUrl: firstUrl, models: [], apiKey },
+            other: { baseUrl: otherUrl, models: [] },
+          },
+        },
+      }) as OpenClawConfig;
+    const first = config("https://first.invalid/v1", "https://other.invalid/v1", "$FIRST_KEY");
+    const equivalent = config("https://first.invalid/v1", "https://changed.invalid/v1", {
+      source: "env",
+      provider: "default",
+      id: "FIRST_KEY",
+    });
+
+    expect(digest(first)).toBe(digest(equivalent));
+    expect(digest(first)).not.toBe(
+      digest(config("https://changed.invalid/v1", "https://other.invalid/v1", "$FIRST_KEY")),
+    );
+  });
 });
