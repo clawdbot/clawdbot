@@ -45,6 +45,9 @@ export type CliSubscriptionRateLimit = {
   overageDisabledReason?: string;
   isUsingOverage?: boolean;
   errorCode?: string;
+  /** Set with `credits_required`: whether buying credits or a saved card can recover the turn. */
+  canUserPurchaseCredits?: boolean;
+  hasChargeableSavedPaymentMethod?: boolean;
 };
 
 /** Normalized result from a CLI-backed model provider turn. */

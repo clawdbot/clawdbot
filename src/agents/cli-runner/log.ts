@@ -38,6 +38,12 @@ export function formatCliSubscriptionRateLimitDigest(rateLimit: CliSubscriptionR
   if (rateLimit.errorCode) {
     parts.push(`error=${rateLimit.errorCode}`);
   }
+  if (rateLimit.canUserPurchaseCredits !== undefined) {
+    parts.push(`canPurchaseCredits=${rateLimit.canUserPurchaseCredits}`);
+  }
+  if (rateLimit.hasChargeableSavedPaymentMethod !== undefined) {
+    parts.push(`savedPaymentMethod=${rateLimit.hasChargeableSavedPaymentMethod}`);
+  }
   if (rateLimit.isUsingOverage) {
     parts.push("usingOverage");
   }

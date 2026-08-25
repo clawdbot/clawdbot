@@ -523,6 +523,8 @@ const claudeCliRateLimitRecordSchema = z.object({
     overageDisabledReason: z.string().optional(),
     isUsingOverage: z.boolean().optional(),
     errorCode: z.string().optional(),
+    canUserPurchaseCredits: z.boolean().optional(),
+    hasChargeableSavedPaymentMethod: z.boolean().optional(),
     unifiedWindows: z
       .record(
         z.string(),
