@@ -21,7 +21,6 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
   buildAuthProfileUnusableHint,
@@ -344,14 +343,7 @@ function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]
   if (profile.type === "api_key") {
     return profile.status === "missing";
   }
-  // Native Claude owns refresh while Doctor waits to commit its queued retired-profile cleanup.
-  const isNativeClaudeRefresh =
-    profile.profileId === CLAUDE_CLI_PROFILE_ID &&
-    profile.provider === "claude-cli" &&
-    profile.type === "oauth" &&
-    profile.status === "expiring";
   return (
-    !isNativeClaudeRefresh &&
     (profile.type === "oauth" || profile.type === "token") &&
     (profile.status === "expired" || profile.status === "expiring" || profile.status === "missing")
   );
