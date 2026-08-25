@@ -41,20 +41,6 @@ describe("buildStatusMessage current time", () => {
   });
 });
 
-describe("buildStatusMessage authentication", () => {
-  it("preserves native runtime authentication labels", () => {
-    const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-haiku-4-5" },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "steer", depth: 0 },
-      modelAuth: "native (claude-cli)",
-    });
-
-    expect(text).toContain("Auth: native (claude-cli)");
-  });
-});
-
 describe("buildStatusMessageParts presentation", () => {
   it("mirrors the text body as a titled status table with context lines", () => {
     const parts = buildStatusMessageParts({

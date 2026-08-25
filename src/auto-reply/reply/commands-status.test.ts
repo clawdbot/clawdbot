@@ -1895,7 +1895,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses native auth labels for anthropic models running on the Claude CLI runtime", async () => {
+  it("uses native Claude CLI auth labels for anthropic models running on the Claude CLI runtime", async () => {
     await withTempHome(
       async () => {
         const text = await buildStatusText({
@@ -1908,7 +1908,7 @@ describe("buildStatusReply subagent summary", () => {
             },
           },
           sessionEntry: {
-            sessionId: "sess-status-claude-cli-native",
+            sessionId: "sess-status-claude-cli-oauth",
             updatedAt: 0,
           },
           sessionKey: "agent:main:main",
@@ -1940,7 +1940,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("prefers active Claude CLI native auth over selected env API-key labels for runtime aliases", async () => {
+  it("prefers active native Claude CLI auth over selected env API-key labels for runtime aliases", async () => {
     const text = await buildStatusText({
       cfg: {
         ...baseCfg,

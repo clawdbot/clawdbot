@@ -375,11 +375,9 @@ function resolveConfiguredProviders(
 ): {
   providers: string[];
   expectsOAuth: Set<string>;
-  directModelAuthProviders: Set<string>;
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
-  const directModelAuthProviders = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     const normalized = normalizeProviderId(id);
     if (!normalized) {
@@ -394,7 +392,6 @@ function resolveConfiguredProviders(
     if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
-    directModelAuthProviders.add(normalized);
     if (apiKeys.has(normalized)) {
       continue;
     }
@@ -426,7 +423,7 @@ function resolveConfiguredProviders(
       expectsOAuth.add(normalized);
     }
   }
-  return { providers: Array.from(out), expectsOAuth, directModelAuthProviders };
+  return { providers: Array.from(out), expectsOAuth };
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
