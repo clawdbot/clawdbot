@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -13,6 +14,7 @@ import {
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import {
@@ -652,6 +654,24 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
         if (providerId !== inherited.providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
+        }
+        const inheritedSettings = inherited.profileSnapshot.settings;
+        const syntheticDeviceProfile =
+          providerId === DEVICE_WORKER_PROVIDER_ID &&
+          isRecord(inheritedSettings) &&
+          typeof inheritedSettings.device === "string" &&
+          normalizedProfileId === `device:${inheritedSettings.device}`;
+        if (!syntheticDeviceProfile) {
+          const configured = options.getConfig().cloudWorkers?.profiles?.[normalizedProfileId];
+          if (!configured) {
+            throw serviceError(
+              "profile_not_found",
+              `Unknown worker profile: ${normalizedProfileId}`,
+            );
+          }
+          if (normalizeCapabilityProviderId(configured.provider) !== providerId) {
+            throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+          }
         }
         provider = providerFor(providerId);
         const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;

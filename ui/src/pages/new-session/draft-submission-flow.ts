@@ -562,11 +562,13 @@ export class DraftSubmissionFlow {
             submissionAgentId,
           );
           if (cleanupError) {
-            this.pendingPlacement.promoteToDispatching(result.key);
-            this.pendingPlacement.retryAllowed = true;
+            if (ownsSubmissionRecovery()) {
+              this.pendingPlacement.promoteToDispatching(result.key);
+              this.pendingPlacement.retryAllowed = true;
+            }
             this.error = t("newSession.placementStartFailed", { error: cleanupError });
             this.callbacks.requestUpdate();
-          } else {
+          } else if (ownsSubmissionRecovery()) {
             this.clearPendingPlacementRecovery();
           }
           return;

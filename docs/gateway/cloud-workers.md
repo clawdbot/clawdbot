@@ -128,7 +128,7 @@ Use `cloudWorkers.projectProfiles` to select a default profile from a managed se
 }
 ```
 
-An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. If a configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
+An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. Deleting a profile from the Cloud workers settings also removes project defaults that reference it. If a manually configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
 
 The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Provision replay first adopts the fixed Crabbox lease, then either resumes that node state or reuses the still-pending setup credential. It never mints a second environment identity for the same operation.
 
@@ -286,7 +286,7 @@ local Codex turn claim without waiting for an acknowledgment from the offline
 node. If the device is already available, use the
 ordinary reconcile-first move instead.
 
-When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
+When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
 Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
 

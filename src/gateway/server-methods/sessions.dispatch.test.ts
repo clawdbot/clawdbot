@@ -406,6 +406,8 @@ describe("sessions.dispatch", () => {
       targetWithEntry({
         sessionId,
         agentRuntimeOverride: "codex",
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );
@@ -447,6 +449,36 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("dispatches the selected runtime instead of an unlocked historical harness", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        agentHarnessId: "codex",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("worker dispatch reached"));
+
+    await invoke(
+      makeContext({
+        workerEnvironmentService: { supportsExecutionMode: () => false } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "worker-turn" }),
+      expect.any(Function),
+      undefined,
+    );
+  });
+
   it.each([
     ["node-only", { supportsExecutionMode: () => false }],
     ["undeclared", { supportsExecutionMode: undefined }],
@@ -455,6 +487,8 @@ describe("sessions.dispatch", () => {
       targetWithEntry({
         sessionId,
         agentRuntimeOverride: "codex",
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );

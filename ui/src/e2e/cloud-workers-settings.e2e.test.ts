@@ -386,7 +386,7 @@ suite.define(() => {
     }
   });
 
-  it("deletes a profile only after confirmation", async () => {
+  it("deletes a profile and its project defaults only after confirmation", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const pending = {
@@ -399,7 +399,18 @@ suite.define(() => {
         idleTimeout: "45m",
       },
     };
-    const initialConfig = { cloudWorkers: { profiles: { pending } } };
+    const retained = { ...pending, settings: { ...pending.settings, provider: "hetzner" } };
+    const retainedProjectProfiles = { "github.com/acme/retained": "retained" };
+    const initialConfig = {
+      cloudWorkers: {
+        profiles: { pending, retained },
+        projectProfiles: {
+          "github.com/acme/app": "pending",
+          "github.com/acme/docs": "pending",
+          ...retainedProjectProfiles,
+        },
+      },
+    };
     const gateway = await installMockGateway(page, {
       featureMethods: ["config.patch", "environments.list"],
       methodResponses: {
@@ -407,7 +418,9 @@ suite.define(() => {
         "config.patch": {
           ok: true,
           hash: "cloud-workers-delete-2",
-          config: { cloudWorkers: { profiles: {} } },
+          config: {
+            cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
+          },
         },
         "environments.list": { environments: [], profiles: [] },
       },
@@ -429,9 +442,13 @@ suite.define(() => {
         throw new Error("Expected delete config.patch request");
       }
       expect(requestRaw(deleteRequest)).toEqual({
-        cloudWorkers: { profiles: { pending: null } },
+        cloudWorkers: {
+          profiles: { pending: null, retained },
+          projectProfiles: { "github.com/acme/app": null, "github.com/acme/docs": null },
+        },
       });
       await expect.poll(() => pendingRow.count()).toBe(0);
+      await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
     } finally {
       await context.close();
     }

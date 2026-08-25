@@ -49,7 +49,15 @@ function useDeviceSession(agentRuntimeOverride?: string): void {
   dispatchTestMocks.resolveTarget.mockReturnValue(
     makeSessionTarget({
       sessionId: dispatchTestSessionId,
-      ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+      ...(agentRuntimeOverride
+        ? {
+            agentHarnessId: agentRuntimeOverride,
+            agentRuntimeOverride,
+            modelSelectionLocked: true,
+            modelOverride: "gpt-test",
+            providerOverride: "openai",
+          }
+        : {}),
       worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
     }),
   );
