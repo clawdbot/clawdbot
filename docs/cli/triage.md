@@ -36,6 +36,12 @@ openclaw triage --run
 
 JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. JSON output and non-interactive sessions never start an agent.
 
+## Output and exit codes
+
+The prompt is written to `logs/support/` inside the state directory with owner-only permissions, alongside the diagnostics archive when one was produced. Both paths are printed, and `--json` returns them plus finding counts by severity.
+
+A launched agent inherits the current environment, so it inspects the same installation the prompt describes, including a custom `OPENCLAW_STATE_DIR`. Triage exits with the launched agent's exit code. If the agent cannot be started, triage prints its manual command and exits non-zero. Selecting the embedded agent when no model is configured reports the missing model and exits non-zero without starting a turn.
+
 ## Options
 
 | Option        | Effect                                                                           |
