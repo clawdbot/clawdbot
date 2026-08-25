@@ -44,7 +44,7 @@ describe("Ollama setup cancellation", () => {
           return await new Promise<Response>((_resolve, reject) => {
             rejectPendingFetch = reject;
             const signal = init?.signal;
-            requestSignal = signal;
+            requestSignal = signal ?? undefined;
             if (!signal) {
               reject(new Error("expected model discovery abort signal"));
               return;
