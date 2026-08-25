@@ -46,6 +46,26 @@ const visibleFinalReceipt = {
   anyVisibleDelivered: true,
 } as const;
 
+function createMessageToolOnlyGroupContext(): TelegramMessageContext {
+  return createContext({
+    chatId: -1001234,
+    isGroup: true,
+    ctxPayload: {
+      SessionKey: "agent:test:telegram:group:-1001234",
+      ChatType: "group",
+    } as TelegramMessageContext["ctxPayload"],
+    primaryCtx: {
+      message: { chat: { id: -1001234, type: "supergroup" } },
+    } as TelegramMessageContext["primaryCtx"],
+    msg: {
+      chat: { id: -1001234, type: "supergroup" },
+      message_id: 456,
+    } as TelegramMessageContext["msg"],
+    threadSpec: { id: undefined, scope: "none" },
+    replyThreadId: undefined,
+  });
+}
+
 describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
@@ -172,23 +192,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     });
 
     await dispatchWithContext({
-      context: createContext({
-        chatId: -1001234,
-        isGroup: true,
-        ctxPayload: {
-          SessionKey: "agent:test:telegram:group:-1001234",
-          ChatType: "group",
-        } as TelegramMessageContext["ctxPayload"],
-        primaryCtx: {
-          message: { chat: { id: -1001234, type: "supergroup" } },
-        } as TelegramMessageContext["primaryCtx"],
-        msg: {
-          chat: { id: -1001234, type: "supergroup" },
-          message_id: 456,
-        } as TelegramMessageContext["msg"],
-        threadSpec: { id: undefined, scope: "none" },
-        replyThreadId: undefined,
-      }),
+      context: createMessageToolOnlyGroupContext(),
       streamMode: "off",
     });
 
@@ -219,6 +223,34 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
+  it("delivers a visible failure when a message-tool-only agent run fails after admission", async () => {
+    const channelInbound = await import("openclaw/plugin-sdk/channel-inbound");
+    vi.spyOn(channelInbound, "readAgentRunTerminalOutcome").mockReturnValueOnce("failed");
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createMessageToolOnlyGroupContext(),
+      retryDispatchErrors: true,
+      streamMode: "off",
+      suppressFailureFallback: true,
+    });
+
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          {
+            text: "Something went wrong while processing your request. Please try again.",
+          },
+        ],
       }),
     );
   });
