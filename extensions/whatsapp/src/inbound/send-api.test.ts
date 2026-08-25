@@ -12,6 +12,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
+import { markdownToWhatsApp } from "../text-runtime.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult, type WhatsAppSendResult } from "./send-result.js";
@@ -326,6 +327,28 @@ describe("createWebSendApi", () => {
     expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
       text: "ping @277038292303944",
       mentions: ["277038292303944@lid"],
+    });
+  });
+
+  it("does not send native mentions for phone numbers inside unterminated inline code", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [{ id: "15551234567@s.whatsapp.net" }],
+        }),
+    });
+
+    await api.sendMessage(
+      "120363000000000000@g.us",
+      markdownToWhatsApp("Run `notify @15551234567"),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+      text: "Run `notify @15551234567",
     });
   });
 

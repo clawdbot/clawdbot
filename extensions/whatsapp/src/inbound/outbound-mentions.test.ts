@@ -115,6 +115,22 @@ describe("resolveWhatsAppOutboundMentions", () => {
     });
   });
 
+  it("does not rewrite or mention phone numbers inside unterminated inline code", () => {
+    const text = "Run `notify @+5511976136970";
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text,
+        participants: [
+          {
+            id: "277038292303944@lid",
+            phoneNumber: "5511976136970@s.whatsapp.net",
+          },
+        ],
+      }),
+    ).toEqual({ text, mentionedJids: [] });
+  });
+
   it("does not mention numeric prefixes inside longer tokens", () => {
     expect(
       resolveWhatsAppOutboundMentions({
