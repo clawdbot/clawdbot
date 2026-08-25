@@ -348,7 +348,7 @@ try {
         Get-FileHash -LiteralPath $msixPath -Algorithm SHA256
     ).Hash.ToLowerInvariant()
     [ordered]@{
-        packagingRepository = 'https://github.com/openclaw/openclaw-windows-node'
+        packagingRepository = 'https://github.com/openclaw/openclaw'
         packagingCommit = $SourceCommit.ToLowerInvariant()
         sourceTreeDirty = $SourceTreeDirty.IsPresent
         payloadRepository = $payloadInfo.repository
