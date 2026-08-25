@@ -2042,7 +2042,7 @@ describe("WorkboardStore", () => {
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");
-    expect(claimed.card.agentId).toBe("main");
+    expect(claimed.card.agentId).toBeUndefined();
     expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
 
     await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
