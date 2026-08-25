@@ -40,6 +40,7 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   onMessage?: (event: Event, transport: RealtimeTranscriptionWebSocketTransport) => void;
   onOpen?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
   parseMessage?: (payload: Buffer) => Event;
+  protocols?: string | string[] | (() => string | string[] | Promise<string | string[]>);
   providerId: string;
   readyOnOpen?: boolean;
   reconnectDelayMs?: number;
@@ -291,7 +292,11 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       }, this.connectTimeoutMs);
 
       void (async () => {
-        let connection: { headers?: Record<string, string>; url: string };
+        let connection: {
+          headers?: Record<string, string>;
+          protocols?: string | string[];
+          url: string;
+        };
         try {
           connection = await this.resolveConnection();
         } catch (error) {
@@ -308,11 +313,14 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
 
         this.currentUrl = connection.url;
         try {
-          socket = new WebSocket(this.currentUrl, {
+          const socketOptions = {
             headers: connection.headers,
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
             ...(proxyAgent ? { agent: proxyAgent } : {}),
-          });
+          };
+          socket = connection.protocols
+            ? new WebSocket(this.currentUrl, connection.protocols, socketOptions)
+            : new WebSocket(this.currentUrl, socketOptions);
           socket.binaryType = "nodebuffer";
           this.ws = socket;
           this.transport = transport;
@@ -405,6 +413,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
 
   private async resolveConnection(): Promise<{
     headers?: Record<string, string>;
+    protocols?: string | string[];
     url: string;
   }> {
     const url = await (typeof this.options.url === "function"
@@ -413,7 +422,10 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     const headers = await (typeof this.options.headers === "function"
       ? this.options.headers()
       : this.options.headers);
-    return { url, headers };
+    const protocols = await (typeof this.options.protocols === "function"
+      ? this.options.protocols()
+      : this.options.protocols);
+    return { url, headers, protocols };
   }
 
   private async attemptReconnect(generation: number): Promise<void> {

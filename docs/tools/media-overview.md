@@ -98,7 +98,7 @@ inbound media through their reply model; see the full provider list in
 <Note>
 **Realtime voice** here means provider-native bidirectional realtime (Talk
 `realtime` mode, e.g. Gemini Live or the OpenAI Realtime API) — only Google
-and OpenAI register it today. Deepgram, ElevenLabs, Mistral, OpenAI, and xAI
+and OpenAI register it today. Deepgram, ElevenLabs, Mistral, NVIDIA, OpenAI, and xAI
 separately register Voice Call streaming STT (one-way audio-to-text); see
 [Speech-to-text and Voice Call](#speech-to-text-and-voice-call) below.
 xAI Realtime voice is an upstream capability but is not registered in
@@ -135,7 +135,7 @@ parsing mark the transcribed attachment on the inbound context, so the shared
 media-understanding pass reuses that transcript instead of making a second
 STT call for the same audio.
 
-Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
+Deepgram, ElevenLabs, Mistral, NVIDIA, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected
 vendor without waiting for a completed recording.
 
@@ -154,6 +154,12 @@ catalogs returned by the Gateway.
   <Accordion title="OpenAI">
     Image, video, batch TTS, batch STT, Voice Call streaming STT, backend
     realtime voice, and memory-embedding surfaces.
+  </Accordion>
+  <Accordion title="NVIDIA">
+    Chat/model routing, batch TTS with Magpie, batch STT with Parakeet, and
+    realtime transcription with Nemotron ASR Streaming for Talk and Voice
+    Call. Hosted realtime transcription uses an HTTPS session followed by a
+    Gateway-relayed NVIDIA WebSocket.
   </Accordion>
   <Accordion title="DeepInfra">
     Chat/model routing, image generation/editing, text-to-video, batch TTS,

@@ -1456,13 +1456,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/nvidia:
-    dependencies:
-      '@grpc/grpc-js':
-        specifier: 1.14.4
-        version: 1.14.4
-      protobufjs:
-        specifier: 8.7.1
-        version: 8.7.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

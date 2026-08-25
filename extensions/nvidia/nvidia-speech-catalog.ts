@@ -25,14 +25,22 @@ const CATALOG_MAX_BYTES = 256 * 1_024;
 const CATALOG_MAX_MODELS = 128;
 const NVCF_INVOCATION_SUFFIX = ".invocation.api.nvcf.nvidia.com";
 const NVCF_GRPC_SERVER = "grpc.nvcf.nvidia.com:443";
+const NVCF_REALTIME_WEBSOCKET_URL =
+  "wss://grpc.nvcf.nvidia.com:443/v1/realtime?intent=transcription";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MODEL_ID_PATTERN = /^nvidia\/[a-z0-9][a-z0-9._-]{0,126}$/;
 const FUNCTION_NAME_PATTERN = /^ai-[a-z0-9][a-z0-9_-]{0,126}$/;
-const MODEL_STATUSES = new Set(["active", "transitioning", "deprecated"]);
-const MODEL_MODALITIES = new Set(["asr", "tts", "nmt"]);
 
 type NvidiaSpeechModality = "asr" | "tts" | "nmt";
 type NvidiaSpeechStatus = "active" | "transitioning" | "deprecated";
+
+function isNvidiaSpeechModality(value: unknown): value is NvidiaSpeechModality {
+  return value === "asr" || value === "tts" || value === "nmt";
+}
+
+function isNvidiaSpeechStatus(value: unknown): value is NvidiaSpeechStatus {
+  return value === "active" || value === "transitioning" || value === "deprecated";
+}
 
 type NvidiaSpeechCloudHttp = {
   functionName: string;
@@ -43,6 +51,13 @@ type NvidiaSpeechCloudHttp = {
   defaultLanguage?: string;
 };
 
+export type NvidiaSpeechRealtime = {
+  transport: "websocket";
+  sessionUrl: string;
+  websocketUrl: typeof NVCF_REALTIME_WEBSOCKET_URL;
+  requestStyle: "nvcf-realtime-transcription";
+};
+
 type NvidiaSpeechCloudGrpc = {
   functionName: string;
   functionId: string;
@@ -50,6 +65,7 @@ type NvidiaSpeechCloudGrpc = {
   server: typeof NVCF_GRPC_SERVER;
   rpcMode: "offline" | "streaming" | "online";
   defaultLanguage?: string;
+  realtime?: NvidiaSpeechRealtime;
 };
 
 export type NvidiaSpeechCatalogModel = {
@@ -204,16 +220,14 @@ function parseNvidiaSpeechCatalogModel(row: unknown): NvidiaSpeechCatalogModel |
     !MODEL_ID_PATTERN.test(row.id) ||
     typeof row.displayName !== "string" ||
     !isBoundedText(row.displayName, 200) ||
-    typeof row.modality !== "string" ||
-    !MODEL_MODALITIES.has(row.modality) ||
-    typeof row.status !== "string" ||
-    !MODEL_STATUSES.has(row.status) ||
+    !isNvidiaSpeechModality(row.modality) ||
+    !isNvidiaSpeechStatus(row.status) ||
     !isRecord(row.capabilities) ||
     !isRecord(row.selection)
   ) {
     return undefined;
   }
-  const modality = row.modality as NvidiaSpeechModality;
+  const modality = row.modality;
   const cloud = parseNvidiaSpeechCloud(row.cloud, modality);
   if (!cloud) {
     return undefined;
@@ -222,7 +236,7 @@ function parseNvidiaSpeechCatalogModel(row: unknown): NvidiaSpeechCatalogModel |
     id: row.id,
     displayName: row.displayName,
     modality,
-    status: row.status as NvidiaSpeechStatus,
+    status: row.status,
     capabilities: row.capabilities,
     selection: row.selection,
     cloud,
@@ -270,6 +284,10 @@ function parseNvidiaSpeechCloud(
   ) {
     return undefined;
   }
+  const realtime = parseNvidiaSpeechRealtime(value.realtime, value.functionId);
+  if (value.realtime !== undefined && (modality !== "asr" || !realtime)) {
+    return undefined;
+  }
   return {
     functionName: value.functionName,
     functionId: value.functionId.toLowerCase(),
@@ -277,6 +295,31 @@ function parseNvidiaSpeechCloud(
     server: NVCF_GRPC_SERVER,
     rpcMode: value.rpcMode,
     ...(value.defaultLanguage ? { defaultLanguage: value.defaultLanguage } : {}),
+    ...(realtime ? { realtime } : {}),
+  };
+}
+
+function parseNvidiaSpeechRealtime(
+  value: unknown,
+  functionId: string,
+): NvidiaSpeechRealtime | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const expectedSessionUrl = `https://${functionId.toLowerCase()}${NVCF_INVOCATION_SUFFIX}/v1/realtime/transcription_sessions`;
+  if (
+    value.transport !== "websocket" ||
+    value.sessionUrl !== expectedSessionUrl ||
+    value.websocketUrl !== NVCF_REALTIME_WEBSOCKET_URL ||
+    value.requestStyle !== "nvcf-realtime-transcription"
+  ) {
+    return undefined;
+  }
+  return {
+    transport: "websocket",
+    sessionUrl: expectedSessionUrl,
+    websocketUrl: NVCF_REALTIME_WEBSOCKET_URL,
+    requestStyle: "nvcf-realtime-transcription",
   };
 }
 
@@ -284,8 +327,9 @@ function parseDefaults(
   value: Record<string, unknown>,
   models: readonly NvidiaSpeechCatalogModel[],
 ): NvidiaSpeechCatalog["defaults"] | undefined {
-  const result = {} as NvidiaSpeechCatalog["defaults"];
-  for (const modality of ["asr", "tts", "nmt"] as const) {
+  const result: Partial<NvidiaSpeechCatalog["defaults"]> = {};
+  const modalities: readonly NvidiaSpeechModality[] = ["asr", "tts", "nmt"];
+  for (const modality of modalities) {
     const entries = value[modality];
     if (!isRecord(entries) || Object.keys(entries).length === 0) {
       return undefined;
@@ -303,7 +347,10 @@ function parseDefaults(
     }
     result[modality] = parsed;
   }
-  return result;
+  if (!result.asr || !result.tts || !result.nmt) {
+    return undefined;
+  }
+  return { asr: result.asr, tts: result.tts, nmt: result.nmt };
 }
 
 function isTrustedNvcfInvocationBaseUrl(value: string, functionId: string): boolean {

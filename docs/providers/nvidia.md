@@ -130,11 +130,12 @@ forwarded as customization fields.
 
 ### Realtime speech to text
 
-Talk and Voice Call use `nvidia/nemotron-asr-streaming` through the NVIDIA gRPC
-streaming endpoint. The Gateway expands the existing 8 kHz G.711 mu-law relay
-audio to 8 kHz PCM16 before sending it to NVIDIA and emits interim and final
-transcripts. Batch audio
-files continue to use Parakeet CTC.
+Talk transcription and Voice Call use `nvidia/nemotron-asr-streaming` through
+NVIDIA's hosted realtime WebSocket API. OpenClaw first creates an ephemeral
+transcription session over HTTPS, then connects to the NVIDIA WebSocket with
+the returned session token. The Gateway expands the existing 8 kHz G.711
+mu-law relay audio to 8 kHz PCM16 before sending it to NVIDIA and emits interim
+and final transcripts. Batch audio files continue to use Parakeet CTC.
 
 ```json5
 {
@@ -167,11 +168,23 @@ files continue to use Parakeet CTC.
 }
 ```
 
-The hosted function ID and default language come from the validated NVIDIA
-speech model catalog, with a bundled fallback for offline startup. `server` and
-`functionId` can be set together for a custom gRPC deployment; a custom server
-requires an explicit `apiKey` so an ambient NVIDIA credential is never sent to
-another origin.
+The hosted function ID, session URL, WebSocket URL, and default language come
+from the validated NVIDIA speech model catalog, with a bundled fallback for
+offline startup. The catalog keeps the model's gRPC metadata for other clients
+and adds a separate `cloud.realtime` contract for this WebSocket path.
+
+For a transcription-only browser or Gateway client, use
+`talk.session.create` (not `talk.client.create`):
+
+```bash
+openclaw gateway call talk.session.create --params \
+  '{"mode":"transcription","transport":"gateway-relay","brain":"none","provider":"nvidia"}'
+```
+
+Send microphone chunks with `talk.session.appendAudio`, then finish with
+`talk.session.close`. `talk.client.create` is reserved for
+provider-native bidirectional `realtime` sessions and therefore rejects
+`mode: "transcription"`.
 
 ### Text to speech
 
@@ -253,48 +266,6 @@ different host port, such as `9001:9000`. OpenClaw then calls
 `http://127.0.0.1:9001/v1/audio/synthesize` for TTS. Custom origins are keyless
 unless `tts.providers.nvidia.apiKey` is set explicitly; `NVIDIA_API_KEY` and
 saved NVIDIA profiles are only sent to NVIDIA-hosted speech endpoints.
-
-### Custom authenticated HTTP endpoints
-
-Custom endpoint authentication and route shape are configured independently.
-For a service that expects the model in the URL, set `routeStyle` and
-`modelPath`; configure its bearer token through the generic request-auth
-surface. OpenClaw does not infer either behavior from the hostname.
-
-```json5
-{
-  tools: {
-    media: {
-      models: [
-        {
-          provider: "nvidia",
-          model: "nvidia/parakeet-ctc",
-          capabilities: ["audio"],
-          baseUrl: "https://speech.example",
-          request: {
-            auth: {
-              mode: "authorization-bearer",
-              token: "${CUSTOM_SPEECH_TOKEN}",
-            },
-          },
-          providerOptions: {
-            nvidia: {
-              routeStyle: "model-path",
-              modelPath: "nvidia/parakeet-ctc",
-            },
-          },
-        },
-      ],
-      audio: { enabled: true },
-    },
-  },
-}
-```
-
-This sends the request to
-`https://speech.example/v1/audio/nvidia/parakeet-ctc/transcriptions`. The
-default `fixed-model` route remains `/v1/audio/transcriptions` and sends the
-model as a form field for custom endpoints.
 
 ### Custom authenticated HTTP endpoints
 

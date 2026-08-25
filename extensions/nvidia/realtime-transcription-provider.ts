@@ -1,93 +1,50 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import {
-  Client,
-  Metadata,
-  credentials,
-  type ClientDuplexStream,
-  type ServiceError,
-} from "@grpc/grpc-js";
 import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionSession,
-  RealtimeTranscriptionSessionCreateRequest,
+import {
+  createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionSession,
+  type RealtimeTranscriptionSessionCreateRequest,
+  type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parse } from "protobufjs";
-import type { Type } from "protobufjs";
 import {
   NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
   resolveNvidiaSpeechCatalogModel,
+  type NvidiaSpeechRealtime,
 } from "./nvidia-speech-catalog.js";
 
-const NVIDIA_REALTIME_ASR_SERVER = "grpc.nvcf.nvidia.com:443";
-const NVIDIA_REALTIME_ASR_FUNCTION_ID = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa";
-const NVIDIA_REALTIME_ASR_RPC = "/nvidia.riva.asr.RivaSpeechRecognition/StreamingRecognize";
-const NVIDIA_REALTIME_ASR_MODEL = "nvidia/nemotron-asr-streaming";
-const MAX_BUFFERED_AUDIO_BYTES = 2 * 1024 * 1024;
-const CONNECT_TIMEOUT_MS = 10_000;
+const FUNCTION_ID = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa";
+const SESSION_URL = `https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/v1/realtime/transcription_sessions`;
+const WEBSOCKET_URL = "wss://grpc.nvcf.nvidia.com:443/v1/realtime?intent=transcription";
+const MODEL = "nvidia/nemotron-asr-streaming";
+const SESSION_TIMEOUT_MS = 10_000;
+const SESSION_RESPONSE_MAX_BYTES = 64 * 1024;
 
-const RIVA_ASR_PROTO = `
-syntax = "proto3";
-package nvidia.riva.asr;
-message RecognitionConfig {
-  int32 encoding = 1;
-  int32 sample_rate_hertz = 2;
-  string language_code = 3;
-  int32 max_alternatives = 4;
-  int32 audio_channel_count = 7;
-  bool enable_automatic_punctuation = 11;
-  string model = 13;
-}
-message StreamingRecognitionConfig {
-  RecognitionConfig config = 1;
-  bool interim_results = 2;
-}
-message StreamingRecognizeRequest {
-  oneof streaming_request {
-    StreamingRecognitionConfig streaming_config = 1;
-    bytes audio_content = 2;
-  }
-}
-message SpeechRecognitionAlternative { string transcript = 1; }
-message StreamingRecognitionResult {
-  repeated SpeechRecognitionAlternative alternatives = 1;
-  bool is_final = 2;
-  float stability = 3;
-}
-message StreamingRecognizeResponse { repeated StreamingRecognitionResult results = 1; }
-`;
-
-const protoRoot = parse(RIVA_ASR_PROTO).root;
-const requestType = protoRoot.lookupType("nvidia.riva.asr.StreamingRecognizeRequest") as Type;
-const responseType = protoRoot.lookupType("nvidia.riva.asr.StreamingRecognizeResponse") as Type;
-
-type NvidiaRealtimeConfig = {
-  apiKey?: string;
-  language?: string;
-  model?: string;
-  server?: string;
-  functionId?: string;
+type NvidiaConfig = { apiKey?: string; language?: string; model?: string };
+type NvidiaEvent = {
+  type?: string;
+  delta?: string;
+  transcript?: string;
+  error?: { message?: string } | string;
+};
+type SessionResponse = {
+  client_secret: { value: string };
+  input_audio_transcription?: Record<string, unknown>;
+  recognition_config?: Record<string, unknown>;
 };
 
-type NvidiaStreamingResult = {
-  alternatives?: Array<{ transcript?: string }>;
-  isFinal?: boolean;
-};
-type NvidiaStreamingResponse = { results?: NvidiaStreamingResult[] };
-
-function readNvidiaRealtimeConfig(
-  rawConfig: RealtimeTranscriptionProviderConfig,
-): NvidiaRealtimeConfig {
+function readConfig(rawConfig: RealtimeTranscriptionProviderConfig): NvidiaConfig {
   const raw = asOptionalRecord(rawConfig);
   const providers = asOptionalRecord(raw?.providers);
   const nested = asOptionalRecord(providers?.nvidia ?? raw?.nvidia ?? raw) ?? {};
@@ -98,34 +55,13 @@ function readNvidiaRealtimeConfig(
     }),
     language: normalizeOptionalString(nested.language),
     model: normalizeOptionalString(nested.model),
-    server: normalizeOptionalString(nested.server),
-    functionId: normalizeOptionalString(nested.functionId),
   };
 }
 
-function serializeRequest(value: unknown): Buffer {
-  const payload = value as Record<string, unknown>;
-  const error = requestType.verify(payload);
-  if (error) {
-    throw new Error(`Invalid NVIDIA realtime ASR request: ${error}`);
-  }
-  return Buffer.from(requestType.encode(requestType.create(payload)).finish());
-}
-
-function deserializeResponse(value: Buffer): NvidiaStreamingResponse {
-  return responseType.toObject(responseType.decode(value), {
-    defaults: false,
-    arrays: true,
-  }) as NvidiaStreamingResponse;
-}
-
-async function resolveNvidiaApiKey(
-  config: NvidiaRealtimeConfig,
+async function resolveApiKey(
+  config: NvidiaConfig,
   cfg: RealtimeTranscriptionSessionCreateRequest["cfg"],
 ): Promise<string> {
-  if (config.server && config.server !== NVIDIA_REALTIME_ASR_SERVER && !config.apiKey) {
-    throw new Error("NVIDIA realtime ASR custom server requires an explicit apiKey");
-  }
   const direct = config.apiKey ?? process.env.NVIDIA_API_KEY?.trim();
   if (direct) {
     return direct;
@@ -140,153 +76,214 @@ async function resolveNvidiaApiKey(
   throw new Error("NVIDIA API key missing for realtime ASR");
 }
 
-function createNvidiaRealtimeSession(
-  req: RealtimeTranscriptionSessionCreateRequest,
-  config: NvidiaRealtimeConfig,
-): RealtimeTranscriptionSession {
-  let client: Client | undefined;
-  let call: ClientDuplexStream<unknown, NvidiaStreamingResponse> | undefined;
-  let connected = false;
-  let closed = false;
-  let speechStarted = false;
-  let terminalErrorSent = false;
+function parseSession(value: unknown): SessionResponse {
+  if (!isRecord(value) || !isRecord(value.client_secret)) {
+    throw new Error("NVIDIA realtime ASR session response is invalid");
+  }
+  const token = normalizeOptionalString(value.client_secret.value);
+  if (!token || token.length > 16_384) {
+    throw new Error("NVIDIA realtime ASR session response has no valid client secret");
+  }
+  return {
+    client_secret: { value: token },
+    ...(isRecord(value.input_audio_transcription)
+      ? { input_audio_transcription: value.input_audio_transcription }
+      : {}),
+    ...(isRecord(value.recognition_config) ? { recognition_config: value.recognition_config } : {}),
+  };
+}
 
-  const reportError = (error: Error) => {
-    if (terminalErrorSent || closed) {
+function parseRealtimeEvent(payload: Buffer): NvidiaEvent {
+  let value: unknown;
+  try {
+    value = JSON.parse(payload.toString());
+  } catch (error) {
+    throw new Error("NVIDIA realtime ASR returned malformed JSON", { cause: error });
+  }
+  if (!isRecord(value)) {
+    throw new Error("NVIDIA realtime ASR returned an invalid event");
+  }
+  const errorValue = value.error;
+  const error =
+    typeof errorValue === "string"
+      ? errorValue
+      : isRecord(errorValue)
+        ? { message: normalizeOptionalString(errorValue.message) }
+        : undefined;
+  return {
+    type: normalizeOptionalString(value.type),
+    delta: normalizeOptionalString(value.delta),
+    transcript: normalizeOptionalString(value.transcript),
+    ...(error ? { error } : {}),
+  };
+}
+
+async function mintSession(apiKey: string, sessionUrl: string): Promise<SessionResponse> {
+  const response = await fetch(sessionUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+    signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`NVIDIA realtime ASR session request failed (HTTP ${response.status})`);
+  }
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > SESSION_RESPONSE_MAX_BYTES) {
+    throw new Error("NVIDIA realtime ASR session response exceeded 64 KiB");
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text) > SESSION_RESPONSE_MAX_BYTES) {
+    throw new Error("NVIDIA realtime ASR session response exceeded 64 KiB");
+  }
+  try {
+    return parseSession(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error("NVIDIA realtime ASR session returned malformed JSON", { cause: error });
+    }
+    throw error;
+  }
+}
+
+function sessionUpdate(params: {
+  language: string;
+  model?: string;
+  session: SessionResponse;
+}): Record<string, unknown> {
+  const transcription = isRecord(params.session.input_audio_transcription)
+    ? params.session.input_audio_transcription
+    : {};
+  return {
+    type: "transcription_session.update",
+    session: {
+      modalities: ["text"],
+      input_audio_format: "pcm16",
+      input_audio_params: { sample_rate_hz: 8_000, num_channels: 1 },
+      input_audio_transcription: {
+        ...transcription,
+        language: params.language,
+        ...(params.model && params.model !== MODEL ? { model: params.model } : {}),
+      },
+      recognition_config: {
+        ...(isRecord(params.session.recognition_config) ? params.session.recognition_config : {}),
+        max_alternatives: 1,
+        enable_automatic_punctuation: true,
+      },
+    },
+  };
+}
+
+function handleEvent(
+  event: NvidiaEvent,
+  transport: RealtimeTranscriptionWebSocketTransport,
+  speechStarted: { value: boolean },
+): void {
+  if (event.type === "transcription_session.updated") {
+    transport.markReady();
+    return;
+  }
+  if (event.type === "conversation.item.input_audio_transcription.delta") {
+    const partial = normalizeOptionalString(event.delta ?? event.transcript);
+    if (!partial) {
       return;
     }
-    terminalErrorSent = true;
-    req.onError?.(error);
-  };
+    if (!speechStarted.value) {
+      speechStarted.value = true;
+      transport.callbacks.onSpeechStart?.();
+    }
+    transport.callbacks.onPartial?.(partial);
+    return;
+  }
+  if (event.type === "conversation.item.input_audio_transcription.completed") {
+    const transcript = normalizeOptionalString(event.transcript);
+    if (transcript) {
+      if (!speechStarted.value) {
+        transport.callbacks.onSpeechStart?.();
+      }
+      transport.callbacks.onTranscript?.(transcript);
+    }
+    speechStarted.value = false;
+    return;
+  }
+  if (
+    event.type === "conversation.item.input_audio_transcription.failed" ||
+    event.type === "error"
+  ) {
+    const message =
+      typeof event.error === "string"
+        ? event.error
+        : (normalizeOptionalString(event.error?.message) ?? "NVIDIA realtime ASR failed");
+    const error = new Error(message);
+    if (transport.isReady()) {
+      transport.callbacks.onError?.(error);
+    } else {
+      transport.failConnect(error);
+    }
+  }
+}
 
-  const closeTransport = () => {
-    connected = false;
-    call?.end();
-    call = undefined;
-    client?.close();
-    client = undefined;
+function createSession(
+  req: RealtimeTranscriptionSessionCreateRequest,
+  config: NvidiaConfig,
+): RealtimeTranscriptionSession {
+  let apiKey = "";
+  let token = "";
+  let hostedSession: SessionResponse | undefined;
+  let endpoint: NvidiaSpeechRealtime = {
+    transport: "websocket",
+    sessionUrl: SESSION_URL,
+    websocketUrl: WEBSOCKET_URL,
+    requestStyle: "nvcf-realtime-transcription",
   };
+  let functionId = FUNCTION_ID;
+  let language = config.language ?? "en-US";
+  const speechStarted = { value: false };
 
-  return {
-    async connect() {
-      if (connected) {
-        return;
-      }
-      if (closed) {
-        throw new Error("NVIDIA realtime ASR session is closed");
-      }
-      const apiKey = await resolveNvidiaApiKey(config, req.cfg);
-      const catalogModel =
-        config.server && config.functionId
-          ? undefined
-          : await resolveNvidiaSpeechCatalogModel({
-              id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
-              modality: "asr",
-            });
-      const grpcCloud = catalogModel?.cloud.transport === "grpc" ? catalogModel.cloud : undefined;
-      const server = config.server ?? grpcCloud?.server ?? NVIDIA_REALTIME_ASR_SERVER;
-      const functionId =
-        config.functionId ?? grpcCloud?.functionId ?? NVIDIA_REALTIME_ASR_FUNCTION_ID;
-      const language = config.language ?? grpcCloud?.defaultLanguage ?? "en-US";
-      client = new Client(server, credentials.createSsl());
-      try {
-        await new Promise<void>((resolve, reject) => {
-          client?.waitForReady(Date.now() + CONNECT_TIMEOUT_MS, (error) =>
-            error
-              ? reject(new Error("NVIDIA realtime ASR connection timeout", { cause: error }))
-              : resolve(),
-          );
-        });
-      } catch (error) {
-        closeTransport();
-        throw error;
-      }
-      if (closed || !client) {
-        closeTransport();
-        throw new Error("NVIDIA realtime ASR session closed during connection");
-      }
-      const metadata = new Metadata();
-      metadata.set("authorization", `Bearer ${apiKey}`);
-      metadata.set("function-id", functionId);
-      call = client.makeBidiStreamRequest(
-        NVIDIA_REALTIME_ASR_RPC,
-        serializeRequest,
-        deserializeResponse,
-        metadata,
-      );
-      call.on("data", (response: NvidiaStreamingResponse) => {
-        for (const result of response.results ?? []) {
-          const transcript = result.alternatives?.[0]?.transcript?.trim();
-          if (!transcript) {
-            continue;
-          }
-          if (!speechStarted) {
-            speechStarted = true;
-            req.onSpeechStart?.();
-          }
-          if (result.isFinal) {
-            req.onTranscript?.(transcript);
-            speechStarted = false;
-          } else {
-            req.onPartial?.(transcript);
-          }
-        }
+  return createRealtimeTranscriptionWebSocketSession<NvidiaEvent>({
+    providerId: "nvidia",
+    callbacks: req,
+    url: async () => {
+      apiKey = await resolveApiKey(config, req.cfg);
+      const catalogModel = await resolveNvidiaSpeechCatalogModel({
+        id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
+        modality: "asr",
       });
-      call.on("error", (error: ServiceError) => {
-        const failedClient = client;
-        call = undefined;
-        client = undefined;
-        failedClient?.close();
-        connected = false;
-        reportError(new Error(`NVIDIA realtime ASR failed: ${error.details || error.message}`));
-      });
-      call.on("end", () => {
-        client?.close();
-        client = undefined;
-        call = undefined;
-        connected = false;
-      });
-      call.write({
-        streamingConfig: {
-          config: {
-            encoding: 1,
-            sampleRateHertz: 8_000,
-            languageCode: language,
-            maxAlternatives: 1,
-            audioChannelCount: 1,
-            enableAutomaticPunctuation: true,
-            ...(config.model && config.model !== NVIDIA_REALTIME_ASR_MODEL
-              ? { model: config.model }
-              : {}),
-          },
-          interimResults: true,
-        },
-      });
-      connected = true;
+      if (catalogModel?.cloud.transport === "grpc") {
+        functionId = catalogModel.cloud.functionId;
+        language = config.language ?? catalogModel.cloud.defaultLanguage ?? language;
+        endpoint = catalogModel.cloud.realtime ?? endpoint;
+      }
+      hostedSession = await mintSession(apiKey, endpoint.sessionUrl);
+      token = hostedSession.client_secret.value;
+      return endpoint.websocketUrl;
     },
-    sendAudio(audio) {
-      if (!connected || !call || closed) {
+    headers: () => ({ Authorization: `Bearer ${apiKey}`, "function-id": functionId }),
+    protocols: () => ["realtime", `realtime-token.${token}`],
+    parseMessage: parseRealtimeEvent,
+    onOpen: (transport) => {
+      if (!hostedSession) {
+        transport.failConnect(new Error("NVIDIA realtime ASR session was not initialized"));
         return;
       }
+      transport.sendJson(sessionUpdate({ language, model: config.model, session: hostedSession }));
+    },
+    onMessage: (event, transport) => handleEvent(event, transport, speechStarted),
+    sendAudio: (audio, transport) => {
       const pcm = mulawToPcm(audio);
-      if (call.writableLength + pcm.byteLength > MAX_BUFFERED_AUDIO_BYTES) {
-        reportError(new Error("NVIDIA realtime ASR audio buffer exceeded 2 MiB"));
-        closeTransport();
-        return;
-      }
-      call.write({ audioContent: pcm });
+      transport.sendJson({ type: "input_audio_buffer.append", audio: pcm.toString("base64") });
+      transport.sendJson({ type: "input_audio_buffer.commit" });
     },
-    close() {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      closeTransport();
+    onClose: (transport) => {
+      transport.sendJson({ type: "input_audio_buffer.done" });
     },
-    isConnected() {
-      return connected;
-    },
-  };
+    connectTimeoutMessage: "NVIDIA realtime ASR connection timeout",
+    connectClosedBeforeReadyMessage: "NVIDIA realtime ASR connection closed before ready",
+  });
 }
 
 export function buildNvidiaRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
@@ -294,22 +291,18 @@ export function buildNvidiaRealtimeTranscriptionProvider(): RealtimeTranscriptio
     id: "nvidia",
     label: "NVIDIA Nemotron ASR Streaming",
     aliases: ["nemotron-asr-streaming", "nvidia-realtime"],
-    defaultModel: NVIDIA_REALTIME_ASR_MODEL,
-    models: [NVIDIA_REALTIME_ASR_MODEL],
+    defaultModel: MODEL,
+    models: [MODEL],
     autoSelectOrder: 55,
-    resolveConfig: ({ rawConfig }) => readNvidiaRealtimeConfig(rawConfig),
+    resolveConfig: ({ rawConfig }) => readConfig(rawConfig),
     isConfigured: ({ providerConfig, cfg }) => {
-      const config = readNvidiaRealtimeConfig(providerConfig);
-      if (config.server && config.server !== NVIDIA_REALTIME_ASR_SERVER) {
-        return Boolean(config.apiKey);
-      }
+      const config = readConfig(providerConfig);
       return Boolean(
         config.apiKey ||
         process.env.NVIDIA_API_KEY?.trim() ||
         isProviderAuthProfileConfigured({ provider: "nvidia", cfg }),
       );
     },
-    createSession: (req) =>
-      createNvidiaRealtimeSession(req, readNvidiaRealtimeConfig(req.providerConfig)),
+    createSession: (req) => createSession(req, readConfig(req.providerConfig)),
   };
 }

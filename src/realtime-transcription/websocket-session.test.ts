@@ -663,6 +663,30 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
+  it("resolves WebSocket subprotocols before opening the socket", async () => {
+    const seenProtocols: Array<string | string[] | undefined> = [];
+    const server = await createRealtimeServer({
+      onUpgrade: (headers) => {
+        seenProtocols.push(headers["sec-websocket-protocol"]);
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      protocols: async () => ["realtime", "realtime-token.test-token"],
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+
+    expect(seenProtocols).toEqual(["realtime,realtime-token.test-token"]);
+    session.close();
+  });
+
   it("applies the connect timeout while resolving async connection details", async () => {
     vi.useFakeTimers();
     const onError = vi.fn();

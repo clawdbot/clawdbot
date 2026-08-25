@@ -11,9 +11,5 @@
     "extensions": [
       "./index.ts"
     ]
-  },
-  "dependencies": {
-    "@grpc/grpc-js": "1.14.4",
-    "protobufjs": "8.7.1"
   }
 }

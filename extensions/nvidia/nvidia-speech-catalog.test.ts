@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 import {
   NVIDIA_CATALOG_ASR_MODEL_ID,
+  NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
   NVIDIA_CATALOG_TTS_MODEL_ID,
   NVIDIA_SPEECH_CATALOG_URL,
   resetNvidiaSpeechCatalogCacheForTests,
@@ -20,6 +21,7 @@ import {
 
 const ASR_FUNCTION_ID = "1598d209-5e27-4d3c-8079-4751568b1081";
 const TTS_FUNCTION_ID = "877104f7-e885-42b9-8de8-f6e4c6303969";
+const REALTIME_FUNCTION_ID = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa";
 
 function catalogPayload() {
   return {
@@ -62,6 +64,28 @@ function catalogPayload() {
           baseUrl: `https://${TTS_FUNCTION_ID}.invocation.api.nvcf.nvidia.com`,
           requestStyle: "riva-tts-http",
           defaultLanguage: "en-US",
+        },
+      },
+      {
+        id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
+        displayName: "Nemotron ASR Streaming",
+        modality: "asr",
+        status: "active",
+        capabilities: { languages: ["en-US"], modes: ["streaming"] },
+        selection: { recommendedFor: ["realtime transcription"] },
+        cloud: {
+          functionName: "ai-nemotron-asr-streaming",
+          functionId: REALTIME_FUNCTION_ID,
+          transport: "grpc",
+          server: "grpc.nvcf.nvidia.com:443",
+          rpcMode: "streaming",
+          defaultLanguage: "en-US",
+          realtime: {
+            transport: "websocket",
+            sessionUrl: `https://${REALTIME_FUNCTION_ID}.invocation.api.nvcf.nvidia.com/v1/realtime/transcription_sessions`,
+            websocketUrl: "wss://grpc.nvcf.nvidia.com:443/v1/realtime?intent=transcription",
+            requestStyle: "nvcf-realtime-transcription",
+          },
         },
       },
       {
@@ -141,11 +165,24 @@ describe("NVIDIA speech catalog", () => {
 
   it("rejects untrusted gRPC routing data", async () => {
     const payload = catalogPayload();
-    payload.models[2]!.cloud.server = "grpc.attacker.example:443";
+    payload.models[3]!.cloud.server = "grpc.attacker.example:443";
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(payload));
 
     await expect(
       resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_ASR_MODEL_ID, modality: "asr" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("accepts only the pinned NVIDIA realtime session and WebSocket URLs", async () => {
+    const payload = catalogPayload();
+    payload.models[2]!.cloud.realtime!.websocketUrl = "wss://attacker.example/realtime";
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(payload));
+
+    await expect(
+      resolveNvidiaSpeechCatalogModel({
+        id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
+        modality: "asr",
+      }),
     ).resolves.toBeUndefined();
   });
 
