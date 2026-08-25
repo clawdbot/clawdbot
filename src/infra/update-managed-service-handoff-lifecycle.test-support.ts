@@ -1,4 +1,10 @@
-import { expect, it } from "vitest";
+type ManagedSystemdPostExitState = {
+  activeState: string;
+  generation?: "replacement";
+  id?: string;
+  loadState?: string;
+  mainPid?: "parent" | "replacement" | "none";
+};
 
 export type ManagedServiceManagerBoundaryOptions = {
   cancelAfterPark?: boolean;
@@ -16,13 +22,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdFault?: "start-failed" | "dead-restored-pid";
   systemdHandoffDeadlineMs?: number;
   systemdHandoffFailure?: boolean;
-  systemdPostExitStates?: Array<{
-    activeState: string;
-    generation?: "replacement";
-    id?: string;
-    loadState?: string;
-    mainPid?: "parent" | "replacement" | "none";
-  }>;
+  systemdPostExitStates?: ManagedSystemdPostExitState[];
   updaterExitCode?: number;
 };
 
@@ -40,14 +40,41 @@ export type ManagedServiceManagerBoundaryResult = {
   commandTimings: ManagedServiceCommandTiming[];
 };
 
+type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
+
+type ManagedTestApi = {
+  (name: string, callback: () => Promise<void>): void;
+  each(
+    cases: readonly ManagedSystemdFailureCase[],
+  ): (
+    name: string,
+    callback: (label: string, value: ManagedSystemdPostExitState) => Promise<void>,
+  ) => void;
+};
+
+type ManagedExpectation = {
+  toBeGreaterThan(expected: number): void;
+  toBeNull(): void;
+  toBeUndefined(): void;
+  toEqual(expected: unknown): void;
+  toHaveLength(expected: number): void;
+  toMatchObject(expected: unknown): void;
+};
+
+type ManagedExpect = {
+  (actual: unknown): ManagedExpectation;
+  arrayContaining(expected: readonly unknown[]): unknown;
+  objectContaining(expected: object): unknown;
+};
+
 export function registerManagedSystemdHandoffConvergenceTests(
   runManagedServiceManagerBoundary: (
     kind: "systemd",
     options?: ManagedServiceManagerBoundaryOptions,
   ) => Promise<ManagedServiceManagerBoundaryResult>,
+  itUnix: ManagedTestApi,
+  expect: ManagedExpect,
 ): void {
-  const itUnix = it.runIf(process.platform !== "win32");
-
   itUnix(
     "waits for the same systemd execution to finish deactivating after its parent exits",
     async () => {

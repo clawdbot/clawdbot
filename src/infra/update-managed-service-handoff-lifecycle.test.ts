@@ -677,7 +677,7 @@ describe("managed service update handoff", () => {
     });
   });
 
-  registerManagedSystemdHandoffConvergenceTests(runManagedServiceManagerBoundary);
+  registerManagedSystemdHandoffConvergenceTests(runManagedServiceManagerBoundary, itUnix, expect);
 
   itUnix.each([
     ["without a late control command", undefined],
