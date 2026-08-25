@@ -449,7 +449,7 @@ export function createSessionWorkspaceProps(
     state.agentsList &&
     !workspace.loading &&
     !workspace.error &&
-    workspace.list?.sessionKey !== state.sessionKey
+    (workspace.pendingReload || workspace.list?.sessionKey !== state.sessionKey)
   ) {
     loadSessionWorkspace(state, workspace);
   }

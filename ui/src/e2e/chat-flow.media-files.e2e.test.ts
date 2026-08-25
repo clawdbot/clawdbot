@@ -951,6 +951,15 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Close Files" }).click();
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
+      await gateway.setMethodResponse("sessions.files.list", {
+        files: [
+          {
+            kind: "modified",
+            name: "AFTER_RUN.md",
+            path: "/workspace/AFTER_RUN.md",
+          },
+        ],
+      });
       await gateway.emitChatFinal({
         runId: "workspace-closed-run",
         text: "Workspace stayed closed.",
@@ -959,10 +968,13 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+        .toBe(2);
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
         timeout: 10_000,
       });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
 
       await page.setViewportSize({ height: 900, width: 640 });
       await page.locator(".side-panel--narrow").waitFor();

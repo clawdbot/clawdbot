@@ -179,11 +179,6 @@ export function loadSessionWorkspace(
     } finally {
       if (isCurrentSessionWorkspace(state, workspace)) {
         workspace.loading = false;
-        const reload = workspace.pendingReload;
-        workspace.pendingReload = false;
-        if (reload) {
-          loadSessionWorkspace(state, workspace);
-        }
       }
       requestWorkspaceUpdate(state);
     }
@@ -203,6 +198,7 @@ export function refreshSessionWorkspaceState(
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
   if (!refreshFiles) {
+    workspace.pendingReload = true;
     return diffOpen;
   }
   if (workspace.loading) {
