@@ -269,7 +269,11 @@ const hoisted = vi.hoisted(() => ({
   markPreparedModelRuntimeSnapshotsStale: vi.fn(
     (
       _reason?: string,
-      _options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
+      _options?: {
+        waitForReplacement?: boolean;
+        preserveReplacementWait?: boolean;
+        agentIds?: ReadonlySet<string>;
+      },
     ) => Symbol("prepared-model-runtime-replacement"),
   ),
   rejectPendingPreparedModelRuntimeReplacement: vi.fn(
@@ -1270,6 +1274,7 @@ describe("provider auth hot reload path ownership", () => {
 });
 
 describe("gateway hot reload model state", () => {
+<<<<<<< HEAD
   it("revokes an active skill review before publishing autonomous mode off", async () => {
     const fixtureDir = autoCleanupTempDirs.make("openclaw-skill-review-reload-");
     const outputPath = path.join(fixtureDir, "skills", "candidate", "SKILL.md");
@@ -1470,6 +1475,29 @@ describe("gateway hot reload model state", () => {
     },
   );
 
+=======
+  it("passes an agent-entry-local refresh scope through the commit and rebuild", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(
+      buildGatewayReloadPlan(["agents.entries.Alpha.model", "meta.lastTouchedAt"]),
+      nextConfig,
+    );
+
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+      "prepared model runtime owner is stale before config publication",
+      { waitForReplacement: true, agentIds: new Set(["alpha"]) },
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["alpha"]),
+    });
+  });
+
+>>>>>>> d172cf80e06 (fix: scope prepared runtime refreshes by agent (oc-92a.6))
   it.each([
     "agents.defaults.compaction.model",
     "agents.defaults.compaction.maxActiveTranscriptBytes",
