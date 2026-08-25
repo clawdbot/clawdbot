@@ -20,6 +20,11 @@ type SnapshotPlugin = {
   enabled: boolean;
   commands?: string[];
   agentHarnessIds?: string[];
+  staticInventory?: {
+    commandAliases: string[];
+    cliCommandHints: string[];
+    routeActivationHints: string[];
+  };
 };
 
 function mockPluginListSnapshot(
@@ -40,7 +45,14 @@ function mockPluginListSnapshot(
       workspaceScope: scope?.workspaceScope ?? "selected",
       registrySource: "config",
       registryDiagnostics: [],
-      plugins,
+      plugins: plugins.map((plugin) => ({
+        ...plugin,
+        staticInventory: plugin.staticInventory ?? {
+          commandAliases: [],
+          cliCommandHints: [],
+          routeActivationHints: [],
+        },
+      })),
       diagnostics: scope?.diagnostics ?? [],
     }),
   }));
@@ -124,6 +136,11 @@ describe("runPluginsListCommand", () => {
             enabled: true,
             commands: ["demo"],
             agentHarnessIds: ["runtime-only"],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
           },
         ],
         diagnostics: [],
@@ -183,7 +200,67 @@ describe("runPluginsListCommand", () => {
           source: "config",
           diagnostics: [],
         },
-        plugins: [{ id: "demo", enabled: true, commands: ["demo"] }],
+        plugins: [
+          {
+            id: "demo",
+            enabled: true,
+            commands: ["demo"],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    ]);
+  });
+
+  it("normalizes legacy JSON snapshot records without static inventory", async () => {
+    vi.doMock("../config/config.js", () => ({
+      getRuntimeConfig: () => ({}),
+    }));
+    vi.doMock("../plugins/status-snapshot.js", () => ({
+      buildPluginRegistrySnapshotReport: () => ({
+        workspaceDir: "/workspace",
+        registrySource: "config",
+        registryDiagnostics: [],
+        plugins: [
+          {
+            id: "legacy",
+            enabled: true,
+            commands: [],
+          },
+        ],
+        diagnostics: [],
+      }),
+    }));
+
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({ json: true }, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      {
+        workspaceDir: "/workspace",
+        registry: {
+          source: "config",
+          diagnostics: [],
+        },
+        plugins: [
+          {
+            id: "legacy",
+            enabled: true,
+            commands: [],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
+          },
+        ],
         diagnostics: [],
       },
     ]);

@@ -851,6 +851,11 @@ describe("plugins cli list", () => {
       tools: [],
       commands: [],
       cliCommands: [],
+      staticInventory: {
+        commandAliases: [],
+        cliCommandHints: [],
+        routeActivationHints: [],
+      },
       services: [],
       gatewayDiscoveryServices: [],
       mcpServers: [
@@ -906,6 +911,11 @@ describe("plugins cli list", () => {
       tools: [],
       commands: [],
       cliCommands: [],
+      staticInventory: {
+        commandAliases: [],
+        cliCommandHints: [],
+        routeActivationHints: [],
+      },
       services: [],
       gatewayDiscoveryServices: [],
       mcpServers: [],

@@ -1,6 +1,10 @@
 /** Verifies plugin loader records expose stable metadata for registered plugin surfaces. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPluginRecord, recordPluginError } from "./loader-records.js";
+import {
+  buildPluginStaticInventory,
+  createPluginRecord,
+  recordPluginError,
+} from "./loader-records.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 describe("plugin loader records", () => {
@@ -52,6 +56,37 @@ describe("plugin loader records", () => {
     });
 
     expect(record.providerIds).toEqual(["kitchen-sink-provider"]);
+  });
+
+  it("projects manifest-declared static inventory separately from runtime registrations", () => {
+    const staticInventory = buildPluginStaticInventory({
+      commandAliases: [
+        { name: "demo" },
+        { name: "dreaming", kind: "runtime-slash" },
+        { name: "demo-setup", cliCommand: "plugins setup demo" },
+        { name: "demo-chat", kind: "runtime-slash", cliCommand: "plugins setup demo" },
+      ],
+      activation: {
+        onRoutes: ["webhook", "oauth-callback"],
+      },
+    });
+    const record = createPluginRecord({
+      id: "kitchen-sink",
+      name: "Kitchen Sink",
+      source: "/tmp/kitchen-sink/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+      staticInventory,
+    });
+
+    expect(record.staticInventory).toEqual({
+      commandAliases: ["demo", "dreaming", "demo-setup", "demo-chat"],
+      cliCommandHints: ["demo", "plugins setup demo", "plugins setup demo"],
+      routeActivationHints: ["webhook", "oauth-callback"],
+    });
+    expect(record.cliCommands).toEqual([]);
+    expect(record.httpRoutes).toBe(0);
   });
 
   it("preserves manifest-declared capability provider ids before runtime registration", () => {

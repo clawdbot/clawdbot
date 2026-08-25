@@ -1,6 +1,7 @@
 // Covers plugin status reporting from config, discovery, and registry state.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { PluginRecord as PublicPluginRecord } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCompatibilityNotice,
@@ -49,8 +50,6 @@ let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginIns
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
 let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
-let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
-let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -120,6 +119,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentEntries: () => [],
   resolveAgentWorkspaceDir: () => undefined,
   resolveDefaultAgentId: () => "default",
   tryResolveConfiguredAgentWorkspaceDir: () => undefined,
@@ -389,8 +389,6 @@ describe("plugin status reports", () => {
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
       buildPluginSnapshotReport,
-      formatPluginCompatibilityNotice,
-      summarizePluginCompatibility,
     } = await import("./status.js"));
   });
 
@@ -481,6 +479,29 @@ describe("plugin status reports", () => {
 
     expect(mockInput(loadPluginMetadataRegistrySnapshotMock).loadModules).toBe(false);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes legacy public PluginRecord snapshots without static inventory", () => {
+    const legacyPlugin = createPluginRecord({
+      id: "legacy",
+      name: "Legacy",
+    }) satisfies PublicPluginRecord;
+    delete legacyPlugin.staticInventory;
+    setSinglePluginLoadResult(legacyPlugin);
+
+    const report = buildPluginSnapshotReport({ config: {} });
+    const inspect = expectInspectReport("legacy", { report });
+
+    expect(report.plugins[0]?.staticInventory).toEqual({
+      commandAliases: [],
+      cliCommandHints: [],
+      routeActivationHints: [],
+    });
+    expect(inspect.staticInventory).toEqual({
+      commandAliases: [],
+      cliCommandHints: [],
+      routeActivationHints: [],
+    });
   });
 
   it("reuses a supplied metadata snapshot for scoped diagnostics", () => {
@@ -1016,14 +1037,4 @@ describe("plugin status reports", () => {
       });
     },
   );
-
-  it("formats and summarizes compatibility notices", () => {
-    const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-
-    expect(formatPluginCompatibilityNotice(notice)).toBe(`legacy-plugin ${HOOK_ONLY_MESSAGE}`);
-    expect(summarizePluginCompatibility([notice])).toEqual({
-      noticeCount: 1,
-      pluginCount: 1,
-    });
-  });
 });

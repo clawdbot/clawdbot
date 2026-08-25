@@ -27,7 +27,7 @@ import {
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { createPluginRecord } from "./loader-records.js";
+import { buildPluginStaticInventory, createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
@@ -324,6 +324,7 @@ export function createManifestPluginRecord(params: {
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     mcpServers: manifestRecord.mcpServers,
+    staticInventory: buildPluginStaticInventory(manifestRecord),
   });
 }
 
@@ -347,6 +348,7 @@ export function applyManifestSnapshotMetadata(
     ...(manifestRecord.setup?.cliBackends ?? []),
   ];
   record.commands = (manifestRecord.commandAliases ?? []).map((alias) => alias.name);
+  record.staticInventory = buildPluginStaticInventory(manifestRecord);
 }
 
 export function maybeThrowOnPluginLoadError(

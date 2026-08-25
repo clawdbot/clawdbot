@@ -42,6 +42,11 @@ function createPluginRecord(
     migrationProviderIds: [],
     agentHarnessIds: [],
     cliCommands: [],
+    staticInventory: {
+      commandAliases: [],
+      cliCommandHints: [],
+      routeActivationHints: [],
+    },
     services: [],
     gatewayDiscoveryServiceIds: [],
     commands: [],

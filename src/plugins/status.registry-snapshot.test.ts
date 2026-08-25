@@ -396,7 +396,19 @@ describe("buildPluginRegistrySnapshotReport", () => {
           tools: ["indexed_echo", "indexed_search", "indexed_echo"],
           trustedToolPolicies: ["workflow-budget"],
         },
-        commandAliases: [{ name: "indexed-demo" }],
+        commandAliases: [
+          { name: "indexed-demo" },
+          { name: "indexed-chat", kind: "runtime-slash" },
+          {
+            name: "indexed-memory",
+            kind: "runtime-slash",
+            cliCommand: "plugins setup indexed-demo",
+          },
+          { name: "indexed-setup", cliCommand: "plugins setup indexed-demo" },
+        ],
+        activation: {
+          onRoutes: ["webhook"],
+        },
         configSchema: {
           type: "object",
           additionalProperties: false,
@@ -433,7 +445,16 @@ describe("buildPluginRegistrySnapshotReport", () => {
         tools: ["indexed_echo", "indexed_search", "indexed_echo"],
         trustedToolPolicies: ["workflow-budget"],
       },
-      commands: ["indexed-demo"],
+      commands: ["indexed-demo", "indexed-chat", "indexed-memory", "indexed-setup"],
+      staticInventory: {
+        commandAliases: ["indexed-demo", "indexed-chat", "indexed-memory", "indexed-setup"],
+        cliCommandHints: [
+          "indexed-demo",
+          "plugins setup indexed-demo",
+          "plugins setup indexed-demo",
+        ],
+        routeActivationHints: ["webhook"],
+      },
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
     });
@@ -802,7 +823,19 @@ describe("buildPluginRegistrySnapshotReport", () => {
         name: "Persisted Demo",
         description: "Persisted registry metadata",
         providers: ["persisted-provider"],
-        commandAliases: [{ name: "persisted-demo" }],
+        commandAliases: [
+          { name: "persisted-demo" },
+          { name: "persisted-chat", kind: "runtime-slash" },
+          {
+            name: "persisted-memory",
+            kind: "runtime-slash",
+            cliCommand: "plugins inspect persisted-demo",
+          },
+          { name: "persisted-status", cliCommand: "plugins inspect persisted-demo" },
+        ],
+        activation: {
+          onRoutes: ["oauth-callback"],
+        },
       },
     });
     const workspaceDir = makeTempDir();
@@ -832,7 +865,21 @@ describe("buildPluginRegistrySnapshotReport", () => {
       description: "Persisted registry metadata",
       version: "2.0.0",
       providerIds: ["persisted-provider"],
-      commands: ["persisted-demo"],
+      commands: ["persisted-demo", "persisted-chat", "persisted-memory", "persisted-status"],
+      staticInventory: {
+        commandAliases: [
+          "persisted-demo",
+          "persisted-chat",
+          "persisted-memory",
+          "persisted-status",
+        ],
+        cliCommandHints: [
+          "persisted-demo",
+          "plugins inspect persisted-demo",
+          "plugins inspect persisted-demo",
+        ],
+        routeActivationHints: ["oauth-callback"],
+      },
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
     });

@@ -6,6 +6,7 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { buildPluginStaticInventory } from "./loader-records.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
@@ -81,6 +82,7 @@ function buildPluginRecordFromInstalledIndex(
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
+    staticInventory: buildPluginStaticInventory(manifest),
     services: [],
     gatewayDiscoveryServiceIds: [],
     commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],

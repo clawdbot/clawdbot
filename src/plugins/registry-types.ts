@@ -460,6 +460,12 @@ type PluginConversationBindingResolvedHandlerRegistration = {
   rootDir?: string;
 };
 
+export type PluginStaticInventory = {
+  commandAliases: string[];
+  cliCommandHints: string[];
+  routeActivationHints: string[];
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -509,6 +515,7 @@ export type PluginRecord = {
   contextEngineIds?: string[];
   agentHarnessIds: string[];
   cliCommands: string[];
+  staticInventory?: PluginStaticInventory;
   services: string[];
   gatewayDiscoveryServiceIds: string[];
   commands: string[];

@@ -4,6 +4,10 @@ import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-run
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
+type GatewayInstanceContextResolver = () =>
+  | { recoveryRuntime?: GatewayRecoveryRuntime }
+  | undefined;
+
 export type GatewayInstanceAgentDispatchOptions = {
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
@@ -17,6 +21,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
+  resolveGatewayContext?: GatewayInstanceContextResolver;
   scopes?: string[];
   signal?: AbortSignal;
   syntheticScopes?: string[];
