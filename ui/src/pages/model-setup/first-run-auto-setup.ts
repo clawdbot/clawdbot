@@ -88,6 +88,14 @@ export class FirstRunAutoSetup {
     }
   }
 
+  retryDetection(): void {
+    if (this.host.routeData()?.firstRun && !this.host.actionsDisabled()) {
+      this.pendingRestart = null;
+      this.host.setRefreshWarning(null);
+      this.reset();
+    }
+  }
+
   dispose(): void {
     this.routeChanged();
   }
@@ -123,6 +131,13 @@ export class FirstRunAutoSetup {
       return;
     }
     const configured = pageState.result.setupComplete && pageState.result.configuredModel;
+    if (this.pendingRestart && !configured) {
+      this.started = true;
+      this.host.setRefreshWarning(
+        `${t("modelSetup.errors.activationFailed")} ${this.pendingRestart.modelRef}. ${t("modelSetup.checkAgain")}.`,
+      );
+      return;
+    }
     if (configured && !this.host.canVerify(snapshot.client)) {
       this.started = true;
       this.host.setVerifyState({
@@ -172,6 +187,10 @@ export class FirstRunAutoSetup {
 
   private async run(owner: FirstRunOwner, detection: SystemAgentSetupDetectResult): Promise<void> {
     if (detection.setupComplete && detection.configuredModel) {
+      if (this.pendingRestart && detection.configuredModel !== this.pendingRestart.modelRef) {
+        this.failPendingActivation(this.pendingRestart);
+        return;
+      }
       const outcome = await this.host.verify();
       if (!this.owns(owner) || !outcome || "error" in outcome) {
         return;
@@ -200,6 +219,13 @@ export class FirstRunAutoSetup {
         return;
       }
       this.attempts.add(targetId);
+      // Activation can commit before its response; retain exact intent across
+      // the same Gateway's reconnect without repeating an ambiguous mutation.
+      this.pendingRestart = {
+        routeData: owner.routeData,
+        connection: owner.connection,
+        modelRef: candidate.modelRef,
+      };
       const outcome = await this.host.activate(candidate, targetId);
       if (!this.owns(owner) || !outcome || "error" in outcome) {
         return;
@@ -207,14 +233,11 @@ export class FirstRunAutoSetup {
       if (!outcome.value.result.ok) {
         // A rejected transport may still commit; only a definitive Gateway
         // failure permits dispatching another provider activation.
+        this.pendingRestart = null;
         continue;
       }
       if (outcome.value.result.gatewayRestartRequired && outcome.value.result.modelRef) {
-        this.pendingRestart = {
-          routeData: owner.routeData,
-          connection: owner.connection,
-          modelRef: outcome.value.result.modelRef,
-        };
+        this.pendingRestart.modelRef = outcome.value.result.modelRef;
         // Keep the completed attempt closed until a replacement hello owns
         // detection and exact-model verification; the old socket is unsafe.
         this.host.setActivationState({
@@ -225,11 +248,22 @@ export class FirstRunAutoSetup {
         this.host.setRefreshWarning(outcome.value.refreshError ?? t("updates.dialog.restarting"));
         return;
       }
+      this.pendingRestart = null;
       if (this.host.activationSuccessful() && !outcome.value.refreshError) {
         context.navigate("custodian", { search: "?onboarding=1" });
       }
       return;
     }
+  }
+
+  private failPendingActivation(pending: PendingRestart): void {
+    this.pendingRestart = null;
+    this.host.setRefreshWarning(null);
+    this.host.setVerifyState({
+      phase: "failed",
+      status: "unknown",
+      error: `${t("modelSetup.errors.activationFailed")} ${pending.modelRef}`,
+    });
   }
 
   private finishVerified(owner: FirstRunOwner, modelRef: string): void {
@@ -245,13 +279,7 @@ export class FirstRunAutoSetup {
       pending.connection.hello === owner.connection.hello ||
       pending.modelRef !== modelRef
     ) {
-      this.pendingRestart = null;
-      this.host.setRefreshWarning(null);
-      this.host.setVerifyState({
-        phase: "failed",
-        status: "unknown",
-        error: `${t("modelSetup.errors.activationFailed")} ${pending.modelRef}`,
-      });
+      this.failPendingActivation(pending);
       return;
     }
     this.pendingRestart = null;

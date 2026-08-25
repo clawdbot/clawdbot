@@ -91,42 +91,39 @@ export function createSessionActions(context: SessionActionContext) {
 
   const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
     const previousSelection = captureSessionSelection();
-    const selectionChanged = !(
+    if (
       nextSelection.agentId === previousSelection.agentId &&
       agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
-    );
-    if (selectionChanged) {
-      // Retire the previous session's runs before history can adopt a new
-      // in-flight owner; otherwise its completion can promote an old run.
-      invalidateRunOwnership?.();
-      reduceTuiSessionProjection(state, {
-        type: "sessionReset",
-        scope: readTuiSessionProjectionScope(state),
-      });
+    ) {
+      return false;
     }
+
+    // Retire the previous session's runs before history can adopt a new
+    // in-flight owner; otherwise its completion can promote an old run.
+    invalidateRunOwnership?.();
+    reduceTuiSessionProjection(state, {
+      type: "sessionReset",
+      scope: readTuiSessionProjectionScope(state),
+    });
     state.currentAgentId = nextSelection.agentId;
     state.currentSessionKey = nextSelection.key;
     state.activeChatRunId = null;
     submit.clearPendingSubmit(state);
     setActivityStatus("idle");
-    if (selectionChanged) {
-      state.currentSessionId = null;
-      state.sessionInfo.displayName = undefined;
-      clearTuiSessionModeOverrides(state.sessionInfo);
-    }
+    state.currentSessionId = null;
+    state.sessionInfo.displayName = undefined;
+    clearTuiSessionModeOverrides(state.sessionInfo);
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
-    if (selectionChanged) {
-      // Live prompt identities belong to the old selection, not its pending successor.
-      chatLog.clearAll();
-    }
-    chatLog.clearPendingUsers();
+    // Live prompt identities belong to the old selection, not its pending successor.
+    chatLog.clearAll();
     clearLocalRunIds?.();
     btw.clear();
     updateHeader();
     updateFooter();
+    return true;
   };
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
@@ -580,15 +577,17 @@ export function createSessionActions(context: SessionActionContext) {
           const toolName = formatPrimitiveString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
-            {
-              content: Array.isArray(message.content)
-                ? (message.content as Record<string, unknown>[])
-                : [],
-              details:
-                typeof message.details === "object" && message.details
-                  ? (message.details as Record<string, unknown>)
-                  : undefined,
-            },
+            state.sessionInfo.verboseLevel === "full"
+              ? {
+                  content: Array.isArray(message.content)
+                    ? (message.content as Record<string, unknown>[])
+                    : [],
+                  details:
+                    typeof message.details === "object" && message.details
+                      ? (message.details as Record<string, unknown>)
+                      : undefined,
+                }
+              : { content: [] },
             { isError: Boolean(message.isError) },
           );
         }
@@ -643,8 +642,9 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string, agentId?: string) => {
-    applySessionSelection(resolveSessionSelection(rawKey, agentId));
-    await loadHistory();
+    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+      await loadHistory();
+    }
   };
 
   const abortActive = async (params?: { preferActive?: boolean }) => {

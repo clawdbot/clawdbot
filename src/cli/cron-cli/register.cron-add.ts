@@ -380,15 +380,15 @@ export function registerCronAddCommand(cron: Command) {
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
             const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
-            if (opts.triggerOnce && !triggerScriptPath) {
-              throw new Error("--trigger-once requires --trigger-script");
+            if ((opts.triggerOnce || opts.triggerScript !== undefined) && !triggerScriptPath) {
+              throw new Error(
+                `--trigger-${opts.triggerOnce ? "once requires --trigger-script" : "script must not be blank"}`,
+              );
             }
-            const trigger = triggerScriptPath
-              ? {
-                  script: await readCronTriggerScript(triggerScriptPath),
-                  ...(opts.triggerOnce ? { once: true } : {}),
-                }
-              : undefined;
+            const trigger = triggerScriptPath && {
+              script: await readCronTriggerScript(triggerScriptPath),
+              ...(opts.triggerOnce ? { once: true } : {}),
+            };
 
             if (
               (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&

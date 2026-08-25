@@ -3,10 +3,7 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  validateAnthropicSetupToken,
-} from "openclaw/plugin-sdk/provider-auth";
+import { validateAnthropicSetupToken } from "openclaw/plugin-sdk/provider-auth";
 import {
   addProviderUsageModel,
   asProviderUsageObject,
@@ -24,6 +21,7 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =

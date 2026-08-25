@@ -17,7 +17,6 @@ import {
   applyAuthProfileConfig,
   type AuthProfileStore,
   buildTokenProfileId,
-  CLAUDE_CLI_PROFILE_ID,
   createProviderApiKeyAuthMethod,
   listProfilesForProvider,
   type OpenClawConfig as ProviderAuthConfig,
@@ -52,12 +51,15 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
-import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_OFF_THINKING_PROFILE,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_OFF_THINKING_PROFILE,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
@@ -1177,9 +1179,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ provider }) =>
+    resolveSyntheticAuth: ({ config, provider }) =>
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth()
+        ? resolveClaudeCliSyntheticAuth(config)
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
