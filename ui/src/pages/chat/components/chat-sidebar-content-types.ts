@@ -65,6 +65,7 @@ type AttachmentSidebarContent = {
   durationMs?: number;
   voiceNote?: boolean;
   resolveSource?: (onRequestUpdate: () => void) => AttachmentSidebarSource | null;
+  rawText?: string | null;
 };
 
 type SessionDiffSidebarContent = {
