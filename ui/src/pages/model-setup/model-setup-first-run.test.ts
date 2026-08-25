@@ -62,6 +62,7 @@ function createFirstRunContext(refreshError?: string) {
       password: "",
       bootstrapToken: "",
     },
+    connectionRevision: 0,
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,
