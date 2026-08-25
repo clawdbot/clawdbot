@@ -39,22 +39,3 @@ export async function captureMantisDirectoryOwnership(params: {
     targetInode: targetStat.ino,
   };
 }
-
-export async function assertMantisDirectoryOwnership(params: {
-  directoryPath: string;
-  ownership: MantisDirectoryOwnership;
-  repoRoot: string;
-}): Promise<void> {
-  const current = await captureMantisDirectoryOwnership({
-    directoryPath: params.directoryPath,
-    repoRoot: params.repoRoot,
-  });
-  if (
-    current.parentDevice !== params.ownership.parentDevice ||
-    current.parentInode !== params.ownership.parentInode ||
-    current.targetDevice !== params.ownership.targetDevice ||
-    current.targetInode !== params.ownership.targetInode
-  ) {
-    throw new Error(`Mantis owned path was replaced: ${path.resolve(params.directoryPath)}`);
-  }
-}
