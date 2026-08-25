@@ -622,6 +622,65 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
+  it("starts the default macOS upgrade without building or packaging the host checkout", () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-macos-upgrade-no-pack-");
+    writeNodeFakePrlctl(
+      tempDir,
+      `if (args.includes("list")) {
+         console.log(JSON.stringify([{ name: "macOS Tahoe", status: "running" }]));
+         process.exit(0);
+       }
+       if (args.includes("exec") && args.includes("whoami")) {
+         console.log("runner");
+         process.exit(0);
+       }
+       process.stderr.write("FAKE_GUEST_COMMAND_BOUNDARY\\n");
+       process.exit(73);`,
+    );
+    const fakePnpm = join(tempDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      '#!/usr/bin/env node\nprocess.stderr.write("UNEXPECTED_HOST_PACKAGE_BUILD\\n"); process.exit(86);\n',
+    );
+    chmodSync(fakePnpm, 0o755);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        TS_PATHS.macos,
+        "--mode",
+        "upgrade",
+        "--host-ip",
+        "127.0.0.1",
+        "--latest-version",
+        "2026.8.25",
+        "--api-key-env",
+        "OPENCLAW_PARALLELS_TEST_API_KEY",
+        "--json",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...fakePrlctlEnv(tempDir),
+          OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(tempDir, "artifacts"),
+          OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1",
+          OPENCLAW_PARALLELS_TEST_API_KEY: "fixture-not-a-real-credential",
+          TMPDIR: tempDir,
+          npm_execpath: fakePnpm,
+        },
+      },
+    );
+
+    expect(result.stderr).toContain("upgrade.restore-snapshot");
+    expect(result.stderr).toContain("upgrade.reset-state");
+    expect(result.stderr).toContain("FAKE_GUEST_COMMAND_BOUNDARY");
+    expect(result.stderr).not.toContain("UNEXPECTED_HOST_PACKAGE_BUILD");
+  });
+
   it("rejects short flags as Parallels smoke option values", () => {
     const cases = [
       [parseLinuxSmokeArgs, "--mode", "-h"],

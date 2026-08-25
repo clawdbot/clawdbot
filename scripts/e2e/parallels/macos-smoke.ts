@@ -273,7 +273,7 @@ class MacosSmoke {
       );
       say(`Run logs: ${this.runDir}`);
 
-      if (await this.needsHostTgz()) {
+      if (this.needsHostTgz()) {
         this.artifact = await packOpenClaw({
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
@@ -384,11 +384,10 @@ class MacosSmoke {
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
   }
 
-  private async needsHostTgz(): Promise<boolean> {
-    if (!this.options.targetPackageSpec) {
-      return true;
-    }
-    return !this.targetInstallsDirectly();
+  private needsHostTgz(): boolean {
+    return this.options.targetPackageSpec
+      ? !this.targetInstallsDirectly()
+      : this.options.mode !== "upgrade";
   }
 
   private artifactLabel(): string {
