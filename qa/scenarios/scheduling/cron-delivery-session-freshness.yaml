@@ -7,11 +7,8 @@ scenario:
   objective: Verify a successful direct cron delivery refreshes the destination channel session before the operator replies.
   coverage:
     primary:
-      - automation.chat-announce-delivery
       - automation.isolated-cron-execution
       - channels.qa-channel-final-reply
-    secondary:
-      - session-management.session-reset
   successCriteria:
     - An isolated cron job delivers a question to the QA channel.
     - The question is mirrored into the destination channel session.
@@ -47,12 +44,11 @@ scenario:
       cronDelayMs: 12000
       questionMarker: QA-CRON-FRESHNESS-QUESTION
       replyMarker: QA-CRON-FRESHNESS-REPLY
-
-gatewayConfigPatch:
-  session:
-    reset:
-      mode: idle
-      idleMinutes: 1
+  gatewayConfigPatch:
+    session:
+      reset:
+        mode: idle
+        idleMinutes: 1
 
 flow:
   steps:
