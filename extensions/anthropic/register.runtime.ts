@@ -1177,9 +1177,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ provider }) =>
+    resolveSyntheticAuth: ({ provider, purpose }) =>
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth()
+        ? resolveClaudeCliSyntheticAuth({ verifyNativeLogin: purpose === "discovery" })
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),

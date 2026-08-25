@@ -25,6 +25,7 @@ import {
 } from "./auth-profiles.js";
 import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import { isRetiredAuthProfileId } from "./auth-profiles/oauth.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
@@ -39,24 +40,15 @@ export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
 
-function isAuthProfileRetired(params: {
-  profileId: string;
-  deprecatedProfileIds: ReadonlySet<string>;
-  provider: string;
-  store: AuthProfileStore;
-}): boolean {
-  if (!params.deprecatedProfileIds.has(params.profileId)) {
-    return false;
-  }
-  return true;
-}
-
-function assertAuthProfileNotRetired(params: Parameters<typeof isAuthProfileRetired>[0]): void {
-  if (!isAuthProfileRetired(params)) {
+function assertAuthProfileNotRetired(
+  profileId: string,
+  providerDeprecatedProfileIds: ReadonlySet<string>,
+): void {
+  if (!isRetiredAuthProfileId(profileId) && !providerDeprecatedProfileIds.has(profileId)) {
     return;
   }
   throw new Error(
-    `Auth profile "${params.profileId}" is retired. Run ${formatCliCommand("openclaw doctor --fix")}.`,
+    `Auth profile "${profileId}" is retired. Run ${formatCliCommand("openclaw doctor --fix")}.`,
   );
 }
 
@@ -118,11 +110,14 @@ export async function resolveApiKeyForProviderCore(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
-  let deprecatedProfileIds: ReadonlySet<string> | undefined;
-  const getDeprecatedProfileIds = () =>
-    (deprecatedProfileIds ??= new Set(
+  let providerDeprecatedProfileIds: ReadonlySet<string> | undefined;
+  const getProviderDeprecatedProfileIds = () =>
+    (providerDeprecatedProfileIds ??= new Set(
       resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
     ));
+  const isRetiredProfile = (candidateProfileId: string) =>
+    isRetiredAuthProfileId(candidateProfileId) ||
+    getProviderDeprecatedProfileIds().has(candidateProfileId);
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   // Pending credential files own this agent's auth route until Doctor commits
   // and archives them; do not fall through to env/config credentials.
@@ -150,12 +145,7 @@ export async function resolveApiKeyForProviderCore(params: {
       return awsSdkProfileAuth;
     }
     const store = getScopedStore(profileId);
-    assertAuthProfileNotRetired({
-      profileId,
-      deprecatedProfileIds: getDeprecatedProfileIds(),
-      provider,
-      store,
-    });
+    assertAuthProfileNotRetired(profileId, getProviderDeprecatedProfileIds());
     const configuredProfileType = store.profiles[profileId]?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
@@ -308,12 +298,10 @@ export async function resolveApiKeyForProviderCore(params: {
     store: providerEntryStore,
   });
   if ("profileId" in providerEntryReference) {
-    assertAuthProfileNotRetired({
-      profileId: providerEntryReference.profileId,
-      deprecatedProfileIds: getDeprecatedProfileIds(),
-      provider,
-      store: providerEntryStore,
-    });
+    assertAuthProfileNotRetired(
+      providerEntryReference.profileId,
+      getProviderDeprecatedProfileIds(),
+    );
   }
   const providerEntryBinding = await authConfig.resolveProviderEntryApiKeyBinding({
     cfg,
@@ -417,15 +405,7 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
-        }).filter(
-          (candidateProfileId) =>
-            !isAuthProfileRetired({
-              profileId: candidateProfileId,
-              deprecatedProfileIds: getDeprecatedProfileIds(),
-              provider,
-              store,
-            }),
-        );
+        }).filter((candidateProfileId) => !isRetiredProfile(candidateProfileId));
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {

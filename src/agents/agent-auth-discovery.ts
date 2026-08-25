@@ -53,6 +53,7 @@ export function resolveAmbientAgentCredentialsForDiscovery(
           config: options.config,
           provider,
           providerConfig: options.config?.models?.providers?.[provider],
+          purpose: "discovery",
         },
       }));
   for (const provider of syntheticAuthProviderRefs) {

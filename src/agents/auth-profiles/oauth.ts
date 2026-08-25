@@ -257,7 +257,7 @@ async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (isRetiredAuthProfileId(profileId)) {
     return null;
   }
   const cred = store.profiles[profileId];
@@ -296,7 +296,7 @@ async function tryResolveOAuthProfile(
   });
 }
 
-function isRetiredOAuthProfileId(profileId: string): boolean {
+export function isRetiredAuthProfileId(profileId: string): boolean {
   return profileId === CLAUDE_CLI_PROFILE_ID;
 }
 
@@ -391,7 +391,7 @@ export async function resolveApiKeyForProfile(
   }
   // Claude owns this native login slot. Legacy persisted copies must never
   // resolve, refresh, or leave OpenClaw as bearer tokens.
-  if (isRetiredOAuthProfileId(profileId)) {
+  if (isRetiredAuthProfileId(profileId)) {
     return null;
   }
   const configForRefResolution = cfg ?? getRuntimeConfig();

@@ -16,6 +16,7 @@ export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
+  purpose?: "discovery" | "runtime";
 };
 
 /** Synthetic provider credential returned by plugin auth helpers. */

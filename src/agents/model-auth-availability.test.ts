@@ -146,6 +146,42 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("keeps native runtime readiness scoped to the exact runtime owner", () => {
+    const metadataSnapshot = {
+      index: { plugins: [] },
+      plugins: [
+        {
+          id: "anthropic",
+          providerAuthAliases: { "claude-cli": "anthropic" },
+        },
+      ],
+    } as unknown as PluginMetadataSnapshot;
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { "claude-cli": "api_key" },
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+
+    expect(resolver.evaluateModelAuth("claude-cli")).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+    });
+    expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
+
+    const apiOnlyResolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { anthropic: "api_key" },
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+    expect(apiOnlyResolver.evaluateModelAuth("claude-cli").availability).not.toBe(true);
+  });
+
   it.each([
     { mode: "api_key" as const, selectedRoute: platformRoute },
     { mode: "oauth" as const, selectedRoute: subscriptionRoute },

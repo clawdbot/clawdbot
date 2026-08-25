@@ -2,10 +2,25 @@
 // profiles decide workspace-only access and root expansion.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
 } from "./tool-fs-policy.js";
+
+describe("resolveSessionPermissionCoreToolPolicy", () => {
+  it.each([
+    { mode: "read-only" as const, execMode: "deny", workspaceOnly: true },
+    { mode: "guarded" as const, execMode: "ask", workspaceOnly: true },
+    { mode: "workspace" as const, execMode: "auto", workspaceOnly: true },
+    { mode: "full" as const, execMode: "full", workspaceOnly: false },
+  ])("maps $mode to $execMode execution", ({ mode, execMode, workspaceOnly }) => {
+    expect(resolveSessionPermissionCoreToolPolicy({ mode })).toMatchObject({
+      execMode,
+      workspaceOnly,
+    });
+  });
+});
 
 describe("resolveEffectiveToolFsWorkspaceOnly", () => {
   it("returns false by default when tools.fs.workspaceOnly is unset", () => {

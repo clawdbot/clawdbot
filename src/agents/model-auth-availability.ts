@@ -622,7 +622,14 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
-    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    // Synthetic runtime owners are exact: API-provider auth must not authorize a native CLI route.
+    const exactProvider = normalizeProviderId(provider);
+    const exactPreparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[exactProvider];
+    const preparedRuntimeAuthMode =
+      exactPreparedRuntimeAuthMode ??
+      (synthetic.has(exactProvider)
+        ? undefined
+        : params.preparedRuntimeAuthModes?.[normalizeProvider(provider)]);
     if (preparedRuntimeAuthMode) {
       return {
         availability: modeAllowed(provider, target, preparedRuntimeAuthMode),

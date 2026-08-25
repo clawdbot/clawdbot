@@ -1405,6 +1405,7 @@ describe("anthropic provider replay hooks", () => {
   });
 
   it("resolves claude-cli with a non-secret native auth marker", async () => {
+    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     const runtimeAuth = provider.resolveSyntheticAuth?.({
@@ -1412,12 +1413,24 @@ describe("anthropic provider replay hooks", () => {
     } as never);
     const discoveryAuth = anthropicProviderDiscovery.resolveSyntheticAuth?.({
       provider: "claude-cli",
+      purpose: "discovery",
     } as never);
     for (const auth of [runtimeAuth, discoveryAuth]) {
       expect(auth?.apiKey).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
       expect(auth?.source).toBe("Claude CLI native auth");
       expect(auth?.mode).toBe("oauth");
     }
+  });
+
+  it("does not publish native readiness when Claude CLI is logged out", async () => {
+    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "missing" });
+
+    expect(
+      anthropicProviderDiscovery.resolveSyntheticAuth?.({
+        provider: "claude-cli",
+        purpose: "discovery",
+      } as never),
+    ).toBeUndefined();
   });
 
   it("does not copy native Claude auth during anthropic cli migration", async () => {

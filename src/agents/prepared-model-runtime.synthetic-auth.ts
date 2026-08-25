@@ -48,6 +48,7 @@ export function resolvePreparedSyntheticAuth(params: {
       providerConfig: Object.entries(params.config.models?.providers ?? {}).find(
         ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
       )?.[1],
+      purpose: "discovery",
     }) ?? undefined
   );
 }
