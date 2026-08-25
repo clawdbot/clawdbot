@@ -19,6 +19,7 @@ import {
   copyConfigResolutionFactsExcept,
 } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
+import { setGatewayAmbientEnvTriggerPolicy } from "../config/runtime-snapshot.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -134,6 +135,10 @@ export async function prepareGatewayServerBootstrap(input: {
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
+  // Channel schema ownership is rebuilt per Control UI config request, with no access to these
+  // startup options. Record the decision so ownership narrows to the candidate set this run
+  // actually activated from.
+  setGatewayAmbientEnvTriggerPolicy(ambientEnvTriggers);
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);

@@ -25,8 +25,10 @@ import {
 } from "./loader-runtime-candidate.js";
 import {
   activatePluginRegistry,
+  collectCededChannelIdsByPlugin,
   createPluginLoaderLogger,
   maybeThrowOnPluginLoadError,
+  pushCededChannelWithoutOwnerDiagnostics,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
@@ -221,6 +223,14 @@ function loadOpenClawPluginsInternal(
       manifestRegistry,
       memorySlot,
     });
+    const { cededChannelIdsByPlugin, cededChannelOwners } = collectCededChannelIdsByPlugin({
+      registry: manifestRegistry,
+      config: context.cfg,
+      sourceConfig: context.activationSourceConfig,
+      env: context.env,
+      onlyPluginIdSet,
+      dreamingSidecar,
+    });
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestBySource.get(candidate.source);
@@ -230,6 +240,7 @@ function loadOpenClawPluginsInternal(
       loadRuntimePluginCandidate({
         candidate,
         manifestRecord,
+        cededChannelIdsByPlugin,
         context,
         options,
         onlyPluginIdSet,
@@ -246,6 +257,12 @@ function loadOpenClawPluginsInternal(
       logger.debug?.(
         `[plugins] loaded ${registry.plugins.length} plugin(s) (${state.pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
       );
+    }
+    // Registration for a ceded channel was skipped up front, so a replacement that failed after
+    // that leaves the channel silently dead; only the finished registry can tell. Metadata and
+    // validate loads never run register, and an empty runtime catalog there proves nothing.
+    if (context.shouldLoadModules && !validateOnly) {
+      pushCededChannelWithoutOwnerDiagnostics({ registry, cededChannelOwners });
     }
     // Scoped snapshots may omit the configured memory plugin intentionally.
     if (!onlyPluginIdSet && typeof memorySlot === "string" && !state.memorySlotMatched) {

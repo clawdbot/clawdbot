@@ -5,7 +5,7 @@ import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
+import { normalizeCededChannelId, normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import {
@@ -330,6 +330,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const id = plugin.id;
+    // A channel this plugin ceded to a preferred replacement is not its to register. Skipping here
+    // rather than resolving a collision later keeps registration order out of the outcome, and
+    // leaves a genuine duplicate — two claimants with no declaration between them — on the
+    // diagnostic path below. Both sides compare canonicalized: a plugin may register the channel
+    // under a case or alias variant of the manifest claim the cede was recorded against.
+    const cededChannelId = normalizeCededChannelId(id);
+    if (
+      record.cededChannelIds?.some(
+        (channelId) => normalizeCededChannelId(channelId) === cededChannelId,
+      )
+    ) {
+      return;
+    }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {

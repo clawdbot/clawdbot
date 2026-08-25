@@ -1,5 +1,9 @@
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -23,6 +27,7 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
+import { coerceConfig } from "../../config/io.read-helpers.js";
 import { projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import {
@@ -34,7 +39,10 @@ import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-norm
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
-import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import {
+  buildRuntimeConfigSchemaForConfig,
+  loadGatewayRuntimeConfigSchema,
+} from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -54,10 +62,16 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
+import type { ConfigUiHints } from "../../shared/config-ui-hints-types.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
+import {
+  getCachedConfigSchemaResponse,
+  invalidateConfigSchemaResponseCache,
+  setCachedConfigSchemaResponse,
+} from "../config-schema-response-cache.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -86,11 +100,6 @@ const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
 // every other path keeps strict document CAS.
 const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
-
-let configSchemaResponseCache: {
-  pluginRegistryVersion: number;
-  response: ConfigSchemaResponse;
-} | null = null;
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigWriteCommitResult = Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
@@ -486,11 +495,46 @@ function stripBundledProviderRuntimeDefaults(params: {
   };
 }
 
+/**
+ * Memoizes buildRuntimeConfigSchemaForConfig for the lifetime of one request handler.
+ *
+ * The write RPCs need hints for the pre-write config at several sites (sentinel restore, the noop
+ * acknowledgement, the pre/post redaction union), all reading the same snapshot object, and every
+ * fresh build repeats manifest-registry resolution that can miss the plugin lifecycle snapshot.
+ * The memo is keyed on the config object's IDENTITY, never on its content: ownership is derived
+ * from the exact object handed in, so two deeply-equal configs read at different times must still
+ * build separately or a write that moves channel ownership would redact under the departed owner,
+ * the stale-schema defect the per-config builds exist to prevent. The authored sourceConfig joins
+ * that key the same way: each entry records the exact sourceConfig it was built with, and a
+ * repeat for the same config under a different sourceConfig rebuilds rather than reusing the
+ * entry, because explicit selection is read from the authored object and two authored views of
+ * one config can select different owners. Handlers create one memo per invocation and never store
+ * it wider, so no build outlives the request that produced it.
+ */
+function createRequestScopedSchemaBuilder(): typeof buildRuntimeConfigSchemaForConfig {
+  // A WeakMap in this closure (rather than threading each build result by hand) keeps the call
+  // sites one-liners while the entries still die with the handler invocation that created them.
+  const built = new WeakMap<
+    OpenClawConfig,
+    { sourceConfig: OpenClawConfig; response: ConfigSchemaResponse }
+  >();
+  return (config, sourceConfig) => {
+    const cached = built.get(config);
+    if (cached && cached.sourceConfig === sourceConfig) {
+      return cached.response;
+    }
+    const response = buildRuntimeConfigSchemaForConfig(config, sourceConfig);
+    built.set(config, { sourceConfig, response });
+    return response;
+  };
+}
+
 function parseValidateConfigFromRawOrRespond(
   params: unknown,
   requestName: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
+  buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig,
   modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
 ): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
@@ -503,7 +547,13 @@ function parseValidateConfigFromRawOrRespond(
     return null;
   }
   const schema = loadSchemaWithPlugins();
-  const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schema.uiHints);
+  // Sentinels are restored against this snapshot, so the hints must describe it. The cached schema
+  // is keyed on plugin registry version alone and can still describe the previous channel owner.
+  const restored = restoreRedactedValues(
+    parsedRes.parsed,
+    snapshot.config,
+    buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+  );
   if (!restored.ok) {
     respond(
       false,
@@ -578,6 +628,15 @@ function rejectDroppedAgentRosterEntries(params: {
 function validateSubmittedConfigOrRespond(params: {
   candidate: unknown;
   sourceConfig: OpenClawConfig | undefined;
+  /**
+   * Authored counterpart of `candidate` for channel schema ownership. config.patch merges the
+   * patch into the runtime-shaped `snapshot.config`, whose validation-seeded
+   * `plugins.entries.<id>.config` records read as operator selection and set `preferOver` aside,
+   * so it must hand validation the authored merge. config.set/apply omit it: their candidate is
+   * built on `snapshot.resolved` plus the operator's delta, so validation's own
+   * pre-materialization parse is already the authored view.
+   */
+  authoredCandidate?: OpenClawConfig;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
   respond: RespondFn;
 }): { validationCandidate: OpenClawConfig; config: OpenClawConfig } | null {
@@ -597,12 +656,15 @@ function validateSubmittedConfigOrRespond(params: {
       }),
     );
   };
-  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+  const validationParams = params.authoredCandidate
+    ? { sourceConfig: params.authoredCandidate }
+    : undefined;
+  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate, validationParams);
   if (!sourceValidated.ok) {
     respondInvalid(sourceValidated.issues);
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(validationCandidate);
+  const validated = validateConfigObjectWithPlugins(validationCandidate, validationParams);
   if (!validated.ok) {
     respondInvalid(validated.issues);
     return null;
@@ -671,12 +733,55 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
 }
 
 export function clearConfigSchemaResponseCacheForTests() {
-  configSchemaResponseCache = null;
+  invalidateConfigSchemaResponseCache();
   invalidateConfigGetResponseCache();
 }
 
 function clearConfigSchemaResponseCache() {
-  configSchemaResponseCache = null;
+  invalidateConfigSchemaResponseCache();
+}
+
+/**
+ * Union the redaction-relevant hints of the pre-write and committed schemas.
+ *
+ * Neither side alone is safe. The committed schema is required so a write that ACTIVATES a
+ * replacement redacts under the owner it selects. But the committed schema alone drops a claimant
+ * the write REMOVED, and a value that claimant declared sensitive can survive under a shared
+ * channel, so the acknowledgement would return it unredacted.
+ *
+ * Both attributes the redaction path consults travel here: `redactConfigObject` and the system
+ * agent gate on `sensitive === true || hasSensitiveUrlHintTag(hint)`, so carrying only the former
+ * would still leak a URL-embedded credential the removed owner alone tagged.
+ */
+function unionRedactionUiHints(
+  previous: ConfigUiHints | undefined,
+  committed: ConfigUiHints | undefined,
+): ConfigUiHints | undefined {
+  if (!previous) {
+    return committed;
+  }
+  if (!committed) {
+    return previous;
+  }
+  const merged: ConfigUiHints = { ...committed };
+  for (const [path, hint] of Object.entries(previous)) {
+    const sensitive = hint?.sensitive === true;
+    const urlSecret = hasSensitiveUrlHintTag(hint);
+    if (!sensitive && !urlSecret) {
+      continue;
+    }
+    const owned = merged[path];
+    const tags =
+      urlSecret && !hasSensitiveUrlHintTag(owned)
+        ? [...(owned?.tags ?? []), SENSITIVE_URL_HINT_TAG]
+        : owned?.tags;
+    merged[path] = {
+      ...owned,
+      ...(sensitive ? { sensitive: true } : {}),
+      ...(tags ? { tags } : {}),
+    };
+  }
+  return merged;
 }
 
 async function respondWithConfigRestartWrite(params: {
@@ -684,14 +789,32 @@ async function respondWithConfigRestartWrite(params: {
   kind: ConfigRestartWriteKind;
   mode: ConfigRestartWriteMode;
   writeResult: ConfigWriteCommitResult;
+  /** Config as it stood before the write, so a claimant this write removed still redacts. */
+  previousConfig: OpenClawConfig;
+  /** Authored counterpart of previousConfig; ownership reads explicit selection from it. */
+  previousSourceConfig: OpenClawConfig;
+  /** Request-scoped memoized builder, shared with the caller's earlier pre-write hint builds. */
+  buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig;
   changedPaths: string[];
   actor: ReturnType<typeof resolveControlPlaneActor>;
   context: GatewayRequestContext;
   respond: RespondFn;
-  uiHints: ConfigRedactionHints;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
+  // Redact under the owner the committed config selects. Hints captured before the write describe
+  // the previous owner, so a write that activates a replacement could return a field that owner
+  // marks sensitive. Clearing the cache above is not enough: the caller already holds stale hints.
+  // Union with the pre-write hints so a claimant this write removed still redacts its own fields.
+  const uiHints = unionRedactionUiHints(
+    params.buildSchemaForConfig(params.previousConfig, params.previousSourceConfig).uiHints,
+    // The committed config is its own authored counterpart on this gateway path:
+    // replaceConfigFile hands back the object it serialized to disk (or the re-read authored
+    // source snapshot) here — its void-io echo and skip-refresh returns, which can echo a runtime
+    // shape, are unreachable from this io-less call — so no seeded entry config can masquerade as
+    // operator selection.
+    params.buildSchemaForConfig(params.writeResult.config, params.writeResult.config).uiHints,
+  );
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
@@ -712,7 +835,7 @@ async function respondWithConfigRestartWrite(params: {
       ...(params.writeResult.hash
         ? { hash: params.context.configRevisionProjector.projectRawHash(params.writeResult.hash) }
         : {}),
-      config: redactConfigObject(params.writeResult.config, params.uiHints),
+      config: redactConfigObject(params.writeResult.config, uiHints),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,
       sentinel: {
@@ -766,16 +889,16 @@ function respondConfigPatchNoop(params: {
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const pluginRegistryVersion = getActivePluginRegistryVersion();
-  if (
-    configSchemaResponseCache &&
-    configSchemaResponseCache.pluginRegistryVersion === pluginRegistryVersion
-  ) {
-    return configSchemaResponseCache.response;
+  const cached = getCachedConfigSchemaResponse(pluginRegistryVersion);
+  if (cached) {
+    return cached;
   }
 
-  // Plugin schema metadata is process-stable until config write or registry activation.
+  // Plugin schema metadata is process-stable until config write or registry activation. Every
+  // accepted config candidate invalidates this from the reload path, which is what covers a
+  // hot-reloaded ownership change that leaves the registry version untouched.
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = { pluginRegistryVersion, response };
+  setCachedConfigSchemaResponse(pluginRegistryVersion, response);
   return response;
 }
 
@@ -853,7 +976,9 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       await readConfigGetResponse({
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
-        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+        // readConfigGetResponse hands the snapshot's authored sourceConfig, so the config it
+        // loads hints for is its own authored counterpart.
+        loadUiHints: (config) => buildRuntimeConfigSchemaForConfig(config, config).uiHints,
         revisionProjector: context.configRevisionProjector,
       }),
       undefined,
@@ -911,11 +1036,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
+    const buildSchemaForConfig = createRequestScopedSchemaBuilder();
     const parsed = parseValidateConfigFromRawOrRespond(
       params,
       "config.set",
       snapshot,
       respond,
+      buildSchemaForConfig,
       resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
     );
     if (!parsed) {
@@ -958,7 +1085,19 @@ export const configHandlers: GatewayRequestHandlers = {
         ...(writeResult.hash
           ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
           : {}),
-        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
+        config: redactConfigObject(
+          writeResult.config,
+          // Take the pre-write hints from the config that was actually on disk, as the
+          // patch and apply paths do. The parsed schema comes from a cache keyed on plugin
+          // registry version alone, and ownership can move through a config reload without
+          // advancing that key, which would leave the departing claimant's only sensitive
+          // hint out of the union and return its retained value here.
+          unionRedactionUiHints(
+            buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+            // Committed config is authored as persisted, so it is its own source half.
+            buildSchemaForConfig(writeResult.config, writeResult.config).uiHints,
+          ),
+        ),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
       },
       undefined,
@@ -980,6 +1119,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
+    const buildSchemaForConfig = createRequestScopedSchemaBuilder();
     const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
       writeOptions.basePluginMetadataSnapshot,
     );
@@ -1055,8 +1195,11 @@ export const configHandlers: GatewayRequestHandlers = {
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
-    const schemaPatch = loadSchemaWithPlugins();
-    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
+    const restoredMerge = restoreRedactedValues(
+      merged,
+      snapshot.config,
+      buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+    );
     if (!restoredMerge.ok) {
       respond(
         false,
@@ -1097,16 +1240,28 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: snapshot.config,
-        uiHints: schemaPatch.uiHints,
+        uiHints: buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
         actor,
         context,
         respond,
       });
       return;
     }
+    // Same patch, applied to the authored snapshot: channel schema ownership inside validation
+    // must read explicit selection from what the operator wrote, and `restoredMerge.result` is
+    // built on `snapshot.config`, which carries validation-seeded entry configs. Sentinel values
+    // the restore step above resolves stay redacted here, which is fine for ownership: presence
+    // and the policy booleans it reads are unchanged by a placeholder string.
+    const authoredCandidate = coerceConfig(
+      applyMergePatch(snapshot.sourceConfig, normalizedPatch, {
+        mergeObjectArraysById: true,
+        replaceArrayPaths: replacePaths,
+      }),
+    );
     const validatedSubmission = validateSubmittedConfigOrRespond({
       candidate: restoredMerge.result,
       sourceConfig: snapshot.sourceConfig,
+      authoredCandidate,
       modelIdNormalizationPolicies,
       respond,
     });
@@ -1132,7 +1287,8 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: validatedConfig,
-        uiHints: schemaPatch.uiHints,
+        // writeConfig is the authored candidate this validated config was materialized from.
+        uiHints: buildSchemaForConfig(validatedConfig, writeConfig).uiHints,
         actor,
         context,
         respond,
@@ -1167,11 +1323,13 @@ export const configHandlers: GatewayRequestHandlers = {
       kind: "config-patch",
       mode: "config.patch",
       writeResult,
+      previousConfig: snapshot.config,
+      previousSourceConfig: snapshot.sourceConfig,
+      buildSchemaForConfig,
       changedPaths,
       actor,
       context,
       respond,
-      uiHints: schemaPatch.uiHints,
       preparedSecretsSnapshot,
     });
   },
@@ -1188,11 +1346,13 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const { snapshot, writeOptions } = writeSnapshot;
+    const buildSchemaForConfig = createRequestScopedSchemaBuilder();
     const parsed = parseValidateConfigFromRawOrRespond(
       params,
       "config.apply",
       snapshot,
       respond,
+      buildSchemaForConfig,
       resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
     );
     if (!parsed) {
@@ -1234,11 +1394,13 @@ export const configHandlers: GatewayRequestHandlers = {
       kind: "config-apply",
       mode: "config.apply",
       writeResult,
+      previousConfig: snapshot.config,
+      previousSourceConfig: snapshot.sourceConfig,
+      buildSchemaForConfig,
       changedPaths,
       actor,
       context,
       respond,
-      uiHints: parsed.schema.uiHints,
       preparedSecretsSnapshot,
     });
   },

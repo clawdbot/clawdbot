@@ -3,6 +3,9 @@ import nodePath from "node:path";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import { collectChannelSchemaMetadataWithOwnership } from "../config/channel-config-metadata.js";
+import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -18,6 +21,7 @@ import {
   type ConfigExternalChangeAuditRecord,
 } from "../config/io.audit.js";
 import type { ConfigWriteNotification } from "../config/io.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
@@ -28,6 +32,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import { collectCededChannelIdsByPlugin } from "../plugins/loader-shared.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
@@ -144,6 +149,148 @@ function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   };
 }
 
+/**
+ * The channel owner each side of a config transaction selects, keyed by canonical channel id, on
+ * both planes the codebase distinguishes: the schema owner is computed with the same registry and
+ * ownership policy the schema plane uses (`loadGatewayRuntimeConfigSchema` pairs them the same
+ * way), and the runtime cede owner comes from the collector plugin registration shares, so the
+ * reload path cannot judge ownership by a different rule than validation, the Control UI, or the
+ * loader apply.
+ *
+ * The pairing matters: ownership reads explicit selection and the per-channel activation
+ * candidates from the SOURCE config, because auto-enable materializes
+ * `plugins.entries.<id>.enabled` into the runtime config and a materialized-config read would
+ * report every auto-enabled claimant as hand-picked. The runtime config still supplies policy
+ * disablement and the registry workspace roots, mirroring how the schema endpoint pairs
+ * `getRuntimeConfig()` with the published source snapshot.
+ */
+type ChannelOwnersSnapshot = {
+  /** Selected schema owner per channel; undefined when no claimant ships a descriptor. */
+  schemaOwners: Map<string, string | undefined>;
+  /** Runtime cede owner per contested channel: the claimant registration hands the channel to. */
+  runtimeOwners: Map<string, string>;
+};
+
+function collectChannelOwners(side: {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+}): ChannelOwnersSnapshot {
+  const registry = resolveConfigWidePluginManifestRegistry({
+    config: side.config,
+    env: process.env,
+  });
+  const policy = createConfiguredChannelOwnershipPolicy({
+    config: side.config,
+    sourceConfig: side.sourceConfig,
+    registry,
+    env: process.env,
+  });
+  const schemaOwners = new Map<string, string | undefined>();
+  for (const entry of collectChannelSchemaMetadataWithOwnership(registry, policy)) {
+    schemaOwners.set(entry.id, entry.schemaPluginId);
+  }
+  // A contest can exist with no schema descriptor on any side: a bare `record.channels` claim
+  // serves a channel, and a `preferOver` declaration can travel on `channelCatalogMeta` alone,
+  // which auto-enable honors like a `channelConfigs` one. The schema map reports no owner for
+  // such a channel however ownership settles, so the runtime plane's cede owner — the same
+  // shared rule plugin registration applies — travels alongside it, or a hot edit could still
+  // restart the stale owner while activation would select the replacement. The two planes stay
+  // in separate maps because manifest channel ids are arbitrary strings, so no composite key
+  // can be proven collision-free.
+  const { cededChannelOwners } = collectCededChannelIdsByPlugin({
+    registry,
+    config: side.config,
+    sourceConfig: side.sourceConfig,
+    env: process.env,
+    onlyPluginIdSet: null,
+    dreamingSidecar: null,
+  });
+  return { schemaOwners, runtimeOwners: cededChannelOwners };
+}
+
+type ChannelOwnershipChange = {
+  channelId: string;
+  previousOwner: string | undefined;
+  nextOwner: string | undefined;
+};
+
+/** The first channel whose selected owner differs between the two config pairs, on either plane. */
+function findChannelOwnershipChange(params: {
+  previous: { config: OpenClawConfig; sourceConfig: OpenClawConfig };
+  next: { config: OpenClawConfig; sourceConfig: OpenClawConfig };
+}): ChannelOwnershipChange | null {
+  const previous = collectChannelOwners(params.previous);
+  const next = collectChannelOwners(params.next);
+  const planes: ReadonlyArray<
+    [ReadonlyMap<string, string | undefined>, ReadonlyMap<string, string | undefined>]
+  > = [
+    [previous.schemaOwners, next.schemaOwners],
+    [previous.runtimeOwners, next.runtimeOwners],
+  ];
+  for (const [previousOwners, nextOwners] of planes) {
+    for (const channelId of new Set([...previousOwners.keys(), ...nextOwners.keys()])) {
+      const previousOwner = previousOwners.get(channelId);
+      const nextOwner = nextOwners.get(channelId);
+      if (previousOwner !== nextOwner) {
+        return { channelId, previousOwner, nextOwner };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether an authored edit touched anything channel ownership SELECTION reads. Selection resolves
+ * from explicit plugin selection and the per-channel activation candidates, both of which live
+ * under `plugins` or `channels` in the source config. Ownership can still move without either
+ * when an `agents.*` edit changes the workspace roots plugin discovery scans; the
+ * `agentWorkspaceRootsMoved` trigger below owns that case.
+ *
+ * Both ownership-comparison triggers gate on it — the zero-diff guard (`noDiffOwnershipChange`)
+ * and the hot-edit escalation gate below it — to keep the comparison off ordinary reload paths:
+ * resolving a manifest registry and walking ownership on both sides costs a few milliseconds warm
+ * and far more when no process-current plugin metadata snapshot is published, while
+ * `diffConfigPaths` is the same walk this file already runs on other source-only paths.
+ */
+function sourceEditTouchesChannelOwnership(
+  previousSourceConfig: OpenClawConfig,
+  nextSourceConfig: OpenClawConfig,
+): boolean {
+  return diffConfigPaths(previousSourceConfig, nextSourceConfig).some(
+    (path) =>
+      path === "plugins" ||
+      path === "channels" ||
+      path.startsWith("plugins.") ||
+      path.startsWith("channels."),
+  );
+}
+
+/**
+ * Whether the agent workspace roots the config-wide manifest registry discovers from moved.
+ * `resolveConfigWidePluginManifestRegistry` discovers plugin manifests per workspace dir, so an
+ * `agents.*` edit that moves, adds, removes, or reorders a workspace changes which claimants exist
+ * at all — no `plugins.*` or `channels.*` path has to change for ownership to move. Order counts:
+ * registry merge order carries origin precedence for channel schema ownership. The roots resolve
+ * from the runtime config pair because that is the pair the ownership comparison hands the
+ * registry resolver.
+ */
+function agentWorkspaceRootsMoved(
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): boolean {
+  try {
+    const previousDirs = listAgentWorkspaceDirs(previousConfig);
+    const nextDirs = listAgentWorkspaceDirs(nextConfig);
+    return (
+      previousDirs.length !== nextDirs.length ||
+      previousDirs.some((dir, index) => dir !== nextDirs[index])
+    );
+  } catch {
+    // An unresolvable roster proves nothing about the roots; let the ownership comparison decide.
+    return true;
+  }
+}
+
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
@@ -201,6 +348,13 @@ export function startGatewayConfigReloader(opts: {
     persistedHash: string | null;
     changedPaths: readonly string[];
   }) => void;
+  /**
+   * Fires when the watcher observes a persisted config it cannot accept — an
+   * invalid file, or one missing after retries. No snapshot is published on
+   * these paths, so file-derived response caches (config.get) must drop their
+   * entries or CAS writers retry against a hash the file no longer has.
+   */
+  onConfigCandidateRejected?: () => void;
   onNoopConfigCommit: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -434,6 +588,8 @@ export function startGatewayConfigReloader(opts: {
       return true;
     }
     opts.log.warn("config reload skipped (config file not found)");
+    // Only the settled state invalidates: a mid-write rename gap heals within the retries above.
+    opts.onConfigCandidateRejected?.();
     return true;
   };
 
@@ -443,6 +599,7 @@ export function startGatewayConfigReloader(opts: {
     }
     const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
     opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    opts.onConfigCandidateRejected?.();
     return true;
   };
 
@@ -658,7 +815,36 @@ export function startGatewayConfigReloader(opts: {
     const markPluginMetadataRefreshApplied = () => {
       pluginMetadataRefreshApplied = pluginMetadataRefreshToken;
     };
-    if (changedPaths.length === 0 && !forcePluginMetadataReload) {
+    // An authored edit can move a channel's selected owner while auto-enable leaves the effective
+    // config byte-identical: explicitly selecting a fallback that auto-enable had already
+    // materialized for another channel changes `isPluginExplicitlySelected` in the source while
+    // every effective path stays put. The early return below still publishes the source snapshot,
+    // so validation and the Control UI switch to the newly selected owner while the active registry
+    // keeps the previous `cededChannelIds` and goes on serving the replacement. Bypass the early
+    // return when that happens, exactly as a forced plugin-metadata refresh already does.
+    //
+    // The source-diff guard runs first so an ordinary no-op reload never pays for the comparison,
+    // and a resolution failure escalates rather than being read as "ownership held still".
+    const noDiffOwnershipChange = ((): ChannelOwnershipChange | null => {
+      if (changedPaths.length > 0 || forcePluginMetadataReload) {
+        return null;
+      }
+      try {
+        if (!sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig)) {
+          return null;
+        }
+        return findChannelOwnershipChange({
+          previous: { config: currentConfig, sourceConfig: currentRuntimeEnvSourceConfig },
+          next: { config: nextConfig, sourceConfig: nextSourceConfig },
+        });
+      } catch (err) {
+        opts.log.warn(
+          `channel ownership comparison failed on an unchanged effective config: ${String(err)}`,
+        );
+        return { channelId: "unknown", previousOwner: undefined, nextOwner: undefined };
+      }
+    })();
+    if (changedPaths.length === 0 && !forcePluginMetadataReload && !noDiffOwnershipChange) {
       let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
       let publishedSourceRolledBack = false;
@@ -715,6 +901,105 @@ export function startGatewayConfigReloader(opts: {
       // also invalidates MCP runtimes assembled from the previous generation.
       plan.reloadPlugins = true;
       plan.disposeMcpRuntimes = true;
+    }
+    if (noDiffOwnershipChange && !plan.restartGateway && !plan.reloadPlugins) {
+      opts.log.info(
+        `channel ownership moved without an effective config change (${
+          noDiffOwnershipChange.channelId
+        }: ${noDiffOwnershipChange.previousOwner ?? "none"} -> ${
+          noDiffOwnershipChange.nextOwner ?? "none"
+        }); reloading plugins`,
+      );
+      plan.reloadPlugins = true;
+      plan.disposeMcpRuntimes = true;
+    }
+    // A moved workspace root changes plugin discovery itself, so it can move ownership past the
+    // source-path predicate below, and it can also invalidate an already-planned plugin reload:
+    // `reloadAttachedGatewayPlugins` rebuilds the lookup table and metadata snapshot from the
+    // process-stable startup `pluginWorkspaceDir`, so only a gateway restart re-resolves
+    // discovery from the new roots. That is why the moved-roots trigger bypasses the
+    // `!plan.reloadPlugins` guard and why its escalation below restarts instead of reloading.
+    const workspaceRootsMoved = agentWorkspaceRootsMoved(currentConfig, nextConfig);
+    if (
+      // Under reload-off the transaction commits the baseline without acting on the plan
+      // (`commitReloadBaseline({runtimeApplied:false})` below never reads it), so the comparison
+      // could only burn the registry resolution and log a plugin reload that never happens.
+      // The mode gate below owns the outcome either way; skipping here changes no behavior.
+      nextSettings.mode !== "off" &&
+      !plan.restartGateway &&
+      // Moved roots outrank an already-planned plugin reload (the reload rebuilds from the
+      // startup roots); the remaining arms keep the `!plan.reloadPlugins` guard because the
+      // moves they catch are ones a planned reload already rebuilds and restarts itself.
+      (workspaceRootsMoved ||
+        (!plan.reloadPlugins &&
+          (plan.restartChannels.size > 0 ||
+            (plan.restartChannelAccounts?.size ?? 0) > 0 ||
+            sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig))))
+    ) {
+      // A `channels.<id>` edit can move the channel's selected owner without touching any
+      // `plugins.*` path: ownership reads the per-channel activation candidates from the source
+      // config, so making or unmaking the channel configured narrows the claimant set. The plan
+      // above only restarts the channel, and `startGatewayChannelFromActiveRegistry` starts it
+      // from the previous plugin registry, so validation and the Control UI would describe the
+      // replacement while the Gateway restarts the displaced owner. Rebuild the plugin registry
+      // first when an owner actually moved — an ownership-neutral channel edit keeps its cheap
+      // plan — with the same MCP runtime pairing as the metadata escalation above.
+      //
+      // The trigger reads the source edit, not the plan: a channel plugin's reload metadata may
+      // classify a `channels.<id>` path as a no-op (WhatsApp's broad noop prefix), and such an
+      // edit can still make the channel meaningfully configured and move the owner while
+      // `plan.restartChannels` stays empty. The comparison below still decides the escalation,
+      // so a neutral edit pays only the diff walk this transaction already runs elsewhere.
+      try {
+        // The previous side must pair `currentConfig` with `currentRuntimeEnvSourceConfig`, not
+        // `currentSourceConfig`: a source-only commit (reload mode off, writer intent "none")
+        // advances the source baseline without advancing the runtime config or the active plugin
+        // registry. After such a commit the plain source baseline already selects the replacement
+        // owner, so pairing it with the stale runtime config reports the move on both sides and
+        // hides the escalation while the channel restarts from the stale registry. The
+        // runtime-env source baseline advances only when the runtime config does, so it is the
+        // source config the active registry was actually built from.
+        const ownershipChange = findChannelOwnershipChange({
+          previous: { config: currentConfig, sourceConfig: currentRuntimeEnvSourceConfig },
+          next: { config: nextConfig, sourceConfig: nextSourceConfig },
+        });
+        if (ownershipChange && workspaceRootsMoved) {
+          // A plugin reload cannot honor the new roots (startup `pluginWorkspaceDir` above), so
+          // escalating to it would rebuild the registry from the old workspace and report success
+          // while validation keeps describing the new one. Restart re-resolves discovery.
+          const reason = `channel ownership moved with an agent workspace root (${
+            ownershipChange.channelId
+          }: ${ownershipChange.previousOwner ?? "none"} -> ${ownershipChange.nextOwner ?? "none"})`;
+          opts.log.info(`${reason}; restarting gateway`);
+          plan.restartGateway = true;
+          plan.restartReasons.push(reason);
+        } else if (ownershipChange) {
+          // No "before channel restart": on the widened trigger the plan may restart no channel
+          // at all — the reload result itself restarts owner-changed channels
+          // (`pluginReloadResult.restartChannels` in `server-reload-hot.ts`).
+          opts.log.info(
+            `channel ownership moved (${ownershipChange.channelId}: ${
+              ownershipChange.previousOwner ?? "none"
+            } -> ${ownershipChange.nextOwner ?? "none"}); reloading plugins`,
+          );
+          plan.reloadPlugins = true;
+          plan.disposeMcpRuntimes = true;
+        }
+      } catch (err) {
+        // A metadata resolution failure is no proof ownership held still. Escalate to the plugin
+        // reload, whose lifecycle recovery owns metadata failures — or to the restart when moved
+        // roots make the reload unable to rebuild what this transaction could not compare.
+        opts.log.warn(`channel ownership comparison failed: ${String(err)}`);
+        if (workspaceRootsMoved) {
+          plan.restartGateway = true;
+          plan.restartReasons.push(
+            "channel ownership comparison failed with moved agent workspace roots",
+          );
+        } else {
+          plan.reloadPlugins = true;
+          plan.disposeMcpRuntimes = true;
+        }
+      }
     }
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");

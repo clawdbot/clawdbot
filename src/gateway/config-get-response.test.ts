@@ -4,6 +4,17 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 
 const mocks = vi.hoisted(() => ({
   appliedConfigHash: "applied-1" as string | null,
+  configSnapshotMetadata: {
+    revision: 1,
+    fingerprint: "runtime-1",
+    sourceFingerprint: "source-1",
+    updatedAtMs: 0,
+  } as {
+    revision: number;
+    fingerprint: string;
+    sourceFingerprint: string | null;
+    updatedAtMs: number;
+  } | null,
   pluginRegistryVersion: 1,
   readConfigFileSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
 }));
@@ -21,6 +32,7 @@ vi.mock("../config/runtime-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     getRuntimeConfigAppliedHash: () => mocks.appliedConfigHash,
+    getRuntimeConfigSnapshotMetadata: () => mocks.configSnapshotMetadata,
   };
 });
 
@@ -66,6 +78,12 @@ function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
 beforeEach(() => {
   invalidateConfigGetResponseCache();
   mocks.appliedConfigHash = "applied-1";
+  mocks.configSnapshotMetadata = {
+    revision: 1,
+    fingerprint: "runtime-1",
+    sourceFingerprint: "source-1",
+    updatedAtMs: 0,
+  };
   mocks.pluginRegistryVersion = 1;
   mocks.readConfigFileSnapshot.mockReset();
   mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot({ gateway: { port: 19_001 } }));
@@ -134,6 +152,88 @@ describe("config.get response cache", () => {
     expect(loadUiHints).toHaveBeenCalledTimes(2);
   });
 
+  // An authored edit whose effective diff is empty is committed as a source-only publication:
+  // `notifyCommitted` (config-reload.ts) skips its invalidation because no path changed, the
+  // applied hash moves only when a candidate is runtime-applied, and the registry version holds
+  // still too. The republish keeps the runtime object — and so its fingerprint — while the source
+  // fingerprint tracks the new canonical source content, so that is the half a hit must prove or
+  // config.get keeps serving the pre-edit authored snapshot.
+  it("rebuilds after a source-only republish that leaves the applied hash unchanged", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    mocks.configSnapshotMetadata = {
+      revision: 2,
+      fingerprint: "runtime-1",
+      sourceFingerprint: "source-2",
+      updatedAtMs: 0,
+    };
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  // `resetConfigRuntimeState` zeroes the snapshot revision counter without invalidating this
+  // cache (`clearSecretsRuntimeSnapshotState` reaches it on the managed-secrets failure paths),
+  // so a later publication can present a previously seen revision number for different content.
+  // The fingerprint key must miss where the revision key false-hit.
+  it("rebuilds when a cleared runtime republishes different content at a recycled revision", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    mocks.configSnapshotMetadata = {
+      revision: 1,
+      fingerprint: "runtime-2",
+      sourceFingerprint: "source-2",
+      updatedAtMs: 0,
+    };
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  // A JSON5 comment, whitespace, or key-order edit leaves the canonical source fingerprint
+  // identical, and its effective diff is empty so the watcher's changed-path invalidation does not
+  // fire either. The response still carries the snapshot's raw file hash, which clients hand back
+  // as the compare-and-swap base for a write, so serving the pre-edit hash makes every CAS write
+  // reject and the retry that rejection asks for return the same stale value. Every republish
+  // bumps the revision, source-only ones included, which is what breaks the loop.
+  it("rebuilds when a comment-only edit moves the raw hash under an unchanged fingerprint", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    expect(first.hash).toBe("raw-token:raw-1");
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...configSnapshot({ gateway: { port: 19_001 } }),
+      raw: '// only a comment changed\n{"gateway":{"port":19001}}',
+      hash: "raw-2",
+    });
+    mocks.configSnapshotMetadata = {
+      revision: 2,
+      fingerprint: "runtime-1",
+      sourceFingerprint: "source-1",
+      updatedAtMs: 0,
+    };
+    const second = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(second.hash).toBe("raw-token:raw-2");
+  });
+
+  // While snapshot state is cleared there is no source fingerprint to prove, so nothing built in
+  // that window may be served from cache — the cleared window is exactly when a stale channel
+  // claimant answer would otherwise survive.
+  it("bypasses the cache while runtime snapshot state is cleared", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    mocks.configSnapshotMetadata = null;
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
+  });
+
   it("rebuilds immediately after watcher or write-path invalidation", async () => {
     const loadUiHints = vi.fn(() => undefined);
     await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
@@ -162,5 +262,24 @@ describe("config.get response cache", () => {
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(loadUiHints).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Codex review P1 on #123209: the schema this redacts with is chosen by the config, since the
+// config decides which plugin owns a channel. Handing the loader nothing let it answer from a
+// cache keyed on plugin registry version alone, which a `channels.<id>` hot reload never changes.
+describe("config.get redaction hint source", () => {
+  it("builds hints from the config it is about to redact", async () => {
+    const seen: unknown[] = [];
+    await readConfigGetResponse({
+      getHotReloadStatus: disabledWatcher,
+      loadUiHints: (config) => {
+        seen.push(config);
+        return undefined;
+      },
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeDefined();
   });
 });

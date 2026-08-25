@@ -10,6 +10,7 @@ import {
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
+import { invalidateConfigSchemaResponseCache } from "./config-schema-response-cache.js";
 import {
   GatewayConfigReloadSupersededError,
   GatewayHotReloadRecoveryError,
@@ -332,11 +333,24 @@ export function startManagedGatewayConfigReloader(
     initialIncludedPaths: params.initialIncludedPaths ?? [],
     initialSnapshotValid: params.initialSnapshotValid,
     initialSnapshotIssues: params.initialSnapshotIssues,
+    // A rejected candidate (invalid file, file missing after retries) publishes no snapshot, so
+    // no key in the config.get cache moves: without this, config.get keeps serving the last
+    // valid file content and raw hash, every CAS write rejects against that stale hash, and the
+    // re-read the rejection instructs returns the same cached response. Only the file-derived
+    // cache drops — the schema cache describes the still-live runtime, which did not change.
+    onConfigCandidateRejected: () => {
+      invalidateConfigGetResponseCache();
+    },
     // Single notification point for every persisted config change — gateway
     // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
     // once the candidate is accepted. Hash-only; clients refresh via config.get.
     onConfigCandidateCommitted: (info) => {
       invalidateConfigGetResponseCache();
+      // Channel ownership is decided by the config, so the built schema is config-dependent while
+      // its cache is keyed on the plugin registry version. A hot-reloaded `channels.<id>` change
+      // leaves that version untouched, so without this `config.schema` and `config.schema.lookup`
+      // keep serving the previous claimant's schema until an RPC write or registry activation.
+      invalidateConfigSchemaResponseCache();
       params.broadcast(
         "config.changed",
         {

@@ -76,6 +76,7 @@ export type PluginLoadLoopState = {
 export function loadRuntimePluginCandidate(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
+  cededChannelIdsByPlugin: ReadonlyMap<string, string[]>;
   context: PluginLoadCacheContext;
   options: PluginLoadOptions;
   onlyPluginIdSet: ReadonlySet<string> | null;
@@ -129,6 +130,7 @@ export function loadRuntimePluginCandidate(params: {
       manifestRecord,
       enabled: false,
       activationState,
+      cededChannelIds: params.cededChannelIdsByPlugin.get(pluginId),
     });
     duplicate.status = "disabled";
     duplicate.error = `overridden by ${existingOrigin} plugin`;
@@ -153,6 +155,7 @@ export function loadRuntimePluginCandidate(params: {
     manifestRecord,
     enabled: enableState.enabled,
     activationState,
+    cededChannelIds: params.cededChannelIdsByPlugin.get(pluginId),
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
   const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
