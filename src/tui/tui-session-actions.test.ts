@@ -2459,6 +2459,27 @@ describe("tui session actions", () => {
       aborted: false,
       rejected: true,
     },
+    {
+      name: "successful abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: true,
+      rejected: false,
+    },
+    {
+      name: "no-active-run abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: false,
+    },
+    {
+      name: "rejected abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: true,
+    },
   ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
     const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
     const abortChat = vi.fn(() => deferred.promise);
@@ -2476,6 +2497,8 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentSessionKey: initialKey,
       currentAgentId: "main",
+      currentSessionId: "first-session",
+      sessionGeneration: 4,
       activeChatRunId: "first-active-run",
       pendingSubmit: acceptedSubmit("first-pending-run"),
     });
@@ -2495,7 +2518,12 @@ describe("tui session actions", () => {
       sessionKey: initialKey,
       ...(initialKey === "global" ? { agentId: "main" } : {}),
     });
-    await setSession(nextKey, initialKey === "global" ? "work" : undefined);
+    if (initialKey === nextKey && initialKey !== "global") {
+      state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
+      state.currentSessionId = "second-session";
+    } else {
+      await setSession(nextKey, initialKey === "global" ? "work" : undefined);
+    }
     state.activeChatRunId = "second-active-run";
     state.pendingSubmit = acceptedSubmit("second-pending-run", "second draft");
     addSystem.mockClear();

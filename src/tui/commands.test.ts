@@ -240,6 +240,21 @@ describe("helpText", () => {
     },
   );
 
+  it("uses session-supported thinking levels in help before the provider fallback", () => {
+    const model = { provider: "minimax", model: "MiniMax-M3" };
+
+    expect(
+      helpText({
+        ...model,
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "max", label: "max" },
+        ],
+      }),
+    ).toContain("/think <off|max|default>");
+    expect(helpText({ ...model, thinkingLevels: [] })).toContain("/think <off|adaptive|default>");
+  });
+
   it("documents default reset values for model, thinking, and fast mode", () => {
     const output = helpText();
 
