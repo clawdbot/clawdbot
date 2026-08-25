@@ -241,15 +241,17 @@ describe("agents set-identity command", () => {
       workspace: string | null;
       identityFile: string | null;
       identitySource: string | null;
+      storedWorkspace: string;
     };
     expect(payload).toMatchObject({
       agentId: "main",
       identity: { name },
+      workspace: null,
       identityFile: null,
       identitySource: null,
     });
-    expect(payload.workspace).toEqual(expect.any(String));
-    expect(payload.workspace).not.toBe("");
+    expect(payload.storedWorkspace).toEqual(expect.any(String));
+    expect(payload.storedWorkspace).not.toBe("");
   });
 
   it("reads identity from an explicit IDENTITY.md path", async () => {
@@ -267,13 +269,21 @@ describe("agents set-identity command", () => {
       config: { agents: { entries: { main: {} } } },
     });
 
-    await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
+    const jsonRuntime = createCapturingTestRuntime();
+    await agentsSetIdentityCommand(
+      { agent: "main", identityFile: identityPath, json: true },
+      jsonRuntime.runtime,
+    );
 
     expect(getWrittenMainIdentity()).toEqual({
       name: "C-3PO",
       theme: "Flustered Protocol Droid",
       emoji: "🤖",
       avatar: "avatars/c3po.png",
+    });
+    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toMatchObject({
+      identityFile: identityPath,
+      identitySource: path.dirname(identityPath),
     });
   });
 
@@ -490,8 +500,9 @@ describe("agents set-identity command", () => {
     expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toEqual({
       agentId: "worker",
       identity: { name: "Worker" },
-      workspace: storedWorkspace,
-      identitySource,
+      workspace: identitySource,
+      storedWorkspace,
+      identitySource: null,
       identityFile: null,
     });
   });

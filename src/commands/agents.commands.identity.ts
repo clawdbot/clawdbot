@@ -201,16 +201,18 @@ export async function agentsSetIdentityCommand(
   });
 
   const storedWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, resolvedAgentId);
-  const identitySourceDir = workspaceDir;
+  const workspaceLocatorDir = workspaceDir;
+  const identitySourceDir = identityFromFile ? workspaceDir : undefined;
   const locatorDiffers =
-    identitySourceDir !== undefined &&
-    normalizeWorkspacePath(identitySourceDir) !== normalizeWorkspacePath(storedWorkspaceDir);
+    workspaceLocatorDir !== undefined &&
+    normalizeWorkspacePath(workspaceLocatorDir) !== normalizeWorkspacePath(storedWorkspaceDir);
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
       agentId: resolvedAgentId,
       identity: nextIdentity,
-      workspace: storedWorkspaceDir,
+      workspace: workspaceLocatorDir ?? null,
+      storedWorkspace: storedWorkspaceDir,
       identityFile: identityFilePath ?? null,
       identitySource: identitySourceDir ?? null,
     });
@@ -232,10 +234,10 @@ export async function agentsSetIdentityCommand(
     runtime.log(`Avatar: ${sanitizeTerminalText(nextIdentity.avatar)}`);
   }
   runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
-  if (locatorDiffers && identitySourceDir) {
-    runtime.log(`Identity source: ${sanitizeTerminalText(shortenHomePath(identitySourceDir))}`);
+  if (locatorDiffers && workspaceLocatorDir) {
+    runtime.log(`Workspace locator: ${sanitizeTerminalText(shortenHomePath(workspaceLocatorDir))}`);
     runtime.log(
-      `Stored workspace unchanged. Relocate with ${formatCliCommand(`openclaw config set agents.entries.${resolvedAgentId}.workspace ${quoteCliArg(identitySourceDir)}`)}.`,
+      `Stored workspace unchanged. Relocate with ${formatCliCommand(`openclaw config set agents.entries.${resolvedAgentId}.workspace ${quoteCliArg(workspaceLocatorDir)}`)}.`,
     );
   }
 }

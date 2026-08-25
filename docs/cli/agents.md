@@ -157,6 +157,7 @@ Avatar paths resolve relative to the workspace root and cannot escape it, even t
 
 - `--agent` or `--workspace` selects the target agent. If `--workspace` matches more than one agent, the command fails and asks you to pass `--agent`.
 - `--workspace` and `--identity-file` only select the agent or identity file. They do not change `agents.entries.*.workspace`.
+  For `--json`, `workspace` remains the supplied locator (or `null` when none was given). `storedWorkspace` reports the agent's persisted workspace. `identitySource` is populated only when `IDENTITY.md` was read.
 - Relocate an existing agent with `openclaw config set agents.entries.<id>.workspace <dir>`, then follow the CLI restart hint and confirm with `openclaw agents list`.
 - Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked against the local file-size limit.
 - When no explicit identity fields are provided, the command reads identity data from `IDENTITY.md`.
