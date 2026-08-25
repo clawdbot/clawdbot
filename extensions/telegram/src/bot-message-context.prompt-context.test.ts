@@ -143,7 +143,6 @@ describe("buildTelegramMessageContext prompt context", () => {
       text: "older unrelated DM",
       from: { id: 1234, is_bot: false, first_name: "Pat" },
     } as never);
-
     const currentMessage = {
       chat,
       message_id: 12,
@@ -252,6 +251,85 @@ describe("buildTelegramMessageContext prompt context", () => {
 
     expect(JSON.stringify(promptContext)).toContain("latest DM");
     expect(JSON.stringify(promptContext)).not.toContain("older DM");
+  });
+
+  it("preserves unavailable sticker state in chat-window context", async () => {
+    const cfg = {
+      agents: { defaults: {} },
+      channels: { telegram: { dmPolicy: "open", dmHistoryLimit: 1 } },
+    } as never;
+    const telegramCfg = { dmPolicy: "open", dmHistoryLimit: 1 } as never;
+    const messageContextRuntime = createTelegramMessageContextRuntime({
+      cfg,
+      accountId: "default",
+      ownerAgentId: "main",
+      opts: {
+        token: "test-token",
+        botInfo: { id: 7, username: "bot", first_name: "Bot" },
+      } as never,
+      telegramCfg,
+      telegramDeps: {
+        resolveStorePath: () => createTempSessionStorePath(),
+      } as never,
+    });
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+    await messageContextRuntime.recordMessageForReplyChain({
+      chat,
+      message_id: 10,
+      date: 1_700_000_000,
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+      sticker: {
+        file_id: "animated-sticker-1",
+        file_unique_id: "animated-sticker-u1",
+        type: "regular",
+        width: 1,
+        height: 1,
+        is_animated: true,
+        is_video: false,
+      },
+    } as never);
+    await messageContextRuntime.recordMessageMediaUnavailableReason({
+      msg: {
+        chat,
+        message_id: 10,
+      } as never,
+      reason: "animated-sticker",
+    });
+    const currentMessage = {
+      chat,
+      message_id: 11,
+      date: 1_700_000_010,
+      text: "What was that?",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+    } as never;
+    await messageContextRuntime.recordMessageForReplyChain(currentMessage);
+
+    const promptContext = await messageContextRuntime.buildPromptContextForMessage(
+      { me: { id: 7, username: "bot", first_name: "Bot" } } as never,
+      currentMessage,
+      [],
+      cfg,
+      telegramCfg,
+      undefined,
+    );
+
+    expect(promptContext).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              message_id: "10",
+              body: expect.stringContaining(
+                "OpenClaw did not stage or analyze this animated Telegram sticker",
+              ),
+              media_type: "sticker",
+              media_ref: undefined,
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(promptContext)).not.toContain("telegram:file/animated-sticker-1");
   });
 
   it("disables persisted DM transcript injection when the effective limit is zero", async () => {

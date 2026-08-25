@@ -18,11 +18,21 @@ import {
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramPrimaryMedia } from "./helpers.js";
-import type { TelegramContext } from "./types.js";
+import type { TelegramContext, TelegramMediaUnavailableReason } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
+
+type TelegramMediaResolution =
+  | (TelegramResolvedMedia & { path: string; unavailableReason?: undefined })
+  | {
+      path?: undefined;
+      contentType?: undefined;
+      kind: "sticker";
+      stickerMetadata?: undefined;
+      unavailableReason: TelegramMediaUnavailableReason;
+    };
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -376,16 +386,19 @@ async function resolveStickerMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<(TelegramResolvedMedia & { path: string }) | null | undefined> {
+}): Promise<TelegramMediaResolution | null | undefined> {
   const { msg, ctx, maxBytes, token, transport, abortSignal } = params;
   if (!msg.sticker) {
     return undefined;
   }
   const sticker = msg.sticker;
-  // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+  // Preserve a model-visible outcome for formats OpenClaw does not analyze.
   if (sticker.is_animated || sticker.is_video) {
     logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-    return null;
+    return {
+      kind: "sticker",
+      unavailableReason: sticker.is_video ? "video-sticker" : "animated-sticker",
+    };
   }
   if (!sticker.file_id) {
     return null;
@@ -467,7 +480,7 @@ export async function resolveMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<(TelegramResolvedMedia & { path: string }) | null> {
+}): Promise<TelegramMediaResolution | null> {
   const {
     ctx,
     maxBytes,

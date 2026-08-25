@@ -200,4 +200,61 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
     expect(context?.ctxPayload.BodyForAgent).toMatch(expectedBody);
     expect(context?.ctxPayload.CommandBody).toBe("ordinary note");
   });
+
+  it("keeps unavailable sticker notices in forwarded media batches", async () => {
+    const chat = { id: 999, type: "private" as const, first_name: "Alice" };
+    const sender = { id: 42, first_name: "Alice", is_bot: false };
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 2,
+        chat,
+        from: sender,
+        text: "ordinary note",
+      },
+      allMedia: [
+        {
+          kind: "sticker",
+          unavailableReason: "animated-sticker",
+          sourceMessageId: "2",
+        },
+      ],
+      options: {
+        bufferedMessages: [
+          {
+            message_id: 1,
+            date: 1_700_000_000,
+            chat,
+            from: sender,
+            text: "ordinary note",
+          },
+          {
+            message_id: 2,
+            date: 1_700_000_001,
+            chat,
+            from: sender,
+            caption: "captioned sticker",
+            sticker: {
+              file_id: "animated-sticker",
+              file_unique_id: "animated-sticker-unique",
+              type: "regular",
+              width: 1,
+              height: 1,
+              is_animated: true,
+              is_video: false,
+            },
+            forward_origin: {
+              type: "hidden_user",
+              sender_user_name: "Original B",
+              date: 500,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(context?.ctxPayload.BodyForAgent).toMatch(
+      /ordinary note\n\[Forwarded from Original B[^\]]*\]\ncaptioned sticker\n\[Sticker unavailable: OpenClaw did not stage or analyze this animated Telegram sticker\.\]/,
+    );
+    expect(context?.ctxPayload.BodyForAgent).not.toContain("<media:sticker>");
+  });
 });

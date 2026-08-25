@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
-import type { StickerMetadata } from "./bot/types.js";
+import type { StickerMetadata, TelegramMediaUnavailableReason } from "./bot/types.js";
 import type {
   TelegramPromptContextProjection,
   TelegramPromptContextSource,
@@ -39,9 +39,16 @@ export type PersistedTelegramMessageCacheValue = {
   botUserId?: number;
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
   resolvedMedia?: TelegramResolvedMedia;
+  mediaUnavailableReason?: TelegramMediaUnavailableReason;
   threadBinding?: TelegramMessageThreadBinding;
   threadId?: string;
 };
+
+export function parseTelegramMediaUnavailableReason(
+  value: unknown,
+): TelegramMediaUnavailableReason | undefined {
+  return value === "animated-sticker" || value === "video-sticker" ? value : undefined;
+}
 
 const TELEGRAM_MEDIA_KINDS = new Set<string>(["audio", "document", "image", "sticker", "video"]);
 

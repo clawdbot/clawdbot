@@ -13,6 +13,7 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { formatTelegramUnavailableStickerNotice } from "./bot-message-context.body.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
   TelegramAmbientTranscriptWatermark,
@@ -343,6 +344,19 @@ export function createTelegramMessageContextRuntime({
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
     });
 
+  const recordMessageMediaUnavailableReason = (params: {
+    msg: Message;
+    reason: NonNullable<TelegramMediaRef["unavailableReason"]>;
+    botUserId?: number;
+  }) =>
+    messageCache.recordMediaUnavailableReason({
+      accountId,
+      chatId: params.msg.chat.id,
+      messageId: String(params.msg.message_id),
+      reason: params.reason,
+      ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
+    });
+
   const recordReplyMessageResolvedMedia = async (params: {
     chatId: string | number;
     messageId: string;
@@ -365,6 +379,17 @@ export function createTelegramMessageContextRuntime({
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
     });
   };
+
+  const recordReplyMessageMediaUnavailableReason = (params: {
+    chatId: string | number;
+    messageId: string;
+    reason: NonNullable<TelegramMediaRef["unavailableReason"]>;
+    botUserId?: number;
+  }) =>
+    messageCache.recordMediaUnavailableReason({
+      accountId,
+      ...params,
+    });
 
   // `MessageReactionUpdated` carries no `message_thread_id`, so the reaction handler
   // recovers the originating topic from the same bounded cache that records inbound
@@ -398,15 +423,17 @@ export function createTelegramMessageContextRuntime({
       ...entry
     } = node;
     const projectedEntry = { ...entry, sender: resolvePromptSender(node, ctx) };
-    if (!media?.path) {
+    const unavailableReason = media?.unavailableReason ?? node.mediaUnavailableReason;
+    if (!media?.path && !unavailableReason) {
       return projectedEntry;
     }
     const { mediaRef: _mediaRef, ...entryWithoutProviderMediaRef } = projectedEntry;
     return {
       ...entryWithoutProviderMediaRef,
-      mediaPath: media.path,
-      mediaKind: media.kind,
-      ...(media.contentType ? { mediaType: media.contentType } : {}),
+      ...(media?.path ? { mediaPath: media.path } : {}),
+      mediaKind: media?.kind ?? "sticker",
+      ...(media?.contentType ? { mediaType: media.contentType } : {}),
+      ...(unavailableReason ? { mediaUnavailableReason: unavailableReason } : {}),
     };
   };
 
@@ -415,20 +442,28 @@ export function createTelegramMessageContextRuntime({
     ctx: TelegramContext,
     flags?: { replyTarget?: boolean },
     media?: TelegramMediaRef,
-  ) => ({
-    message_id: node.messageId,
-    thread_id: node.threadId,
-    sender: resolvePromptSender(node, ctx),
-    sender_id: node.senderId,
-    sender_username: node.senderUsername,
-    timestamp_ms: node.timestamp,
-    body: node.body,
-    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
-    media_path: media?.path,
-    media_ref: media?.path ? undefined : node.mediaRef,
-    reply_to_id: node.replyToId,
-    is_reply_target: flags?.replyTarget === true ? true : undefined,
-  });
+  ) => {
+    const unavailableReason = media?.unavailableReason ?? node.mediaUnavailableReason;
+    const unavailableNotice = unavailableReason
+      ? formatTelegramUnavailableStickerNotice(unavailableReason)
+      : undefined;
+    const body = [node.body, unavailableNotice].filter(Boolean).join("\n");
+    return {
+      message_id: node.messageId,
+      thread_id: node.threadId,
+      sender: resolvePromptSender(node, ctx),
+      sender_id: node.senderId,
+      sender_username: node.senderUsername,
+      timestamp_ms: node.timestamp,
+      body: body || undefined,
+      media_type:
+        media?.contentType ?? media?.kind ?? (unavailableReason ? "sticker" : node.mediaType),
+      media_path: media?.path,
+      media_ref: media?.path || unavailableReason ? undefined : node.mediaRef,
+      reply_to_id: node.replyToId,
+      is_reply_target: flags?.replyTarget === true ? true : undefined,
+    };
+  };
 
   const buildPromptContextForMessage = async (
     ctx: TelegramContext,
@@ -547,7 +582,9 @@ export function createTelegramMessageContextRuntime({
   return {
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
+    recordMessageMediaUnavailableReason,
     recordReplyMessageResolvedMedia,
+    recordReplyMessageMediaUnavailableReason,
     resolveCachedMessageThreadSpec,
     buildReplyChainForMessage,
     toReplyChainEntry,

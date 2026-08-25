@@ -172,6 +172,7 @@ describe("telegram stickers", () => {
         {
           messageId: 101,
           filePath: "stickers/animated.tgs",
+          unavailableReason: "animated-sticker",
           sticker: {
             file_id: "animated_sticker_id",
             file_unique_id: "animated_unique",
@@ -187,6 +188,7 @@ describe("telegram stickers", () => {
         {
           messageId: 102,
           filePath: "stickers/video.webm",
+          unavailableReason: "video-sticker",
           sticker: {
             file_id: "video_sticker_id",
             file_unique_id: "video_unique",
@@ -223,9 +225,81 @@ describe("telegram stickers", () => {
           } as unknown as TelegramContext,
         });
 
-        expect(media).toBeNull();
+        expect(media).toEqual({
+          kind: "sticker",
+          unavailableReason: scenario.unavailableReason,
+        });
         expect(getFile).not.toHaveBeenCalled();
         expect(proxyFetch).not.toHaveBeenCalled();
+      }
+    },
+    STICKER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "retains an unavailable sticker notice in later group chat-window context",
+    async () => {
+      const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
+      telegramBotDepsForTest.getRuntimeConfig = (() => ({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupAllowFrom: ["777"],
+            groupPolicy: "open",
+            groups: {
+              "-10042": { allowFrom: ["777"], groupPolicy: "open", requireMention: false },
+            },
+          },
+        },
+      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+
+      const getFile = vi.fn(async () => ({ file_path: "stickers/animated.tgs" }));
+      try {
+        const { handler, replySpy } = await createBotHandlerWithOptions({});
+        const chat = { id: -10042, type: "supergroup", title: "Sticker QA" } as const;
+        const from = { id: 777, is_bot: false, first_name: "Ada" } as const;
+
+        await handler({
+          message: {
+            chat,
+            from,
+            message_id: 201,
+            date: 1736380800,
+            sticker: {
+              file_id: "animated_sticker_id",
+              file_unique_id: "animated_unique",
+              type: "regular",
+              width: 512,
+              height: 512,
+              is_animated: true,
+              is_video: false,
+            },
+          },
+          me: { id: 999, username: "openclaw_bot", first_name: "OpenClaw" },
+          getFile,
+        });
+        await handler({
+          message: {
+            chat,
+            from,
+            message_id: 202,
+            date: 1736380801,
+            text: "What was that?",
+          },
+          me: { id: 999, username: "openclaw_bot", first_name: "OpenClaw" },
+          getFile,
+        });
+
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
+        const laterContext = JSON.stringify(replySpy.mock.calls.at(1)?.[0]);
+        expect(laterContext).toContain(
+          "OpenClaw did not stage or analyze this animated Telegram sticker",
+        );
+        expect(laterContext).not.toContain("telegram:file/animated_sticker_id");
+        expect(getFile).not.toHaveBeenCalled();
+      } finally {
+        telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
       }
     },
     STICKER_TEST_TIMEOUT_MS,

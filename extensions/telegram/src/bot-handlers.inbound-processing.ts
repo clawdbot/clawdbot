@@ -93,6 +93,7 @@ export function createTelegramInboundProcessing({
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
+    recordMessageMediaUnavailableReason,
     promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
@@ -253,8 +254,14 @@ export function createTelegramInboundProcessing({
         releaseDispatchDedupeClaims(dispatchDedupeClaims, abortError);
         return { kind: "ignored" };
       }
-      if (media) {
+      if (media?.path) {
         await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+      } else if (media?.unavailableReason) {
+        await recordMessageMediaUnavailableReason({
+          msg,
+          reason: media.unavailableReason,
+          botUserId: ctx.me?.id,
+        });
       }
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
@@ -316,10 +323,12 @@ export function createTelegramInboundProcessing({
       ? [
           media
             ? {
-                path: media.path,
+                ...(media.path ? { path: media.path } : {}),
                 contentType: media.contentType,
                 kind: media.kind,
                 stickerMetadata: media.stickerMetadata,
+                unavailableReason: media.unavailableReason,
+                sourceMessageId: String(msg.message_id),
               }
             : { kind: nativeMedia.kind },
         ]

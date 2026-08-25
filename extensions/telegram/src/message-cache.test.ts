@@ -25,6 +25,7 @@ type PersistedValue = {
   botUserId?: number;
   promptContextProjection?: unknown;
   resolvedMedia?: TelegramResolvedMedia;
+  mediaUnavailableReason?: "animated-sticker" | "video-sticker";
   threadBinding?: {
     kind: "provider-observed-v1";
     threadSpec: { scope: "direct-messages" | "dm" | "forum"; id: number };
@@ -175,6 +176,34 @@ describe("telegram message cache", () => {
     const reloadedCache = cacheFor(bucketKey, store);
     await record(reloadedCache, message(9000, "Kesava", { photo: photo("photo-2") }));
     expect((await get(reloadedCache, "9000"))?.resolvedMedia).toBeUndefined();
+  });
+
+  it("persists unavailable sticker outcomes and drops them when the media changes", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    const animatedSticker = {
+      file_id: "animated-1",
+      file_unique_id: "animated-1-unique",
+      width: 1,
+      height: 1,
+      is_animated: true,
+      is_video: false,
+    };
+    await record(cache, message(9001, "Kesava", { sticker: animatedSticker }));
+    await cache.recordMediaUnavailableReason({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9001",
+      reason: "animated-sticker",
+    });
+
+    expect(onlyEntry(entries)[1].mediaUnavailableReason).toBe("animated-sticker");
+    const reloaded = await reloadGet(bucketKey, store, "9001");
+    expect(reloaded?.mediaUnavailableReason).toBe("animated-sticker");
+
+    const reloadedCache = cacheFor(bucketKey, store);
+    await record(reloadedCache, message(9001, "Kesava", { photo: photo("photo-2") }));
+    expect((await get(reloadedCache, "9001"))?.mediaUnavailableReason).toBeUndefined();
   });
 
   it("persists provider-observed topic bindings for messages and same-topic replies", async () => {

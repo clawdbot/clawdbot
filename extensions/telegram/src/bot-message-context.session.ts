@@ -27,6 +27,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { formatTelegramUnavailableStickerNotice } from "./bot-message-context.body.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
@@ -189,15 +190,17 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
       forwardedFrom: entry.forwardedFrom,
       forwardedDate: entry.forwardedDate,
     }),
-    entry.mediaKind || entry.mediaType
-      ? formatMediaPlaceholderText([
-          entry.mediaKind
-            ? { kind: entry.mediaKind }
-            : isTelegramMediaKind(entry.mediaType ?? "")
-              ? { kind: entry.mediaType as TelegramMediaKind }
-              : { contentType: entry.mediaType },
-        ])
-      : undefined,
+    entry.mediaUnavailableReason
+      ? formatTelegramUnavailableStickerNotice(entry.mediaUnavailableReason)
+      : entry.mediaKind || entry.mediaType
+        ? formatMediaPlaceholderText([
+            entry.mediaKind
+              ? { kind: entry.mediaKind }
+              : isTelegramMediaKind(entry.mediaType ?? "")
+                ? { kind: entry.mediaType as TelegramMediaKind }
+                : { contentType: entry.mediaType },
+          ])
+        : undefined,
     mediaPath ? `[media_path:${mediaPath}]` : undefined,
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
@@ -448,10 +451,17 @@ export async function buildTelegramInboundContextPayload(params: {
   const bufferedBodySegments = shouldRenderBufferedBody
     ? bufferedMessages.flatMap((bufferedMessage) => {
         const bufferedMedia = resolveTelegramPrimaryMedia(bufferedMessage);
+        const unavailableReason = allMedia.find(
+          (media) => media.sourceMessageId === String(bufferedMessage.message_id),
+        )?.unavailableReason;
         const textParts = getTelegramTextParts(bufferedMessage);
-        const segmentBody =
-          renderTelegramTextEntities(textParts.text, textParts.entities) ||
-          formatMediaPlaceholderText(bufferedMedia ? [{ kind: bufferedMedia.kind }] : []);
+        const renderedText = renderTelegramTextEntities(textParts.text, textParts.entities);
+        const mediaContext = unavailableReason
+          ? formatTelegramUnavailableStickerNotice(unavailableReason)
+          : renderedText
+            ? undefined
+            : formatMediaPlaceholderText(bufferedMedia ? [{ kind: bufferedMedia.kind }] : []);
+        const segmentBody = [renderedText, mediaContext].filter(Boolean).join("\n");
         if (!segmentBody) {
           return [];
         }
@@ -627,10 +637,22 @@ export async function buildTelegramInboundContextPayload(params: {
   const replyTargetMedia =
     replyHeadMedia ??
     (visibleReplyTarget?.mediaType ? { kind: visibleReplyTarget.mediaType } : undefined);
-  const replyBody =
+  const replyBodyBase =
     replyHead?.body ??
     visibleReplyTarget?.body ??
     (replyTargetMedia ? formatMediaPlaceholderText([replyTargetMedia]) : undefined);
+  const replyUnavailableReason =
+    replyHead?.mediaUnavailableReason ??
+    (visibleReplyChain.length === 0
+      ? replyMedia.find((media) => media.unavailableReason)?.unavailableReason
+      : undefined);
+  const replyUnavailableNotice = replyUnavailableReason
+    ? formatTelegramUnavailableStickerNotice(replyUnavailableReason)
+    : undefined;
+  const replyBody =
+    replyUnavailableNotice || replyBodyBase
+      ? [replyBodyBase, replyUnavailableNotice].filter(Boolean).join("\n")
+      : undefined;
   const telegramFrom = isGroup ? buildTelegramGroupFrom(chatId, threadSpec) : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
@@ -838,6 +860,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
   if (isGroup && historyKey) {
+    const hasUnavailableSticker = allMedia.some((media) => media.unavailableReason);
     recordTelegramGroupHistoryEntry({
       historyMap: groupHistories,
       historyKey,
@@ -845,7 +868,7 @@ export async function buildTelegramInboundContextPayload(params: {
       entry: {
         sender: buildSenderLabel(msg, senderId || chatId),
         body:
-          rawBody ||
+          (hasUnavailableSticker ? bodyText : rawBody) ||
           (stickerCacheHit ? bodyText : undefined) ||
           formatMediaPlaceholderText(currentMediaFacts),
         timestamp: msg.date ? msg.date * 1000 : undefined,

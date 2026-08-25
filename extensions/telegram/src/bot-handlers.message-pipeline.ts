@@ -124,6 +124,11 @@ export interface TelegramMessagePipeline {
     media: TelegramResolvedMedia;
     botUserId?: number;
   }) => Promise<void>;
+  recordMessageMediaUnavailableReason: (params: {
+    msg: Message;
+    reason: NonNullable<TelegramMediaRef["unavailableReason"]>;
+    botUserId?: number;
+  }) => Promise<void>;
   resolveCachedMessageThreadSpec: (params: {
     chatId: number | string;
     messageId: number | string;
@@ -203,7 +208,9 @@ export function createTelegramMessagePipeline({
   const {
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
+    recordMessageMediaUnavailableReason,
     recordReplyMessageResolvedMedia,
+    recordReplyMessageMediaUnavailableReason,
     resolveCachedMessageThreadSpec,
     buildReplyChainForMessage,
     toReplyChainEntry,
@@ -309,9 +316,15 @@ export function createTelegramMessagePipeline({
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
     for (const [index, node] of chain.entries()) {
-      let mediaRef: TelegramMediaRef | undefined;
+      let mediaRef: TelegramMediaRef | undefined = node.mediaUnavailableReason
+        ? {
+            kind: "sticker",
+            unavailableReason: node.mediaUnavailableReason,
+          }
+        : undefined;
       const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
       if (
+        !mediaRef &&
         replyFileId &&
         hasInboundMedia(node.sourceMessage) &&
         (await shouldHydrateMedia(node, index))
@@ -335,17 +348,27 @@ export function createTelegramMessagePipeline({
             });
             if (media) {
               mediaRef = {
-                path: media.path,
+                ...(media.path ? { path: media.path } : {}),
                 kind: media.kind,
                 ...(media.contentType ? { contentType: media.contentType } : {}),
                 ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+                ...(media.unavailableReason ? { unavailableReason: media.unavailableReason } : {}),
               };
-              await recordReplyMessageResolvedMedia({
-                chatId: ctx.message.chat.id,
-                messageId: node.messageId,
-                media,
-                botUserId: ctx.me?.id,
-              });
+              if (media.path) {
+                await recordReplyMessageResolvedMedia({
+                  chatId: ctx.message.chat.id,
+                  messageId: node.messageId,
+                  media,
+                  botUserId: ctx.me?.id,
+                });
+              } else if (media.unavailableReason) {
+                await recordReplyMessageMediaUnavailableReason({
+                  chatId: ctx.message.chat.id,
+                  messageId: node.messageId,
+                  reason: media.unavailableReason,
+                  botUserId: ctx.me?.id,
+                });
+              }
             }
           }
         } catch (err) {
@@ -536,10 +559,10 @@ export function createTelegramMessagePipeline({
       for (const [index, media] of params.allMedia.entries()) {
         const messageId = media.sourceMessageId ?? (index === 0 ? currentMessageId : undefined);
         const promptMediaPath = media.path ? resolveTelegramPromptMediaPath(media.path) : undefined;
-        if (messageId && promptMediaPath) {
+        if (messageId && (promptMediaPath || media.unavailableReason)) {
           promptContextMediaByMessageId.set(messageId, {
             ...media,
-            path: promptMediaPath,
+            ...(promptMediaPath ? { path: promptMediaPath } : {}),
           });
         }
       }
@@ -553,11 +576,17 @@ export function createTelegramMessagePipeline({
         const mediaKind =
           entry.mediaKind ??
           (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
-        if (entry.messageId && entry.mediaPath && promptMediaPath) {
+        if (
+          entry.messageId &&
+          ((entry.mediaPath && promptMediaPath) || entry.mediaUnavailableReason)
+        ) {
           promptContextMediaByMessageId.set(entry.messageId, {
-            path: promptMediaPath,
+            ...(promptMediaPath ? { path: promptMediaPath } : {}),
             kind: mediaKind,
             ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
+            ...(entry.mediaUnavailableReason
+              ? { unavailableReason: entry.mediaUnavailableReason }
+              : {}),
           });
         }
       }
@@ -636,6 +665,7 @@ export function createTelegramMessagePipeline({
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
+    recordMessageMediaUnavailableReason,
     resolveCachedMessageThreadSpec,
     processMessageWithReplyChain,
   };

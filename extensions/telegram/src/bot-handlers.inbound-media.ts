@@ -111,6 +111,7 @@ export function createTelegramInboundMedia({
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
+    recordMessageMediaUnavailableReason,
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
@@ -360,16 +361,30 @@ export function createTelegramInboundMedia({
           continue;
         }
         if (media) {
-          await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+          if (media.path) {
+            await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+          } else if (media.unavailableReason) {
+            await recordMessageMediaUnavailableReason({
+              msg,
+              reason: media.unavailableReason,
+              botUserId: ctx.me?.id,
+            });
+          }
           allMedia.push({
-            path: media.path,
+            ...(media.path ? { path: media.path } : {}),
             contentType: media.contentType,
             kind: media.kind,
             stickerMetadata: media.stickerMetadata,
+            unavailableReason: media.unavailableReason,
             sourceMessageId,
           });
-          materializedCount++;
-          selection.set(sourceMessageId, "include");
+          if (media.path) {
+            materializedCount++;
+            selection.set(sourceMessageId, "include");
+          } else {
+            skippedCount++;
+            selection.set(sourceMessageId, "exclude");
+          }
         } else {
           allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");

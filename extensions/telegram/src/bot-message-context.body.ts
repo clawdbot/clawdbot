@@ -58,7 +58,7 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { TelegramContext, TelegramMediaUnavailableReason } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
@@ -132,6 +132,13 @@ async function resolveStickerVisionSupport(params: {
   } catch {
     return false;
   }
+}
+
+export function formatTelegramUnavailableStickerNotice(
+  reason: TelegramMediaUnavailableReason,
+): string {
+  const format = reason === "video-sticker" ? "video" : "animated";
+  return `[Sticker unavailable: OpenClaw did not stage or analyze this ${format} Telegram sticker.]`;
 }
 
 export async function resolveTelegramInboundBody(params: {
@@ -247,6 +254,15 @@ export async function resolveTelegramInboundBody(params: {
     const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
     formattedStickerDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
+  const unavailableStickerNotices = [
+    ...new Set(
+      allMedia.flatMap((media) =>
+        media.unavailableReason
+          ? [formatTelegramUnavailableStickerNotice(media.unavailableReason)]
+          : [],
+      ),
+    ),
+  ].join("\n");
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
@@ -265,8 +281,10 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   let bodyText = rawBody;
-  if (formattedStickerDescription) {
-    bodyText = [formattedStickerDescription, rawBody].filter(Boolean).join("\n");
+  if (formattedStickerDescription || unavailableStickerNotices) {
+    bodyText = [formattedStickerDescription, unavailableStickerNotices, rawBody]
+      .filter(Boolean)
+      .join("\n");
   }
   const isAudioMedia = (media: TelegramMediaRef) =>
     media.kind === "audio" || media.contentType?.startsWith("audio/") === true;
@@ -320,7 +338,10 @@ export async function resolveTelegramInboundBody(params: {
     bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
   const historyBody =
-    rawBody || formattedStickerDescription || formatMediaPlaceholderText(nativeMediaFacts);
+    rawBody ||
+    formattedStickerDescription ||
+    unavailableStickerNotices ||
+    formatMediaPlaceholderText(nativeMediaFacts);
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
