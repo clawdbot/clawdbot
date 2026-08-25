@@ -48,7 +48,8 @@ import {
   capChatHistoryAroundMessage,
   enrichChatHistoryCompactionMarkers,
   readChatHistoryPage,
-  readChatHistoryMessageSeq,
+  resolveChatHistoryNextOffset,
+  shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
@@ -111,47 +112,6 @@ async function handleChatMetadataRequest({
 // The UI fills metadata gaps as soon as chat.startup returns, so history never waits
 // beyond this budget for a catalog snapshot that requires slower discovery.
 const CHAT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-  replayOldestRecord?: boolean;
-}): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq !== undefined) {
-    const recordOffset = params.totalMessages - oldestSeq + 1;
-    const replayOffset = recordOffset - 1;
-    if (params.replayOldestRecord && replayOffset > params.offset) {
-      return replayOffset;
-    }
-    // A replay cursor that does not advance strands every older record. Skip
-    // the pathological projected siblings and continue with the next record.
-    return Math.max(params.offset + 1, recordOffset);
-  }
-  return params.offset + params.rawPageMessages;
-}
-
-function shouldReplayOldestChatHistoryRecord(params: {
-  projected: unknown[];
-  bounded: unknown[];
-}): boolean {
-  const oldestSeq = params.bounded
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq === undefined) {
-    return false;
-  }
-  const projectedCount = params.projected.filter(
-    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
-  ).length;
-  const boundedCount = params.bounded.filter(
-    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
-  ).length;
-  return boundedCount < projectedCount;
-}
 
 async function handleChatHistoryRequest({
   params,

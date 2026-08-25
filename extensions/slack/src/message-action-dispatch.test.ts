@@ -732,6 +732,26 @@ describe("handleSlackMessageAction", () => {
 
   it.each([
     {
+      name: "prefers an explicit reply target over an inherited Slack thread",
+      params: {
+        to: "channel:C1",
+        message: "Reply to the requested message",
+        threadId: "111.222",
+        replyTo: "999.000",
+      },
+      expected: { content: "Reply to the requested message", threadTs: "999.000" },
+    },
+    {
+      name: "falls back to the Slack thread when the reply target is not a timestamp",
+      params: {
+        to: "channel:C1",
+        message: "Reply in the current thread",
+        threadId: "111.222",
+        replyTo: "msg-internal-1",
+      },
+      expected: { content: "Reply in the current thread", threadTs: "111.222" },
+    },
+    {
       name: "passes replyBroadcast through for Slack thread sends",
       params: {
         to: "channel:C1",

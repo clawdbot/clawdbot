@@ -37,6 +37,16 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   return undefined;
 }
 
+/**
+ * True when media must be uploaded as a file: any non-empty, non-http(s) value
+ * (e.g. a local workspace path) has no address the server can fetch, so the
+ * send must require a successful upload rather than degrade to caption text.
+ */
+export function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
+  const trimmed = mediaUrl?.trim();
+  return Boolean(trimmed && !/^https?:\/\//i.test(trimmed));
+}
+
 export function looksLikeMattermostTargetId(raw: string, _normalized?: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {

@@ -1,35 +1,34 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { readClaudeCliCredentialsCached } = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn(),
+const { spawnSync } = vi.hoisted(() => ({
+  spawnSync: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  readClaudeCliCredentialsCached,
-}));
+vi.mock("node:child_process", () => ({ spawnSync }));
 
-const { readClaudeCliCredentialsForRuntime, readClaudeCliCredentialsForSetupNonInteractive } =
-  await import("./cli-auth-seam.js");
+const { probeClaudeCliAuthStatus } = await import("./cli-auth-seam.js");
 
 beforeEach(() => {
-  readClaudeCliCredentialsCached.mockReset();
+  spawnSync.mockReset();
 });
 
-it("keeps runtime Claude credential reads on the non-prompting path", () => {
-  readClaudeCliCredentialsForRuntime();
+it("asks Claude CLI to verify its own login", () => {
+  spawnSync.mockReturnValue({
+    status: 0,
+    stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }),
+  });
 
-  expect(readClaudeCliCredentialsCached).toHaveBeenCalledWith({ allowKeychainPrompt: false });
-});
+  expect(probeClaudeCliAuthStatus()).toEqual({ status: "available" });
 
-it("uses the bounded credential inspector only for non-interactive setup", () => {
-  readClaudeCliCredentialsForSetupNonInteractive();
-
-  expect(readClaudeCliCredentialsCached).toHaveBeenCalledWith(
-    expect.objectContaining({
-      allowKeychainPrompt: false,
-      tryKeychainWithoutPrompt: true,
-      ttlMs: 0,
-      onStoredCredentialUnreadable: expect.any(Function),
-    }),
+  expect(spawnSync).toHaveBeenCalledWith(
+    "claude",
+    ["auth", "status", "--json"],
+    expect.objectContaining({ timeout: 3_000 }),
   );
+});
+
+it("does not inspect Claude token storage when the CLI reports logout", () => {
+  spawnSync.mockReturnValue({ status: 1, stdout: "" });
+
+  expect(probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
 });

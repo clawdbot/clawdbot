@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
 }));
 
+const runActualBrowserResizeWithOutput = browserCliResizeModule.runBrowserResizeWithOutput;
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
   mocks.runBrowserResizeWithOutput,
@@ -44,6 +45,7 @@ describe("browser state option collisions", () => {
 
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {
     const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
+    browser.option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserStateCommands(browser, parentOpts);
     return program;
   };
@@ -80,6 +82,69 @@ describe("browser state option collisions", () => {
     getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
 
+  it.each([
+    { args: ["cookies"], path: "/cookies" },
+    {
+      args: ["cookies", "set", "session", "value", "--url", "https://example.com"],
+      path: "/cookies/set",
+    },
+    { args: ["cookies", "clear"], path: "/cookies/clear" },
+    { args: ["storage", "local", "get"], path: "/storage/local" },
+    { args: ["storage", "local", "set", "key", "value"], path: "/storage/local/set" },
+    { args: ["storage", "local", "clear"], path: "/storage/local/clear" },
+    { args: ["storage", "session", "get"], path: "/storage/session" },
+    { args: ["storage", "session", "set", "key", "value"], path: "/storage/session/set" },
+    { args: ["storage", "session", "clear"], path: "/storage/session/clear" },
+    { args: ["set", "offline", "on"], path: "/set/offline" },
+    { args: ["set", "headers", "{}"], path: "/set/headers" },
+    { args: ["set", "credentials", "name", "value"], path: "/set/credentials" },
+    { args: ["set", "geo", "48", "16"], path: "/set/geolocation" },
+    { args: ["set", "media", "dark"], path: "/set/media" },
+    { args: ["set", "timezone", "UTC"], path: "/set/timezone" },
+    { args: ["set", "locale", "en-US"], path: "/set/locale" },
+    { args: ["set", "device", "iPhone 14"], path: "/set/device" },
+  ])("inherits parent timeout for $path", async ({ args, path }) => {
+    await runBrowserCommand(["--timeout", "60000", "--json", ...args]);
+
+    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ path }),
+    );
+  });
+
+  it("inherits the parent timeout for the viewport resize alias", async () => {
+    await runBrowserCommand(["--timeout", "60000", "set", "viewport", "1024", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parent: expect.objectContaining({ timeout: "60000" }),
+        width: 1024,
+        height: 768,
+      }),
+    );
+    expect(mocks.runBrowserResizeWithOutput.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
+  });
+
+  it("keeps the parent timeout and normalized target at the shared resize request boundary", async () => {
+    await runActualBrowserResizeWithOutput({
+      parent: { timeout: "60000", json: true },
+      profile: "work",
+      width: 1024,
+      height: 768,
+      targetId: " tab-1 ",
+      successMessage: "unused",
+    });
+
+    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({
+        path: "/act",
+        query: { profile: "work" },
+        body: { kind: "resize", width: 1024, height: 768, targetId: "tab-1" },
+      }),
+    );
+  });
+
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
     const request = await runBrowserCommandAndGetRequest([
       "cookies",
@@ -95,34 +160,16 @@ describe("browser state option collisions", () => {
     expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
   });
 
-  it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
+  it("does not inherit the parent Gateway URL as the cookie scope", async () => {
     const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
-      [
-        "browser",
-        "--url",
-        "ws://gw",
-        "cookies",
-        "set",
-        "session",
-        "abc",
-        "--url",
-        "https://example.com",
-      ],
+      ["browser", "--url", "wss://gateway.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },
     );
-    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
-    expect(request.body?.cookie?.url).toBe("https://example.com");
-  });
 
-  it("inherits --url from parent when subcommand does not provide it", async () => {
-    const program = createStateProgram({ withGatewayUrl: true });
-    await program.parseAsync(
-      ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
-      { from: "user" },
-    );
-    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
-    expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expectErrorMessage("Missing required --url option for cookies set");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {

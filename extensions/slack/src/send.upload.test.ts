@@ -579,6 +579,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
         vi.stubEnv("no_proxy", "127.0.0.1,localhost");
         const alternateClient = createUploadTestClient(`${baseUrl}/api/`);
+        const onDeliveryResult = vi.fn();
         mockUploadDestination(alternateClient, `${baseUrl}/upload/v1/capability`);
         fetchWithSsrFGuard.mockImplementationOnce(async (params) => {
           const mockedFetch = globalThis.fetch;
@@ -590,9 +591,30 @@ describe("sendMessageSlack file upload with user IDs", () => {
           }
         });
 
-        await sendUpload(alternateClient, { mediaUrl: "/tmp/alternate-root.png" });
+        const result = await sendUpload(alternateClient, {
+          mediaUrl: "/tmp/alternate-root.png",
+          message: "a".repeat(8_500),
+          threadTs: "171.222",
+          onDeliveryResult,
+        });
 
         expectCompletedUpload({ client: alternateClient, expected: { channel_id: "C123CHAN" } });
+        expect(alternateClient.chat.postMessage).toHaveBeenCalledOnce();
+        expect(
+          onDeliveryResult.mock.calls.map(([delivery]) => delivery.receipt.parts[0]?.kind),
+        ).toEqual(["media", "text"]);
+        expect(
+          result.receipt.parts.map(({ platformMessageId, kind, index, threadId }) => ({
+            platformMessageId,
+            kind,
+            index,
+            threadId,
+          })),
+        ).toEqual([
+          { platformMessageId: "F001", kind: "media", index: 0, threadId: "171.222" },
+          { platformMessageId: "171234.567", kind: "text", index: 1, threadId: "171.222" },
+        ]);
+        expect(result.receipt.threadId).toBe("171.222");
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
         expect(uploadTimeoutControllers).toHaveLength(0);
       },

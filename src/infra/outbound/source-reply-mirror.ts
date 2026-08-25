@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
@@ -508,6 +509,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
       presentation: params.actionParams.presentation as ReplyPayload["presentation"],
       interactive: params.actionParams.interactive as ReplyPayload["interactive"],
       channelData: params.actionParams.channelData as ReplyPayload["channelData"],
+      location: normalizeOutboundLocation(params.actionParams.location),
     },
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);

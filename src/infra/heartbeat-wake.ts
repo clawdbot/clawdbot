@@ -218,7 +218,7 @@ function mergePendingWakeReasons(
   return merged;
 }
 
-function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGroup[] {
+function takePendingWakeBatch(maxGroups: number, now = performance.now()): ReadyWakeGroup[] {
   if (maxGroups <= 0) {
     return [];
   }
@@ -362,7 +362,7 @@ function queuePendingWakeReason(params: {
   blockTargetUntilMs?: number;
   retainedWork?: boolean;
 }) {
-  const requestedAt = params.requestedAt ?? Date.now();
+  const requestedAt = params.requestedAt ?? performance.now();
   const enqueueSequence = params.enqueueSequence ?? ++wakeEnqueueSequence;
   const normalizedReason = normalizeWakeReason(params.reason);
   const normalizedAgentId = normalizeHeartbeatWakeTarget(params.agentId);
@@ -443,7 +443,7 @@ function retryPendingWake(
 ) {
   // A thrown or busy wake owns only its target; replaying the whole batch
   // duplicates completed reminders and stalls unrelated agents.
-  const retryAtMs = Date.now() + retrySchedule.delayMs;
+  const retryAtMs = performance.now() + retrySchedule.delayMs;
   queuePendingWakeReason({
     source: pendingWake.source,
     intent: pendingWake.intent,
@@ -546,24 +546,8 @@ async function dispatchPendingWakeGroup(params: {
           pendingWake.intent === "immediate")
       ) {
         // Retain real task/event work until its spacing guard allows a retry.
-        const retryAtMs = Math.max(Date.now(), result.retryAtMs ?? Date.now() + DEFAULT_RETRY_MS);
-        queuePendingWakeReason({
-          source: pendingWake.source,
-          intent: pendingWake.intent,
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-          heartbeat: pendingWake.heartbeat,
-          tasks: pendingWake.tasks,
-          scheduledEveryMs: pendingWake.scheduledEveryMs,
-          scheduledAnchorMs: pendingWake.scheduledAnchorMs,
-          requestedAt: pendingWake.requestedAt,
-          enqueueSequence: pendingWake.enqueueSequence,
-          immediateBarrierSequence: pendingWake.immediateBarrierSequence,
-          notBeforeMs: retryAtMs,
-          retainedWork: true,
-        });
-        schedule(retryAtMs - Date.now());
+        const { delayMs } = resolveHeartbeatRetrySchedule(pendingWake, result);
+        retryPendingWake(pendingWake, { delayMs, deferWakeOnly: true });
       }
     }
   } finally {
@@ -581,7 +565,7 @@ async function dispatchPendingWakeGroup(params: {
 
 function schedule(coalesceMs: number) {
   const delay = resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0);
-  const dueAt = Date.now() + delay;
+  const dueAt = performance.now() + delay;
   if (timer) {
     // If existing timer fires sooner or at the same time, keep it.
     if (typeof timerDueAt === "number" && timerDueAt <= dueAt) {
@@ -633,7 +617,7 @@ function schedulePendingWakes(readyDelayMs: number) {
     // would spin zero-delay timers while every provider slot remains busy.
     return;
   }
-  const now = Date.now();
+  const now = performance.now();
   if (
     activeWakeTargets.has(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) ||
     (activeWakeTargets.size > 0 &&
@@ -764,7 +748,7 @@ export function requestHeartbeat(opts: {
   scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
-  const requestedAt = Date.now();
+  const requestedAt = performance.now();
   const { coalesceMs: requestedCoalesceMs, ...wake } = opts;
   const coalesceMs = requestedCoalesceMs ?? DEFAULT_COALESCE_MS;
   // Wake timers outlive the attempt that requested them. Do not let their

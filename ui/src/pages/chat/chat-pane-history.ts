@@ -20,6 +20,7 @@ import {
 } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
+  commitCurrentChatHistorySnapshot,
   loadChatHistory,
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
@@ -355,6 +356,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           : nextPagination;
         state.chatHistoryPagination = appliedPagination;
         state.lastError = null;
+        commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
       }

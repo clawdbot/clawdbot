@@ -162,7 +162,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ mediaUrl: "/tmp/img.png" }],
         sentMediaUrls: ["/tmp/img.png"],
       }),
-    ).toEqual([{ mediaUrl: undefined, mediaUrls: undefined }]);
+    ).toEqual([]);
   });
 
   it("does not dedupe text sent via messaging tool to another target", () => {
@@ -685,6 +685,28 @@ describe("resolveFollowupDeliveryDecision", () => {
         }),
       ).toMatchObject({ kind: "retry-source-delivery" });
     }
+  });
+
+  it("recovers a substantive final after an explicitly allowed media payload is deduplicated", () => {
+    const substantiveFinal =
+      "This is a substantive private answer that missed the message tool. It must trigger recovery after its only marked media was already delivered.";
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const mediaUrl = "file:///tmp/already-sent.png";
+    const execution = createSettledExecution(substantiveFinal);
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.messagingToolSentMediaUrls = [mediaUrl];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting([
+          setReplyPayloadMetadata({ mediaUrl }, { deliverDespiteSourceReplySuppression: true }),
+        ]),
+      }),
+    ).toMatchObject({ kind: "retry-source-delivery" });
   });
 
   it("routes settled delivery with the actual runtime provider", () => {

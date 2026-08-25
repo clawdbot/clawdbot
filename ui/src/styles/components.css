@@ -24,18 +24,21 @@
 
 openclaw-session-owner-chip {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .session-owner-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
   border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: hsl(var(--owner-hue) 58% 26%);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
   color: white;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   transition:
@@ -46,18 +49,6 @@ openclaw-session-owner-chip {
 .session-owner-chip--away {
   filter: grayscale(0.8);
   opacity: 0.45;
-}
-
-.session-owner-chip--row {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-}
-
-.session-owner-chip--header {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
 }
 
 .session-owner-chip .viewer-avatar {
@@ -78,7 +69,6 @@ openclaw-session-owner-chip {
 
 .session-owner-stack__back {
   position: absolute;
-  z-index: 0;
   left: 0;
   display: inline-flex;
 }
@@ -1447,102 +1437,10 @@ select.input {
   height: 16px;
 }
 
-/* ===========================================
-   Cron Form
-   =========================================== */
-
-/* Stat strip used by the tasks page. */
-.summary-strip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px 18px;
-  padding: 14px 16px;
-}
-
-.summary-strip__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.summary-stat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.summary-stat__icon {
-  width: 30px;
-  height: 30px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  padding: 6px;
-  flex-shrink: 0;
-}
-
-.summary-stat__icon svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.summary-stat--danger .summary-stat__icon {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
-.summary-stat__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.summary-stat__label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.summary-stat__value {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-@media (max-width: 1100px) {
-  .summary-strip {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .summary-strip__stats {
-    width: 100%;
-    gap: 8px 18px;
-  }
 }
 
 :root[data-theme-mode="light"] .field input,
@@ -1670,49 +1568,6 @@ select.input {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.scope-upgrade-status-trigger {
-  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
-  background: color-mix(in srgb, var(--warn) 11%, transparent);
-}
-
-.scope-upgrade-status-trigger:hover {
-  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
-}
-
-.scope-upgrade-status-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.scope-upgrade-details-popover {
-  --max-width: min(380px, calc(100vw - 32px));
-}
-
-.scope-upgrade-details-popover::part(body) {
-  padding: 0;
-}
-
-.scope-upgrade-details {
-  width: min(380px, calc(100vw - 32px));
-  box-shadow: var(--overlay-shadow);
-}
-
-.scope-upgrade-details-dialog .scope-upgrade-details {
-  width: 100%;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  box-shadow: 0 -18px 48px color-mix(in srgb, black 24%, transparent);
-}
-
-@media (max-width: 560px) {
-  .scope-upgrade-details {
-    flex-wrap: wrap;
-  }
-
-  .scope-upgrade-details .callout__content {
-    flex-basis: calc(100% - 38px);
-  }
 }
 
 .callout.danger {
@@ -3748,8 +3603,7 @@ td.data-table-key-col {
   gap: 12px;
 }
 
-/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
-   and the mark says so before any sentence is read. */
+/* The compact ok-tone tile makes the settled outcome visible before its copy. */
 .secret-reveal__status {
   width: 28px;
   height: 28px;

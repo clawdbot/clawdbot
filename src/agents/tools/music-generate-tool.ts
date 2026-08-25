@@ -8,12 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { loadWebMedia } from "../../media/web-media.js";
 import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
 import {
   generateMusic,
@@ -25,9 +20,7 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   formatGeneratedAttachmentLines,
@@ -38,7 +31,6 @@ import { buildMediaGenerationRequestKey } from "../media-generation-task-status-
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
-import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   createDefaultMediaGenerateBackgroundScheduler,
   type MediaGenerateAsyncStartCallback,
@@ -50,16 +42,16 @@ import {
   type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
-  applyMusicGenerationModelConfigDefaults,
+  applyAgentDefaultModelConfig,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
+  loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
-  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
@@ -73,18 +65,12 @@ import {
   createMusicGenerateListActionResult,
   createMusicGenerateStatusActionResult,
 } from "./music-generate-tool.actions.js";
-import {
-  createSandboxBridgeReadFile,
-  type AnyAgentTool,
-  type SandboxFsBridge,
-  type ToolFsPolicy,
-} from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const GENERATED_MUSIC_MEDIA_SUBDIR = "tool-music-generation";
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
-const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
 const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
 const GENERATED_MUSIC_PROBE_BUDGET_MS = 3000;
@@ -301,89 +287,24 @@ async function loadReferenceImages(params: {
     rewrittenFrom?: string;
   }>
 > {
-  const loaded: Array<{
-    sourceImage: MusicGenerationSourceImage;
-    resolvedInput: string;
-    rewrittenFrom?: string;
-  }> = [];
-
-  for (const rawInput of params.inputs) {
-    params.signal?.throwIfAborted();
-    const trimmed = rawInput.trim();
-    const inputRaw = normalizeMediaReferenceSource(
-      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
-    );
-    if (!inputRaw) {
-      throw new ToolInputError("image required (empty string in array)");
-    }
-    const refInfo = classifyMediaReferenceSource(inputRaw);
-    const { isDataUrl, isHttpUrl } = refInfo;
-    if (refInfo.hasUnsupportedScheme) {
-      throw new ToolInputError(
-        `Unsupported image reference: ${rawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-      );
-    }
-    if (params.sandboxConfig && isHttpUrl) {
-      throw new ToolInputError("Sandboxed music_generate does not allow remote image URLs.");
-    }
-
-    const resolvedInput = params.sandboxConfig
-      ? inputRaw
-      : inputRaw.startsWith("~")
-        ? resolveUserPath(inputRaw)
-        : inputRaw;
-    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
-      input: resolvedInput,
-      isDataUrl,
-      workspaceDir: params.workspaceDir,
-      sandbox: params.sandboxConfig,
-    });
-    params.signal?.throwIfAborted();
-    const media = isDataUrl
-      ? decodeDataUrl(resolvedInput)
-      : params.sandboxConfig
-        ? await loadWebMedia(resolvedPath ?? resolvedInput, {
-            sandboxValidated: true,
-            readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
-            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
-          })
-        : await (async () => {
-            const referenceTarget = resolvedPath ?? resolvedInput;
-            const isRemoteReference = /^https?:\/\//i.test(referenceTarget);
-            const { signal, cleanup } = buildTimeoutAbortSignal({
-              timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
-              operation: "music-generate.reference-fetch",
-              ...(params.signal ? { signal: params.signal } : {}),
-              ...(isRemoteReference ? { url: referenceTarget } : {}),
-            });
-            try {
-              return await loadWebMedia(resolvedPath ?? resolvedInput, {
-                localRoots,
-                requestInit: signal ? { signal } : undefined,
-                ssrfPolicy: params.ssrfPolicy,
-              });
-            } finally {
-              cleanup();
-            }
-          })();
-    params.signal?.throwIfAborted();
-    if (media.kind !== "image") {
-      throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
-    }
-    const mimeType = "mimeType" in media ? media.mimeType : media.contentType;
-    const fileName = "fileName" in media ? media.fileName : undefined;
-    loaded.push({
-      sourceImage: {
-        buffer: media.buffer,
-        mimeType,
-        fileName,
-      },
-      resolvedInput,
-      ...(rewrittenFrom ? { rewrittenFrom } : {}),
-    });
-  }
-
-  return loaded;
+  const loaded = await loadMediaToolReferences<MusicGenerationSourceImage>({
+    inputs: params.inputs,
+    toolName: "music_generate",
+    expectedKind: "image",
+    sandbox: params.sandboxConfig,
+    workspaceDir: params.workspaceDir,
+    ssrfPolicy: params.ssrfPolicy,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    mapMedia: (media) => ({
+      buffer: media.buffer,
+      mimeType: "mimeType" in media ? media.mimeType : media.contentType,
+      fileName: "fileName" in media ? media.fileName : undefined,
+    }),
+  });
+  return loaded.map(({ source, resolvedInput, rewrittenFrom }) =>
+    Object.assign({ sourceImage: source, resolvedInput }, rewrittenFrom ? { rewrittenFrom } : {}),
+  );
 }
 
 type LoadedReferenceImage = Awaited<ReturnType<typeof loadReferenceImages>>[number];
@@ -675,7 +596,7 @@ export function createMusicGenerateTool(options?: {
       }
       const explicitModelConfig = hasExplicitMusicGenerationModelConfig(cfg);
       const effectiveCfg =
-        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
+        applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig) ?? cfg;
       const prompt = readToolStringParam(args, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(

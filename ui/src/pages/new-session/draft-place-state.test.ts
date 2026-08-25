@@ -100,10 +100,30 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.machineClass).toBe("");
   });
 
-  it("clears a selected cloud profile when the runtime switches to an incompatible mode", () => {
+  it.each([
+    {
+      name: "clears a one-mode cloud profile when the runtime becomes incompatible",
+      executionModes: ["worker-turn"] as const,
+      compatible: false,
+    },
+    {
+      name: "retains a two-mode cloud profile and its machine when the runtime changes",
+      executionModes: ["worker-turn", "remote-exec"] as const,
+      compatible: true,
+    },
+  ])("$name", ({ executionModes, compatible }) => {
     const persistPreference = vi.fn();
     const cloudProfiles: DraftCloudProfile[] = [
-      { id: "aws", providerId: "crabbox", executionMode: "worker-turn" },
+      {
+        id: "aws",
+        providerId: "crabbox",
+        executionMode: "worker-turn",
+        executionModes,
+        machines: [
+          { id: "standard", label: "Standard", default: true },
+          { id: "fast", label: "Fast" },
+        ],
+      },
     ];
     const state = new DraftPlaceState(
       { cloudProfiles, persistPreference } as unknown as DraftGatewayState,
@@ -129,9 +149,10 @@ describe("DraftPlaceState cloud machine selection", () => {
       cloudPlacementExecutionMode: "worker-turn",
       source: "model",
     });
-    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
     state.restorePreferenceSelections();
     expect(state.cloudProfileId).toBe("aws");
+    expect(state.machineClass).toBe("fast");
 
     resolveRuntime.mockReturnValue({
       id: "codex",
@@ -141,12 +162,19 @@ describe("DraftPlaceState cloud machine selection", () => {
     });
     state.restorePreferenceSelections();
 
-    expect(state.cloudProfileId).toBe("");
-    expect(state.worktree).toBe(false);
-    expect(persistPreference).toHaveBeenLastCalledWith(
-      "main",
-      "",
-      expect.objectContaining({ where: { kind: "local" }, worktree: false }),
-    );
+    if (compatible) {
+      expect(state.cloudProfileId).toBe("aws");
+      expect(state.machineClass).toBe("fast");
+      expect(state.worktree).toBe(true);
+      expect(persistPreference).not.toHaveBeenCalled();
+    } else {
+      expect(state.cloudProfileId).toBe("");
+      expect(state.worktree).toBe(false);
+      expect(persistPreference).toHaveBeenLastCalledWith(
+        "main",
+        "",
+        expect.objectContaining({ where: { kind: "local" }, worktree: false }),
+      );
+    }
   });
 });

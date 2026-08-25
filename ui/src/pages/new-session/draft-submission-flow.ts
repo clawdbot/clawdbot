@@ -1,6 +1,7 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -562,11 +563,13 @@ export class DraftSubmissionFlow {
             submissionAgentId,
           );
           if (cleanupError) {
-            this.pendingPlacement.promoteToDispatching(result.key);
-            this.pendingPlacement.retryAllowed = true;
+            if (ownsSubmissionRecovery()) {
+              this.pendingPlacement.promoteToDispatching(result.key);
+              this.pendingPlacement.retryAllowed = true;
+            }
             this.error = t("newSession.placementStartFailed", { error: cleanupError });
             this.callbacks.requestUpdate();
-          } else {
+          } else if (ownsSubmissionRecovery()) {
             this.clearPendingPlacementRecovery();
           }
           return;
@@ -626,10 +629,12 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
         });
       if (result.initialRun.status === "started") {
+        const { hello, selfUser } = context.gateway.snapshot;
+        const sender = resolveCurrentUserIdentity(hello, submissionClient.instanceId, selfUser);
         prepareInitialUserMessageHandoff(
           context.initialUserMessage,
           result.key,
-          { text: message, attachments, createdAt: submittedAt },
+          { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
           submissionClient,
           { runId: result.initialRun.runId, messageSeq: result.initialRun.messageSeq },
         );
@@ -639,9 +644,6 @@ export class DraftSubmissionFlow {
         return;
       }
       this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
-      if (requestId !== this.submitRequestToken) {
-        return;
-      }
       await this.startedSession.navigate(context, {
         client: submissionClient,
         key: result.key,

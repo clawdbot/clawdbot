@@ -171,7 +171,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.reconcileWaitingApprovalSnapshot();
     if (reconciledLocalCompletion) {
       void retryReconnectableQueuedChatSends(state);
-    } else {
+    } else if (this.presented) {
       state.requestUpdate?.();
     }
   }
@@ -287,6 +287,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
       this.sessionSharingStates = new Map();
+      state.guardianNotices = [];
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
@@ -302,6 +303,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    state.selfUser = snapshot.selfUser ?? null;
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state, this.presented);
     }

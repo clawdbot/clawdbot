@@ -11,7 +11,6 @@ import {
 
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
-  readonly sessionCreatedOrder: Map<string, number>;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
@@ -20,20 +19,6 @@ type SidebarSessionListOwner = {
   expandedAgentId(): string;
   requestSessionDataUpdate(): void;
 };
-
-function pruneSidebarSessionOrder(
-  owner: SidebarSessionListOwner,
-  retainedResults: readonly NonNullable<SessionListSnapshot["result"]>[],
-): void {
-  const visibleKeys = new Set(
-    retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
-  );
-  for (const key of owner.sessionCreatedOrder.keys()) {
-    if (!visibleKeys.has(key)) {
-      owner.sessionCreatedOrder.delete(key);
-    }
-  }
-}
 
 function pruneSidebarAgentSessionCaches(
   owner: SidebarSessionListOwner,
@@ -49,11 +34,6 @@ function pruneSidebarAgentSessionCaches(
     owner.sessionsResult = null;
     owner.sessionsAgentId = null;
   }
-  const retainedResults = Object.values(owner.sessionResultsByAgent);
-  if (owner.sessionsResult) {
-    retainedResults.push(owner.sessionsResult);
-  }
-  pruneSidebarSessionOrder(owner, retainedResults);
 }
 
 export function subscribeSidebarAgentSessionCaches(
@@ -94,22 +74,8 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
-  const sessions = snapshot.result?.sessions ?? [];
   if (snapshot.result && snapshot.agentId) {
     owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
-  }
-  const retainedResults = snapshot.result
-    ? [snapshot.result, ...Object.values(owner.sessionResultsByAgent)]
-    : Object.values(owner.sessionResultsByAgent);
-  pruneSidebarSessionOrder(owner, retainedResults);
-  let nextCreatedOrder = 0;
-  for (const order of owner.sessionCreatedOrder.values()) {
-    nextCreatedOrder = Math.max(nextCreatedOrder, order + 1);
-  }
-  for (const row of sessions) {
-    if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
-      owner.sessionCreatedOrder.set(row.key, nextCreatedOrder++);
-    }
   }
 }
 

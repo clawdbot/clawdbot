@@ -1434,7 +1434,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ready for operator review.");
   });
 
-  it("renders a queued linked session without running copy", () => {
+  it("renders a queued linked session without a concurrency claim", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
         {
@@ -1456,7 +1456,7 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
     expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
-      "Waiting for a concurrency slot",
+      "",
     );
   });
 

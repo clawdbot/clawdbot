@@ -1,5 +1,4 @@
 // Route-first machine-readable Gateway health command.
-import { formatErrorMessage } from "../../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 type GatewayHealthRpcOpts = Parameters<
@@ -65,9 +64,7 @@ export async function runGatewayHealthJsonRoute(
     );
   } catch (error) {
     if (!rpc) {
-      runtime.error(formatErrorMessage(error));
-      runtime.exit(1);
-      return;
+      throw error;
     }
     const [healthModule, callModule] = await Promise.all([
       deps.emitReachableGatewayAuthDiagnostic && deps.readNonObservingHealthConfig

@@ -49,6 +49,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -204,7 +205,7 @@ function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): strin
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
-  if (ctx.cfg.gateway?.mode === "remote") {
+  if (ctx.cfg.gateway?.mode === "remote" || !isGatewayHostServiceEnvironment()) {
     return [];
   }
   const service = resolveGatewayService();

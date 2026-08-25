@@ -75,7 +75,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   // These caches were not Lit state on the element and stay non-reactive here.
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
-  sessionCreatedOrder = new Map<string, number>();
 
   private readonly subscriptions: SubscriptionsController;
   readonly sessionCatalogLive = new SessionCatalogLiveState();
@@ -508,7 +507,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionsAgentId = null;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
-    this.sessionCreatedOrder.clear();
     this.visibleSessionLimits.clear();
     this.notify();
   }

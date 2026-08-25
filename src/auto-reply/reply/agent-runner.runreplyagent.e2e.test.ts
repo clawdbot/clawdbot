@@ -14,6 +14,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -33,6 +34,7 @@ import {
 } from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -567,7 +569,7 @@ function attachSourceTurnRecorder(params: {
       cwd: "/tmp",
       sessionEntry: params.sessionEntry,
       sessionId: "session",
-      sessionKey: "main",
+      sessionKey: params.followupRun.run.sessionKey ?? "main",
       sessionStore: params.sessionStore,
       storePath: params.storePath,
     },
@@ -2139,6 +2141,93 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoverySourceIngress).toBe("channel");
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("recovers a scoped Telegram topic and admits the next inbound turn", async () => {
+    const sessionKey = "agent:main:main:thread:1234:42";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "telegram:1234",
+      accountId: "work",
+      threadId: 42,
+    };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+      {
+        delivery: normalizeSessionDeliveryState({
+          context: { ...deliveryContext, threadId: "42" },
+        }),
+      },
+      sessionKey,
+    );
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const claimed = requireStoredSessionEntry(storePath, sessionKey);
+      expect(claimed.restartRecoveryDeliveryContext).toEqual(deliveryContext);
+      expect(typeof claimed.restartRecoveryDeliveryRunId).toBe("string");
+      expect(
+        buildCurrentRunRestartRecoveryClaim({
+          entry: claimed,
+          runId: claimed.restartRecoveryDeliveryRunId ?? "missing-recovery-run",
+          deliveryContext: { ...deliveryContext, threadId: "42" },
+        }),
+      ).toMatchObject({ restartRecoveryDeliveryContext: deliveryContext });
+      return { payloads: [{ text: "recovered topic reply" }], meta: {} };
+    });
+
+    const topicContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: deliveryContext.to,
+      AccountId: deliveryContext.accountId,
+      MessageThreadId: deliveryContext.threadId,
+      TransportThreadId: deliveryContext.threadId,
+      SessionKey: sessionKey,
+    } as const;
+    const interrupted = createMinimalRun({
+      sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-1" },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: interrupted.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: interrupted.sourceTurnId,
+      storePath,
+      text: "recover this private topic",
+    });
+
+    await expect(interrupted.run()).resolves.toEqual(
+      expect.objectContaining({ text: "recovered topic reply" }),
+    );
+
+    const completed = requireStoredSessionEntry(storePath, sessionKey);
+    expect(completed.restartRecoveryDeliveryRunId).toBeUndefined();
+    const nextStore = { [sessionKey]: completed };
+    const followup = createMinimalRun({
+      sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-2" },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry: completed,
+      sessionStore: nextStore,
+      sessionKey,
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: followup.followupRun,
+      sessionEntry: completed,
+      sessionStore: nextStore,
+      sourceTurnId: followup.sourceTurnId,
+      storePath,
+      text: "accept the next private-topic message",
+    });
+
+    await expect(followup.run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(requireStoredSessionEntry(storePath, sessionKey).restartRecoveryDeliveryRunId).toBe(
+      undefined,
+    );
   });
 
   it("fails closed and retires an unknown terminal receipt when the live run returns", async () => {

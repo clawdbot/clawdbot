@@ -294,7 +294,9 @@ function renderCatalogState(
                 onModelSetup();
               }}
             >
-              ${t("modelSetup.connectionFailure.action")}
+              ${hasOptions
+                ? t("modelSetup.connectionFailure.action")
+                : t("chat.modelControls.emptyModelsAction")}
             </button>
           `
         : nothing}

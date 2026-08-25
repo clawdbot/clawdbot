@@ -5,6 +5,7 @@ import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   doctorCommand: vi.fn(),
+  triageCommand: vi.fn(),
   dashboardCommand: vi.fn(),
   resetCommand: vi.fn(),
   uninstallCommand: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 
 const {
   doctorCommand,
+  triageCommand,
   dashboardCommand,
   resetCommand,
   uninstallCommand,
@@ -46,6 +48,10 @@ const DOCTOR_SESSION_SQLITE_MODES = [
 
 vi.mock("../../commands/doctor.js", () => ({
   doctorCommand: mocks.doctorCommand,
+}));
+
+vi.mock("../../commands/triage.js", () => ({
+  triageCommand: mocks.triageCommand,
 }));
 
 vi.mock("../../commands/dashboard.js", () => ({
@@ -600,6 +606,28 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtimeArg).toBe(runtime);
     expect(options.noOpen).toBe(true);
     expect(options.json).toBe(true);
+  });
+
+  it.each([
+    { args: [], options: { json: false, noExport: false, run: false } },
+    { args: ["--json", "--no-export"], options: { json: true, noExport: true, run: false } },
+    { args: ["--run"], options: { json: false, noExport: false, run: true } },
+  ])("forwards triage options for $args", async ({ args, options }) => {
+    triageCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["triage", ...args]);
+
+    expect(triageCommand).toHaveBeenCalledWith(runtime, options);
+  });
+
+  it("rejects embedded execution in triage JSON mode", async () => {
+    await runMaintenanceCli(["triage", "--json", "--run"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      jsonFailure("triage --json cannot be combined with --run."),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("passes reset options to reset command", async () => {

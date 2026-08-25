@@ -63,10 +63,10 @@ import {
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
 import {
-  createGitTransferList,
+  createWorkspaceGitTransferList,
   filterExistingGitTransferList,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+  runWorkspaceInventoryCommandToFile,
+} from "./workspace-sync-inventory.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
@@ -253,7 +253,7 @@ export function createWorkerWorkspaceActions(
           throw new Error("Worker workspace git base is not a commit id");
         }
 
-        gitTransferListPath = await createGitTransferList({
+        gitTransferListPath = await createWorkspaceGitTransferList({
           gitRoot,
           temporaryDirectory: path.join(temporaryDirectory, "transfer"),
           signal: options.ownerSignal,
@@ -262,7 +262,7 @@ export function createWorkerWorkspaceActions(
 
         const objectListPath = path.join(temporaryDirectory, "base-objects");
         const packPath = path.join(temporaryDirectory, "base.pack");
-        await runLocalCommandToFile({
+        await runWorkspaceInventoryCommandToFile({
           argv: [
             "git",
             "-C",
@@ -277,7 +277,7 @@ export function createWorkerWorkspaceActions(
           timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
         await fs.appendFile(objectListPath, `${baseCommit}\n`);
-        await runLocalCommandToFile({
+        await runWorkspaceInventoryCommandToFile({
           argv: ["git", "-C", gitRoot, "pack-objects", "--stdout"],
           inputPath: objectListPath,
           outputPath: packPath,

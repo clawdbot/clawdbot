@@ -105,8 +105,12 @@ describe("OpenAI memory embedding adapter", () => {
     expect(JSON.stringify(current.cacheKeyData)).not.toContain("fixture-secret");
   });
 
-  it("preserves custom endpoint tenant and version-like cache identity headers", async () => {
-    const createForTenant = async (tenant: string) => {
+  it("keeps rotated proxy credentials out of tenant-specific embedding cache identity", async () => {
+    const createForTenant = async (
+      tenant: string,
+      proxyApiKey: string,
+      proxyHeaderName = "X-Api-Key",
+    ) => {
       const client = await resolveRemoteEmbeddingBearerClient({
         provider: "bailian-embedding",
         defaultBaseUrl: "https://embeddings.example/v1",
@@ -116,12 +120,19 @@ describe("OpenAI memory embedding adapter", () => {
           remote: {
             apiKey: "fixture-secret",
             headers: {
+              [proxyHeaderName]: proxyApiKey,
+              "X-Deployment": tenant,
               "X-Tenant": tenant,
               version: "tenant-api-v2",
               "User-Agent": "tenant-client/2",
             },
           },
         },
+      });
+      expect(client.headers).toMatchObject({
+        Authorization: "Bearer fixture-secret",
+        [proxyHeaderName]: proxyApiKey,
+        "X-Deployment": tenant,
       });
       mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
         provider,
@@ -135,19 +146,26 @@ describe("OpenAI memory embedding adapter", () => {
       });
     };
 
-    const first = await createForTenant("tenant-a");
-    const second = await createForTenant("tenant-b");
+    const first = await createForTenant("tenant-a", "proxy-key-before-rotation");
+    const rotated = await createForTenant("tenant-a", "proxy-key-after-rotation", "x-aPI-kEY");
+    const second = await createForTenant("tenant-b", "proxy-key-after-rotation");
     const headers = first.runtime?.cacheKeyData?.headers;
 
     expect(headers).toEqual(
       expect.arrayContaining([
+        ["X-Deployment", "tenant-a"],
         ["X-Tenant", "tenant-a"],
         ["version", "tenant-api-v2"],
         ["User-Agent", "tenant-client/2"],
       ]),
     );
+    expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
+    expect(hashText(JSON.stringify(first.runtime?.cacheKeyData))).toBe(
+      hashText(JSON.stringify(rotated.runtime?.cacheKeyData)),
+    );
     expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
     expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
+    expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("proxy-key-before-rotation");
   });
 
   it("sends document input_type in OpenAI batch embedding requests", async () => {

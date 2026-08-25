@@ -143,7 +143,7 @@ export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
 const buildAllPluginInspectReports: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
-const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
+export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const notifyGatewayPluginMetadataChangedMock: AsyncUnknownMock = vi.fn();
@@ -486,7 +486,7 @@ vi.mock("../plugins/status.js", () => ({
       Parameters<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>,
       ReturnType<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>
     >(
-      buildPluginCompatibilityNotices,
+      buildPluginCompatibilityNoticesMock,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
@@ -853,7 +853,7 @@ export function resetPluginsCliTestState() {
   buildPluginRegistrySnapshotReportMock.mockReset();
   buildPluginInspectReportMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
-  buildPluginCompatibilityNotices.mockReset();
+  buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();
   notifyGatewayPluginMetadataChangedMock.mockReset();
@@ -993,7 +993,7 @@ export function resetPluginsCliTestState() {
     registryDiagnostics: [],
   });
   buildPluginDiagnosticsReportMock.mockReturnValue(defaultPluginReport);
-  buildPluginCompatibilityNotices.mockReturnValue([]);
+  buildPluginCompatibilityNoticesMock.mockReturnValue([]);
   const defaultRegistryIndex = {
     version: 1,
     hostContractVersion: "2026.4.25",

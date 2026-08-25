@@ -727,7 +727,7 @@ suite.define(() => {
     });
   });
 
-  it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
+  it("reuses ready model metadata while a remembered worktree choice validates", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const models = MODELS;
       const branches = GIT_BRANCHES;
@@ -755,23 +755,23 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
-      await gateway.deferNext("chat.metadata");
       await gateway.deferNext("worktrees.branches");
       await navigateInApp(page, "new-session");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect
         .poll(async () => (await gateway.getRequests("chat.metadata")).length)
-        .toBe(metadataRequests + 1);
+        .toBe(metadataRequests);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
 
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
-      await gateway.resolveDeferred("chat.metadata", { models });
-      await expect.poll(() => start.isDisabled()).toBe(true);
       await gateway.rejectDeferred("worktrees.branches", {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",

@@ -1,8 +1,10 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -10,6 +12,7 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  uiProofArtifactDir,
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -198,6 +201,62 @@ suite.define(() => {
     }
   });
 
+  it("removes an archived current thread from the sidebar before the patch resolves", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const sessionKey = "agent:main:research";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      historyMessages: [
+        { role: "assistant", content: [{ type: "text", text: "Research thread content" }] },
+      ],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(sessionKey, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionArchiveFiltering: true,
+      sessionKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const row = page.locator(`[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-before.png");
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
+      await gateway.waitForRequest("sessions.patch");
+
+      await expect.poll(() => row.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-pending.png");
+
+      await gateway.resolveDeferred("sessions.patch");
+      await expect.poll(() => row.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-complete.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "archive-current-thread.webm"));
+      }
+    }
+  });
+
   // Batch archiving used to serialize one sessions.patch transaction per row.
   // The whole selection now crosses the Gateway once and settles from one list.
 
@@ -330,10 +389,13 @@ suite.define(() => {
       sessionKey: "agent:main:main",
     });
 
-    const assertSelectedRoute = async () => {
+    const assertSelectedRoute = async (expectSidebarRow = true) => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath(selected.key));
+      if (!expectSidebarRow) {
+        return;
+      }
       const row = page.locator(`.sidebar-recent-session[data-session-key="${selected.key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await expect
@@ -476,11 +538,9 @@ suite.define(() => {
         reason: "update",
         sessionKey: selected.key,
       });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
+      await selectedRow.waitFor({ state: "detached", timeout: 10_000 });
 
-      await assertSelectedRoute();
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
+      await assertSelectedRoute(false);
       expect(
         await page.evaluate(
           () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
@@ -554,6 +614,7 @@ suite.define(() => {
       await assertSelectedRoute();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -666,7 +727,7 @@ suite.define(() => {
         .toBe(controlUiSessionPath(archived.key));
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await archivedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await context.close();
     }

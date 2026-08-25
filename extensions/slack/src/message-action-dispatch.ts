@@ -24,6 +24,7 @@ import {
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 type SlackActionInvoke = (
@@ -140,7 +141,7 @@ export async function handleSlackMessageAction(params: {
         mediaUrl: mediaUrl ?? undefined,
         ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         accountId,
-        threadTs: threadId ?? replyTo ?? undefined,
+        threadTs: resolveSlackThreadTsValue({ replyToId: replyTo, threadId }),
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
       },

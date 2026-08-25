@@ -207,10 +207,10 @@ suite.define(() => {
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // The picker's own revalidation lands after the rows render, so wait for it.
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      // Opening the picker consumes the recovered ready snapshot without
+      // revalidating it.
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       expect(await gateway.getRequests("chat.metadata")).toEqual([
-        expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
       ]);
@@ -219,7 +219,7 @@ suite.define(() => {
     }
   });
 
-  it("shows a retryable CLI-agent failure and recovers both picker catalogs", async () => {
+  it("recovers a failed CLI-agent catalog without reloading ready model metadata", async () => {
     if (captureCatalogRetryProof) {
       await mkdir(catalogRetryProofDir, { recursive: true });
     }
@@ -298,7 +298,7 @@ suite.define(() => {
         ),
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
       if (captureCatalogRetryProof) {
         await page.screenshot({
           animations: "disabled",
@@ -336,7 +336,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);

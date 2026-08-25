@@ -7,11 +7,12 @@ import {
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
-  createGitTransferList,
+  createWorkspaceGitTransferList,
   readWorkspaceTransferPaths,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+  runWorkspaceInventoryCommandToFile,
+} from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
@@ -23,43 +24,35 @@ export type NodeWorkspaceTransferSnapshot = {
   packPath?: string;
 };
 
-async function successfulGit(root: string, args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["git", "-C", root, ...args], {
-    timeoutMs: TRANSFER_TIMEOUT_MS,
-    maxOutputBytes: 256 * 1024,
-    maxCombinedOutputBytes: 512 * 1024,
-    baseEnv: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error("Worker workspace Git inspection failed");
-  }
-  return result.stdout.trim();
-}
-
 export async function prepareNodeWorkspaceTransferSnapshot(params: {
   localPath: string;
   temporaryRoot: string;
   signal?: AbortSignal;
 }): Promise<NodeWorkspaceTransferSnapshot> {
   const root = await fsp.realpath(params.localPath);
-  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+  const git = await probeWorkspaceGitMode({
+    localPath: root,
+    commandOptions: {
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      maxOutputBytes: 256 * 1024,
+      maxCombinedOutputBytes: 512 * 1024,
+      baseEnv: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+      signal: params.signal,
+    },
+    runTask: runCommandWithTimeout,
   });
   let baseCommit: string | null = null;
   let includePaths: ReadonlySet<string> | undefined;
-  if (gitAdmin) {
-    const gitRoot = await fsp.realpath(await successfulGit(root, ["rev-parse", "--show-toplevel"]));
+  if (git.mode === "git") {
+    const gitRoot = await fsp.realpath(git.gitRoot);
     if (gitRoot !== root) {
       throw new Error("Worker git workspace sync requires the managed worktree root");
     }
-    baseCommit = await successfulGit(root, ["rev-parse", "--verify", "HEAD"]);
+    baseCommit = git.baseCommit;
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {
       throw new Error("Worker workspace Git base is not a commit id");
     }
-    const transferList = await createGitTransferList({
+    const transferList = await createWorkspaceGitTransferList({
       gitRoot: root,
       temporaryDirectory: path.join(params.temporaryRoot, "inventory"),
       signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
@@ -81,7 +74,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     const signal = params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS);
     const objectListPath = path.join(params.temporaryRoot, "base-objects");
     packPath = path.join(params.temporaryRoot, "base.pack");
-    await runLocalCommandToFile({
+    await runWorkspaceInventoryCommandToFile({
       argv: [
         "git",
         "-C",
@@ -96,7 +89,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       timeoutMs: TRANSFER_TIMEOUT_MS,
     });
     await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runLocalCommandToFile({
+    await runWorkspaceInventoryCommandToFile({
       argv: ["git", "-C", root, "pack-objects", "--stdout"],
       inputPath: objectListPath,
       outputPath: packPath,

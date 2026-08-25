@@ -138,4 +138,29 @@ describe("cloud worker settings state", () => {
       },
     });
   });
+
+  it("removes only project defaults that reference a deleted profile", () => {
+    const config = {
+      cloudWorkers: {
+        profiles: { production: configuredProfile, retained: configuredProfile },
+        projectProfiles: {
+          "github.com/acme/app": "production",
+          "github.com/acme/docs": "production",
+          "github.com/acme/retained": "retained",
+        },
+      },
+    };
+
+    expect(buildCloudWorkerDeletePatch(config, "production")).toEqual({
+      patch: {
+        cloudWorkers: {
+          profiles: { production: null, retained: configuredProfile },
+          projectProfiles: {
+            "github.com/acme/app": null,
+            "github.com/acme/docs": null,
+          },
+        },
+      },
+    });
+  });
 });

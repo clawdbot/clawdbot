@@ -106,6 +106,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
       : { kind: "ok" as const },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
+    replayMetadata: { replaySafe: true, hadPotentialSideEffects: false },
     ...overrides.attempt,
   } as EmbeddedRunAttemptResult;
 
