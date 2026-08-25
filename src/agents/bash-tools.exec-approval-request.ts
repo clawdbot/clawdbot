@@ -341,12 +341,19 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    suppressDelivery: params.suppressDelivery,
-    // Cron has no chat turn to answer from, so its cards go only to connected
-    // approval clients (Control UI/TUI); allow-always there mints a standing
-    // grant that ends the recurrence. With no client connected, the request
-    // still registers and expires no-route into the headless denial (#128031).
-    deliverToApprovalClientsOnly: params.trigger === "cron" ? true : undefined,
+    // Gateway-host cron cards go only to connected approval clients (Control
+    // UI/TUI); allow-always there mints a standing grant that ends the
+    // recurrence. With no client connected, the request still registers and
+    // expires no-route into the headless denial (#128031). Node-host cron has
+    // no grant mint/consume path yet, so it keeps the fully suppressed
+    // headless policy instead of raising cards whose allow-always could not
+    // stick as a scoped grant.
+    suppressDelivery:
+      params.suppressDelivery === true || (params.trigger === "cron" && params.host !== "gateway")
+        ? true
+        : undefined,
+    deliverToApprovalClientsOnly:
+      params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

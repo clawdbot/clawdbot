@@ -3797,12 +3797,55 @@ EOF`,
         runId: "cron-run-1",
         ask: "on-miss",
       });
-      security.stop();
       expect(result.pendingResult).toBeUndefined();
       expect(result.deniedResult).toBeUndefined();
       expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+      // Authority is recorded at the final effect: validation skips the prompt
+      // but the use is consumed only by the pre-spawn revalidation closure.
+      expect(readGrantUseCounts()).toEqual([0]);
+      expect(result.revalidateBeforeExecution).toBeDefined();
+      await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
+      security.stop();
       expect(JSON.stringify(security.events)).toContain("standing-grant");
       expect(readGrantUseCounts()).toEqual([1]);
+    });
+
+    it("denies at the spawn boundary when the grant is invalidated after consult", async () => {
+      const revision = seedCronJobRow();
+      mintStandingGrant(revision);
+      unregisterCronSource = registerCronRunExecSource("cron-run-1", {
+        agentId: "main",
+        jobId: "job-1",
+        jobConfigRevision: revision,
+      });
+      const security = captureSecurityEvents();
+      const result = await runGatewayAllowlist({
+        command: grantCommand,
+        workdir,
+        agentId: "main",
+        runId: "cron-run-1",
+        ask: "on-miss",
+      });
+      expect(result.pendingResult).toBeUndefined();
+      expect(result.deniedResult).toBeUndefined();
+      expect(result.revalidateBeforeExecution).toBeDefined();
+      // Revoke the parent approval between consult and spawn: the closure
+      // must deny instead of executing on the stale authority.
+      const database = openOpenClawStateDatabase(databaseOptions());
+      // sqlite-allow-raw -- test-only reversal of the minting approval row.
+      database.db
+        .prepare("update operator_approvals set status = 'denied', decision = 'deny'")
+        .run();
+      const denied = await result.revalidateBeforeExecution?.();
+      security.stop();
+      expect(denied?.details.status).toBe("failed");
+      expect(denied?.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("standing grant no longer valid"),
+        }),
+      );
+      expect(readGrantUseCounts()).toEqual([0]);
+      expect(JSON.stringify(security.events)).toContain("standing-grant-invalidated");
     });
 
     it("falls through to prompting when no standing grant matches", async () => {

@@ -8,6 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import {
   buildCronExecOperationBinding,
   consumeCronStandingGrant,
+  validateCronStandingGrant,
 } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -812,36 +813,66 @@ export async function processGatewayAllowlist(
     !requiresHeredocApproval &&
     !requiresSecurityAuditSuppressionApproval;
   if (cronStandingGrantEligible) {
-    let grantUse: ReturnType<typeof consumeCronStandingGrant> | undefined;
+    const grantLookup = {
+      agentId: cronExecutionSource.agentId,
+      cronJobId: cronExecutionSource.jobId,
+      jobConfigRevision: cronExecutionSource.jobConfigRevision,
+      operationBinding: buildCronExecOperationBinding({
+        command: params.command,
+        cwd: params.workdir,
+        env: params.requestedEnv,
+      }),
+    };
+    let grantCheck: ReturnType<typeof validateCronStandingGrant> | undefined;
     try {
-      grantUse = consumeCronStandingGrant({
-        agentId: cronExecutionSource.agentId,
-        cronJobId: cronExecutionSource.jobId,
-        jobConfigRevision: cronExecutionSource.jobConfigRevision,
-        operationBinding: buildCronExecOperationBinding({
-          command: params.command,
-          cwd: params.workdir,
-          env: params.requestedEnv,
-        }),
-      });
+      grantCheck = validateCronStandingGrant(grantLookup);
     } catch {
-      grantUse = undefined;
+      grantCheck = undefined;
     }
-    if (grantUse?.outcome === "consumed") {
-      emitGatewayExecApprovalSecurityEvent({
-        action: "exec.approval.approved",
-        outcome: "success",
-        severity: "medium",
-        agentId: params.agentId,
-        reason: `standing-grant grant=${grantUse.grant.grantId} approval=${grantUse.grant.mintedByApprovalId}`,
-        hostSecurity,
-        hostAsk,
-        host: "gateway",
-        segmentCount: allowlistEval.segments.length,
-        trigger: params.trigger,
-        decision: "standing-grant",
-      });
-      return { execCommandOverride: enforcedCommand };
+    if (grantCheck?.outcome === "consumed") {
+      const emitGrantEvent = (approved: boolean, reason: string) =>
+        emitGatewayExecApprovalSecurityEvent({
+          action: approved ? "exec.approval.approved" : "exec.approval.denied",
+          outcome: approved ? "success" : "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: "standing-grant",
+        });
+      return {
+        execCommandOverride: enforcedCommand,
+        // Durable authority is recorded only at the final effect: awaited
+        // pre-spawn work (script preflight) can outlive a revocation or job
+        // edit, so the grant is re-verified and consumed right before the
+        // process spawns and any failure denies instead of executing.
+        revalidateBeforeExecution: async () => {
+          let grantUse: ReturnType<typeof consumeCronStandingGrant> | undefined;
+          try {
+            grantUse = consumeCronStandingGrant(grantLookup);
+          } catch {
+            grantUse = undefined;
+          }
+          if (grantUse?.outcome === "consumed") {
+            emitGrantEvent(
+              true,
+              `standing-grant grant=${grantUse.grant.grantId} approval=${grantUse.grant.mintedByApprovalId}`,
+            );
+            return undefined;
+          }
+          const invalidReason = grantUse?.outcome ?? "grant-store-unavailable";
+          emitGrantEvent(false, `standing-grant-invalidated ${invalidReason}`);
+          return buildGatewayExecApprovalDeniedToolResult({
+            deniedReason: `standing grant no longer valid (${invalidReason}); the next occurrence will prompt for approval again`,
+            command: params.command,
+            cwd: params.workdir,
+          });
+        },
+      };
     }
   }
   const requiresAsk =

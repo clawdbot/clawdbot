@@ -1691,8 +1691,8 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
-    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
-    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBe(true);
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
@@ -1763,8 +1763,8 @@ describe("exec approvals", () => {
         command: "echo cron-node-denied",
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
-    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
-    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBe(true);
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     expect(
       vi
         .mocked(callGatewayTool)

@@ -153,6 +153,27 @@ export function mintCronStandingGrantLocked(
   );
 }
 
+type CronStandingGrantLookupParams = {
+  agentId: string;
+  cronJobId: string;
+  jobConfigRevision: string;
+  operationBinding: string;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+};
+
+/**
+ * Validates a standing grant without recording a use. Callers that skip the
+ * prompt on this result must still call consumeCronStandingGrant at the final
+ * execution boundary: authority is recorded only where the process spawns, so
+ * a revocation or job edit during awaited pre-spawn work still fails closed.
+ */
+export function validateCronStandingGrant(
+  params: CronStandingGrantLookupParams,
+): ConsumeCronStandingGrantResult {
+  return lookupCronStandingGrant(params, { recordUse: false });
+}
+
 /**
  * Validates and consumes one standing grant for a cron-context exec. All
  * revalidation happens against authoritative rows inside one synchronous write
@@ -160,14 +181,16 @@ export function mintCronStandingGrantLocked(
  * config revision, and the minting approval row still holding allow-always.
  * Every non-consumed outcome means the caller falls through to prompting.
  */
-export function consumeCronStandingGrant(params: {
-  agentId: string;
-  cronJobId: string;
-  jobConfigRevision: string;
-  operationBinding: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): ConsumeCronStandingGrantResult {
+export function consumeCronStandingGrant(
+  params: CronStandingGrantLookupParams,
+): ConsumeCronStandingGrantResult {
+  return lookupCronStandingGrant(params, { recordUse: true });
+}
+
+function lookupCronStandingGrant(
+  params: CronStandingGrantLookupParams,
+  opts: { recordUse: boolean },
+): ConsumeCronStandingGrantResult {
   return runOpenClawStateWriteTransaction((database) => {
     if (!tableExists(database.db, STANDING_GRANT_TABLE)) {
       return { outcome: "no-grant" };
@@ -230,6 +253,23 @@ export function consumeCronStandingGrant(params: {
     }
     if (approvalRow.status !== "allowed" || approvalRow.decision !== "allow-always") {
       return { outcome: "approval-not-allow-always" };
+    }
+    if (!opts.recordUse) {
+      return {
+        outcome: "consumed",
+        grant: {
+          grantId: grant.grant_id,
+          mintedByApprovalId: grant.minted_by_approval_id,
+          agentId: grant.agent_id,
+          cronJobId: grant.cron_job_id,
+          jobConfigRevision: grant.job_config_revision,
+          operationBinding: grant.operation_binding,
+          createdAtMs: grant.created_at_ms,
+          expiresAtMs: grant.expires_at_ms,
+          lastUsedAtMs: grant.last_used_at_ms,
+          useCount: grant.use_count,
+        },
+      };
     }
     const nextUseCount = grant.use_count + 1;
     const updated = executeSqliteQuerySync(
