@@ -675,10 +675,15 @@ describe("agents delete command", () => {
 
   it("deregisters the agent database after offline deletion", async () => {
     await withStateDirEnv("openclaw-agents-delete-registry-", async ({ tempRoot, stateDir }) => {
+      const mainAgentDir = path.join(tempRoot, "main-agent");
       const cfg: OpenClawConfig = {
         agents: {
           list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            {
+              id: "main",
+              agentDir: mainAgentDir,
+              workspace: path.join(stateDir, "workspace-main"),
+            },
             { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
           ],
         },
@@ -687,8 +692,10 @@ describe("agents delete command", () => {
       const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
       const externalDatabaseDir = path.join(tempRoot, "external-databases");
       await fs.mkdir(externalDatabaseDir);
+      await fs.mkdir(mainAgentDir);
       const externalDatabasePath = path.join(externalDatabaseDir, "ops.sqlite");
       const sharedDatabasePath = path.join(externalDatabaseDir, "shared.sqlite");
+      const survivorOwnedDatabasePath = path.join(mainAgentDir, "ops.sqlite");
       const externalDatabasePaths = [
         externalDatabasePath,
         `${externalDatabasePath}-wal`,
@@ -696,14 +703,16 @@ describe("agents delete command", () => {
         `${externalDatabasePath}-journal`,
       ];
       await Promise.all(
-        [...externalDatabasePaths, sharedDatabasePath].map((sqlitePath) =>
-          fs.writeFile(sqlitePath, ""),
+        [...externalDatabasePaths, sharedDatabasePath, survivorOwnedDatabasePath].map(
+          (sqlitePath) => fs.writeFile(sqlitePath, ""),
         ),
       );
       const canonicalExternalDatabaseDir = await fs.realpath(externalDatabaseDir);
+      const canonicalMainAgentDir = await fs.realpath(mainAgentDir);
       registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
       registerOpenClawAgentDatabase({ agentId: "ops", path: externalDatabasePath });
       registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: survivorOwnedDatabasePath });
       registerOpenClawAgentDatabase({ agentId: "main", path: sharedDatabasePath });
       recordAgentProvenance("ops", { createdVia: "operator" });
       recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "ops" });
@@ -726,6 +735,11 @@ describe("agents delete command", () => {
         path.join(canonicalExternalDatabaseDir, path.basename(sharedDatabasePath)),
         expect.anything(),
       );
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        path.join(canonicalMainAgentDir, path.basename(survivorOwnedDatabasePath)),
+        expect.anything(),
+      );
+      expect((await fs.stat(survivorOwnedDatabasePath)).isFile()).toBe(true);
       const registeredDatabases = listOpenClawRegisteredAgentDatabases();
       expect(registeredDatabases.map((entry) => entry.agentId)).not.toContain("ops");
       expect(registeredDatabases).toEqual(
