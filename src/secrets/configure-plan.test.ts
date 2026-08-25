@@ -94,7 +94,7 @@ describe("secrets configure plan helpers", () => {
       },
     });
     const openaiCandidate = candidates.find(
-      (entry) => entry.path === "profiles.openai:default.key",
+      (entry) => entry.path === 'profiles["openai:default"].key',
     );
     expect(openaiCandidate?.type).toBe("auth-profiles.api_key.key");
     expect(openaiCandidate?.agentId).toBe("main");
@@ -146,7 +146,7 @@ describe("secrets configure plan helpers", () => {
     });
 
     const openaiCandidate = candidates.find(
-      (entry) => entry.path === "profiles.openai:default.key",
+      (entry) => entry.path === 'profiles["openai:default"].key',
     );
     expect(openaiCandidate?.existingRef).toStrictEqual({
       source: "env",
