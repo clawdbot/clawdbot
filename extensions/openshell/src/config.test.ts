@@ -65,13 +65,11 @@ describe("openshell plugin config", () => {
     ["/sandbox/project", "/sandbox/project/agent"],
     ["/agent/worker/project", "/agent/worker"],
   ])(
-    "rejects overlapping workspace roots %s and %s",
+    "preserves shipped overlapping workspace roots %s and %s",
     (remoteWorkspaceDir, remoteAgentWorkspaceDir) => {
       const config = { remoteWorkspaceDir, remoteAgentWorkspaceDir };
-      expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(false);
-      expect(() => resolveOpenShellPluginConfig(config)).toThrow(
-        "remote workspace roots must not overlap",
-      );
+      expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
+      expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
     },
   );
 

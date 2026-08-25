@@ -185,8 +185,9 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 
 `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` must be absolute paths and
 stay under the managed roots `/sandbox` or `/agent`; other absolute paths are
-rejected. The two directories must not be identical or nested inside each
-other because OpenClaw manages their contents independently.
+rejected. Choose distinct, non-overlapping directories because OpenClaw manages
+their contents independently; previously configured overlapping roots remain
+accepted for upgrade compatibility.
 
 `timeoutSeconds` applies to ordinary OpenShell CLI operations. Sandbox creation
 always receives at least 300 seconds so image builds and first-time provisioning
