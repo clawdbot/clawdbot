@@ -335,16 +335,73 @@ describe("terminal tool", () => {
       const { backend, manager, sessionId } = await openAgentTerminal();
       const tool = makeTool(manager, options);
 
-      const result = await tool.execute("allowed-input", {
-        action: "input",
-        sessionId,
-        data: "echo approved\r",
+      await withActiveRun(manager, async () => {
+        const result = await tool.execute("allowed-input", {
+          action: "input",
+          sessionId,
+          data: "echo approved\r",
+        });
+
+        expect(result.details).toEqual({ ok: true });
       });
 
-      expect(result.details).toEqual({ ok: true });
       expect(backend.writes).toEqual(["echo approved\r"]);
       expect(approvalMocks.register).not.toHaveBeenCalled();
       expect(approvalMocks.decide).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects full terminal input without an active admitted run", async () => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
+
+    await expect(
+      tool.execute("unadmitted-full-input", {
+        action: "input",
+        sessionId,
+        data: "echo unsafe\r",
+      }),
+    ).rejects.toThrow("agent run is no longer active");
+
+    expect(backend.writes).toEqual([]);
+    expect(approvalMocks.register).not.toHaveBeenCalled();
+  });
+
+  it.each(["released", "replaced"] as const)(
+    "rejects full terminal input after its exact run authority is %s",
+    async (lifecycle) => {
+      const { backend, manager, sessionId } = await openAgentTerminal();
+      const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
+
+      await withActiveRun(manager, async (authority) => {
+        const replacement =
+          lifecycle === "replaced"
+            ? claimAgentRunDelegatedAuthority({
+                instanceId: "replacement-terminal-instance",
+                runId: authority.operationalRunInstance.runId,
+              })
+            : undefined;
+        if (!replacement) {
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+
+        try {
+          await expect(
+            tool.execute("stale-full-input", {
+              action: "input",
+              sessionId,
+              data: "echo unsafe\r",
+            }),
+          ).rejects.toThrow("agent run is no longer active");
+        } finally {
+          if (replacement) {
+            releaseAgentRunDelegatedAuthority(replacement);
+          }
+        }
+      });
+
+      expect(backend.writes).toEqual([]);
+      expect(approvalMocks.register).not.toHaveBeenCalled();
     },
   );
 

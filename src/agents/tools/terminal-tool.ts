@@ -200,10 +200,6 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       if (policy.mode === "deny") {
         throw new ToolInputError("Terminal input denied by execution policy");
       }
-      if (policy.mode === "full") {
-        return terminalActionResult("input", manager.writeAgent(owner, sessionId, data));
-      }
-
       const operationalRunInstance = callerIdentity?.operationalRunInstance;
       const delegatedAuthority = operationalRunInstance
         ? getActiveAgentRunDelegatedAuthority(operationalRunInstance)
@@ -219,35 +215,37 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
       }
 
-      const registration = await registerExecApprovalRequestForHostOrThrow({
-        approvalId: randomUUID(),
-        command: `Terminal input: ${JSON.stringify(data)}`,
-        workdir: undefined,
-        host: "gateway",
-        security: policy.security,
-        ask: "always",
-        unavailableDecisions: ["allow-always"],
-        warningText: "Allow the agent to send this exact input to an existing shared terminal.",
-        agentId,
-        sessionKey: agentSessionKey,
-        sessionId: agentSessionId,
-        runId: operationalRunInstance.runId,
-        toolCallId,
-        ...(opts.approvalReviewerDeviceIds?.length
-          ? { approvalReviewerDeviceIds: opts.approvalReviewerDeviceIds }
-          : {}),
-        requireDeliveryRoute: true,
-      });
-      const decision = await resolveRegisteredExecApprovalDecision({
-        approvalId: registration.id,
-        preResolvedDecision: registration.finalDecision,
-      });
-      if (decision !== "allow-once") {
-        throw new ToolInputError("Terminal input denied: operator approval required");
+      if (policy.mode !== "full") {
+        const registration = await registerExecApprovalRequestForHostOrThrow({
+          approvalId: randomUUID(),
+          command: `Terminal input: ${JSON.stringify(data)}`,
+          workdir: undefined,
+          host: "gateway",
+          security: policy.security,
+          ask: "always",
+          unavailableDecisions: ["allow-always"],
+          warningText: "Allow the agent to send this exact input to an existing shared terminal.",
+          agentId,
+          sessionKey: agentSessionKey,
+          sessionId: agentSessionId,
+          runId: operationalRunInstance.runId,
+          toolCallId,
+          ...(opts.approvalReviewerDeviceIds?.length
+            ? { approvalReviewerDeviceIds: opts.approvalReviewerDeviceIds }
+            : {}),
+          requireDeliveryRoute: true,
+        });
+        const decision = await resolveRegisteredExecApprovalDecision({
+          approvalId: registration.id,
+          preResolvedDecision: registration.finalDecision,
+        });
+        if (decision !== "allow-once") {
+          throw new ToolInputError("Terminal input denied: operator approval required");
+        }
       }
       signal?.throwIfAborted();
-      // Approval can outlive its run or Gateway. Check both exact owners again
-      // immediately before the synchronous PTY write so stale grants cannot execute.
+      // Every write, including unprompted Full access, is bound to its exact live
+      // run and Gateway immediately before synchronous PTY I/O.
       if (
         getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority ||
         callerIdentity.receiptAuthority?.() === false
