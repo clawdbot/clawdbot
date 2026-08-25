@@ -124,4 +124,20 @@ describe("whatsapp config schema", () => {
       },
     });
   });
+
+  it("accepts implicitMentions at channel and account scope", () => {
+    const res = expectWhatsAppConfigValid({
+      implicitMentions: { quotedBot: false },
+      accounts: {
+        work: {
+          implicitMentions: { replyToBot: false, quotedBot: false },
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.implicitMentions?.quotedBot).toBe(false);
+      expect(res.data.accounts?.work?.implicitMentions?.replyToBot).toBe(false);
+    }
+  });
 });

@@ -21,6 +21,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  implicitMentions: {
+    label: "WhatsApp Implicit Mentions",
+    help: "Whether a reply/quote to the bot counts as an implicit mention. Set quotedBot: false to require an explicit @mention in groups. WhatsApp only emits the quote trigger, so replyToBot and threadParticipation have no effect here.",
+  },
   direct: {
     label: "WhatsApp Direct Chat Overrides",
     help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',

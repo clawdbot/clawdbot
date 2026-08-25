@@ -5,6 +5,7 @@ import type {
   ChannelReadReceiptConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
+import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
@@ -50,6 +51,8 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
     /** Same-phone setup (bot uses your personal WhatsApp number). */
     selfChatMode?: boolean;
+    /** Which reply/quote/thread facts count as an implicit mention. */
+    implicitMentions?: ChannelImplicitMentionsConfig;
     groups?: Record<string, WhatsAppGroupConfig>;
     /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
     direct?: Record<string, WhatsAppDirectConfig>;

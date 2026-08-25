@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements group gating behavior.
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
@@ -245,6 +246,17 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     "quoted_bot",
     !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
   );
+  // Honor the channel implicit-mention policy (e.g. quotedBot:false) the same way
+  // Slack does; without this the operator's channels.whatsapp.implicitMentions config
+  // is silently ignored and every reply to a bot/self message counts as a mention.
+  // inheritAccountDefault mirrors WhatsApp's accounts.default -> named-account inheritance
+  // per key, so a partial named override does not clear flags set on accounts.default.
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "whatsapp",
+    accountId: inboundPolicy.account.accountId,
+    inheritAccountDefault: true,
+  });
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention: true,
@@ -254,6 +266,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     policy: {
       isGroup: true,
       requireMention,
+      implicitMentions,
       allowTextCommands: false,
       hasControlCommand: false,
       commandAuthorized: false,
