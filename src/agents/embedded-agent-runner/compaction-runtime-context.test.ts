@@ -220,32 +220,46 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
   });
 
-  it("keeps literal compaction model overrides off provider runtime discovery", () => {
-    const normalizeProviderModelId = vi.spyOn(
-      providerModelNormalizationRuntime,
-      "normalizeProviderModelIdWithRuntime",
-    );
+  it.each([
+    { name: "without configured aliases", models: undefined },
+    {
+      name: "with an unrelated configured alias",
+      models: { "openai/gpt-5.4-mini": { alias: "fast" } },
+    },
+  ])(
+    "keeps literal compaction model overrides off provider runtime discovery $name",
+    ({ models }) => {
+      const normalizeProviderModelId = vi.spyOn(
+        providerModelNormalizationRuntime,
+        "normalizeProviderModelIdWithRuntime",
+      );
 
-    try {
-      const result = resolveEmbeddedCompactionTarget({
-        config: {
-          agents: { defaults: { compaction: { model: "gpt-4o" } } },
-        } as OpenClawConfig,
-        provider: "openai",
-        modelId: "gpt-3.5-turbo",
-        authProfileId: "openai:p1",
-      });
+      try {
+        const result = resolveEmbeddedCompactionTarget({
+          config: {
+            agents: {
+              defaults: {
+                ...(models ? { models } : {}),
+                compaction: { model: "gpt-4o" },
+              },
+            },
+          } as OpenClawConfig,
+          provider: "openai",
+          modelId: "gpt-3.5-turbo",
+          authProfileId: "openai:p1",
+        });
 
-      expect(result).toEqual({
-        provider: "openai",
-        model: "gpt-4o",
-        authProfileId: "openai:p1",
-      });
-      expect(normalizeProviderModelId).not.toHaveBeenCalled();
-    } finally {
-      normalizeProviderModelId.mockRestore();
-    }
-  });
+        expect(result).toEqual({
+          provider: "openai",
+          model: "gpt-4o",
+          authProfileId: "openai:p1",
+        });
+        expect(normalizeProviderModelId).not.toHaveBeenCalled();
+      } finally {
+        normalizeProviderModelId.mockRestore();
+      }
+    },
+  );
 
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({

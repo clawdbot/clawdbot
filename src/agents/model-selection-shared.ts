@@ -139,7 +139,7 @@ function listConfiguredModelMaps(cfg: OpenClawConfig, agentId?: string) {
   ];
 }
 
-function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
+export function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string) {
   return listConfiguredModelMaps(cfg, agentId).flatMap(({ models }) =>
     Object.entries(models ?? {}).flatMap(([keyRaw, entryRaw]) => {
       if (parseModelPolicyWildcardRef(keyRaw)) {

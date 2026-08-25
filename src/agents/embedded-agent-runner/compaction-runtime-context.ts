@@ -16,6 +16,7 @@ import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
+  listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -191,12 +192,13 @@ export function resolveEmbeddedCompactionTarget(params: {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  // Literal overrides need no provider-runtime normalization; only a matching
-  // configured alias can change their already-owned compaction target.
-  const alias = buildModelAliasIndex({
-    cfg: config,
-    defaultProvider,
-  }).byAlias.get(normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model));
+  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  // Unrelated aliases must not cold-load provider runtime for a literal override.
+  const alias = listModelAliasCandidates(config).some(
+    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+  )
+    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    : undefined;
   if (alias) {
     return assembleTarget(alias.ref.provider, alias.ref.model);
   }
