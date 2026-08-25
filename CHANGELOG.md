@@ -155,7 +155,6 @@ Docs: https://docs.openclaw.ai
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
-- **Provider reasoning levels:** preserve provider-defined effort mappings across model discovery, configured route selection, thinking controls, and compaction so unsupported levels stay hidden and mapped advanced levels remain available. Thanks @ekinnee.
 - **iOS fresh-install setup:** atomically redact spent setup credentials before Keychain cleanup so a deferred item deletion no longer disconnects a successfully paired device. Fixes #107591. Thanks @dagmarjeeves-lab.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
