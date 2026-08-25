@@ -8,7 +8,6 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import type {
-  ModelAuthAvailability,
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
@@ -44,6 +43,7 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
+import { resolveModelProviderRouteOverridePresence } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
@@ -79,43 +79,6 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
-function resolveLegacyEntryAvailability(params: {
-  authResolver: ModelAuthAvailabilityResolver;
-  entry: ModelCatalogEntry;
-  primaryAvailability: ModelAuthAvailability;
-  cfg: OpenClawConfig;
-  agentId: string;
-  metadataSnapshot: PluginMetadataSnapshot;
-  resolvePreparedSyntheticCliRuntime: (entry: ModelCatalogEntry) => string | undefined;
-}): ModelAuthAvailability {
-  if (params.primaryAvailability === true) {
-    return true;
-  }
-  let available = params.primaryAvailability;
-  const preparedSyntheticRuntime = params.resolvePreparedSyntheticCliRuntime(params.entry);
-  const runtimeProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.entry.provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: params.entry.id,
-      metadataSnapshot: params.metadataSnapshot,
-    }) ?? preparedSyntheticRuntime;
-  if (
-    runtimeProvider &&
-    normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
-  ) {
-    const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true || preparedSyntheticRuntime === runtimeProvider) {
-      return true;
-    }
-    if (available === false && runtimeAvailable === undefined) {
-      available = undefined;
-    }
-  }
-  return available;
-}
-
 function createModelsListEntryEvaluator(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -142,6 +105,30 @@ function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then(() => {
+      const legacyProvider = normalizeProviderId(entry.provider) !== "openai";
+      const configuredRuntime = legacyProvider
+        ? resolveCliRuntimeExecutionProvider({
+            provider: entry.provider,
+            cfg: params.cfg,
+            agentId: params.agentId,
+            modelId: entry.id,
+            metadataSnapshot: params.metadataSnapshot,
+          })
+        : undefined;
+      const preparedRuntimeOwner = legacyProvider
+        ? resolvePreparedSyntheticCliRuntime(entry)
+        : undefined;
+      const runtimeProvider = configuredRuntime ?? preparedRuntimeOwner;
+      const isAlternateRuntime =
+        runtimeProvider !== undefined &&
+        normalizeProviderId(runtimeProvider) !== normalizeProviderId(entry.provider);
+      const exactNativeRuntime =
+        isAlternateRuntime &&
+        configuredRuntime &&
+        preparedRuntimeOwner &&
+        normalizeProviderId(configuredRuntime) === normalizeProviderId(preparedRuntimeOwner)
+          ? configuredRuntime
+          : undefined;
       const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
@@ -150,22 +137,38 @@ function createModelsListEntryEvaluator(params: {
           api: variant.api,
           baseUrl: variant.baseUrl,
         })),
-      });
-      const resolved =
-        evaluation.routeResolution === null && normalizeProviderId(entry.provider) !== "openai"
+        ...(exactNativeRuntime
           ? {
-              ...evaluation,
-              availability: resolveLegacyEntryAvailability({
-                authResolver: params.authResolver,
-                entry,
-                primaryAvailability: evaluation.availability,
-                cfg: params.cfg,
-                agentId: params.agentId,
-                metadataSnapshot: params.metadataSnapshot,
-                resolvePreparedSyntheticCliRuntime,
+              api: entry.api,
+              baseUrl: entry.baseUrl,
+              runtimeOwnerId: exactNativeRuntime,
+              requestTransportOverrides: resolveModelProviderRouteOverridePresence({
+                provider: entry.provider,
+                modelId: entry.id,
+                authoredConfig: getRuntimeConfigSourceSnapshot() ?? params.cfg,
               }),
             }
-          : evaluation;
+          : {}),
+      });
+      const legacyRoute = legacyProvider && evaluation.routeResolution === null;
+      let availability = evaluation.availability;
+      // A prepared native owner without a successful exact fact is not auth evidence.
+      if (legacyRoute && availability !== true && isAlternateRuntime && !exactNativeRuntime) {
+        const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(
+          runtimeProvider,
+          {
+            ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
+            ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
+          },
+        );
+        availability =
+          runtimeAvailable === true
+            ? true
+            : availability === false && runtimeAvailable === undefined
+              ? undefined
+              : availability;
+      }
+      const resolved = legacyRoute ? { ...evaluation, availability } : evaluation;
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
       // profile discovery tested; widening it would hide routes backed by another valid profile.

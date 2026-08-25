@@ -14,6 +14,7 @@ import type {
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
+  ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
@@ -84,7 +85,7 @@ const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
   listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
 );
 
-export type ModelAuthAvailability = boolean | undefined;
+type ModelAuthAvailability = boolean | undefined;
 type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
 export type ModelAuthAvailabilityRef = {
   modelId?: string;
@@ -96,6 +97,10 @@ export type ModelAuthAvailabilityRef = {
   preferredProfileId?: string;
   /** Explicit user/session lock; model-id suffixes are transport identity only. */
   lockedProfileId?: string;
+  /** Exact successful native runtime owner required for this availability check. */
+  runtimeOwnerId?: string;
+  /** Exact request behavior that the runtime successfully reproduced. */
+  requestTransportOverrides?: ProviderRouteOverridePresence;
 };
 export type ModelAuthAvailabilityEvaluation = {
   availability: ModelAuthAvailability;
@@ -164,6 +169,11 @@ function normalizeModelIdForProvider(provider: string, modelId: string): string 
   return normalizeProviderIdForAuth(trimmed.slice(0, slash)) === provider
     ? trimmed.slice(slash + 1).trim() || undefined
     : undefined;
+}
+
+function normalizeMaterializedBaseUrl(value: unknown): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed.replace(/\/+$/u, "") : undefined;
 }
 
 /** Builds one snapshot-scoped read-only auth evaluator. */
@@ -319,6 +329,51 @@ export function createModelAuthAvailabilityResolver(
       api: ref.api ?? configuredModel?.api ?? configured?.api,
       baseUrl: ref.baseUrl ?? configuredModel?.baseUrl ?? configured?.baseUrl,
     };
+  };
+  const resolveNativeRuntimeMaterialization = (
+    provider: string,
+    target: AuthTarget,
+  ): RuntimeAuthMaterialization | undefined => {
+    const runtimeOwnerId = target.runtimeOwnerId?.trim().toLowerCase();
+    const modelId = target.modelId
+      ? normalizeModelIdForProvider(provider, target.modelId)?.toLowerCase()
+      : undefined;
+    const requestTransportOverrides = target.requestTransportOverrides;
+    const physicalRoutes = target.observedRoutes?.length
+      ? target.observedRoutes
+      : [{ api: target.api, baseUrl: target.baseUrl }];
+    const routeKeys = new Set<string>();
+    for (const route of physicalRoutes) {
+      const api = typeof route.api === "string" ? route.api.trim().toLowerCase() : "";
+      const baseUrl = normalizeMaterializedBaseUrl(route.baseUrl);
+      if (api && baseUrl) {
+        routeKeys.add(`${api}\0${baseUrl}`);
+      }
+    }
+    if (
+      target.lockedProfileId?.trim() ||
+      !runtimeOwnerId ||
+      !modelId ||
+      routeKeys.size === 0 ||
+      !requestTransportOverrides
+    ) {
+      return undefined;
+    }
+    // Native proof is profile-free and exact-route scoped; an explicit profile lock
+    // always owns selection and cannot be displaced by a prior harness success.
+    const matches = params.preparedRuntimeAuthMaterializations?.filter(
+      (fact) =>
+        normalizeProvider(fact.provider) === normalizeProvider(provider) &&
+        fact.modelId === modelId &&
+        routeKeys.has(
+          `${fact.modelApi.trim().toLowerCase()}\0${normalizeMaterializedBaseUrl(fact.modelBaseUrl) ?? ""}`,
+        ) &&
+        fact.requestTransportOverrides === requestTransportOverrides &&
+        fact.runtimeOwnerId === runtimeOwnerId &&
+        fact.authMode === "native" &&
+        fact.authProfileId === undefined,
+    );
+    return matches?.length === 1 ? matches[0] : undefined;
   };
   const providerBinding = (provider: string) =>
     resolveProviderEntryApiKeyProfileReference({
@@ -809,6 +864,14 @@ export function createModelAuthAvailabilityResolver(
   ): AuthSourceEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
     const target = preparedTarget ?? prepareAuthTarget(provider, ref);
+    const nativeRuntimeMaterialization = resolveNativeRuntimeMaterialization(provider, target);
+    if (nativeRuntimeMaterialization) {
+      return {
+        availability: true,
+        selectedAuthMode: "native",
+        evidence: "runtime",
+      };
+    }
     const profileLock = ref.lockedProfileId?.trim();
     const policy = directPolicy(provider, target);
     if (!profileLock && policy.binding.kind === "profile-incompatible") {

@@ -159,7 +159,12 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
       modelApi: materializedRoute.api,
       modelBaseUrl: materializedRoute.baseUrl,
       requestTransportOverrides: materializedRoute.requestTransportOverrides,
-      authMode: materializedRoute.authRequirement === "subscription" ? "oauth" : "api-key",
+      authMode:
+        "authMode" in materializedRoute
+          ? materializedRoute.authMode
+          : materializedRoute.authRequirement === "subscription"
+            ? "oauth"
+            : "api-key",
       runtimeOwnerId: input.agentHarnessId,
       ...(input.profileId ? { authProfileId: input.profileId } : {}),
     });
@@ -187,6 +192,7 @@ function resolveOpaqueHarnessMaterialization(
   credential: AuthProfileStore["profiles"][string] | undefined,
 ) {
   if (
+    !input.pluginHarnessOwnsTransport ||
     !input.pluginHarnessOwnsAuthBootstrap ||
     input.apiKeyInfo ||
     hasInlineCredentialMaterial(credential) ||
@@ -202,22 +208,32 @@ function resolveOpaqueHarnessMaterialization(
     config: input.config,
     requestTransportOverrides: input.requestTransportOverrides ?? "none",
   });
-  if (resolution?.kind !== "routes") {
-    return undefined;
+  if (resolution?.kind === "routes") {
+    const routes = resolution.routes.filter(
+      (route) =>
+        route.api === input.modelApi &&
+        route.requestTransportOverrides === (input.requestTransportOverrides ?? "none") &&
+        (!input.modelBaseUrl ||
+          modelMatchesProviderModelRoute({
+            provider: input.provider,
+            api: input.modelApi,
+            baseUrl: input.modelBaseUrl,
+            route,
+          })),
+    );
+    return routes.length === 1 ? routes[0] : undefined;
   }
-  const routes = resolution.routes.filter(
-    (route) =>
-      route.api === input.modelApi &&
-      route.requestTransportOverrides === (input.requestTransportOverrides ?? "none") &&
-      (!input.modelBaseUrl ||
-        modelMatchesProviderModelRoute({
-          provider: input.provider,
-          api: input.modelApi,
-          baseUrl: input.modelBaseUrl,
-          route,
-        })),
-  );
-  return routes.length === 1 ? routes[0] : undefined;
+  const baseUrl = input.modelBaseUrl?.trim();
+  // Only a completed credential-free harness run owns native auth proof;
+  // profiles and forwarded credentials must stay on their explicit paths.
+  return resolution === null && !input.profileId && baseUrl
+    ? {
+        api: input.modelApi,
+        baseUrl,
+        requestTransportOverrides: input.requestTransportOverrides ?? "none",
+        authMode: "native",
+      }
+    : undefined;
 }
 
 function isModelApi(value: string): value is ModelApi {

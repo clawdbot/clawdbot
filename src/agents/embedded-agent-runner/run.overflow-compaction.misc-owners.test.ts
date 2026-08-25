@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { markAuthProfileSuccess } from "../auth-profiles.js";
+import {
+  clearAllRuntimeAuthMaterializations,
+  getPreparedRuntimeAuthMaterializations,
+} from "../auth-profiles/runtime-materializations.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -13,7 +17,21 @@ vi.mock("../auth-profiles.js", () => ({
   markAuthProfileSuccess: vi.fn(),
 }));
 
+vi.mock("../../plugins/provider-model-routes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/provider-model-routes.js")>();
+  return {
+    ...actual,
+    resolveProviderModelRoutes: (
+      params: Parameters<typeof actual.resolveProviderModelRoutes>[0],
+    ) => (params.provider === "anthropic" ? null : actual.resolveProviderModelRoutes(params)),
+  };
+});
+
 const mockedMarkAuthProfileSuccess = vi.mocked(markAuthProfileSuccess);
+
+afterEach(() => {
+  clearAllRuntimeAuthMaterializations();
+});
 
 describe("markEmbeddedRunAuthProfileSuccess", () => {
   beforeEach(() => {
@@ -51,6 +69,7 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
 
   it("uses a harness-owned SecretRef fingerprint when the harness resolves it", () => {
     const onSuccessfulAuthBinding = vi.fn();
+    const agentDir = "/tmp/openclaw-secretref-materialization";
 
     reportEmbeddedRunSuccessfulAuthBinding({
       profileId: "openai:work",
@@ -60,8 +79,10 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
         authBindingFingerprint: "resolved-secretref-fingerprint",
       } as EmbeddedRunAttemptResult,
       provider: "openai",
+      agentDir,
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
       agentHarnessId: "codex",
       pluginHarnessOwnsTransport: true,
       pluginHarnessOwnsAuthBootstrap: true,
@@ -77,6 +98,18 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
       runtimeOwnerKind: "plugin-harness",
       runtimeOwnerId: "codex",
     });
+    expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+      {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "none",
+        authMode: "api-key",
+        runtimeOwnerId: "codex",
+        authProfileId: "openai:work",
+      },
+    ]);
   });
 
   it("binds opaque harness auth to the exact captured runtime artifact", () => {
@@ -111,6 +144,112 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
       runtimeArtifactId: runtimeArtifact.id,
       runtimeArtifactFingerprint: runtimeArtifact.fingerprint,
     });
+  });
+
+  it("records exact native auth only after a credential-free harness succeeds", () => {
+    const agentDir = "/tmp/openclaw-native-auth-materialization";
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileStore: { version: 1, profiles: {} },
+      apiKeyInfo: null,
+      attempt: {} as EmbeddedRunAttemptResult,
+      provider: "anthropic",
+      agentDir,
+      modelId: "claude-opus-5",
+      modelApi: "anthropic-messages",
+      modelBaseUrl: "https://api.anthropic.com",
+      requestTransportOverrides: "none",
+      agentHarnessId: "claude-cli",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+    });
+
+    expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+      {
+        provider: "anthropic",
+        modelId: "claude-opus-5",
+        modelApi: "anthropic-messages",
+        modelBaseUrl: "https://api.anthropic.com",
+        requestTransportOverrides: "none",
+        authMode: "native",
+        runtimeOwnerId: "claude-cli",
+      },
+    ]);
+  });
+
+  const nativeAuthDenialCases: Array<{
+    label: string;
+    overrides: Partial<Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0]>;
+  }> = [
+    {
+      label: "transport ownership",
+      overrides: { pluginHarnessOwnsTransport: false },
+    },
+    {
+      label: "auth-bootstrap ownership",
+      overrides: { pluginHarnessOwnsAuthBootstrap: false },
+    },
+    {
+      label: "an unbound profile id",
+      overrides: { profileId: "anthropic:missing" },
+    },
+    {
+      label: "a SecretRef profile",
+      overrides: {
+        profileId: "anthropic:ref",
+        profileStore: {
+          version: 1,
+          profiles: {
+            "anthropic:ref": {
+              type: "api_key",
+              provider: "anthropic",
+              keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+            },
+          },
+        },
+      },
+    },
+    {
+      label: "an inline profile credential",
+      overrides: {
+        profileId: "anthropic:inline",
+        profileStore: {
+          version: 1,
+          profiles: {
+            "anthropic:inline": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "inline-test-key",
+            },
+          },
+        },
+      },
+    },
+    {
+      label: "forwarded auth material",
+      overrides: {
+        apiKeyInfo: { apiKey: "forwarded-test-key", mode: "api-key", source: "test" },
+      },
+    },
+  ];
+
+  it.each(nativeAuthDenialCases)("does not record native auth without $label", ({ overrides }) => {
+    const agentDir = `/tmp/openclaw-unowned-native-auth-${overrides.profileId ?? "owner"}`;
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileStore: { version: 1, profiles: {} },
+      apiKeyInfo: null,
+      attempt: {} as EmbeddedRunAttemptResult,
+      provider: "anthropic",
+      agentDir,
+      modelId: "claude-opus-5",
+      modelApi: "anthropic-messages",
+      modelBaseUrl: "https://api.anthropic.com",
+      agentHarnessId: "claude-cli",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+      ...overrides,
+    });
+
+    expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
   });
 });
 

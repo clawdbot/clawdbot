@@ -1633,7 +1633,7 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps catalog models available through a native CLI runtime", async () => {
+  it("keeps catalog models unavailable until a native CLI runtime succeeds", async () => {
     await withoutAnthropicEnvAuth(async () => {
       await withModelsTestState(
         {
@@ -1683,7 +1683,7 @@ describe("models.list", () => {
                     devicePlacementSupported: false,
                     source: "model",
                   },
-                  available: true,
+                  available: false,
                   tags: ["configured"],
                 },
               ],

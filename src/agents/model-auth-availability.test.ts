@@ -52,6 +52,7 @@ function authStore(
 }
 
 function evaluate(params: {
+  provider?: string;
   cfg?: OpenClawConfig | Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   ref?: ModelAuthAvailabilityRef;
@@ -66,12 +67,14 @@ function evaluate(params: {
     cfg: (params.cfg ?? {}) as OpenClawConfig,
     authStore: params.store ?? authStore(),
     env: params.env ?? {},
-    routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
+    routeResolverFactory: routeResolverFactory(
+      params.resolution === undefined ? dualRoutes : params.resolution,
+    ),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
-  }).evaluateModelAuth("openai", params.ref);
+  }).evaluateModelAuth(params.provider ?? "openai", params.ref);
 }
 
 describe("createModelAuthAvailabilityResolver", () => {
@@ -220,6 +223,90 @@ describe("createModelAuthAvailabilityResolver", () => {
       evidence: "provider-config",
       selectedRoute: platformRoute,
     });
+  });
+
+  it("uses only an exact credential-free native runtime materialization", () => {
+    const materialization = {
+      provider: "anthropic",
+      modelId: "claude-opus-5",
+      modelApi: "anthropic-messages",
+      modelBaseUrl: "https://api.anthropic.com/",
+      requestTransportOverrides: "none",
+      authMode: "native",
+      runtimeOwnerId: "claude-cli",
+    } as const;
+    const ref = {
+      modelId: "claude-opus-5",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      runtimeOwnerId: "claude-cli",
+      requestTransportOverrides: "none",
+    } as const;
+    const evaluateNative = (
+      target: ModelAuthAvailabilityRef,
+      facts: readonly RuntimeAuthMaterialization[] = [materialization],
+    ) =>
+      evaluate({
+        provider: "anthropic",
+        resolution: null,
+        ref: target,
+        preparedRuntimeAuthMaterializations: facts,
+      });
+
+    expect(evaluateNative(ref)).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedAuthMode: "native",
+    });
+
+    const physicalRoute = {
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    } as const;
+    const physicalRef = {
+      modelId: ref.modelId,
+      runtimeOwnerId: ref.runtimeOwnerId,
+      requestTransportOverrides: ref.requestTransportOverrides,
+      observedRoutes: [physicalRoute, physicalRoute],
+    } as const;
+    expect(evaluateNative(physicalRef)).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedAuthMode: "native",
+    });
+
+    expect(evaluateNative({ ...physicalRef, observedRoutes: [] }).availability).not.toBe(true);
+
+    expect(
+      evaluateNative(
+        {
+          ...physicalRef,
+          observedRoutes: [
+            physicalRoute,
+            { ...physicalRoute, baseUrl: "https://proxy.example.test" },
+          ],
+        },
+        [materialization, { ...materialization, modelBaseUrl: "https://proxy.example.test" }],
+      ).availability,
+    ).not.toBe(true);
+
+    const mismatches: RuntimeAuthMaterialization[] = [
+      { ...materialization, provider: "openai" },
+      { ...materialization, modelId: "claude-sonnet-5" },
+      { ...materialization, modelApi: "openai-responses" },
+      { ...materialization, modelBaseUrl: "https://proxy.example.test" },
+      { ...materialization, requestTransportOverrides: "present" },
+      { ...materialization, runtimeOwnerId: "openclaw" },
+      { ...materialization, authMode: "oauth" },
+      { ...materialization, authProfileId: "anthropic:default" },
+    ];
+    for (const mismatch of mismatches) {
+      expect(evaluateNative(ref, [mismatch]).availability).not.toBe(true);
+    }
+
+    expect(evaluateNative({ ...ref, lockedProfileId: "anthropic:locked" }).availability).not.toBe(
+      true,
+    );
   });
 
   it.each([
