@@ -265,7 +265,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
                 throw new Error("Realtime voice client disconnected");
               }
             },
-            runAgentConsult: consultRunner.runArgs,
+            runAgentConsult: consultRunner.runOwnedArgs,
             getToolAuthorityOverlay: (source) =>
               consultRunner.getToolAuthorityOverlay(undefined, source),
             appendTranscript: ({ entryId, role, text }) =>

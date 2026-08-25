@@ -11,7 +11,10 @@ describe("GPT-Live Gateway direct transport", () => {
     const onAudio = vi.fn();
     const onClose = vi.fn();
     const onReady = vi.fn();
-    const runAgentConsult = vi.fn(async () => ({ text: "Delegated result" }));
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "Delegated result" })),
+      { claimAppend: vi.fn(() => true) },
+    );
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},

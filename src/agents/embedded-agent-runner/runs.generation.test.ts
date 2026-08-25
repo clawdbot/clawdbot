@@ -29,6 +29,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunAbortableForRunId,
+  prepareEmbeddedAgentRunCompletionClaim,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
@@ -107,6 +108,20 @@ describe("embedded run registry lifecycle generations", () => {
     resetDiagnosticRunActivityForTest();
     resetDiagnosticEventsForTest();
     lifecycleMock.reset();
+  });
+
+  it("revokes a completed claim when the gateway lifecycle rotates", () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+    setActiveEmbeddedRun("claim-session", handle);
+    clearActiveEmbeddedRun("claim-session", handle);
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(claimCompletion()).toBe(false);
   });
 
   it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {

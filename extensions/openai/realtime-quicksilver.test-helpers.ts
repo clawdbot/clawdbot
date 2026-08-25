@@ -140,6 +140,9 @@ export function createBroker(params?: {
     },
     openAIRealtimeHost,
   );
-  const runAgentConsult = params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" }));
+  const runAgentConsult = Object.assign(
+    params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" })),
+    { claimAppend: vi.fn(() => true) },
+  );
   return { realtime, sockets, socketRequests, logger, runAgentConsult };
 }

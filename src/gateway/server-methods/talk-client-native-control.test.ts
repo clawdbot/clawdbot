@@ -22,6 +22,7 @@ import {
   upstream,
   withNativePlugin,
   withParkedNativeTask,
+  withRegisteredNativeEmbeddedRun,
 } from "./talk-client-native-control.test-support.js";
 
 describe("native Talk through the public OpenAI plugin registration", () => {
@@ -198,10 +199,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
             clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
           }
         })
-        .mockResolvedValueOnce({
-          payloads: [{ text: "Fresh consult completed." }],
-          meta: { durationMs: 0 },
-        });
+        .mockImplementationOnce(
+          async (params) =>
+            await withRegisteredNativeEmbeddedRun(params, () => ({
+              payloads: [{ text: "Fresh consult completed." }],
+              meta: { durationMs: 0 },
+            })),
+        );
       const settleBackend = async () => {
         releaseBackend.resolve();
         await Promise.allSettled(
@@ -307,10 +311,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       expect(
         readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID }),
       ).toHaveLength(1);
-      upstream.runEmbeddedAgent.mockResolvedValue({
-        payloads: [{ text: "Legacy provider consultation." }],
-        meta: { durationMs: 0 },
-      });
+      upstream.runEmbeddedAgent.mockImplementation(
+        async (params) =>
+          await withRegisteredNativeEmbeddedRun(params, () => ({
+            payloads: [{ text: "Legacy provider consultation." }],
+            meta: { durationMs: 0 },
+          })),
+      );
       socket.serverEvent(nativeDelegation("legacy-status", "Status?"));
       await vi.waitFor(() =>
         expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),

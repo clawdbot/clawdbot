@@ -136,6 +136,19 @@ export function requireString(record: Record<string, unknown>, key: string): str
   return value;
 }
 
+export async function withRegisteredNativeEmbeddedRun<T>(
+  params: Pick<RunEmbeddedAgentParams, "runId" | "sessionId" | "sessionKey">,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const handle = createEmbeddedRunHandle({ runId: params.runId });
+  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  try {
+    return await run();
+  } finally {
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  }
+}
+
 function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {
   const reply = respond.mock.calls.at(-1);
   if (!reply) {
@@ -510,10 +523,13 @@ export async function withParkedNativeTask(
         throw error;
       });
     })
-    .mockResolvedValue({
-      payloads: [{ text: "Subsequent task completed." }],
-      meta: { durationMs: 0 },
-    });
+    .mockImplementation(
+      async (params) =>
+        await withRegisteredNativeEmbeddedRun(params, () => ({
+          payloads: [{ text: "Subsequent task completed." }],
+          meta: { durationMs: 0 },
+        })),
+    );
   const settleBackend = async () => {
     releaseBackend.resolve();
     await Promise.allSettled(

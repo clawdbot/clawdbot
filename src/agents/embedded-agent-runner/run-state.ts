@@ -116,6 +116,12 @@ export type EmbeddedRunRegistration = {
   onHumanInputResolved?: () => void;
 };
 
+type EmbeddedRunCompletionClaim = {
+  runId: string;
+  lifecycleGeneration: string;
+  promoted: boolean;
+};
+
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   handle?: EmbeddedAgentQueueHandle;
@@ -138,6 +144,9 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunRegistrations: new WeakMap<EmbeddedAgentQueueHandle, EmbeddedRunRegistration>(),
+  // Talk prepares before registration; only the matching live run promotes this
+  // one-shot final-delivery claim. Replacement or lifecycle rotation revokes it.
+  completionClaims: new Map<string, EmbeddedRunCompletionClaim>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
@@ -163,6 +172,9 @@ export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS =
     EmbeddedAgentQueueHandle,
     EmbeddedRunRegistration
   >());
+export const EMBEDDED_RUN_COMPLETION_CLAIMS =
+  embeddedRunState.completionClaims ??
+  (embeddedRunState.completionClaims = new Map<string, EmbeddedRunCompletionClaim>());
 
 /** Only an accepted question's exact admitted owner may suppress stale-work recovery. */
 export function registerActiveEmbeddedRunHumanInputWait(
@@ -307,6 +319,11 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     if (ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle) {
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
       RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(runId);
+    }
+  }
+  for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+    if (!isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)) {
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
     }
   }
   for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {

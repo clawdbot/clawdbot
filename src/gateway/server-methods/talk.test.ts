@@ -6,6 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -3426,16 +3431,28 @@ describe("talk.client.create handler", () => {
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
     mocks.createTalkClientGatewayControlOwner.mockImplementation(
       (params: {
-        runAgentConsult: (args: unknown, signal?: AbortSignal) => Promise<{ text: string }>;
-      }) => ({
-        activate: mocks.gatewayControlActivate,
-        adoptProvider: mocks.gatewayControlAdoptProvider,
-        close: mocks.gatewayControlClose,
-        assertOpen: vi.fn(),
-        control: mocks.gatewayControl,
-        runAgentConsult: ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
-          params.runAgentConsult({ question: prompt }, signal),
-      }),
+        runAgentConsult: ((args: unknown, signal?: AbortSignal) => Promise<{ text: string }>) & {
+          claimAppend?: () => boolean;
+          steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
+        };
+      }) => {
+        const runAgentConsult = Object.assign(
+          ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
+            params.runAgentConsult({ question: prompt }, signal),
+          {
+            claimAppend: params.runAgentConsult.claimAppend,
+            steer: params.runAgentConsult.steer,
+          },
+        );
+        return {
+          activate: mocks.gatewayControlActivate,
+          adoptProvider: mocks.gatewayControlAdoptProvider,
+          close: mocks.gatewayControlClose,
+          assertOpen: vi.fn(),
+          control: mocks.gatewayControl,
+          runAgentConsult,
+        };
+      },
     );
   });
 
@@ -3826,11 +3843,14 @@ describe("talk.client.create handler", () => {
         sessionId: "session-main",
         timeoutMs: 30_000,
       });
+      const handle = createEmbeddedRunHandle({ runId: "talk-realtime-consult:gpt-live" });
+      setActiveEmbeddedRun("session-main", handle, "agent:main:main");
       started.resolve();
       try {
         await release.promise;
         return { text: "Done" };
       } finally {
+        clearActiveEmbeddedRun("session-main", handle, "agent:main:main");
         registration?.cleanup?.();
       }
     });
@@ -3846,9 +3866,10 @@ describe("talk.client.create handler", () => {
       context,
     });
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
-    const consult = (
-      createInput.runAgentConsult as (params: { prompt: string }) => Promise<{ text: string }>
-    )({ prompt: "Check the release" });
+    const providerConsult = createInput.runAgentConsult as ((params: {
+      prompt: string;
+    }) => Promise<{ text: string }>) & { claimAppend?: () => boolean };
+    const consult = providerConsult({ prompt: "Check the release" });
     await started.promise;
 
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith({
@@ -3896,6 +3917,7 @@ describe("talk.client.create handler", () => {
 
     release.resolve();
     await expect(consult).resolves.toEqual({ text: "Done" });
+    expect(providerConsult.claimAppend?.()).toBe(true);
     expect(chatAbortControllers.has("talk-realtime-consult:gpt-live")).toBe(false);
   });
 

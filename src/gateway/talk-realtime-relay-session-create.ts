@@ -13,6 +13,7 @@ import type { TalkEventInput } from "../talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
 import { createTalkRealtimeRunControlOwner } from "./talk-client-gateway-control.js";
+import { bindTalkRealtimeRelayAgentConsult } from "./talk-realtime-relay-agent-consult.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
@@ -164,13 +165,12 @@ export function createTalkRealtimeRelaySession(
         sessionKey: canonicalKey,
         runId,
       }),
+    isRunCurrent: (runId) => getActiveRelay()?.activeAgentRuns.get(runId) === canonicalKey,
   });
-  const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
-    if (!getActiveRelay()) {
-      throw new Error("Realtime gateway-relay session is closed");
-    }
-    return await consultRunner.runPrompt({ prompt, signal });
-  };
+  const runAgentConsult = bindTalkRealtimeRelayAgentConsult(
+    consultRunner.runPrompt,
+    () => getActiveRelay() !== undefined,
+  );
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,
     supportsToolCalls: params.supportsToolCalls,
