@@ -169,6 +169,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       setEntry: (next) => {
         entry = next;
       },
+      sourceTurnId: "source-turn",
       storePath,
     });
 
