@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  consumeRequesterFinalAttachment,
+  registerRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
 import {
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
@@ -77,6 +82,57 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
     expect(first.requesterTurnRunId).toBeUndefined();
     expect(schedule).toHaveBeenCalledOnce();
+  });
+
+  it("promotes the requester attachment only after durable settlement", () => {
+    const entry = makeRun("run-child");
+    entry.requesterAgentId = "main";
+    const append = vi.fn(() => true);
+    registerRequesterFinalAttachment({
+      requesterAgentId: "main",
+      requesterSessionKey: REQUESTER,
+      requesterSessionId: "session-main",
+      requesterTurnRunId: REQUESTER_TURN,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      timeoutMs: 60_000,
+      append,
+    });
+    const persistOrThrow = vi.fn(() => {
+      expect(
+        consumeRequesterFinalAttachment({
+          requesterAgentId: "main",
+          requesterSessionKey: REQUESTER,
+          requesterSessionId: "session-main",
+          batchRunIds: [entry.runId],
+          rearmGeneration: 1,
+          text: "too early",
+        }),
+      ).toBe("missing");
+    });
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow,
+        schedule: vi.fn(),
+      }),
+    ).toBe(true);
+    expect(
+      consumeRequesterFinalAttachment({
+        requesterAgentId: "main",
+        requesterSessionKey: REQUESTER,
+        requesterSessionId: "session-main",
+        batchRunIds: [entry.runId],
+        rearmGeneration: 1,
+        text: "settled",
+      }),
+    ).toBe("appended");
+    expect(append).toHaveBeenCalledExactlyOnceWith("settled");
   });
 
   it("retires a completed yielded batch whose requester already produced its final", () => {

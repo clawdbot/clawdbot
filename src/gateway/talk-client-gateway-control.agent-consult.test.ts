@@ -7,7 +7,12 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunsTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  consumeRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../agents/subagents/requester-final-attachment.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 type ConsultParams = Parameters<
@@ -114,7 +119,7 @@ describe("Talk client agent consult admission", () => {
       const registration = params.onRunStarted?.({
         runId: "run-talk",
         sessionId: "session-talk",
-        timeoutMs: 1,
+        timeoutMs: 60_000,
       });
       setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
       try {
@@ -210,6 +215,43 @@ describe("Talk client agent consult admission", () => {
     expect(chatAbortControllers.has("run-talk")).toBe(false);
     expect(runner.runPrompt.claimAppend()).toBe(false);
     expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
+  });
+
+  it("registers the provider late-final callback before a yielded run settles", async () => {
+    const core = deferred<{ payloads: never[] }>();
+    mocks.runEmbeddedAgentCore.mockReturnValueOnce(core.promise);
+    const append = vi.fn(() => true);
+    const runner = createRunner();
+
+    const run = runner.runPrompt({
+      prompt: "investigate",
+      requesterFinal: { append },
+    });
+    await vi.waitFor(() => expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce());
+    expect(
+      promoteRequesterFinalAttachment({
+        requesterAgentId: "researcher",
+        requesterSessionKey: "agent:researcher:talk",
+        requesterTurnRunId: "run-talk",
+        batchRunIds: ["run-child"],
+        rearmGeneration: 1,
+      }),
+    ).toBe(true);
+    core.resolve({ payloads: [] });
+    await expect(run).resolves.toEqual({ text: "done" });
+    expect(runner.runPrompt.claimAppend()).toBe(true);
+    expect(
+      consumeRequesterFinalAttachment({
+        requesterAgentId: "researcher",
+        requesterSessionKey: "agent:researcher:talk",
+        requesterSessionId: "session-talk",
+        batchRunIds: ["run-child"],
+        rearmGeneration: 1,
+        text: "late final",
+      }),
+    ).toBe("appended");
+    expect(append).toHaveBeenCalledExactlyOnceWith("late final");
+    expect(getAgentEventLifecycleGeneration()).toEqual(expect.any(String));
   });
 
   it("rejects final append after another run reuses the embedded session id", async () => {

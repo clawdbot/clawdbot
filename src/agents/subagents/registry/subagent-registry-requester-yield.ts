@@ -1,5 +1,6 @@
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Persists explicit yield intent before the requester run is aborted. */
@@ -173,6 +174,15 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     throw error;
   }
 
+  if (rearmGeneration !== undefined && params.requesterAgentId) {
+    promoteRequesterFinalAttachment({
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey,
+      requesterTurnRunId,
+      batchRunIds,
+      rearmGeneration,
+    });
+  }
   if (
     rearmGeneration !== undefined &&
     entries.every((entry) => typeof entry.execution.endedAt === "number")

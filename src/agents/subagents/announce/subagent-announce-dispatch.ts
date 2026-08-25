@@ -34,6 +34,8 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   /** Direct completion that already sent the yielded requester's visible final. */
   requesterVisibleFinalDelivered?: true;
+  /** Bounded visible final returned by the direct requester synthesis turn. */
+  finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   // Stops fallback delivery when ownership changed or another terminal result

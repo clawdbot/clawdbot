@@ -36,6 +36,7 @@ export type AgentDeliveryEvidence = {
   acceptedSessionSpawns?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    finalAssistantVisibleText?: unknown;
     toolSummary?: {
       calls?: unknown;
     };

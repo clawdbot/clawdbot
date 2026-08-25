@@ -1922,6 +1922,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       result: {
         payloads: [{ text: "requester voice completion" }],
+        meta: { finalAssistantVisibleText: "requester voice completion" },
       },
     });
     testing.setDepsForTest({
@@ -1958,7 +1959,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectDeliveryPath(result, "direct");
-    expect(result).toMatchObject({ requesterVisibleFinalDelivered: true });
+    expect(result).toMatchObject({
+      requesterVisibleFinalDelivered: true,
+      finalAssistantVisibleText: "requester voice completion",
+    });
     expect(callGateway).not.toHaveBeenCalled();
     expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       deliver: true,

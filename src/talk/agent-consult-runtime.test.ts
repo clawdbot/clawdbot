@@ -586,6 +586,38 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
+    const warn = vi.fn();
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "  Working on it.   I will report back.  ",
+      },
+    });
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      sessionKey: "voice:yielded",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice:yielded",
+      args: { question: "Investigate this" },
+      transcript: [],
+      surface: "a live voice session",
+      userLabel: "Caller",
+    });
+
+    expect(result).toEqual({
+      text: "Working on it. I will report back.",
+      yielded: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("forks requester context when fork mode has a parent session", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:main"] = {
