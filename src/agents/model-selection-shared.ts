@@ -139,7 +139,7 @@ function listConfiguredModelMaps(cfg: OpenClawConfig, agentId?: string) {
   ];
 }
 
-function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string): ModelAliasCandidate[] {
+export function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string) {
   return listConfiguredModelMaps(cfg, agentId).flatMap(({ models }) =>
     Object.entries(models ?? {}).flatMap(([keyRaw, entryRaw]) => {
       if (parseModelPolicyWildcardRef(keyRaw)) {
@@ -164,15 +164,32 @@ function buildEffectiveModelAliases(
   if (candidates.length === 0) {
     return { aliases: [], disabledKeys: new Set() };
   }
-  const manifestPlugins = params.manifestPluginContext.get();
   for (const candidate of candidates) {
+    const isColdDefaultProviderAlias =
+      params.allowManifestNormalization !== false &&
+      hasSlashFormModelRef(candidate.keyRaw) &&
+      normalizeProviderId(candidate.keyRaw.slice(0, candidate.keyRaw.indexOf("/"))) ===
+        normalizeProviderId(DEFAULT_PROVIDER) &&
+      !findExactConfiguredProviderRefParts({ cfg: params.cfg, raw: candidate.keyRaw }) &&
+      params.manifestPluginContext.peek() === undefined &&
+      !getActivePluginRegistryWorkspaceDirFromState() &&
+      !getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env });
+    // The default-provider owner declares no manifest or runtime model normalizer;
+    // cold alias indexing must not discover every plugin for an identity transform.
+    const manifestPlugins = isColdDefaultProviderAlias
+      ? undefined
+      : params.manifestPluginContext.get();
     const ref = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       agentId: params.agentId,
       raw: candidate.keyRaw,
       defaultProvider: params.defaultProvider,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
+      allowManifestNormalization: isColdDefaultProviderAlias
+        ? false
+        : params.allowManifestNormalization,
+      allowPluginNormalization: isColdDefaultProviderAlias
+        ? false
+        : params.allowPluginNormalization,
       manifestPlugins,
     });
     if (!ref) {
@@ -840,18 +857,7 @@ export function resolveConfiguredModelRef(
     if (profileAliasCandidate) {
       // Auth-profile suffixes are not part of alias matching; resolve the alias
       // target while preserving the provider/model semantics of the key.
-      const aliasRef = parseModelRefWithCompatAlias({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: profileAliasCandidate.keyRaw,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: manifestPluginContext.get(),
-      });
-      if (aliasRef) {
-        return aliasRef;
-      }
+      return profileAliasCandidate.ref;
     }
     const primaryWithoutProfile = modelWithoutProfile || trimmed;
     const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
@@ -885,18 +891,7 @@ export function resolveConfiguredModelRef(
       }
     }
     if (aliasCandidate) {
-      const aliasRef = parseModelRefWithCompatAlias({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: aliasCandidate.keyRaw,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: manifestPluginContext.get(),
-      });
-      if (aliasRef) {
-        return aliasRef;
-      }
+      return aliasCandidate.ref;
     }
 
     if (!trimmed.includes("/")) {
@@ -1458,6 +1453,7 @@ export function buildConfiguredModelCatalog(params: {
         contextTokens,
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
+        ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,

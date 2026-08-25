@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => undefined,
+  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({

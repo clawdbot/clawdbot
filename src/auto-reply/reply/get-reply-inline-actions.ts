@@ -1,5 +1,6 @@
 /** Handles inline slash commands, skill invocations, and abort actions before model runs. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
@@ -140,6 +141,7 @@ type InlineActionResult =
       directives: InlineDirectives;
       abortedLastRun: boolean;
       cleanedBody: string;
+      queueModeOverride?: QueueMode;
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
 
@@ -560,6 +562,7 @@ export async function handleInlineActions(params: {
       isGroup,
     }) && inlineStatusRequested;
   let didSendInlineStatus = false;
+  let queueModeOverride: QueueMode | undefined;
   if (handleInlineStatus) {
     const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
@@ -641,6 +644,7 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await runCommands(inlineCommandContext);
+    queueModeOverride = inlineResult.queueModeOverride;
     notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
@@ -693,6 +697,7 @@ export async function handleInlineActions(params: {
   const commandBodyBeforeRun = command.commandBodyNormalized;
   const bodyBeforeRun = sessionCtx.agentText;
   const commandResult = await runCommands(command);
+  queueModeOverride = commandResult.queueModeOverride ?? queueModeOverride;
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
@@ -712,6 +717,7 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
     cleanedBody,
+    ...(queueModeOverride ? { queueModeOverride } : {}),
     ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
   };
 }

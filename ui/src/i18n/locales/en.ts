@@ -240,6 +240,7 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
+    lastActivity: "Last activity: {time}",
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",

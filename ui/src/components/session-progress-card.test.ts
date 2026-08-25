@@ -18,12 +18,38 @@ const progressCard: ProgressCard = {
 };
 
 describe("renderSessionProgressCard", () => {
+  it.each(["board", "composer", "dock", "hovercard", "rail"] as const)(
+    "shows the last activity time for %s cards with and without checklist steps",
+    (placement) => {
+      const container = document.createElement("div");
+
+      for (const steps of [progressCard.steps, undefined]) {
+        render(renderSessionProgressCard({ ...progressCard, steps }, placement), container);
+
+        const timestamp = container.querySelector(".session-progress-card time");
+        expect(timestamp?.getAttribute("datetime")).toBe(
+          new Date(progressCard.updatedAt).toISOString(),
+        );
+        expect(timestamp?.textContent).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+        expect(timestamp?.getAttribute("aria-label")).toMatch(/^Last activity: /);
+        expect(timestamp?.getAttribute("title")).toBe(timestamp?.getAttribute("aria-label"));
+        const accessibleCard =
+          placement === "composer"
+            ? timestamp?.closest("summary")
+            : timestamp?.closest(".session-progress-card");
+        expect(accessibleCard?.getAttribute("aria-label")).toContain(
+          timestamp?.getAttribute("aria-label"),
+        );
+      }
+    },
+  );
+
   it("renders sanitized markdown and one accessible typed checklist", () => {
     const container = document.createElement("div");
     render(renderSessionProgressCard(progressCard, "rail"), container);
 
     const card = container.querySelector(".session-progress-card");
-    expect(card?.getAttribute("aria-label")).toBe("1 of 3 completed");
+    expect(card?.getAttribute("aria-label")).toMatch(/^1 of 3 completed\. Last activity: /);
     expect(card?.querySelector("strong")?.textContent).toBe("Focused change");
     expect(card?.querySelector("progress")?.getAttribute("value")).toBe("1");
     expect(card?.querySelectorAll(".session-progress-card__count")).toHaveLength(0);
