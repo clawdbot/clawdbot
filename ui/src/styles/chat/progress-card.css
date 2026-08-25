@@ -408,10 +408,14 @@
 .session-progress-card--dock {
   position: absolute;
   z-index: 3;
-  inset-block-end: var(--chat-composer-bottom-gap);
+  inset-block-end: var(--chat-composer-bottom-gap, 14px);
   inset-inline-end: var(--chat-thread-gutter);
   inset-inline-start: calc(
-    50% + min(50% - var(--chat-composer-side-inset) / 2, var(--chat-thread-max-width, 48rem) / 2) +
+    50% +
+      min(
+        50% - var(--chat-composer-side-inset, 36px) / 2,
+        var(--chat-thread-max-width, 48rem) / 2
+      ) +
       var(--space-3)
   );
   max-height: min(46%, 420px);

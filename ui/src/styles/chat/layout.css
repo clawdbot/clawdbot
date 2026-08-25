@@ -1690,9 +1690,11 @@ button.chat-reply-preview--message:disabled {
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  width: calc(100% - var(--chat-composer-side-inset));
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
   max-width: var(--chat-thread-max-width, 48rem);
-  margin: 8px auto var(--chat-composer-bottom-gap);
+  margin: 8px auto var(--chat-composer-bottom-gap, 14px);
 }
 
 /* Floating tray pinned to the conversation's top-right (the positioned
