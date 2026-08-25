@@ -148,33 +148,27 @@ type ComposingDraft = {
   value: string;
 };
 
-export type ChatComposerState = SkillMenuState & {
-  slashMenuOpen: boolean;
-  slashMenuItems: SlashCommandDef[];
-  slashMenuIndex: number;
-  slashMenuMode: "command" | "args";
-  slashMenuCommand: SlashCommandDef | null;
-  slashMenuArgItems: string[];
-  slashCommandRefreshPending: boolean;
-  composerComposing: boolean;
-  composingDraft: ComposingDraft | null;
-  composerInputIntentKey: string | null;
-  pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
-  goalExpandedId: string | null;
-  activeGatewayQuestionId: string | null;
-  gatewayQuestionCollapsed: boolean;
-  questionTakeoverActive: boolean;
-  restoreComposerFocus: boolean;
-  composerInput: HTMLElement | null;
-  composerTextarea: HTMLTextAreaElement | null;
-  microphonePicker: ComposerMicrophonePicker | null;
-  capabilityMenuOpen: boolean;
-  capabilityMenuView: ChatComposerPlusMenuView;
-  // Stable Lit refs: inline arrows would change identity per render and force
-  // layout observers to detach and reconnect on every chat update.
-  composerInputRef: ((element?: Element) => void) | null;
-  textareaRef: ((element?: Element) => void) | null;
-  dictation: ComposerDictationController | null;
-  dictationDraftKey: string | null;
-  dictationSelection: { start: number; end: number } | null;
-};
+export type ChatComposerState = SkillMenuState &
+  SlashMenuState & {
+    composerComposing: boolean;
+    composingDraft: ComposingDraft | null;
+    composerInputIntentKey: string | null;
+    pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+    goalExpandedId: string | null;
+    activeGatewayQuestionId: string | null;
+    gatewayQuestionCollapsed: boolean;
+    questionTakeoverActive: boolean;
+    restoreComposerFocus: boolean;
+    composerInput: HTMLElement | null;
+    composerTextarea: HTMLTextAreaElement | null;
+    microphonePicker: ComposerMicrophonePicker | null;
+    capabilityMenuOpen: boolean;
+    capabilityMenuView: ChatComposerPlusMenuView;
+    // Stable Lit refs: inline arrows would change identity per render and force
+    // layout observers to detach and reconnect on every chat update.
+    composerInputRef: ((element?: Element) => void) | null;
+    textareaRef: ((element?: Element) => void) | null;
+    dictation: ComposerDictationController | null;
+    dictationDraftKey: string | null;
+    dictationSelection: { start: number; end: number } | null;
+  };

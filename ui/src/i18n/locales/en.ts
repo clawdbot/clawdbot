@@ -5767,6 +5767,8 @@ export const en: TranslationMap = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       sessionOverride: "Session override",
+      resetToDefault: "Reset to default ({model})",
+      useDefault: "Use default",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",

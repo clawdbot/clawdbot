@@ -178,10 +178,6 @@ async function openMenu(page: Page) {
   return composer;
 }
 
-function webSearchSwitch(menu: import("playwright").Locator) {
-  return menu.locator('.agent-chat__capability-menu-switch[aria-label="Web search"]');
-}
-
 function webSearchItem(menu: import("playwright").Locator) {
   return menu.locator('wa-dropdown-item[value="toggle-web-search"]');
 }
@@ -236,7 +232,7 @@ suite.define(() => {
             expect.stringContaining("Manage plugins"),
           ]),
         );
-      await expect.poll(() => webSearchSwitch(dropdown).isVisible()).toBe(true);
+      await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
       await skillsRoot.focus();
       await skillsRoot.evaluate((item) => {
@@ -304,7 +300,7 @@ suite.define(() => {
         .toBe(false);
 
       await menu.getByRole("menuitem", { name: "Back" }).click();
-      const webSearch = webSearchSwitch(menu);
+      const webSearch = webSearchItem(menu);
       await expect
         .poll(() =>
           webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
@@ -629,9 +625,9 @@ suite.define(() => {
       ]);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      const webSearch = webSearchSwitch(menu);
-      await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
-      await expect.poll(() => webSearchItem(menu).getAttribute("title")).toBe("Loading…");
+      const webSearch = webSearchItem(menu);
+      await expect.poll(() => webSearch.isDisabled()).toBe(true);
+      await expect.poll(() => webSearch.getAttribute("title")).toBe("Loading…");
       await webSearch.evaluate((item) => {
         item
           .closest("wa-dropdown")
@@ -678,7 +674,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      await expect.poll(() => webSearchSwitch(menu).count()).toBe(1);
+      await expect.poll(() => webSearchItem(menu).count()).toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
       await menu.getByRole("menuitem", { name: "Back" }).click();

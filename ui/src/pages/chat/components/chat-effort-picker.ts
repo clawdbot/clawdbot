@@ -7,7 +7,7 @@ import type {
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 type ChatEffortPickerParams = {
   disabled: boolean;
@@ -121,7 +121,10 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__effort-picker"
-      @toggle=${(event: Event) => syncChatPickerOverlay(event.currentTarget as HTMLDetailsElement)}
+      @toggle=${(event: Event) => {
+        handleChatComposerDetailsToggle(event);
+        syncChatPickerOverlay(event.currentTarget as HTMLDetailsElement);
+      }}
     >
       <summary
         class="chat-controls__inline-select-trigger chat-controls__effort-trigger ${params.fastMode

@@ -38,7 +38,7 @@ export type ChatComposerMenuSkill = {
 type ChatComposerRootToggle = {
   value: string;
   label: string;
-  icon?: unknown;
+  icon?: TemplateResult;
   checked: boolean;
   disabled: boolean;
   title?: string;
@@ -124,9 +124,8 @@ function renderCapabilityToggleRow(options: {
   checked: boolean;
   disabled: boolean;
   title: string | null | undefined;
-  icon?: unknown;
-  note?: TemplateResult | typeof nothing;
   icon?: TemplateResult;
+  note?: TemplateResult | typeof nothing;
 }) {
   return html`
     <wa-dropdown-item

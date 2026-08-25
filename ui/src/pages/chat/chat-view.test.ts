@@ -5903,22 +5903,30 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("shows override provenance without a separate reset action", () => {
+  it("shows override provenance with a reset action", () => {
     const { state } = createChatHeaderState({
       model: null,
       models: createOpenAiModelCatalog(),
     });
+    const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
 
     expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
     expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
-    renderModelControls(state, { modelOverrides: { main: "openai/gpt-5.4" } }, container);
+    renderModelControls(
+      state,
+      { modelOverrides: { main: "openai/gpt-5.4" }, onModelSelect },
+      container,
+    );
 
-    expect(container.querySelector(".chat-controls__model-provenance")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
       "Session override",
     );
-    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+    const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    reset?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
 
   it("hides model choices for locked sessions while preserving reasoning and speed", () => {

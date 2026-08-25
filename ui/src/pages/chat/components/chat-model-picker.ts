@@ -634,7 +634,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                             <span>${t("chat.modelControls.sessionOverride")}</span>
                             <openclaw-tooltip
                               .content=${t("chat.modelControls.resetToDefault", {
-                                model: params.defaultModelLabel,
+                                model: defaultModelOption?.label ?? params.triggerModelLabel,
                               })}
                             >
                               <button
@@ -649,9 +649,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     return;
                                   }
                                   commitModel("");
-                                  const details = (
-                                    event.currentTarget as HTMLElement
-                                  ).closest<HTMLDetailsElement>("details");
+                                  const resetButton = event.currentTarget;
+                                  if (!(resetButton instanceof HTMLElement)) {
+                                    return;
+                                  }
+                                  const details =
+                                    resetButton.closest<HTMLDetailsElement>("details");
                                   if (details) {
                                     details.open = false;
                                     if (event.detail === 0) {

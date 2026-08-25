@@ -3209,8 +3209,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
         if (width <= 768) {
-          expect(controls.modelTriggerPadding).toEqual({ end: 10, start: 10 });
-          expect(controls.effortTriggerPadding).toEqual({ end: 10, start: 10 });
+          const modelPadding = width <= 480 ? 0 : 4;
+          expect(controls.modelTriggerPadding).toEqual({
+            end: modelPadding,
+            start: modelPadding,
+          });
+          expect(controls.effortTriggerPadding).toEqual({ end: 4, start: 4 });
           expect(composerFontSize).toBe(16);
           expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);

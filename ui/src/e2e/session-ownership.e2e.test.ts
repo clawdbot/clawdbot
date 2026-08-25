@@ -6,11 +6,7 @@ import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  openNewSessionPlusMenu,
-  replaceGatewayClient,
-  selectNewSessionDraft,
-} from "./new-session-page.test-support.ts";
+import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
   routeAvatarFixtures,
@@ -607,9 +603,8 @@ suite.define(() => {
     await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
     await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
-    await menu.getByRole("menuitem", { name: "Draft" }).click();
-    await currentPage.keyboard.press("Escape");
-    await currentPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
+    await draftToggle.check();
+    await expectBrowser(draftToggle).toBeChecked();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();

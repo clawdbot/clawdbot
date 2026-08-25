@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 
 /**
@@ -87,7 +88,7 @@ export class ConnectMachineSetupState {
       this.setupValue = setup;
     } catch (error) {
       if (this.stillCurrent(requestId, client)) {
-        this.errorValue = error instanceof Error ? error.message : String(error);
+        this.errorValue = formatUiError(error);
       }
     } finally {
       if (requestId === this.requestId) {

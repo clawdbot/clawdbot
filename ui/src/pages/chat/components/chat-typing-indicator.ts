@@ -49,6 +49,6 @@ export function renderChatTypingIndicator(
           </span>
         </div>`
       : null}
-    <span class="sr-only">${status}</span>
+    <span class="sr-only" role="status">${status}</span>
   </div>`;
 }
