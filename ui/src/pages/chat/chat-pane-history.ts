@@ -516,7 +516,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         draft: editorText,
       });
     } catch (error) {
-      if (!this.isConnectionScopeCurrent(scope)) {
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        !visibleSessionMatches(state, sourceKey, agentParams.agentId)
+      ) {
         return;
       }
       state.lastError = formatUiError(error);

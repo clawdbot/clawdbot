@@ -152,4 +152,24 @@ describe("chat pane message cuts", () => {
     expect(navigate).not.toHaveBeenCalled();
     expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
   });
+
+  it("does not paint a stale fork error after the selected session changes", async () => {
+    let rejectFork!: (error: Error) => void;
+    const forked = new Promise<never>((_resolve, reject) => {
+      rejectFork = reject;
+    });
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+
+    const pending = pane.forkFromMessage("user-entry");
+    state.sessionKey = "agent:main:replacement";
+    rejectFork(new Error("stale fork failed"));
+
+    await pending;
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+  });
 });
