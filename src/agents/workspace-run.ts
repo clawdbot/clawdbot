@@ -1,8 +1,10 @@
+import path from "node:path";
 /**
  * Agent run workspace resolver.
  *
  * Selects per-run workspace directories and redacts run identifiers for logs/prompts.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -154,4 +156,26 @@ export function resolveRunWorkspaceDir(params: {
     agentId,
     agentIdSource,
   };
+}
+
+/**
+ * Choose which directory supplies AGENTS.md / SOUL.md / BOOTSTRAP.md for a run.
+ * Managed worktree sessions must use their checkout so shared agent-home
+ * rewrites cannot poison later worktree prompts.
+ */
+export function resolveRunBootstrapWorkspaceDir(params: {
+  canonicalWorkspaceDir: string;
+  sessionWorkspaceDir: string;
+  managedWorktreeDir?: string | null;
+}): string {
+  const managed = normalizeOptionalString(params.managedWorktreeDir);
+  if (!managed) {
+    return params.canonicalWorkspaceDir;
+  }
+  const session = path.resolve(params.sessionWorkspaceDir);
+  const root = path.resolve(managed);
+  if (session === root || session.startsWith(`${root}${path.sep}`)) {
+    return params.sessionWorkspaceDir;
+  }
+  return managed;
 }

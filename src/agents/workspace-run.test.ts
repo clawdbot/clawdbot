@@ -3,9 +3,40 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRunWorkspaceDir } from "./workspace-run.js";
+import { resolveRunBootstrapWorkspaceDir, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
+
+describe("resolveRunBootstrapWorkspaceDir", () => {
+  it("keeps canonical bootstrap when the run is not a managed worktree", () => {
+    expect(
+      resolveRunBootstrapWorkspaceDir({
+        canonicalWorkspaceDir: "/home/user/.openclaw/workspace",
+        sessionWorkspaceDir: "/home/user/.openclaw/workspace",
+      }),
+    ).toBe("/home/user/.openclaw/workspace");
+  });
+
+  it("uses the remounted session workspace when it sits in the managed worktree", () => {
+    expect(
+      resolveRunBootstrapWorkspaceDir({
+        canonicalWorkspaceDir: "/home/user/.openclaw/workspace",
+        sessionWorkspaceDir: "/home/user/.openclaw/worktrees/abc/wt-1/nested",
+        managedWorktreeDir: "/home/user/.openclaw/worktrees/abc/wt-1",
+      }),
+    ).toBe("/home/user/.openclaw/worktrees/abc/wt-1/nested");
+  });
+
+  it("falls back to the managed worktree root when only cwd is bound", () => {
+    expect(
+      resolveRunBootstrapWorkspaceDir({
+        canonicalWorkspaceDir: "/home/user/.openclaw/workspace",
+        sessionWorkspaceDir: "/home/user/.openclaw/workspace",
+        managedWorktreeDir: "/home/user/.openclaw/worktrees/abc/wt-1",
+      }),
+    ).toBe("/home/user/.openclaw/worktrees/abc/wt-1");
+  });
+});
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {

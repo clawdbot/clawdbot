@@ -50,7 +50,13 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import {
+  redactRunIdentifier,
+  resolveRunBootstrapWorkspaceDir,
+  resolveRunWorkspaceDir,
+} from "../workspace-run.js";
+import { getRegistryWorktree } from "../worktrees/registry.js";
+import { resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -367,6 +373,21 @@ async function runEmbeddedAgentInternal(
             resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
           );
           const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
+          // Managed worktree checkouts own their bootstrap files. Keeping the
+          // shared agent home here leaves absolute .openclaw/workspace paths in
+          // the system prompt and lets one exec escape rewrite AGENTS.md for
+          // every later worktree session.
+          const managedWorktreeId = await resolveWorktreeIdForPath({
+            candidatePaths: [resolvedWorkspace, params.cwd],
+          }).catch(() => undefined);
+          const managedWorktreeDir = managedWorktreeId
+            ? getRegistryWorktree(process.env, managedWorktreeId)?.path
+            : undefined;
+          const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir({
+            canonicalWorkspaceDir: canonicalWorkspace,
+            sessionWorkspaceDir: resolvedWorkspace,
+            managedWorktreeDir,
+          });
           const redactedSessionId = redactRunIdentifier(params.sessionId);
           const redactedSessionKey = redactRunIdentifier(params.sessionKey);
           const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -447,7 +468,7 @@ async function runEmbeddedAgentInternal(
             agentDir,
             workspaceResolution,
             workspaceDir: resolvedWorkspace,
-            bootstrapWorkspaceDir: canonicalWorkspace,
+            bootstrapWorkspaceDir,
             isCanonicalWorkspace,
             globalLane,
             hookRunner,
