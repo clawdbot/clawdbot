@@ -109,6 +109,11 @@ const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
   { cacheRejections: true },
 );
 
+const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
+  () => import("../plugins/manifest-contract-eligibility.js"),
+  { cacheRejections: true },
+);
+
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,
 ): Promise<AuthProfileStore | undefined> {
@@ -174,6 +179,92 @@ function collectAuthProfileServiceEnvVars(params: {
   }
 
   return entries;
+}
+
+async function collectAmbientProviderApiKeyServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
+  existingEnvironmentValueSources?: Record<
+    string,
+    GatewayServiceEnvironmentValueSource | undefined
+  >;
+  platform: NodeJS.Platform;
+}): Promise<Record<string, string>> {
+  if (params.platform !== "linux") {
+    return {};
+  }
+  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
+  const existingManagedFileEnvironment = Object.fromEntries(
+    Object.entries(params.existingEnvironment ?? {}).filter(
+      ([key, value]) =>
+        existingManagedKeys.has(key.toUpperCase()) &&
+        readEnvironmentValueSource(params.existingEnvironmentValueSources, key) === "file" &&
+        value?.trim(),
+    ),
+  );
+  const ownedKeys = new Set(
+    [
+      ...Object.keys(params.durableEnvironment),
+      ...Object.keys(params.existingEnvironment ?? {}).filter(
+        (key) => !Object.hasOwn(existingManagedFileEnvironment, key),
+      ),
+    ].map((key) => key.toUpperCase()),
+  );
+  const candidates = new Map(
+    Object.entries({ ...params.env, ...existingManagedFileEnvironment }).flatMap(
+      ([rawKey, rawValue]) => {
+        const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+        const value = rawValue?.trim();
+        return key &&
+          key.endsWith("_API_KEY") &&
+          !key.endsWith("_ADMIN_API_KEY") &&
+          !ownedKeys.has(key) &&
+          value &&
+          !isDangerousHostEnvVarName(key) &&
+          !isDangerousHostEnvOverrideVarName(key)
+          ? [[key, value] as const]
+          : [];
+      },
+    ),
+  );
+  if (candidates.size === 0) {
+    return {};
+  }
+  const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
+    await loadDaemonInstallProviderManifestRuntime();
+  const config = params.config ?? {};
+  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env as NodeJS.ProcessEnv });
+  return Object.fromEntries(
+    snapshot.plugins.flatMap((plugin) => {
+      if (
+        plugin.origin === "workspace" ||
+        !isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })
+      ) {
+        return [];
+      }
+      const providers = new Set(
+        (plugin.providerAuthChoices ?? [])
+          .filter(
+            ({ method, appGuidedSecret, onboardingScopes }) =>
+              method === "api-key" &&
+              appGuidedSecret === true &&
+              (!onboardingScopes || onboardingScopes.includes("text-inference")),
+          )
+          .map(({ provider }) => provider),
+      );
+      return (plugin.setup?.providers ?? [])
+        .filter(({ id }) => providers.has(id))
+        .flatMap(({ envVars = [] }) =>
+          envVars.flatMap((name) => {
+            const key = normalizeEnvVarKey(name, { portable: true })?.toUpperCase();
+            const value = key ? candidates.get(key) : undefined;
+            return key && value ? [[key, value] as const] : [];
+          }),
+        );
+    }),
+  );
 }
 
 type ExecSecretRefPassEnvSource = {
@@ -607,6 +698,14 @@ async function buildGatewayInstallEnvironment(params: {
       env: params.env,
       config: params.config,
     });
+  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+    platform: params.platform,
+  });
   // Full target discovery materializes plugin metadata; configs without refs do not need it.
   const containsConfigSecretRef = configContainsSecretRef(params.config);
   const { keys: configSecretRefKeys, environment: configSecretRefEnvironment } =
@@ -649,6 +748,7 @@ async function buildGatewayInstallEnvironment(params: {
     valueSource: ({ normalizedKey }) =>
       readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
+  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, {});
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
@@ -659,6 +759,7 @@ async function buildGatewayInstallEnvironment(params: {
   );
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
+      ...ambientProviderApiKeyEnvironment,
       ...durableEnvironment,
       ...configSecretRefKeyEnvironment,
       ...configSecretRefEnvironment,
@@ -685,7 +786,10 @@ async function buildGatewayInstallEnvironment(params: {
     platform: params.platform,
     existingEnvironmentFileEnvironment: existingEnvironmentFileRenderEnvironment,
     stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
-    configSecretRefEnvironment,
+    configSecretRefEnvironment: {
+      ...ambientProviderApiKeyEnvironment,
+      ...configSecretRefEnvironment,
+    },
   });
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
     includeRawKeys: true,
