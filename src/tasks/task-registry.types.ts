@@ -12,7 +12,7 @@ export type JsonValue =
 
 /** Runtime families that own task run lifecycles. */
 export const TASK_RUNTIMES = ["subagent", "acp", "cron", "cli"] as const;
-export const TASK_STATUSES = [
+const TASK_STATUSES = [
   "queued",
   "running",
   "succeeded",
