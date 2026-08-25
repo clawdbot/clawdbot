@@ -7,8 +7,9 @@ title: "Platforms"
 ---
 
 OpenClaw core is written in TypeScript. **Node is the primary, default, and
-recommended runtime**. Bun 1.4+ builds with `node:sqlite` can run the CLI,
-Gateway, and managed node host as an explicit opt-in; see [Bun](/install/bun).
+recommended runtime**. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+the CLI, Gateway, and managed node host as an explicit opt-in; see
+[Bun](/install/bun).
 
 Companion apps exist for Windows Hub, macOS (menu bar app), and mobile nodes
 (iOS/Android). Linux companion apps are planned, but the Gateway is fully

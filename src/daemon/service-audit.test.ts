@@ -134,14 +134,16 @@ describe("auditGatewayServiceConfig", () => {
     resolveBunRuntimeInfo.mockResolvedValue({
       version: "1.4.0",
       hasNodeSqlite: true,
+      sqliteVersion: "3.51.3",
       supported: true,
     });
   });
 
-  it("flags unsupported Bun runtimes", async () => {
+  it("flags Bun runtimes without WAL-safe SQLite", async () => {
     resolveBunRuntimeInfo.mockResolvedValue({
-      version: "1.3.6",
-      hasNodeSqlite: false,
+      version: "1.4.0",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.51.2",
       supported: false,
     });
     const audit = await auditGatewayServiceConfig({
@@ -155,10 +157,10 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
     expect(
       audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("Bun 1.4+ with node:sqlite is required");
+    ).toContain("Bun 1.4+ with WAL-reset-safe node:sqlite is required");
   });
 
-  it("accepts Bun 1.4 with node:sqlite", async () => {
+  it("accepts Bun 1.4 with WAL-safe node:sqlite", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",

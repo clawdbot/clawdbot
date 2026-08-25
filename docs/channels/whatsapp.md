@@ -597,7 +597,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported legacy Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

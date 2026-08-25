@@ -18,7 +18,7 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   {
     value: "bun",
     label: "Bun 1.4+",
-    hint: "Requires Bun 1.4 or newer with node:sqlite support.",
+    hint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
   },
 ];
 

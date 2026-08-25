@@ -192,7 +192,7 @@ async function resolveCliProgramArguments(params: {
   if (!params.runtimePath?.trim()) {
     throw new Error(
       params.runtime === "bun"
-        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with node:sqlite support, then retry."
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
         : "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.",
     );
   }

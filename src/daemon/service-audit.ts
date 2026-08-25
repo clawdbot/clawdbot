@@ -558,7 +558,7 @@ async function auditGatewayRuntime(
       issues.push({
         code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
         message:
-          "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with node:sqlite is required.",
+          "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
         detail: execPath,
         level: "recommended",
       });

@@ -81,6 +81,7 @@ describe("runtime-guard", () => {
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
       hasNodeSqlite: false,
+      sqliteVersion: null,
     };
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
     expect(runtime.error).toHaveBeenCalledOnce();
@@ -108,12 +109,13 @@ describe("runtime-guard", () => {
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
+      sqliteVersion: "3.53.3",
     };
     expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("accepts Bun when the runtime provides node:sqlite", () => {
+  it("accepts Bun when the runtime provides WAL-reset-safe node:sqlite", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -125,6 +127,7 @@ describe("runtime-guard", () => {
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
+      sqliteVersion: "3.53.2",
     };
     expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -145,13 +148,15 @@ describe("runtime-guard", () => {
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
       hasNodeSqlite: false,
+      sqliteVersion: null,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Bun 1.4 or newer with node:sqlite support.",
+        "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
         "Detected: bun 1.3.14 (exec: /usr/bin/bun).",
+        "Detected SQLite: unavailable.",
         "PATH searched: /usr/bin",
         "Install Bun: https://bun.com/docs/installation",
         "Upgrade Bun or run OpenClaw with a supported Node release.",
@@ -175,8 +180,31 @@ describe("runtime-guard", () => {
         execPath: "/usr/bin/bun",
         pathEnv: "/usr/bin",
         hasNodeSqlite: true,
+        sqliteVersion: "3.53.2",
       }),
     ).toThrow("exit");
+  });
+
+  it("rejects Bun when its node:sqlite version is not WAL-reset-safe", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    };
+
+    expect(() =>
+      assertSupportedRuntime(runtime, {
+        kind: "bun",
+        version: "1.4.0",
+        execPath: "/usr/bin/bun",
+        pathEnv: "/usr/bin",
+        hasNodeSqlite: true,
+        sqliteVersion: "3.51.2",
+      }),
+    ).toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Detected SQLite: 3.51.2."));
   });
 
   it("reports unknown runtimes with fallback labels", () => {
@@ -193,6 +221,7 @@ describe("runtime-guard", () => {
       execPath: null,
       pathEnv: "(not set)",
       hasNodeSqlite: false,
+      sqliteVersion: null,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");

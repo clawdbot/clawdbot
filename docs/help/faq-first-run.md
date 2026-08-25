@@ -676,9 +676,9 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="Can I use Bun?">
     Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4+
-    with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an
-    explicit opt-in. Bun can also run package scripts; use `pnpm install` for
-    dependency installation.
+    with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node
+    host as an explicit opt-in. Bun can also run package scripts; use
+    `pnpm install` for dependency installation.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

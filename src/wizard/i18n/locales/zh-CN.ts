@@ -1085,7 +1085,7 @@ export const zh_CN = {
       daemonRuntimeNode: "Node（推荐）",
       daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
       daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并支持 node:sqlite。",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',

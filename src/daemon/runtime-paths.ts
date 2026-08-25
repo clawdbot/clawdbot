@@ -153,13 +153,18 @@ process.stdout.write(JSON.stringify({ nodeVersion: process.versions.node, sqlite
 
 const BUN_RUNTIME_PROBE = String.raw`
 let hasNodeSqlite = false;
+let sqliteVersion = null;
 try {
   const { DatabaseSync } = require("node:sqlite");
   const db = new DatabaseSync(":memory:");
-  db.close();
-  hasNodeSqlite = true;
+  try {
+    sqliteVersion = db.prepare("SELECT sqlite_version() AS version").get()?.version ?? null;
+    hasNodeSqlite = true;
+  } finally {
+    db.close();
+  }
 } catch {}
-process.stdout.write(JSON.stringify({ bunVersion: process.versions.bun ?? null, hasNodeSqlite }));
+process.stdout.write(JSON.stringify({ bunVersion: process.versions.bun ?? null, hasNodeSqlite, sqliteVersion }));
 `;
 
 type NodeRuntimeInfo = {
@@ -202,6 +207,7 @@ async function resolveNodeRuntimeInfo(
 export type BunRuntimeInfo = {
   version: string | null;
   hasNodeSqlite: boolean;
+  sqliteVersion: string | null;
   supported: boolean;
 };
 
@@ -221,13 +227,19 @@ export async function resolveBunRuntimeInfo(
     }
     const version = typeof parsed.bunVersion === "string" ? parsed.bunVersion : null;
     const hasNodeSqlite = parsed.hasNodeSqlite === true;
+    const sqliteVersion = typeof parsed.sqliteVersion === "string" ? parsed.sqliteVersion : null;
     return {
       version,
       hasNodeSqlite,
-      supported: isSupportedBunVersion(version) && hasNodeSqlite,
+      sqliteVersion,
+      supported:
+        isSupportedBunVersion(version) &&
+        hasNodeSqlite &&
+        sqliteVersion !== null &&
+        isSqliteWalResetSafeVersion(sqliteVersion),
     };
   } catch {
-    return { version: null, hasNodeSqlite: false, supported: false };
+    return { version: null, hasNodeSqlite: false, sqliteVersion: null, supported: false };
   }
 }
 

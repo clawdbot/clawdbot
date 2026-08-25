@@ -601,7 +601,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Service runtime">
     - Node is the primary, default, and recommended managed Gateway runtime.
-    - Bun 1.4+ with `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
+    - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
   <Accordion title="Lifecycle behavior">

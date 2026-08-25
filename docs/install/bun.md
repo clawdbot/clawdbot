@@ -8,7 +8,7 @@ title: "Bun"
 ---
 
 <Warning>
-Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. Older Bun versions are rejected at startup.
+Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.

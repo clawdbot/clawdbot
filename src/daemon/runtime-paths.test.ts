@@ -58,9 +58,13 @@ function nodeRuntime(
   };
 }
 
-function bunRuntime(bunVersion: string | null, hasNodeSqlite = true) {
+function bunRuntime(
+  bunVersion: string | null,
+  hasNodeSqlite = true,
+  sqliteVersion: string | null = hasNodeSqlite ? "3.51.3" : null,
+) {
   return {
-    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite })}\n`,
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion })}\n`,
     stderr: "",
   };
 }
@@ -340,7 +344,7 @@ describe("resolvePreferredNodePath", () => {
 });
 
 describe("resolvePreferredBunPath", () => {
-  it("uses the stable BUN_INSTALL executable when Bun 1.4 provides node:sqlite", async () => {
+  it("uses the stable BUN_INSTALL executable when Bun 1.4 provides WAL-safe node:sqlite", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
     const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
 
@@ -355,7 +359,7 @@ describe("resolvePreferredBunPath", () => {
     expect(result).toBe(bunPath);
     expect(execFile).toHaveBeenCalledWith(
       bunPath,
-      ["-e", expect.stringContaining('require("node:sqlite")')],
+      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
       { encoding: "utf8", timeoutMs: 5_000 },
     );
   });
@@ -412,6 +416,7 @@ describe("resolvePreferredBunPath", () => {
   it.each([
     ["Bun is older than 1.4", bunRuntime("1.3.14", true)],
     ["node:sqlite is unavailable", bunRuntime("1.4.0", false)],
+    ["its SQLite version is not WAL-reset-safe", bunRuntime("1.4.0", true, "3.51.2")],
   ])("rejects a Bun executable when %s", async (_reason, probe) => {
     const info = await resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe));
 

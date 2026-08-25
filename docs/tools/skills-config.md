@@ -81,9 +81,10 @@ Most skills configuration lives under `skills` in
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
   installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
-  with `node:sqlite` is supported as an explicit runtime opt-in. `openclaw setup
-  --node-manager` and `openclaw onboard --node-manager` accept `npm`, `pnpm`, or
-  `bun`; set `"yarn"` directly in config for Yarn-backed skill installs.
+  with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
+  `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
+  `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
+  installs.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">

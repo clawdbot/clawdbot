@@ -1122,7 +1122,7 @@ export const en = {
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
       daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with node:sqlite support.",
+      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
