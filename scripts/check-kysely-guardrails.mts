@@ -25,7 +25,10 @@ const nodeSqliteBoundaryRoots = [
   path.join(repoRoot, "packages"),
 ];
 
-const nodeSqliteConstructorOwnerPaths = new Set(["src/infra/node-sqlite.ts"]);
+const nodeSqliteConstructorOwnerPaths = new Set([
+  "src/infra/node-sqlite.ts",
+  "src/infra/sqlite-runtime-version.ts",
+]);
 
 const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 

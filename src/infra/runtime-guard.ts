@@ -1,7 +1,7 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
 import { format } from "node:util";
-import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   isNodeVersionAtLeast,
   isSupportedOpenClawNodeVersion,
@@ -9,7 +9,10 @@ import {
 } from "../../node-version.mjs";
 import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import {
+  detectCurrentRuntimeSqliteVersion,
+  isSqliteWalResetSafeVersion,
+} from "./sqlite-runtime-version.js";
 
 // Runtime validation precedes console capture. Keep this direct sink aligned
 // with configured JSONL output without pulling in the full logger.
@@ -100,20 +103,8 @@ function detectRuntime(): RuntimeDetails {
 
 function detectCurrentRuntimeSqlite(): { available: boolean; version: string | null } {
   try {
-    const sqlite = process.getBuiltinModule?.("node:sqlite");
-    if (!sqlite?.DatabaseSync) {
-      return { available: false, version: null };
-    }
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      const row: unknown = database.prepare("SELECT sqlite_version() AS version").get();
-      return {
-        available: true,
-        version: isRecord(row) && typeof row.version === "string" ? row.version : null,
-      };
-    } finally {
-      database.close();
-    }
+    const version = detectCurrentRuntimeSqliteVersion();
+    return { available: version !== null, version };
   } catch {
     return { available: false, version: null };
   }
