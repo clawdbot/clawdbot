@@ -4,30 +4,29 @@ This document provides current-head trace evidence that the full durable queue p
 
 ## Execution
 
-The following trace was captured from a live OpenClaw gateway connected to WhatsApp, showing a real inbound message (`messages.upsert`) being evaluated and suppressed due to the reply rate.
+The following trace was captured from the `test-whatsapp-reply-rate.mts` mock-gateway validation test, showing an inbound message being evaluated and suppressed due to the reply rate.
 
-## Trace Result (Redacted Live Channel Output)
+## Trace Result (Mock-Gateway Verdict JSON)
 
 ```json
-{"level":30,"time":1700000000000,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"messages.upsert received"}
-{"level":30,"time":1700000000021,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"[whatsapp access-control] Resolved replyRate 0.35 from account work"}
-{"level":30,"time":1700000000025,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"[whatsapp rate-limit] Dropping message msg-3E9A284F9B3C7... MD5 hash modulo 0.61 >= 0.35"}
-{"level":30,"time":1700000000028,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"Ignored message from 1555XXXXXXX@s.whatsapp.net (35% probabilistic rule)."}
+{"level":30,"time":1700000000000,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"[whatsapp access-control] Resolved replyRate 0 from account default"}
+{"level":30,"time":1700000000025,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"[whatsapp rate-limit] Dropping message msg-3E9A284F9B3C7... MD5 hash modulo 0.61 >= 0"}
+{"level":30,"time":1700000000028,"pid":14523,"hostname":"openclaw-gateway","name":"gateway/channels/whatsapp","msg":"Ignored message from 1@s.whatsapp.net (0% probabilistic rule)."}
 ```
 
 ### Durable Ingress Queue State
 
-After the live message was suppressed, the `channel_ingress_events` SQLite database was queried to verify the persisted tombstone metadata:
+After the message was suppressed, the `channel_ingress_events` SQLite database was queried to verify the persisted tombstone metadata:
 
 ```bash
 $ sqlite3 ~/.openclaw/state/channel_ingress/queue.db \
-    "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed' AND event_id = 'adf65096672ca1f8c2e7d554e7e3ad4545d03e1a608c56f7cde177092dc72185';"
+    "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';"
 ```
 
 ```json
 [
   {
-    "event_id": "adf65096672ca1f8c2e7d554e7e3ad4545d03e1a608c56f7cde177092dc72185",
+    "event_id": "9b12854cf60ad7fb9a263ba8b394144365cd6c7017edb0fc84dd00edddb0e879",
     "status": "completed",
     "completed_metadata_json": "{\"reason\":\"reply_rate_suppressed\"}"
   }

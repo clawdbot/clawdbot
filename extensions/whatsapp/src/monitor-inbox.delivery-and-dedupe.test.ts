@@ -735,7 +735,7 @@ describe("web monitor inbox delivery and dedupe", () => {
       durableInboundQueue: queue,
     });
 
-    const messageId = nextMessageId("reply-rate-blocked");
+    const messageId = "reply-rate-suppressed-id"; // Hash evaluates to 0.84 > 0.2
     const upsert = buildNotifyMessageUpsert({
       id: messageId,
       remoteJid: "15555550000@s.whatsapp.net",
