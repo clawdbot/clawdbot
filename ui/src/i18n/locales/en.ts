@@ -5647,6 +5647,7 @@ export const en: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
+      notSent: "Not sent",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       steer: "Steer",

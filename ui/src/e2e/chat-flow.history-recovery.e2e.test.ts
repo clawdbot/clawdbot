@@ -510,38 +510,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("chat.send");
-
-      const prompt = "policy should not eat this";
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
-
-      await gateway.rejectDeferred("chat.send", {
-        code: "INVALID_REQUEST",
-        message: "send blocked by session policy",
-      });
-
-      await page.locator(".chat-queue").getByText("Failed").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await composer.inputValue()).toBe(prompt);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("parks an ACK-lost send for review before a same-key manual retry", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

@@ -27,7 +27,7 @@ import {
 } from "./chat-queue.ts";
 import { createResetSlashCommandSender } from "./chat-reset-delivery.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { cancelChatDelivery, canRestoreComposer, restoreComposer } from "./chat-send-composer.ts";
+import { cancelChatDelivery, canRestoreComposer } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
@@ -63,7 +63,7 @@ import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import { hasDirectSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 async function settleDeliverySettings(
   host: ChatHost,
@@ -302,6 +302,9 @@ async function sendQueuedChatMessage(
     });
     if (isTerminalFailureChatSendAck(ack)) {
       const error = formatTerminalChatSendAckError(ack, "chat");
+      // Release in-flight ownership before publishing Retry; an immediate click
+      // must not see this completed send as the run that blocks its replacement.
+      finishScopedChatSending(host, scope);
       setState("failed", error);
       if (isVisible()) {
         const projectionScope = readChatSessionProjectionScope(host, {
@@ -324,9 +327,10 @@ async function sendQueuedChatMessage(
           publishRunStatus: false,
           armLocalTerminalReconcile: ack.runId === runId,
         });
-        restoreComposer(host, options ?? {});
       }
-      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
+        inline: storageMode === "durable",
+      });
       recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
         error,
         ackStatus: ack.status,
@@ -345,23 +349,21 @@ async function sendQueuedChatMessage(
           sessionKey,
           agentId: prepared.agentId,
         });
-        reduceChatSessionProjection(
-          host,
-          {
-            type: "sendPending",
-            runId,
-            message: {
-              role: "user",
-              content: buildUserChatMessageContentBlocks(
-                message,
-                attachments.length ? attachments : undefined,
-              ),
-              timestamp: startedAt,
-              __openclaw: { idempotencyKey: `${runId}:user` },
-            },
-          },
-          { scope: projectionScope },
-        );
+        const projectedMessage = buildLocalUserMessage({
+          text: message,
+          ...(attachments.length ? { attachments } : {}),
+          createdAt: startedAt,
+          runId,
+          ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
+          ...(prepared.sender ? { sender: prepared.sender } : {}),
+        });
+        if (projectedMessage) {
+          reduceChatSessionProjection(
+            host,
+            { type: "sendPending", runId, message: projectedMessage },
+            { scope: projectionScope },
+          );
+        }
         if (ack.runId !== runId) {
           reduceChatSessionProjection(
             host,
@@ -506,14 +508,17 @@ async function sendQueuedChatMessage(
       });
       return "pending";
     }
+    // Keep the retry action behind terminal ownership release, as above.
+    finishScopedChatSending(host, scope);
     setState("failed", error);
     if (isVisible()) {
-      restoreComposer(host, options ?? {});
       if (activeLeafChanged) {
         void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
       }
     }
-    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
+    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
+      inline: storageMode === "durable",
+    });
     recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
     return "failed";
   } finally {

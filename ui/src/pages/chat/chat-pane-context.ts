@@ -303,6 +303,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    state.selfUser = snapshot.selfUser ?? null;
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state, this.presented);
     }
