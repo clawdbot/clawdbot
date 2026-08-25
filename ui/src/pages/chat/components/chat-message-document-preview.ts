@@ -112,7 +112,7 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
 }
 
 async function probeDocumentPreview(source: string, signal: AbortSignal): Promise<boolean> {
-  const url = source.split("#", 1)[0];
+  const url = source.replace(/#.*$/u, "");
   // Iframes report many HTTP failures as load events. Probe after explicit
   // interaction, and cancel the GET fallback before it buffers the document.
   let response = await fetch(url, {
@@ -155,7 +155,7 @@ function requestDocumentFramePreview(
   if (!(trigger instanceof HTMLButtonElement)) {
     return;
   }
-  const cacheKey = source.split("#", 1)[0];
+  const cacheKey = source.replace(/#.*$/u, "");
   const resource = observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
     cacheKey,
