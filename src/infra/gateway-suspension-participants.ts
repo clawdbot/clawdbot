@@ -4,6 +4,7 @@
 // sessions, and runs. A plugin that owns its own background queue registers a
 // participant here so its work is closed and counted inside the same atomic
 // suspension fence.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Active work a participant still owns. Zero means the participant is idle. */
@@ -50,23 +51,53 @@ const PARTICIPANT_STATE = resolveGlobalSingleton(
   }),
 );
 
-function normalizeCount(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
+/** Stand-in count for a participant that cannot be trusted to be idle. */
+const UNUSABLE_REPORT_COUNT = 1;
 
-function toBlocker(
+function unusableReportBlocker(
   participantId: string,
-  report: GatewaySuspensionParticipantReport,
-): GatewaySuspensionParticipantBlocker | null {
-  const count = normalizeCount(report?.activeCount);
-  if (count === 0) {
-    return null;
-  }
-  const message = report?.message?.trim();
+  reason: string,
+): GatewaySuspensionParticipantBlocker {
   return {
     participantId,
-    count,
-    message: message || `${count} active ${participantId} operation(s)`,
+    count: UNUSABLE_REPORT_COUNT,
+    message: `${participantId} ${reason}`,
+  };
+}
+
+/**
+ * Convert a participant's raw return value into a blocker.
+ *
+ * Fails closed: only an exact synchronous non-negative integer may report idle.
+ * A promise, missing field, NaN, or any other shape means the participant did
+ * not actually fence and account for its queue, so it blocks the suspension
+ * instead of silently permitting an unsafe host freeze.
+ */
+function toBlocker(
+  participantId: string,
+  report: unknown,
+): GatewaySuspensionParticipantBlocker | null {
+  if (!isRecord(report)) {
+    return unusableReportBlocker(participantId, "returned an unusable suspension report");
+  }
+  if (typeof report.then === "function") {
+    // Participants are synchronous by contract; awaiting here would reopen the
+    // gap between closing admission and taking the authoritative snapshot.
+    return unusableReportBlocker(participantId, "returned an asynchronous suspension report");
+  }
+  const activeCount = report.activeCount;
+  if (typeof activeCount !== "number" || !Number.isSafeInteger(activeCount) || activeCount < 0) {
+    return unusableReportBlocker(participantId, "reported an invalid active count");
+  }
+  if (activeCount === 0) {
+    return null;
+  }
+  const message = report.message;
+  const trimmed = typeof message === "string" ? message.trim() : "";
+  return {
+    participantId,
+    count: activeCount,
+    message: trimmed || `${activeCount} active ${participantId} operation(s)`,
   };
 }
 
@@ -97,13 +128,17 @@ export function registerGatewaySuspensionParticipant(
 export function inspectGatewaySuspensionParticipants(): GatewaySuspensionParticipantBlocker[] {
   const blockers: GatewaySuspensionParticipantBlocker[] = [];
   for (const [id, participant] of PARTICIPANT_STATE.participants) {
-    let report: GatewaySuspensionParticipantReport;
+    // The return value is untrusted plugin output, not the declared type.
+    let report: unknown;
     try {
       report = participant.status();
     } catch {
       // A participant that cannot answer is treated as busy: never report idle
       // on missing evidence.
-      report = { activeCount: 1, message: `${id} suspension status unavailable` };
+      report = {
+        activeCount: UNUSABLE_REPORT_COUNT,
+        message: `${id} suspension status unavailable`,
+      };
     }
     const blocker = toBlocker(id, report);
     if (blocker) {
@@ -121,7 +156,8 @@ export function inspectGatewaySuspensionParticipants(): GatewaySuspensionPartici
 export function prepareGatewaySuspensionParticipants(): GatewaySuspensionParticipantBlocker[] {
   const blockers: GatewaySuspensionParticipantBlocker[] = [];
   for (const [id, participant] of PARTICIPANT_STATE.participants) {
-    let report: GatewaySuspensionParticipantReport;
+    // The return value is untrusted plugin output, not the declared type.
+    let report: unknown;
     // Marked prepared before the report is read: a participant that threw may
     // still have closed its admission, so it is owed a resume either way.
     PARTICIPANT_STATE.prepared.add(participant);
@@ -130,7 +166,10 @@ export function prepareGatewaySuspensionParticipants(): GatewaySuspensionPartici
     } catch {
       // Fail closed: an unusable participant blocks the suspension instead of
       // silently leaving its queue open behind a ready result.
-      report = { activeCount: 1, message: `${id} could not prepare for suspension` };
+      report = {
+        activeCount: UNUSABLE_REPORT_COUNT,
+        message: `${id} could not prepare for suspension`,
+      };
     }
     const blocker = toBlocker(id, report);
     if (blocker) {

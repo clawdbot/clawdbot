@@ -1376,9 +1376,16 @@ admission and taking the authoritative snapshot.
 - `resume` is called on explicit resume, on a refused (rolled-back) prepare, at
   lease expiry, and on in-process restart. It must be safe to call when the
   participant is already open.
+- Only an exact non-negative integer `activeCount` may report idle. The host
+  fails closed on anything else — a returned promise, a missing or fractional
+  count, `NaN`, or a non-object — and treats the participant as busy, because
+  such a report proves the participant did not actually fence its queue.
 - A participant that throws from `prepare` or `status` is treated as busy, and
   one that throws from `resume` holds the Gateway fail-closed until it
   succeeds. Never swallow an error to report idle.
+- Registrations are bound to the plugin lifecycle. If a plugin throws later in
+  `register()`, the host tears its participants down during rollback, so a
+  failed plugin cannot leave a callback inside the suspension fence.
 - Participant ids are namespaced by plugin id, so `delivery-queue` above is
   reported as `<plugin-id>:delivery-queue`.
 

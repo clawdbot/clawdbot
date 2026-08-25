@@ -84,6 +84,38 @@ describe("gateway suspension participants", () => {
     ]);
   });
 
+  // A participant whose report cannot be trusted must never let prepare reach
+  // ready: that would freeze the host over a queue that never actually fenced.
+  it.each([
+    ["a promise", () => Promise.resolve({ activeCount: 0 })],
+    ["a missing count", () => ({}) as never],
+    ["NaN", () => ({ activeCount: Number.NaN })],
+    ["a negative count", () => ({ activeCount: -1 })],
+    ["a fractional count", () => ({ activeCount: 1.5 })],
+    ["a non-object", () => 0 as never],
+    ["null", () => null as never],
+  ])("refuses suspension when a participant reports %s", (_label, prepare) => {
+    registerGatewaySuspensionParticipant({
+      id: "queue-a",
+      prepare: prepare as unknown as () => { activeCount: number },
+      status: prepare as unknown as () => { activeCount: number },
+      resume: vi.fn(),
+    });
+
+    const result = prepareGatewaySuspensionParticipants();
+
+    expect(result.idle).toBe(false);
+    expect(result.blockers).toHaveLength(1);
+    expect(inspectGatewaySuspensionParticipants()).toHaveLength(1);
+  });
+
+  it("accepts an explicit zero count as idle", () => {
+    registerGatewaySuspensionParticipant(participant("queue-a", 0));
+
+    expect(prepareGatewaySuspensionParticipants().idle).toBe(true);
+    expect(inspectGatewaySuspensionParticipants()).toEqual([]);
+  });
+
   it("reopens prepared participants exactly once on resume", () => {
     const entry = participant("queue-a", 0);
     registerGatewaySuspensionParticipant(entry);
