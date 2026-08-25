@@ -7,6 +7,21 @@ const metadataMocks = vi.hoisted(() => ({
   resolveConfigWidePluginManifestRegistry: vi.fn(),
 }));
 
+const workspaceDirMocks = vi.hoisted(() => ({
+  listAgentWorkspaceDirs: vi.fn(),
+}));
+
+vi.mock("../agents/workspace-dirs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/workspace-dirs.js")>(
+    "../agents/workspace-dirs.js",
+  );
+  workspaceDirMocks.listAgentWorkspaceDirs.mockImplementation(actual.listAgentWorkspaceDirs);
+  return {
+    ...actual,
+    listAgentWorkspaceDirs: workspaceDirMocks.listAgentWorkspaceDirs,
+  };
+});
+
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: metadataMocks.resolveConfigWidePluginManifestRegistry,
 }));
@@ -54,6 +69,7 @@ function compare(nextSourceConfig: OpenClawConfig) {
 }
 
 beforeEach(() => {
+  workspaceDirMocks.listAgentWorkspaceDirs.mockClear();
   metadataMocks.resolveConfigWidePluginManifestRegistry.mockReset().mockImplementation(() => {
     throw new Error("the supplied write snapshot must avoid registry resolution");
   });
@@ -82,5 +98,51 @@ describe("findChannelOwnershipChange", () => {
 
     expect(compare(nextSourceConfig)).toBeNull();
     expect(metadataMocks.resolveConfigWidePluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("refreshes each registry when workspace roots match in a different order", () => {
+    const previousConfig = {
+      ...runtimeConfig,
+      agents: {
+        list: [
+          { id: "first", workspace: "/tmp/first-workspace" },
+          { id: "second", workspace: "/tmp/second-workspace" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    const nextConfig = {
+      ...runtimeConfig,
+      agents: {
+        list: [
+          { id: "second", workspace: "/tmp/second-workspace" },
+          { id: "first", workspace: "/tmp/first-workspace" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    metadataMocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);
+
+    expect(
+      findChannelOwnershipChange({
+        previous: { config: previousConfig, sourceConfig: previousSourceConfig },
+        next: { config: nextConfig, sourceConfig: previousSourceConfig },
+        pluginMetadataSnapshot: { manifestRegistry },
+      }),
+    ).toBeNull();
+    expect(
+      metadataMocks.resolveConfigWidePluginManifestRegistry.mock.calls.map(
+        ([params]) => (params as { config: OpenClawConfig }).config,
+      ),
+    ).toEqual([previousConfig, nextConfig]);
+  });
+
+  it("refreshes each registry when workspace root comparison throws", () => {
+    workspaceDirMocks.listAgentWorkspaceDirs.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    metadataMocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);
+
+    expect(compare(previousSourceConfig)).toBeNull();
+    expect(workspaceDirMocks.listAgentWorkspaceDirs).toHaveBeenCalledTimes(1);
+    expect(metadataMocks.resolveConfigWidePluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 });
