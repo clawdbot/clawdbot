@@ -5,6 +5,7 @@ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
+import type { ModelFallbackRunOptions } from "../../agents/model-fallback-attempt.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -366,7 +367,7 @@ export type FallbackRunnerParams = {
   model: string;
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string) => Promise<unknown>;
+  run: (provider: string, model: string, options?: ModelFallbackRunOptions) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -659,7 +660,13 @@ export function setupAgentRunnerExecutionTestState() {
       }),
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", {
+        modelRoutingProvenance: {
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          stage: "initial",
+        },
+      }),
       provider: "anthropic",
       model: "claude",
       attempts: [],
