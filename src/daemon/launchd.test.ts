@@ -264,7 +264,8 @@ function defaultLaunchAgentFixture(
   return launchAgentFixture(env, defaultProgramArguments, overrides);
 }
 
-type LaunchAgentControlFixture = Parameters<typeof stopLaunchAgent>[0];
+type LaunchAgentControlFixture = Parameters<typeof stopLaunchAgent>[0] &
+  Parameters<typeof uninstallLaunchAgent>[0];
 
 function launchAgentControlFixture(
   env: LaunchAgentControlFixture["env"],
