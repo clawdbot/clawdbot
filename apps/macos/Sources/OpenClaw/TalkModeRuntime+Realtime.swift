@@ -819,10 +819,5 @@ extension TalkModeRuntime {
         bypassRealtimeOnNextStart = false
         return realtimeRelayGeneration
     }
-
-    func _test_isSilenceMonitorActive() -> Bool {
-        guard let silenceTask else { return false }
-        return !silenceTask.isCancelled
-    }
 }
 #endif

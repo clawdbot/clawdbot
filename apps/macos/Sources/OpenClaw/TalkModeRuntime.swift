@@ -1688,3 +1688,12 @@ extension TalkModeRuntime {
         return spoken.contains(probe)
     }
 }
+
+#if DEBUG
+extension TalkModeRuntime {
+    func _test_isSilenceMonitorActive() -> Bool {
+        guard let silenceTask else { return false }
+        return !silenceTask.isCancelled
+    }
+}
+#endif
