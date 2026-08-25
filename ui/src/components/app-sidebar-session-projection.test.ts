@@ -318,7 +318,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
     });
   });
 
-  it.each(["ended", "replaced", "preview-hidden"] as const)(
+  it.each(["ended", "preview-hidden"] as const)(
     "clears held running activity when its run is %s",
     (change) => {
       const projection = new SidebarSessionProjection();
@@ -333,12 +333,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
           },
         }),
       );
-      const changed =
-        change === "ended"
-          ? sessionRow(running.key)
-          : change === "replaced"
-            ? sessionRow(running.key, { hasActiveRun: true, activeRunIds: ["run-two"] })
-            : running;
+      const changed = change === "ended" ? sessionRow(running.key) : running;
       const showPreview = change !== "preview-hidden";
 
       projection.project(
@@ -358,6 +353,72 @@ describe("SidebarSessionProjection running subtitle hold", () => {
       });
     },
   );
+
+  it("holds the subtitle across a run-id rotation while the session stays running", () => {
+    // Live repro: queued->running rotates activeRunIds; the row must not blank.
+    const projection = new SidebarSessionProjection();
+    const queued = sessionRow("running", {
+      hasActiveRun: true,
+      activeRunIds: ["run-one"],
+      status: "queued",
+    });
+    projection.project(projectionInput([queued]));
+    const rotated = sessionRow(queued.key, { hasActiveRun: true, activeRunIds: ["run-two"] });
+    projection.project(projectionInput([rotated]));
+
+    expect(projection.resolveSubtitle(subtitleParams(rotated)).subtitle).toBe(
+      "Waiting for a concurrency slot",
+    );
+  });
+
+  it("floors ambient subtitle replacement at the minimum display time", () => {
+    let clock = 0;
+    const projection = new SidebarSessionProjection(() => clock);
+    const running = sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"] });
+    const withNarration = (line: string) => ({
+      sidebarLiveActivity: true,
+      showPreview: true,
+      narrationLines: new Map([[running.key, line]]),
+      observerDigests: new Map(),
+    });
+    projection.project(projectionInput([running], { subtitle: withNarration("First activity") }));
+
+    clock = 500;
+    projection.project(projectionInput([running], { subtitle: withNarration("Second activity") }));
+    expect(projection.resolveSubtitle(subtitleParams(running)).subtitle).toBe("First activity");
+
+    clock = 2_500;
+    projection.project(projectionInput([running], { subtitle: withNarration("Second activity") }));
+    expect(projection.resolveSubtitle(subtitleParams(running)).subtitle).toBe("Second activity");
+  });
+
+  it("lets operator-critical text replace a held subtitle immediately", () => {
+    let clock = 0;
+    const projection = new SidebarSessionProjection(() => clock);
+    const running = sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"] });
+    projection.project(
+      projectionInput([running], {
+        subtitle: {
+          sidebarLiveActivity: true,
+          showPreview: true,
+          narrationLines: new Map([[running.key, "Ambient activity"]]),
+          observerDigests: new Map(),
+        },
+      }),
+    );
+
+    clock = 200;
+    const queued = sessionRow(running.key, {
+      hasActiveRun: true,
+      activeRunIds: ["run-one"],
+      status: "queued",
+    });
+    projection.project(projectionInput([queued]));
+
+    expect(projection.resolveSubtitle(subtitleParams(queued)).subtitle).toBe(
+      "Waiting for a concurrency slot",
+    );
+  });
 
   it("clears held narration when the user disables live activity", () => {
     const projection = new SidebarSessionProjection();

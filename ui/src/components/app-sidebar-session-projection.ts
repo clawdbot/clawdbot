@@ -10,9 +10,14 @@ import {
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 
 const SIDEBAR_CREATED_ORDER_CAP = 1_000;
+// Ambient subtitle sources (observer digest, narration, work path) race at
+// event rate; without a floor the line swaps A->B->A within a second. Matches
+// the narration throttle so replacement cadence stays consistent.
+const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
 type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
@@ -68,18 +73,26 @@ function baselineSessionRows(rows: readonly SidebarRecentSession[], limit: numbe
   });
 }
 
-function sidebarRunIdentity(session: SidebarRecentSession): string {
-  return `${session.sessionId ?? ""}\u0000${session.activeRunIds?.join("\u0000") ?? ""}`;
+/** Attention, agent-declared status, and the queued explanation are messages
+ * the operator must act on; they replace a held subtitle immediately. */
+function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
+  return Boolean(
+    sessionAttentionSubtitle(session.attention) ||
+    session.agentStatusNote ||
+    (session.hasActiveRun && session.status === "queued"),
+  );
 }
 
 export class SidebarSessionProjection {
+  constructor(private readonly now: () => number = () => Date.now()) {}
+
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
   private readonly childModes = new Map<string, SidebarExpansionMode>();
   private readonly heldSubtitles = new Map<
     string,
-    { identity: string; value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue }
+    { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
   >();
   private previousInput: Pick<
     SidebarProjectionInput,
@@ -307,15 +320,18 @@ export class SidebarSessionProjection {
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
-    const fresh = resolveSidebarSessionSubtitle(params);
-    if (fresh.subtitle || !params.session.hasActiveRun || !params.showPreview) {
-      return fresh;
+    if (!params.session.hasActiveRun || !params.showPreview) {
+      return resolveSidebarSessionSubtitle(params);
     }
+    // While a run is live the held value is the display: observeSubtitle
+    // refreshed it this update pass, applying the minimum-display floor.
     const held = this.heldSubtitles.get(params.session.key);
-    if (held?.identity !== sidebarRunIdentity(params.session)) {
-      return fresh;
+    if (!held) {
+      return resolveSidebarSessionSubtitle(params);
     }
-    return params.hasDisplay ? (held.catalogValue ?? fresh) : held.value;
+    return params.hasDisplay
+      ? (held.catalogValue ?? resolveSidebarSessionSubtitle(params))
+      : held.value;
   }
 
   private observeSubtitle(
@@ -325,10 +341,6 @@ export class SidebarSessionProjection {
     if (!session.hasActiveRun || !environment.showPreview) {
       this.heldSubtitles.delete(session.key);
       return;
-    }
-    const identity = sidebarRunIdentity(session);
-    if (this.heldSubtitles.get(session.key)?.identity !== identity) {
-      this.heldSubtitles.delete(session.key);
     }
     if (!environment.sidebarLiveActivity && this.heldSubtitles.get(session.key)?.value.narration) {
       this.heldSubtitles.delete(session.key);
@@ -343,13 +355,26 @@ export class SidebarSessionProjection {
       observerDigest: environment.observerDigests.get(session.key) ?? null,
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
-    if (value.subtitle) {
-      const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });
-      this.heldSubtitles.set(session.key, {
-        identity,
-        value,
-        ...(catalogValue.subtitle ? { catalogValue } : {}),
-      });
+    if (!value.subtitle) {
+      // Transient gaps between event updates keep the last shown line; the
+      // hold dies with the run (the hasActiveRun branch above).
+      return;
     }
+    const held = this.heldSubtitles.get(session.key);
+    const now = this.now();
+    const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
+    if (
+      replacing &&
+      now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
+      !isOperatorCriticalSubtitle(session)
+    ) {
+      return;
+    }
+    const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });
+    this.heldSubtitles.set(session.key, {
+      value,
+      ...(catalogValue.subtitle ? { catalogValue } : {}),
+      shownAt: held !== undefined && !replacing ? held.shownAt : now,
+    });
   }
 }
