@@ -11,6 +11,22 @@ const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
   "extensions/tsconfig.package-boundary.paths.json" as const;
 const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
+const XAI_OMITTED_BOUNDARY_PATHS = {
+  "openclaw/plugin-sdk/channel-secret-basic-runtime": [
+    "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-secret-owner-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-secret-tts-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts",
+  ],
+  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
+  "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
+  "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
+  "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+} as const;
 const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
 type TsConfigJson = {
@@ -69,6 +85,11 @@ function readJsonFile<T>(relativePath: string): T {
 
 function readExtensionTsconfig(extensionName: string): TsConfigJson {
   return readJsonFile<TsConfigJson>(`extensions/${extensionName}/tsconfig.json`);
+}
+
+function isContainedPackageBoundaryTarget(target: string): boolean {
+  const root = /^\.\.\/(dist|packages|extensions)\//u.exec(target)?.[1];
+  return root !== undefined && posix.normalize(target).startsWith(`../${root}/`);
 }
 
 function collectExtensionsWithTsconfig(): string[] {
@@ -158,6 +179,9 @@ describe("opt-in extension package boundaries", () => {
       throw new Error("Missing shared extension package boundary aliases");
     }
     expect(paths["openclaw/plugin-sdk/*"]).toEqual(["../dist/plugin-sdk/*.d.ts"]);
+    for (const [specifier, targets] of Object.entries(XAI_OMITTED_BOUNDARY_PATHS)) {
+      expect(paths[specifier], specifier).toEqual(targets);
+    }
     for (const entrypoint of privateLocalOnlyPluginSdkEntrypoints) {
       expect(paths[`openclaw/plugin-sdk/${entrypoint}`], entrypoint).toEqual([
         `../packages/plugin-sdk/dist/src/plugin-sdk/${entrypoint}.d.ts`,
@@ -180,7 +204,7 @@ describe("opt-in extension package boundaries", () => {
     for (const [specifier, targets] of Object.entries(paths)) {
       expect(targets.length, specifier).toBeGreaterThan(0);
       for (const target of targets) {
-        expect(target, specifier).toMatch(/^\.\.\/(?:dist|packages|extensions)\//u);
+        expect(isContainedPackageBoundaryTarget(target), specifier).toBe(true);
       }
     }
 
@@ -200,6 +224,16 @@ describe("opt-in extension package boundaries", () => {
       "${configDir}/src/**/*test-harness.ts",
       "${configDir}/src/**/*test-support.ts",
     ]);
+  });
+
+  it("rejects package aliases that escape their declared declaration root", () => {
+    for (const target of [
+      "../dist/../src/gateway/auth.ts",
+      "../packages/../../src/gateway/auth.ts",
+      "../extensions/../src/gateway/auth.ts",
+    ]) {
+      expect(isContainedPackageBoundaryTarget(target), target).toBe(false);
+    }
   });
 
   it("keeps every opt-in extension rooted inside its package and on the package sdk", () => {
@@ -230,16 +264,7 @@ describe("opt-in extension package boundaries", () => {
     if (!paths) {
       throw new Error("Missing shared extension package boundary aliases");
     }
-    const omitted = new Set([
-      "openclaw/plugin-sdk/channel-secret-basic-runtime",
-      "openclaw/plugin-sdk/channel-secret-owner-runtime",
-      "openclaw/plugin-sdk/channel-secret-tts-runtime",
-      "@openclaw/matrix/test-api.js",
-      "@openclaw/discord/api.js",
-      "@openclaw/slack/api.js",
-      "@openclaw/telegram/api.js",
-      "@openclaw/whatsapp/api.js",
-    ]);
+    const omitted = new Set(Object.keys(XAI_OMITTED_BOUNDARY_PATHS));
     const expectedPaths = Object.fromEntries(
       Object.entries(paths)
         .filter(([specifier]) => !omitted.has(specifier))
