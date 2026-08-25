@@ -592,6 +592,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     ...(media.path ? { path: media.path, url: media.path } : {}),
     contentType: media.contentType,
+    ...(media.fileName ? { fileName: media.fileName } : {}),
     kind: media.kind,
     transcribed: index !== undefined && audioTranscribedMediaIndex === index,
   });

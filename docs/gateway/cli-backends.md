@@ -118,10 +118,11 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled Anthropic plugin runs the installed Claude Code executable through
 Anthropic's official Agent SDK. Claude Code owns its existing local login and
-subscription; OpenClaw does not extract that login or send synthesized
-Anthropic API requests. Compatible agent turns share one warm SDK query and
-Claude Code subprocess. A changed model, system prompt, authenticated identity,
-or tool policy starts a new query; persisted Claude session IDs still provide
+subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
+refreshes, or forwards native tokens, or sends synthesized Anthropic API
+requests. Compatible agent turns share one warm SDK query and
+Claude Code subprocess. A changed model, system prompt, or tool policy starts a
+new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
 Keep Claude Code updated, especially if the SDK reports an incompatible
@@ -136,11 +137,14 @@ claude update
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 The Agent SDK always runs with Claude Code's default permission mode.
-OpenClaw's existing effective exec policy remains authoritative through SDK
-permission callbacks and a `PreToolUse` hook, including when user settings
-would otherwise preapprove a tool. Per-agent and session restrictions still
-override broader global policy. OpenClaw-owned MCP tools remain authorized by
-the Gateway rather than receiving a second Claude-native approval.
+OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
+host control, including when user or enterprise settings would otherwise
+preapprove a call. Native requests pass through canonical `before_tool_call`
+policy before exec policy and approval, with native tool names and file
+arguments projected into their OpenClaw equivalents. Per-agent and session
+restrictions still override broader global policy. OpenClaw-owned MCP tools
+remain authorized by the Gateway rather than receiving duplicate native
+approval; other MCP tools stay host-permission controlled.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's
@@ -347,12 +351,12 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
-For `claude-cli`, an imported native OAuth profile reuses the matching,
-identity-verified Claude Code login without forwarding an extracted access
-token. Explicit non-native API-key and token profiles continue to use the
-protected, per-invocation credential-forwarding CLI path, keeping selected
-per-agent profiles authoritative without placing credential values in command
-arguments.
+For `claude-cli`, the installed Claude Code process uses its current native
+login. OpenClaw uses a non-secret route marker and never reads, persists,
+refreshes, selects, or forwards the native tokens.
+Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+Explicit OpenClaw-managed API-key and token profiles continue to use the
+protected, per-invocation credential-forwarding CLI path.
 
 ## Reseed history cap
 

@@ -220,7 +220,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
+    return isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase;
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -230,7 +230,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return true;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    if (entry.type !== "text") {
+    if (!isAssistantTextContentType(entry.type)) {
       return true;
     }
     return parseAssistantTextSignature(entry)?.phase === "final_answer";

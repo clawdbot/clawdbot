@@ -219,18 +219,28 @@ function resolveEffectiveRuntimeModel(params: {
   // The session-selected context-window option caps native runs too; the CLI
   // backend maps the option id to argv/env separately, but budget and payload
   // sizing must honor the selection on every runtime path.
-  const selectedWindowTokens = resolveModelContextWindowProfile({
+  const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry: params.runtimeModel,
     selected: params.contextWindow,
-  }).contextTokens;
-  const ctxInfo = resolveContextWindowInfo({
+  });
+  const resolvedCtxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.contextConfigProvider ?? params.provider,
     modelId: params.modelId,
     modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
-    modelContextWindow: selectedWindowTokens,
+    modelContextWindow: contextWindowProfile.contextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  // resolveContextWindowInfo ranks the passed selection below both the
+  // discovered model cap and models.providers.*.models[].contextTokens, so a
+  // 200k session would keep budgeting against the wider window. Only an
+  // effective option caps here; the bare catalog scalar stays subordinate.
+  const ctxInfo =
+    contextWindowProfile.contextWindow &&
+    contextWindowProfile.contextTokens !== undefined &&
+    resolvedCtxInfo.tokens > contextWindowProfile.contextTokens
+      ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
+      : resolvedCtxInfo;
 
   // Apply contextTokens cap to model so session runtime's auto-compaction
   // threshold uses the effective limit, not the native context window.

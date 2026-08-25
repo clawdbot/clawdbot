@@ -42,6 +42,16 @@ const status = {
   lastAttemptAtMs: 1,
   lastSuccessAtMs: 1,
   lastError: null,
+  collectionReview: {
+    workspace1: { attemptedAtMs: Date.now() - 60_000, succeededAtMs: Date.now() - 30_000 },
+  },
+  experienceReview: {
+    workspace1: {
+      attemptedAtMs: Date.now() - 15_000,
+      outcome: "proposed" as const,
+      proposalId: "proposal-1",
+    },
+  },
   counts: { active: 1, stale: 0, archived: 0 },
   skills: [
     {
@@ -146,6 +156,16 @@ describe("skills curator cli", () => {
     );
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("daily-brief (/other-workspace/skills/daily-brief/SKILL.md)  active"),
+    );
+  });
+
+  it("prints the last collection and experience outcomes", async () => {
+    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining("Collection review workspac"),
+    );
+    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining("Experience review workspac: proposed (proposal-1)"),
     );
   });
 });

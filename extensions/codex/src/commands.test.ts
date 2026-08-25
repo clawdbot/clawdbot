@@ -157,6 +157,7 @@ function createThreadResumeResponse(params: {
     thread: {
       id: params.threadId,
       sessionId: params.threadId,
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
@@ -521,6 +522,59 @@ describe("codex command", () => {
     expectResultTextContains(denied, "Only an owner or operator.admin");
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
+
+  it.each(["status", "account", "threads", "sessions --host paired-node", "mcp", "skills"])(
+    "keeps host-wide /codex %s inspection owner-only",
+    async (args) => {
+      const codexControlRequest = vi.fn();
+      const safeCodexControlRequest = vi.fn();
+      const readCodexStatusProbes = vi.fn();
+      const listCodexCliSessionsOnNode = vi.fn();
+
+      const result = await runCommand(
+        args,
+        {
+          codexControlRequest,
+          safeCodexControlRequest,
+          readCodexStatusProbes,
+          listCodexCliSessionsOnNode,
+        },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expectResultTextContains(result, "Only an owner or operator.admin");
+      expect(codexControlRequest).not.toHaveBeenCalled();
+      expect(safeCodexControlRequest).not.toHaveBeenCalled();
+      expect(readCodexStatusProbes).not.toHaveBeenCalled();
+      expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows operator.admin to inspect host-wide Codex account state", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({ ok: true as const, value: {} }));
+
+    const result = await runCommand(
+      "account",
+      { safeCodexControlRequest },
+      { senderIsOwner: false, gatewayClientScopes: ["operator.admin"] },
+    );
+
+    expectResultTextContains(result, "Account: available");
+    expect(safeCodexControlRequest).toHaveBeenCalled();
+  });
+
+  it.each(["help", "models", "binding"])(
+    "preserves safe /codex %s inspection for authorized non-owners",
+    async (args) => {
+      const result = await runCommand(
+        args,
+        { listCodexAppServerModels: vi.fn(async () => ({ models: [] })) },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expect(result.text).not.toContain("Only an owner or operator.admin");
+    },
+  );
 
   it("never sends a paired-node workspace to the gateway Codex app-server", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });

@@ -14,11 +14,30 @@ import {
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
+export type ChatProgressCardPlacement = "composer" | "dock" | "rail";
+
+/* Narrowest gutter that still holds a readable card: the dock keeps a 12px gap
+ * from the composer and clears the transcript scrollbar strip on the far side,
+ * so this leaves it ~250px of its own. */
+const PROGRESS_CARD_DOCK_MIN_GUTTER_PX = 280;
+
+/** Picks the single live progress-card placement for one chat pane. */
+function chatProgressCardPlacement(params: {
+  companionRailVisible: boolean;
+  composerGutter: number;
+}): ChatProgressCardPlacement {
+  if (params.companionRailVisible) {
+    return "rail";
+  }
+  return params.composerGutter >= PROGRESS_CARD_DOCK_MIN_GUTTER_PX ? "dock" : "composer";
+}
+
 /** Builds the two rail models and their shared sidebar slot controls. */
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
   paneWidth: number;
+  composerGutter: number;
   presentationId: string;
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
@@ -70,14 +89,17 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardInRail =
-    params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-    isSidebarSlotVisible(sidebarLayout, "companion");
+  const progressCardPlacement = chatProgressCardPlacement({
+    companionRailVisible:
+      params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
+      isSidebarSlotVisible(sidebarLayout, "companion"),
+    composerGutter: params.composerGutter,
+  });
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardInRail,
+    progressCardPlacement,
     sessionWorkspace,
   };
 }

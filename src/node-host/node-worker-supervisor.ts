@@ -210,22 +210,23 @@ class NodeWorkerSupervisor {
     }
     if (active?.state === "running") {
       if (active.container) {
-        const containerState = await this.requireContainerLifecycle().inspect(
-          active.container,
-          active,
-        );
-        if (containerState === "unknown") {
+        const inspection = await this.requireContainerLifecycle().inspect(active.container, active);
+        if (inspection === "unknown") {
           return this.store.get(launchId);
         }
-        if (containerState === "reused") {
+        if (inspection === "reused") {
           throw new Error(`node worker launch ${launchId} lost its container ownership`);
         }
-        if (containerState === "live") {
+        if (inspection === "live") {
           const clientState = inspectNodeWorkerProcessIdentity(active.worker);
           if (clientState !== "dead" && clientState !== "reused") {
             return this.store.get(launchId);
           }
-          await this.stopChild(active, "interrupted");
+          // Observe the dead attach client's result before fencing its still-running owner.
+          await active.done;
+          if (this.active.get(launchId) === active) {
+            await this.stopChild(active, "interrupted");
+          }
         } else {
           await this.cleanupActiveContainer(active);
           await active.done;

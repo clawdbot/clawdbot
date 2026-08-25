@@ -881,6 +881,14 @@ describe("gateway/node-registry", () => {
       capacity: { total: 2, available: 2 },
       bundlePrewarm: 1,
     });
+    expect(
+      priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true, ["system.run"]),
+    ).toBe(true);
+    expect(nodeRegistry.updateSurface("node-1", { commands: [] })).not.toBeNull();
+    expect(priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true)).toBe(true);
+    expect(
+      priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true, ["system.run"]),
+    ).toBe(false);
   });
 
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {

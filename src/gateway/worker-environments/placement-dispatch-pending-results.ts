@@ -11,8 +11,13 @@ import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
 } from "./placement-teardown.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+import { boundedWorkerError } from "./worker-error.js";
+import type {
+  WorkerWorkspaceRecoveryFailureReport,
+  WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
@@ -47,6 +52,9 @@ export type PlacementRecoveryDeps = {
       | { paths: string[]; stagedResultRef: string; totalCount: number }
       | { cleared: true }
     ),
+  ) => Promise<void>;
+  reportWorkspaceResultRecoveryFailure?: (
+    recovery: WorkerWorkspaceRecoveryFailureReport,
   ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
     sessionId: string;
@@ -480,8 +488,32 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
-      // Keep the result, claim, and environment fenced. The next sweep retries.
+    } catch (error) {
+      try {
+        const current = placements.get(pending.sessionId);
+        const currentPending = placements
+          .listPendingWorkspaceResults()
+          .find(
+            (candidate) =>
+              candidate.sessionId === pending.sessionId &&
+              candidate.environmentId === pending.environmentId &&
+              candidate.ownerEpoch === pending.ownerEpoch &&
+              candidate.placementGeneration === pending.placementGeneration &&
+              candidate.claimId === pending.claimId &&
+              candidate.runId === pending.runId &&
+              candidate.gatewayInstanceId === pending.gatewayInstanceId,
+          );
+        if (currentPending && isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)) {
+          await deps.reportWorkspaceResultRecoveryFailure?.({
+            sessionId: current.sessionId,
+            sessionKey: current.sessionKey,
+            agentId: current.agentId,
+            error: boundedWorkerError(error),
+          });
+        }
+      } catch {
+        // Transcript reporting must not weaken the durable recovery fence.
+      }
     }
   }
   if (cleanupOrphans) {

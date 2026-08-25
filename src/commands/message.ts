@@ -14,6 +14,7 @@ import type { ChannelMessageActionName } from "../channels/plugins/types.public.
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
@@ -23,7 +24,10 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
-import { isMessageBroadcastSuccessful } from "../infra/outbound/message-action-contracts.js";
+import {
+  isMessageActionSuccessful,
+  resolveMessageSendOutcome,
+} from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -48,8 +52,18 @@ function extractMessageId(payload: unknown): string | undefined {
 
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
   const messageId = extractMessageId(result.payload);
+  const sendResult = result.kind === "send" ? result.sendResult : undefined;
+  const sendOutcome = result.kind === "send" ? resolveMessageSendOutcome(sendResult) : undefined;
   return {
-    ...(result.kind === "broadcast" ? { ok: isMessageBroadcastSuccessful(result) } : {}),
+    ...(result.kind === "broadcast"
+      ? { ok: isMessageActionSuccessful(result) }
+      : sendOutcome && !sendOutcome.ok && !result.dryRun
+        ? {
+            ...formatCliJsonFailure(sendOutcome.error),
+            deliveryStatus: sendResult?.deliveryStatus,
+            ...(sendOutcome.sentBeforeError ? { sentBeforeError: true } : {}),
+          }
+        : {}),
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,

@@ -161,7 +161,7 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
     ].map(rect);
     const shells = [
       ...document.querySelectorAll(
-        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden]), .scope-upgrade-shell-status:not([hidden])",
+        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden])",
       ),
     ]
       .map(rect)
@@ -254,22 +254,8 @@ suite.define(() => {
       beforeExpandProof: undefined,
       custodian: false,
       deviceLess: true,
-      direction: "ltr",
-      expectedControl: ".scope-upgrade-shell-status",
-      expectedUpdate: false,
-      name: "limited-access status",
-      navCollapsed: false,
-      operatorScopes: limitedScopes,
-      proof: "limited-access",
-      themeMode: "light" as const,
-      updateAvailable: undefined,
-    },
-    {
-      beforeExpandProof: undefined,
-      custodian: false,
-      deviceLess: true,
       direction: "rtl",
-      expectedControl: ".scope-upgrade-shell-status",
+      expectedControl: ".sidebar-attention--floating .sidebar-issues-button",
       expectedUpdate: false,
       name: "collapsed RTL limited-access status and attention",
       navCollapsed: true,
@@ -327,61 +313,6 @@ suite.define(() => {
         await waitForShellLayout(page);
         await expectPanelHeaderControlsClearShellChrome(page);
         await capturePanel(page, testCase.proof);
-      },
-    );
-  });
-
-  it("keeps the mobile limited-access header below the topbar without a desktop gutter", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "light",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 844, width: 390 },
-      },
-      async ({ page }) => {
-        await failNextDeviceIdentityMint(page);
-        await seedSettings(page, "light");
-        await installMockGateway(page, scenario({ operatorScopes: limitedScopes }));
-        await openExpandedFilesPanel(page);
-        const status = page.locator(".scope-upgrade-shell-status");
-        await status.waitFor();
-        const geometry = await page.evaluate(() => {
-          const header = document
-            .querySelector(".sidebar-region__right-runtime .side-panel > .side-panel__header")
-            ?.getBoundingClientRect();
-          const firstControl = document
-            .querySelector(
-              ".sidebar-region__right-runtime .side-panel > .side-panel__header :is(button, wa-tab)",
-            )
-            ?.getBoundingClientRect();
-          const panelControls = [
-            ...document.querySelectorAll(
-              ".sidebar-region__right-runtime .side-panel > .side-panel__header :is(button, wa-tab)",
-            ),
-          ].map((element) => element.getBoundingClientRect());
-          const scopeStatus = document
-            .querySelector(".scope-upgrade-shell-status")
-            ?.getBoundingClientRect();
-          if (!header || !firstControl || !scopeStatus) {
-            throw new Error("Mobile limited-access geometry is incomplete");
-          }
-          return {
-            controlInset: firstControl.left - header.left,
-            overlaps: panelControls.some((control) => {
-              const overlapX =
-                Math.min(control.right, scopeStatus.right) -
-                Math.max(control.left, scopeStatus.left);
-              const overlapY =
-                Math.min(control.bottom, scopeStatus.bottom) -
-                Math.max(control.top, scopeStatus.top);
-              return overlapX > 0.5 && overlapY > 0.5;
-            }),
-          };
-        });
-        expect(geometry.overlaps).toBe(false);
-        expect(geometry.controlInset).toBeLessThanOrEqual(16);
-        await capturePanel(page, "mobile-limited-access");
       },
     );
   });

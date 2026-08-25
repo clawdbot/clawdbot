@@ -12,6 +12,7 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -44,6 +45,55 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   pane.handleDocumentKeydown(event);
   return event;
 }
+
+describe("chat pane retained presentation", () => {
+  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.presented = false;
+    requestUpdate.mockClear();
+    const result = {
+      count: 1,
+      path: "",
+      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
+    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+
+    pane.applySessionsState({
+      agentId: "main",
+      deletedSessions: [],
+      error: null,
+      groups: [],
+      groupSettings: [],
+      loading: false,
+      modelOverrides: {},
+      result,
+      sectionOrder: [],
+    });
+
+    expect(state.sessionsResult).toBe(result);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+
+    lifecycle.onPaneSessionChange = () => undefined;
+    await lifecycle.updateComplete;
+
+    expect(performUpdate).not.toHaveBeenCalled();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+  });
+});
 
 describe("chat pane header state", () => {
   it("forks through the shared session organizer flow and selects the new session", async () => {

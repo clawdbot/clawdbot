@@ -27,6 +27,10 @@ import {
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
+  getRuntimeExternalCliProfileIds,
+  getRuntimeLocalProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore as getInternalRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialMutationToken,
@@ -1429,34 +1433,36 @@ describe("promoteAuthProfileInOrder", () => {
   it("narrows provider removal to selected profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "openrouter:oauth": {
-              type: "oauth",
-              provider: "openrouter",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            },
-            "openrouter:api-key": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "api-key",
-            },
+      const initialStore: RuntimeAuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openrouter:oauth": {
+            type: "oauth",
+            provider: "openrouter",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
           },
-          order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
-          lastGood: { openrouter: "openrouter:oauth" },
-          usageStats: {
-            "openrouter:oauth": { lastUsed: 1 },
-            "openrouter:api-key": { lastUsed: 2 },
+          "openrouter:api-key": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "api-key",
           },
         },
-        agentDir,
-      );
+        order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
+        lastGood: { openrouter: "openrouter:oauth" },
+        usageStats: {
+          "openrouter:oauth": { lastUsed: 1 },
+          "openrouter:api-key": { lastUsed: 2 },
+        },
+        runtimePersistedProfileIds: ["openrouter:oauth", "openrouter:api-key"],
+        runtimeLocalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
+        runtimeExternalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
+        runtimeExternalCliProfileIds: ["openrouter:oauth", "openrouter:api-key"],
+      };
+      saveAuthProfileStore(initialStore, agentDir);
 
-      await removeProviderAuthProfilesWithLock({
+      const removedStore = await removeProviderAuthProfilesWithLock({
         agentDir,
         provider: "openrouter",
         profileIds: ["openrouter:oauth"],
@@ -1469,6 +1475,49 @@ describe("promoteAuthProfileInOrder", () => {
       });
       expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
+      expect(removedStore?.runtimePersistedProfileIds ?? []).not.toContain("openrouter:oauth");
+      expect(removedStore ? getRuntimeLocalProfileIds(removedStore) : []).not.toContain(
+        "openrouter:oauth",
+      );
+      expect(removedStore?.runtimeExternalProfileIds ?? []).not.toContain("openrouter:oauth");
+      expect(removedStore ? getRuntimeExternalCliProfileIds(removedStore) : []).not.toContain(
+        "openrouter:oauth",
+      );
+    });
+  });
+
+  it("does not rewrite the store when selected profiles are absent", async () => {
+    await withAuthProfileTestState("openclaw-auth-remove-noop-", async ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const initialStore: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openrouter:api-key": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "api-key",
+          },
+        },
+      };
+      saveAuthProfileStore(initialStore, agentDir);
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
+      ]);
+      const credentialRevision =
+        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
+
+      await removeProviderAuthProfilesWithLock({
+        agentDir,
+        provider: "openrouter",
+        profileIds: ["openrouter:missing"],
+      });
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual(initialStore);
+      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBe(
+        credentialRevision,
+      );
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBe(stateRevision);
     });
   });
 

@@ -175,6 +175,17 @@ export function setCurrentPluginMetadataSnapshot(
   publishCurrentPluginMetadataSnapshot(snapshot, options);
 }
 
+/** Publishes a prepared CLI snapshot without displacing a lifecycle owner. */
+export function adoptCurrentPluginMetadataSnapshotIfAbsent(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions = {},
+): void {
+  if (getCurrentPluginMetadataSnapshotState().snapshot !== undefined) {
+    return;
+  }
+  setCurrentPluginMetadataSnapshot(snapshot, options);
+}
+
 function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
   return {
     ...getCurrentPluginMetadataSnapshotState(),

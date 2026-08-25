@@ -7,6 +7,7 @@ import {
   type WorkerProfile,
 } from "../../plugins/types.js";
 import { hashWorkerCredential } from "./credential.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -100,56 +101,180 @@ describe("worker environment service", () => {
       state: "ready",
     });
     expect(provision).toHaveBeenCalledOnce();
+    expect(provision).toHaveBeenCalledWith(
+      { region: "test" },
+      expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
+      undefined,
+    );
+  });
+
+  it("P1: direct creation preserves the default setup of an advertised node provider", async () => {
+    const provision = vi.fn(async () => ({
+      leaseId: "lease-direct-default-node",
+      node: { deviceId: "device-direct-default-node" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provision,
+      }),
+      { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+    );
+
+    const environment = await workerService.create("development", "request-direct-default-node");
+
+    expect(environment).toMatchObject({
+      state: "ready",
+      nodeDeviceId: "device-direct-default-node",
+    });
+    expect(environment.profileSnapshot).not.toHaveProperty("executionMode");
+    expect(provision).toHaveBeenCalledWith(
+      { region: "test" },
+      expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
+      undefined,
+    );
   });
 
   it.each<{
     mode: WorkerExecutionMode;
     lease: WorkerLease;
-    expectedTransport: "node" | "SSH";
+    transport: "node" | "SSH";
+    inherited?: true;
   }>([
     {
       mode: "worker-turn",
-      lease: { leaseId: "lease-worker-turn-ssh", ssh: support.SSH_ENDPOINT },
-      expectedTransport: "node",
+      lease: { leaseId: "lease-worker-turn-node", node: { deviceId: "worker-turn-device" } },
+      transport: "node",
     },
     {
       mode: "remote-exec",
-      lease: { leaseId: "lease-remote-exec-node", node: { deviceId: "device-1" } },
-      expectedTransport: "SSH",
+      lease: { leaseId: "lease-remote-exec-node", node: { deviceId: "remote-exec-device" } },
+      transport: "node",
+    },
+    {
+      mode: "remote-exec",
+      lease: { leaseId: "lease-remote-exec-ssh", ssh: support.SSH_ENDPOINT },
+      transport: "SSH",
+    },
+    {
+      mode: "remote-exec",
+      lease: { leaseId: "lease-inherited-node", node: { deviceId: "inherited-device" } },
+      transport: "node",
+      inherited: true,
     },
   ])(
-    "rejects a $mode provider that returns the wrong lease transport",
-    async ({ mode, lease, expectedTransport }) => {
-      const destroy = vi.fn(async () => {});
+    "forwards $mode placement to its $transport provider transport (inherited: $inherited)",
+    async ({ mode, lease, transport, inherited }) => {
+      const provision = vi.fn(async () => lease);
       const provider = support.createProvider({
-        supportedExecutionModes: [mode],
-        provision: async () => lease,
-        destroy,
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provision,
       });
-      const workerService = support.createService(provider);
-
-      await expect(
-        workerService.create("development", `transport-${mode}`, undefined, mode),
-      ).rejects.toMatchObject({
-        code: "invalid_profile",
-        message: expect.stringContaining(
-          `${mode} providers must return a ${expectedTransport} lease`,
-        ),
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       });
+      const idempotencyKey = `transport-${mode}-${transport}-${inherited ? "inherited" : "profile"}`;
 
-      expect(destroy).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
-      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-      expect(support.testState.store.list()).toEqual([
-        expect.objectContaining({
-          state: "failed",
-          leaseId: null,
-          nodeDeviceId: null,
-          sshEndpoint: null,
-          lastError: `${mode} providers must return a ${expectedTransport} lease`,
-        }),
-      ]);
+      const result = inherited
+        ? await workerService.createFromProfileSnapshot(
+            {
+              profileId: "development",
+              providerId: provider.id,
+              profileSnapshot: { install: "bundle", settings: { region: "test" } },
+            },
+            idempotencyKey,
+            undefined,
+            mode,
+          )
+        : await workerService.create("development", idempotencyKey, undefined, mode);
+
+      expect(result).toMatchObject({
+        state: "ready",
+        leaseId: lease.leaseId,
+        profileSnapshot: { executionMode: mode, settings: { region: "test" } },
+        ...(lease.node ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null } : {}),
+      });
+      expect(provision).toHaveBeenCalledWith(
+        { region: "test" },
+        expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
+        { executionMode: mode },
+      );
+      expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(transport === "SSH" ? 1 : 0);
     },
   );
+
+  it("rejects an SSH lease for worker-turn placement even when its provider also supports remote-exec", async () => {
+    const lease = { leaseId: "lease-worker-turn-ssh", ssh: support.SSH_ENDPOINT };
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn", "remote-exec"],
+      provision: async () => lease,
+      destroy,
+    });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.create("development", "transport-worker-turn-ssh", undefined, "worker-turn"),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining("worker-turn providers must return a node lease"),
+    });
+
+    expect(destroy).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        leaseId: null,
+        nodeDeviceId: null,
+        sshEndpoint: null,
+        lastError: "worker-turn providers must return a node lease",
+      }),
+    ]);
+  });
+
+  it("rejects a repeated operation id when its selected execution mode changes", async () => {
+    const provision = vi.fn(async () => ({
+      leaseId: "lease-stable-operation-mode",
+      node: { deviceId: "device-stable-operation-mode" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provision,
+      }),
+      { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+    );
+
+    const original = await workerService.create(
+      "development",
+      "request-stable-operation-mode",
+      undefined,
+      "worker-turn",
+    );
+    await expect(
+      workerService.create(
+        "development",
+        "request-stable-operation-mode",
+        undefined,
+        "worker-turn",
+      ),
+    ).resolves.toMatchObject({ environmentId: original.environmentId });
+    await expect(
+      workerService.create(
+        "development",
+        "request-stable-operation-mode",
+        undefined,
+        "remote-exec",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+
+    expect(provision).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+      state: "ready",
+      leaseId: original.leaseId,
+    });
+  });
 
   it("delegates configured machine options to the profile provider", async () => {
     const listMachineOptions = vi.fn(async () => [
@@ -213,6 +338,7 @@ describe("worker environment service", () => {
     );
     const parent = await workerService.create("development", "parent-profile-snapshot");
     support.getDevelopmentProfile().settings = { region: "mutated" };
+    support.getDevelopmentProfile().provider = "FaKe";
 
     const child = await workerService.createFromProfileSnapshot(
       {
@@ -229,6 +355,125 @@ describe("worker environment service", () => {
       providerId: parent.providerId,
       profileSnapshot: parent.profileSnapshot,
     });
+  });
+
+  it.each([
+    {
+      name: "removed",
+      mutate: () => {
+        support.testState.config.cloudWorkers = { profiles: {} };
+      },
+      code: "profile_not_found",
+    },
+    {
+      name: "assigned to a different provider",
+      mutate: () => {
+        support.getDevelopmentProfile().provider = "replacement";
+      },
+      code: "invalid_profile",
+    },
+  ])("rejects a fresh inherited environment when its profile was $name", async (testCase) => {
+    let lease = 0;
+    let credential = 0;
+    const provision = vi.fn(async () => ({
+      leaseId: `inherited-lease-${(lease += 1)}`,
+      ssh: support.SSH_ENDPOINT,
+    }));
+    const workerService = support.createService(support.createProvider({ provision }), {
+      generateWorkerCredential: () => `inherited-worker-credential-${(credential += 1)}`,
+    });
+    const parent = await workerService.create("development", "parent-inherited-profile");
+    const inherited = {
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    };
+    testCase.mutate();
+
+    await expect(
+      workerService.createFromProfileSnapshot(inherited, "fresh-inherited-profile"),
+    ).rejects.toMatchObject({ code: testCase.code });
+    expect(provision).toHaveBeenCalledOnce();
+    expect(support.testState.store.list()).toHaveLength(1);
+
+    await expect(
+      workerService.createFromProfileSnapshot(inherited, "parent-inherited-profile"),
+    ).resolves.toMatchObject({ environmentId: parent.environmentId });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
+  it("allows paired-device placement without configured cloud profiles", async () => {
+    support.testState.config.cloudWorkers = { profiles: {} };
+    const provision = vi.fn(async () => ({
+      leaseId: "device-lease",
+      node: { deviceId: "device-1" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        id: DEVICE_WORKER_PROVIDER_ID,
+        supportedExecutionModes: ["worker-turn"],
+        provision,
+      }),
+      { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+    );
+
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: "device:device-1",
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+        },
+        "paired-profileless",
+        undefined,
+        "worker-turn",
+      ),
+    ).resolves.toMatchObject({ state: "ready", nodeDeviceId: "device-1" });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
+  it("revokes removed configured device profiles without disabling synthetic paired devices", async () => {
+    let lease = 0;
+    let credential = 0;
+    const profile = support.getDevelopmentProfile();
+    profile.provider = DEVICE_WORKER_PROVIDER_ID;
+    profile.settings = { device: "device-1" };
+    const provision = vi.fn(async () => ({
+      leaseId: `named-device-lease-${(lease += 1)}`,
+      node: { deviceId: "device-1" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        id: DEVICE_WORKER_PROVIDER_ID,
+        supportedExecutionModes: ["worker-turn"],
+        provision,
+      }),
+      {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+        generateWorkerCredential: () => `named-device-credential-${(credential += 1)}`,
+      },
+    );
+    const parent = await workerService.create(
+      "development",
+      "named-device-parent",
+      undefined,
+      "worker-turn",
+    );
+    support.testState.config.cloudWorkers = { profiles: {} };
+
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: parent.profileId,
+          providerId: parent.providerId,
+          profileSnapshot: parent.profileSnapshot,
+        },
+        "named-device-child",
+        undefined,
+        "worker-turn",
+      ),
+    ).rejects.toMatchObject({ code: "profile_not_found" });
+    expect(provision).toHaveBeenCalledOnce();
   });
 
   it("rejects plaintext secret fields before persisting intent", async () => {

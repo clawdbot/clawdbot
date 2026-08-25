@@ -641,6 +641,18 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+    (harness.ctx as { dispatchReplyFromConfig?: unknown }).dispatchReplyFromConfig = undefined;
+  });
+
+  it("forwards the instance-bound reply dispatcher", async () => {
+    const dispatchReplyFromConfig = vi.fn();
+    (harness.ctx as { dispatchReplyFromConfig?: unknown }).dispatchReplyFromConfig =
+      dispatchReplyFromConfig;
+
+    await runCommandHandler(agentStatusHandler);
+
+    const { turnPlanMock } = getSlackSlashMocks();
+    expect(turnPlanMock).toHaveBeenCalledWith(expect.objectContaining({ dispatchReplyFromConfig }));
   });
 
   it("delivers native /login block replies before the command finishes", async () => {

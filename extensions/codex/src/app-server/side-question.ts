@@ -210,7 +210,7 @@ export async function runCodexAppServerSideQuestion(
   }
   if (isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)) {
     throw new Error(
-      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
+      "Normal Codex turns are supported on nodes, but /btw is not yet bound to the active placement.",
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);

@@ -48,6 +48,7 @@ import {
 } from "../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
@@ -204,7 +205,8 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
         : "recently finished";
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
+  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 

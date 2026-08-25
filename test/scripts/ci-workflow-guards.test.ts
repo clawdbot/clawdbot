@@ -58,6 +58,11 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 const TSX_IMPORT = import.meta.resolve("tsx");
 const TYPESCRIPT_NODE_MODULES = path.dirname(
   path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
@@ -1151,6 +1156,52 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   });
 }
 
+function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[] }): {
+  calls: string[];
+  output: string;
+  status: number | null;
+} {
+  const root = tempDirs.make("openclaw-ci-guards-");
+  const fakeBin = path.join(root, "bin");
+  const callsPath = path.join(root, "pnpm-calls.txt");
+  mkdirSync(fakeBin);
+  writeFileSync(
+    path.join(root, "package.json"),
+    `${JSON.stringify({
+      scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
+    })}\n`,
+  );
+  writeExecutable(path.join(fakeBin, "pnpm"), [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+  ]);
+  const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
+    (step: WorkflowStep) => step.name === "Run check shard",
+  ).run;
+  const run = spawnSync("bash", ["-c", checkShardRun], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FROZEN_TARGET: options.frozenTarget ? "true" : "false",
+      FORMAT_CHECK: "false",
+      HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PNPM_CALLS: callsPath,
+      PR_BASE_SHA: "",
+      TASK: "guards",
+    },
+  });
+  return {
+    calls: existsSync(callsPath)
+      ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
+      : [],
+    output: `${run.stdout}${run.stderr}`,
+    status: run.status,
+  };
+}
+
 function runDependencyCheckFixture(options: {
   historicalTarget: boolean;
   releaseToolingEntry?: boolean;
@@ -1992,7 +2043,12 @@ NODE
       DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
       DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
     });
-    expect(publish.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(publish.permissions).toEqual({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+      packages: "write",
+    });
     expect(releaseWorkflow.jobs.approve_docker_publish.environment).toBe("docker-release");
   });
 
@@ -3121,7 +3177,7 @@ NODE
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
     for (const [workflowPath, selectorCount] of [
-      [".github/workflows/ci.yml", 1],
+      [".github/workflows/ci.yml", 2],
       [".github/workflows/ios-periphery.yml", 1],
       [".github/workflows/macos-periphery.yml", 1],
       [".github/workflows/shared-openclawkit-periphery.yml", 2],
@@ -3315,6 +3371,7 @@ NODE
       "control-ui-i18n": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
       "ios-build": "macos-26",
+      "ios-screenshot-shard": "macos-26",
       "macos-node": "macos-15",
       "macos-swift": "macos-26",
       "native-i18n": "ubuntu-24.04",
@@ -3341,6 +3398,7 @@ NODE
       "macos-node": "blacksmith-6vcpu-macos-15",
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
+      "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
@@ -3993,7 +4051,12 @@ NODE
       mkdirSync(consumer, { recursive: true });
       writeFileSync(
         path.join(source, "package.json"),
-        JSON.stringify({ files: ["index.js"], name: "cache-proof-dep", version: "1.0.0" }),
+        JSON.stringify({
+          files: ["index.js"],
+          name: "cache-proof-dep",
+          packageManager: rootPackageManager,
+          version: "1.0.0",
+        }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
       execFileSync("pnpm", ["pack", "--pack-destination", registry], {
@@ -4058,6 +4121,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
           JSON.stringify({
             dependencies: { "cache-proof-dep": "1.0.0" },
             name: "cache-proof-root",
+            packageManager: rootPackageManager,
             private: true,
           }),
         );
@@ -5794,10 +5858,16 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const workflow = readCiWorkflow();
 
     expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
-    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(4);
     expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
+    for (const jobName of [
+      "checks-windows",
+      "macos-node",
+      "macos-swift",
+      "ios-build",
+      "ios-screenshot-shard",
+    ]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -6170,6 +6240,50 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checkShardStep.run).toContain(
       'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
+    );
+  });
+
+  it("runs temp path guardrails in the hosted guard shard", () => {
+    const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
+    const current = runGuardCheckFixture({
+      frozenTarget: false,
+      scripts: [...requiredScripts, "check:temp-path-guardrails"],
+    });
+    expect(current.status, current.output).toBe(0);
+    expect(current.calls).toContain("check:temp-path-guardrails");
+    expect(current.calls.indexOf("check:temp-path-guardrails")).toBeLessThan(
+      current.calls.indexOf("dup:check"),
+    );
+
+    const frozenMissing = runGuardCheckFixture({
+      frozenTarget: true,
+      scripts: requiredScripts,
+    });
+    expect(frozenMissing.status, frozenMissing.output).toBe(0);
+    expect(frozenMissing.calls).not.toContain("check:temp-path-guardrails");
+    expect(frozenMissing.calls).toContain("dup:check:coverage");
+    expect(frozenMissing.output).toContain(
+      "[skip] frozen target predates the temp path guardrails",
+    );
+
+    const currentMissing = runGuardCheckFixture({
+      frozenTarget: false,
+      scripts: requiredScripts,
+    });
+    expect(currentMissing.status).toBe(1);
+    expect(currentMissing.calls).not.toContain("check:temp-path-guardrails");
+    expect(currentMissing.calls).not.toContain("dup:check");
+    expect(currentMissing.output).toContain(
+      "Current CI targets must provide the check:temp-path-guardrails package script.",
+    );
+
+    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+    const preflightGuards = workflow.slice(
+      workflow.indexOf("guards)"),
+      workflow.indexOf("npm-lock)"),
+    );
+    expect(preflightGuards.indexOf("pnpm check:temp-path-guardrails")).toBeLessThan(
+      preflightGuards.indexOf("pnpm dup:check"),
     );
   });
 
@@ -7291,13 +7405,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRunContract).not.toContain("--testTimeout");
   });
 
-  it("does not rebuild Control UI after build:ci-artifacts", () => {
+  it("builds artifacts once and smoke-tests the built CLI with Node and Bun", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const setupStep = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
     const buildDistStep = buildArtifactSteps.find(
       (step: WorkflowStep) => step.name === "Build dist",
     );
+    const nodeHelpSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test CLI launcher help",
+    );
+    const nodeStatusSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test CLI launcher status json",
+    );
+    const bunSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test built CLI with Bun",
+    );
 
+    expect(setupStep.with["install-bun"]).toBe("true");
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
       "Build Control UI",
@@ -7305,6 +7432,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(buildArtifactSteps.some((step: WorkflowStep) => step.run === "pnpm ui:build")).toBe(
       false,
     );
+    expect(nodeHelpSmoke.run).toBe("node openclaw.mjs --help");
+    expect(nodeStatusSmoke.run).toBe("node openclaw.mjs status --json --timeout 1");
+    expect(bunSmoke.run).toContain("bun openclaw.mjs --help");
+    expect(bunSmoke.run).toContain("bun openclaw.mjs status --json --timeout 1");
   });
 
   it("keeps source-only Control UI locale drift advisory", () => {
@@ -7775,6 +7906,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "macos-node",
       "macos-swift",
       "ios-build",
+      "ios-screenshot-shard",
+      "ios-screenshot-evidence",
       "android",
       "docker-seed-e2e",
     ];

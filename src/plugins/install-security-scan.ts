@@ -1,19 +1,6 @@
 // Runs security checks over plugin install candidates before activation.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  InstallPolicyOrigin,
-  InstallPolicyRequestKind,
-  InstallPolicySource,
-} from "../security/install-policy.js";
-import type {
-  InstallPolicyWarningDetails,
-  InstallSafetyOverrides,
-} from "./install-security-scan.types.js";
+import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
-
-type InstallScanLogger = {
-  warn?: (message: string) => void;
-};
 
 /** Result returned by plugin/skill install security policy checks. */
 export type InstallSecurityScanResult = {
@@ -23,9 +10,6 @@ export type InstallSecurityScanResult = {
     installPolicyWarning?: InstallPolicyWarningDetails;
   };
 };
-
-/** Plugin install request kinds that share install policy without skill install semantics. */
-type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
 
 /** Skill install metadata shape passed into shared install policy evaluation. */
 export type SkillInstallSpecMetadata = {
@@ -51,17 +35,9 @@ async function loadInstallSecurityScanRuntime() {
 
 /** Scans an unpacked bundle source before plugin install/update. */
 export async function scanBundleInstallSource(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    logger: InstallScanLogger;
-    pluginId: string;
-    sourceDir: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
-    version?: string;
-    source?: InstallPolicySource;
-  },
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").scanBundleInstallSourceRuntime
+  >[0],
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanBundleInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanBundleInstallSourceRuntime(params);
@@ -69,42 +45,20 @@ export async function scanBundleInstallSource(
 
 /** Scans a package source directory and executable metadata before install/update. */
 export async function scanPackageInstallSource(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    extensions: string[];
-    logger: InstallScanLogger;
-    packageDir: string;
-    pluginId: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    source?: InstallPolicySource;
-    trustedSourceLinkedOfficialInstall?: boolean;
-  },
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").scanPackageInstallSourceRuntime
+  >[0],
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanPackageInstallSourceRuntime(params);
 }
 
 /** Scans the installed package dependency tree after npm resolution. */
-export async function scanInstalledPackageDependencyTree(params: {
-  additionalPackageDirs?: string[];
-  allowManagedNpmRootPackagePeerSymlinks?: boolean;
-  config?: OpenClawConfig;
-  dependencyScanRootDir?: string;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  packageDir: string;
-  pluginId: string;
-  requestKind?: PluginInstallRequestKind;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  trustedSourceLinkedOfficialInstall?: boolean;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanInstalledPackageDependencyTree(
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").scanInstalledPackageDependencyTreeRuntime
+  >[0],
+): Promise<InstallSecurityScanResult | undefined> {
   const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }
@@ -114,68 +68,40 @@ export async function scanInstalledPackageDependencyTree(params: {
  * Remove only with the matching runtime-postbuild legacy alias cleanup.
  */
 export async function scanFileInstallSource(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    filePath: string;
-    logger: InstallScanLogger;
-    mode?: "install" | "update";
-    pluginId: string;
-    requestedSpecifier?: string;
-    source?: InstallPolicySource;
-  },
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").scanFileInstallSourceRuntime
+  >[0],
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanFileInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanFileInstallSourceRuntime(params);
 }
 
 /** Runs npm install policy checks before package install side effects. */
-export async function preflightPluginNpmInstallPolicy(params: {
-  config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  packageName: string;
-  pluginId?: string;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  sourcePath: string;
-  sourcePathKind: "file" | "directory";
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function preflightPluginNpmInstallPolicy(
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").preflightPluginNpmInstallPolicyRuntime
+  >[0],
+): Promise<InstallSecurityScanResult | undefined> {
   const { preflightPluginNpmInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
   return await preflightPluginNpmInstallPolicyRuntime(params);
 }
 
 /** Runs git install policy checks before plugin install side effects. */
-export async function preflightPluginGitInstallPolicy(params: {
-  config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  pluginId: string;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  sourcePath: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function preflightPluginGitInstallPolicy(
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").preflightPluginGitInstallPolicyRuntime
+  >[0],
+): Promise<InstallSecurityScanResult | undefined> {
   const { preflightPluginGitInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
   return await preflightPluginGitInstallPolicyRuntime(params);
 }
 
 /** Evaluates shared install policy for skill-managed dependency installs. */
-export async function evaluateSkillInstallPolicy(params: {
-  config?: OpenClawConfig;
-  installId: string;
-  installSpec?: SkillInstallSpecMetadata;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  origin: InstallPolicyOrigin;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  skillName: string;
-  sourceDir: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function evaluateSkillInstallPolicy(
+  params: Parameters<
+    typeof import("./install-security-scan.runtime.js").evaluateSkillInstallPolicyRuntime
+  >[0],
+): Promise<InstallSecurityScanResult | undefined> {
   const { evaluateSkillInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
   return await evaluateSkillInstallPolicyRuntime(params);
 }

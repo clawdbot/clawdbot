@@ -689,7 +689,12 @@ describe("detectSetupInference", () => {
       recommended: false,
     });
     expect(detection.setupComplete).toBe(false);
-    expect(detection.recommendedInstalls).toHaveLength(9);
+    expect(detection.recommendedInstalls.map((install) => install.id)).toEqual([
+      "ollama",
+      "lmstudio",
+      "claude-code",
+      "codex-cli",
+    ]);
     expect(detection.workspace.length).toBeGreaterThan(0);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),

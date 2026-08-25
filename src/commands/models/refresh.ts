@@ -1,3 +1,4 @@
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -7,20 +8,16 @@ export async function modelsRefreshCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const result = await refreshRemoteModelCatalog({ config: getRuntimeConfig(), force: true });
+  if (result.status === "error") {
+    const message = `Remote catalog refresh failed: ${result.error}`;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  }
   if (options.json) {
     writeRuntimeJson(runtime, result, 0);
-    if (result.status === "error") {
-      runtime.exit(1);
-    }
     return;
   }
   if (result.status === "disabled") {
     runtime.log("Remote catalog refresh is disabled (models.catalogRefresh.enabled=false)");
-    return;
-  }
-  if (result.status === "error") {
-    runtime.error(`Remote catalog refresh failed: ${result.error}`);
-    runtime.exit(1);
     return;
   }
   runtime.log(

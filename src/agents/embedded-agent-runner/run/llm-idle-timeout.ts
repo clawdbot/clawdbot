@@ -185,20 +185,6 @@ function hasConfiguredLocalProviderSignal(params: {
   );
 }
 
-function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
-  const rawModelId = model?.id;
-  if (typeof rawModelId !== "string") {
-    return false;
-  }
-
-  const provider = model?.provider?.trim().toLowerCase();
-  if (provider && !provider.startsWith("ollama")) {
-    return false;
-  }
-
-  return isCloudModelRef(rawModelId);
-}
-
 type RuntimeModelLocality = {
   isLocalRuntimeModel: boolean;
   isExplicitLocalHostnameRuntimeModel: boolean;
@@ -221,7 +207,7 @@ function resolveRuntimeModelLocality(params?: {
       isSelfHostedHostnameRuntimeModel: false,
     };
   }
-  const notCloudModel = !isOllamaCloudModel(params?.model);
+  const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
     isLocalRuntimeModel: isLocalProviderBaseUrl(baseUrl) && notCloudModel,
     isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostnameBaseUrl(baseUrl) && notCloudModel,
@@ -262,7 +248,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -378,7 +364,7 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     // Unlimited run budget bounds total cost, not first-token liveness. Omit
     // the sentinel from bounds so provider-class defaults still apply.

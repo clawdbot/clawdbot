@@ -16,13 +16,15 @@ export {
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_MODEL_ALIASES,
+  CLAUDE_CLI_OFF_THINKING_PROFILE,
   CLAUDE_CLI_SESSION_ID_FIELDS,
 } from "./cli-constants.js";
 
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
-// endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+// endpoint, token source, plugin source, or telemetry bootstrap mode. Claude's
+// config directory remains inherited because it owns the selected native login.
 /** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
@@ -33,7 +35,6 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_CUSTOM_HEADERS",
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
-  "CLAUDE_CONFIG_DIR",
   // Re-injected per run from OpenClaw's canonical context budget.
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   // Re-injected only for 200K runs. Claude's user settings `env` block has
@@ -116,12 +117,6 @@ type ClaudeCliEffortArgAction =
   | { mode: "preserve" }
   | { mode: "omit" }
   | { mode: "set"; effort: ClaudeCliEffort };
-
-/** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */
-export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
-  levels: [{ id: "off" }],
-  defaultLevel: "off",
-} as const;
 
 /** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {

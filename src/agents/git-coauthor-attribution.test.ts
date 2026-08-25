@@ -11,7 +11,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.js";
-import { ensureProfileForEmail, syncGitHubIdentity } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   appendGitCoauthorContext,
@@ -52,6 +52,8 @@ describe("Git co-author attribution", () => {
       };
       const ada = profile("ada@example.test", 20, "ada");
       const grace = profile("grace@example.test", 10, "grace");
+      const sameTime = profile("same-time@example.test", 5, "same-time");
+      const later = profile("later@example.test", 1, "later");
       const primary = profile("primary@example.test", 30, "primary");
       const current = profile("current@example.test", 15, "current");
       const optedOut = profile("opted-out@example.test", 25, "opted-out", false);
@@ -64,20 +66,34 @@ describe("Git co-author attribution", () => {
         .run("github-attribution", "40", legacy.id, "legacy", Date.now());
       const scope = { agentId: "main", env: state.env, sessionKey };
       await upsertSessionEntryCore(scope, { sessionId: "coauthors", updatedAt: 1 });
-      for (const participant of [ada, grace, primary, optedOut, unlinked, legacy]) {
+      for (const [index, participant] of [
+        ada,
+        grace,
+        sameTime,
+        later,
+        primary,
+        optedOut,
+        unlinked,
+        legacy,
+      ].entries()) {
         recordSessionParticipant(scope, {
           actor: { type: "human", id: participant.id },
+          promptedAt: participant === grace || participant === sameTime ? 100 : 200 + index,
+          source: "profile",
+          sessionAgentId: "main",
+        });
+      }
+      for (const participant of [ada, ada, grace, sameTime, later]) {
+        recordSessionParticipant(scope, {
+          actor: { type: "human", id: participant.id },
+          promptedAt: 400,
           source: "profile",
           sessionAgentId: "main",
         });
       }
       recordSessionParticipant(scope, {
-        actor: { type: "human", id: ada.id },
-        source: "profile",
-        sessionAgentId: "main",
-      });
-      recordSessionParticipant(scope, {
         actor: { type: "human", id: current.id },
+        promptedAt: 1,
         source: "channel",
         sessionAgentId: "main",
       });
@@ -124,19 +140,26 @@ describe("Git co-author attribution", () => {
       const modelPrompt = appendGitCoauthorContext("commit this", attribution);
       expect(modelPrompt).toContain(
         [
-          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
-          "Co-authored-by: current <15+current@users.noreply.github.com>",
           "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+          "Co-authored-by: same-time <5+same-time@users.noreply.github.com>",
+          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
+          "Co-authored-by: later <1+later@users.noreply.github.com>",
+          "Co-authored-by: current <15+current@users.noreply.github.com>",
         ].join("\n"),
+      );
+      expect(modelPrompt).toContain(
+        "Worked on by:\n- @ada\n- @same-time\n- @grace\n- @later\n- @current",
       );
       expect(modelPrompt).not.toContain("Co-authored-by: opted-out");
       expect(modelPrompt).not.toContain("Co-authored-by: legacy");
       expect(structured).toMatchObject({
-        logins: ["grace", "current", "ada"],
+        logins: ["ada", "same-time", "grace", "later", "current"],
         trailers: [
-          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
-          "Co-authored-by: current <15+current@users.noreply.github.com>",
           "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+          "Co-authored-by: same-time <5+same-time@users.noreply.github.com>",
+          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
+          "Co-authored-by: later <1+later@users.noreply.github.com>",
+          "Co-authored-by: current <15+current@users.noreply.github.com>",
         ],
       });
       expect(modelPrompt).toContain(
@@ -145,6 +168,61 @@ describe("Git co-author attribution", () => {
       expect(modelPrompt).toContain(
         "1 linked profile participant(s) match the configured primary Git author",
       );
+    });
+  });
+
+  it("combines historical profile contributions under one verified GitHub account", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:merged-coauthors";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      await upsertSessionEntryCore(scope, { sessionId: "merged-coauthors", updatedAt: 1 });
+      const oldProfile = ensureProfileForEmail("old@example.test", { env: state.env });
+      const mergedProfile = ensureProfileForEmail("merged@example.test", { env: state.env });
+      const otherProfile = ensureProfileForEmail("other@example.test", { env: state.env });
+
+      for (const [profile, accountId, login, email] of [
+        [mergedProfile, 20, "merged", "merged@example.test"],
+        [otherProfile, 10, "other", "other@example.test"],
+      ] as const) {
+        syncGitHubIdentity(
+          { identity: { accountId, login }, authenticationAlias: { kind: "email", email } },
+          { env: state.env },
+        );
+        setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, { env: state.env });
+      }
+      for (const [profile, promptedAt] of [
+        [oldProfile, 10],
+        [oldProfile, 20],
+        [mergedProfile, 30],
+        [mergedProfile, 40],
+        [otherProfile, 50],
+        [otherProfile, 60],
+        [otherProfile, 70],
+      ] as const) {
+        recordSessionParticipant(scope, {
+          actor: { type: "human", id: profile.id },
+          promptedAt,
+          sessionAgentId: "main",
+          source: "profile",
+        });
+      }
+      linkEmail("old@example.test", mergedProfile.id, { env: state.env });
+
+      expect(
+        resolveGitCoauthorAttribution({
+          agentId: "main",
+          config: {},
+          env: state.env,
+          sessionKey,
+          storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        }),
+      ).toMatchObject({
+        logins: ["merged", "other"],
+        trailers: [
+          "Co-authored-by: merged <20+merged@users.noreply.github.com>",
+          "Co-authored-by: other <10+other@users.noreply.github.com>",
+        ],
+      });
     });
   });
 

@@ -231,7 +231,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
   };
 
-  const load = async (options: SessionRosterLoadOptions) => {
+  const load = async (options: SessionRosterLoadOptions, publishAfter?: Promise<void>) => {
     const scope = host.connection.capture();
     if (!scope) {
       return;
@@ -265,7 +265,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     }
     try {
-      const result = await requestSessionList(scope.client, requestOptions);
+      const request = requestSessionList(scope.client, requestOptions);
+      await Promise.allSettled([request, publishAfter]);
+      const result = await request;
       if (!host.connection.isCurrent(scope)) {
         return;
       }
@@ -386,10 +388,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     return { ...lastListOptions, force: true };
   };
 
-  const refreshPlan = (options: SessionRefreshOptions): SessionRosterLoadOptions[] => {
+  const refreshPlan = (options: SessionRefreshOptions) => {
     const ownerId = host.snapshot().selfUser?.id.trim();
     if (!ownerId || options.append === true || !isPrimarySessionListQuery(options)) {
-      return [options];
+      return { initial: options, shared: undefined };
     }
     const sharedLimit = Math.max(
       OWNER_FIRST_SESSION_LIST_LIMIT,
@@ -399,19 +401,19 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     );
     // Keep owner-first and shared loads atomic in the existing refresh queue.
     // Only the shared phase advances canonical membership and durable options.
-    return [
-      {
+    return {
+      initial: {
         ...options,
         ownerId,
         limit: OWNER_FIRST_SESSION_LIST_LIMIT,
         provisional: true,
       },
-      {
+      shared: {
         ...options,
         limit: sharedLimit,
         mergeExisting: true,
       },
-    ];
+    };
   };
 
   const drainRefreshQueue = async (options: SessionRefreshOptions) => {
@@ -421,11 +423,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     let next: SessionRefreshOptions | null = options;
     while (next) {
-      for (const loadOptions of refreshPlan(next)) {
-        await load(loadOptions);
-        if (!host.connection.isCurrent(scope)) {
-          return;
-        }
+      const { initial, shared } = refreshPlan(next);
+      const initialLoad = load(initial);
+      await (shared ? load(shared, initialLoad) : initialLoad);
+      if (!host.connection.isCurrent(scope)) {
+        return;
       }
       next = takeNextQueuedRefresh();
     }

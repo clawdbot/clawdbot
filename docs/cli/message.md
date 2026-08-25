@@ -104,6 +104,11 @@ true}`. `--pin` is shorthand for pinned delivery when the channel supports
 - `--silent` (Telegram, Discord): send without a notification.
 - `--gif-playback` (WhatsApp only): treat video media as GIF playback.
 
+When a send is suppressed by a message hook, fails, or only partially succeeds,
+the command explains the outcome and exits nonzero. Partial delivery keeps any
+confirmed message ID. JSON failures include `ok: false`, `deliveryStatus`, and
+`error`; successful JSON responses retain their existing shape.
+
 ```bash
 openclaw message send --channel discord \
   --target channel:123 --message "Choose:" \

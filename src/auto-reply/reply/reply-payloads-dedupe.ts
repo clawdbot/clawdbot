@@ -9,6 +9,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
   channelRouteTargetsMatchExact,
@@ -34,22 +35,6 @@ type MessagingToolDedupeRouteParams = {
   replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 };
-
-/** Removes text payloads already sent by message tools. */
-function filterMessagingToolDuplicates(params: {
-  payloads: ReplyPayload[];
-  sentTexts: string[];
-}): ReplyPayload[] {
-  const { payloads, sentTexts } = params;
-  if (sentTexts.length === 0) {
-    return payloads;
-  }
-  return payloads.filter(
-    (payload) =>
-      Boolean(payload.mediaUrl || payload.mediaUrls?.length) ||
-      !isMessagingToolDuplicate(payload.text ?? "", sentTexts),
-  );
-}
 
 /** Removes media payload URLs already sent by message tools. */
 export function filterMessagingToolMediaDuplicates(params: {
@@ -110,12 +95,12 @@ export function filterMessagingToolMediaDuplicates(params: {
     }
 
     const nextMediaUrl = stripSingle ? undefined : mediaUrl;
-    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
+    const nextMediaUrls = strippedMediaUrls ? filteredUrls : mediaUrls;
     const nextPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrl: nextMediaUrl,
-      mediaUrls: nextMediaUrls,
-      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+      mediaUrls: nextMediaUrls?.length ? nextMediaUrls : undefined,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls?.length
         ? { audioAsVoice: undefined }
         : {}),
     });
@@ -422,14 +407,22 @@ export function filterMessagingToolReplyPayload(
     decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
       ? decision.routeSentTexts
       : (params.sentTexts ?? []);
-  const filterPayload = (normalizedSentMediaUrls: string[]) =>
-    filterMessagingToolDuplicates({
-      payloads: filterMessagingToolMediaDuplicates({
-        payloads: [params.payload],
-        sentMediaUrls: normalizedSentMediaUrls,
-      }),
-      sentTexts,
+  const filterPayload = (normalizedSentMediaUrls: string[]) => {
+    const payloads = filterMessagingToolMediaDuplicates({
+      payloads: [params.payload],
+      sentMediaUrls: normalizedSentMediaUrls,
     });
+    return sentTexts.length === 0
+      ? payloads
+      : payloads.filter(
+          (payload) =>
+            !isMessagingToolDuplicate(payload.text ?? "", sentTexts) ||
+            hasReplyPayloadContent(
+              { ...payload, text: undefined },
+              { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },
+            ),
+        );
+  };
   return params.normalizeSentMediaUrls
     ? params.normalizeSentMediaUrls(sentMediaUrls).then(filterPayload)
     : filterPayload(sentMediaUrls);

@@ -60,8 +60,8 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
-  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
-  ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
@@ -496,7 +496,7 @@ describe("publishable plugin npm package install security scan", () => {
         "@openclaw/codex",
         "dist/dynamic-tools-current.js",
       ),
-    ).toEqual([dynamicToolsKey, dynamicToolsKey]);
+    ).toEqual([dynamicToolsKey]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
         "@openclaw/codex",
@@ -508,13 +508,13 @@ describe("publishable plugin npm package install security scan", () => {
         "@openclaw/codex",
         "dist/session-catalog-current.js",
       ),
-    ).toEqual(["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js"]);
+    ).toEqual([]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath(
         "@openclaw/codex",
         "dist/shared-client-current.js",
       ),
-    ).toEqual([]);
+    ).toEqual(["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js"]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
     ).toEqual([]);

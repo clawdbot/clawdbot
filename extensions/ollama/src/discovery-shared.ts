@@ -5,6 +5,7 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -104,7 +105,6 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
-  "127.0.0.1",
   "0.0.0.0",
   "::1",
   "::",
@@ -113,17 +113,6 @@ const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "host.orb.internal",
 ]);
 const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
-
-function isIpv4Loopback(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  return octets[0] === 127;
-}
 
 function isIpv4PrivateRange(host: string): boolean {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
@@ -161,6 +150,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    isLoopbackHost(host) ||
     host.endsWith(".local") ||
     isIpv4PrivateRange(host) ||
     isIpv6LocalRange(host) ||
@@ -198,7 +188,7 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
   }
-  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isIpv4Loopback(host);
+  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
 }
 
 function hasExplicitRemoteOllamaApiProvider(
