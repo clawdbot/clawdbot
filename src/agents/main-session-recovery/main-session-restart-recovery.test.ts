@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -63,6 +64,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -1387,6 +1389,165 @@ describe("main-session-restart-recovery", () => {
       expect(deliveredText).toHaveBeenCalledWith({
         to: "discord:dm:123",
         text: "hooked: final answer",
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      resetGlobalHookRunner();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
+  it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "telegram:12345",
+      accountId: "work",
+      threadId: "99",
+    } as const;
+    const delivery = {
+      kind: "external" as const,
+      context: deliveryContext,
+      route: {
+        channel: "telegram",
+        accountId: "work",
+        target: { to: "telegram:12345", chatType: "direct" as const },
+        thread: { id: "99", kind: "topic" as const, source: "turn" as const },
+      },
+      origin: {
+        provider: "telegram",
+        to: "telegram:12345",
+        accountId: "work",
+        threadId: "99",
+      },
+    };
+    const interruptedEntry = mainSessionEntry({ delivery });
+    const recoveryContext = resolveReplyRunDeliveryContext({
+      cfg: {},
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:12345",
+        AccountId: "work",
+        SessionKey: sessionKey,
+      },
+      sessionEntry: interruptedEntry,
+      sessionKey,
+    });
+    expect(recoveryContext).toEqual(deliveryContext);
+    await writeMainSession({
+      sessionsDir,
+      sessionKey,
+      delivery,
+      restartRecoveryDeliveryContext: recoveryContext,
+    });
+    await writeCompletedToolTranscript(sessionsDir);
+
+    const deliveredText = vi.fn();
+    const telegramOutbound: ChannelOutboundAdapter = {
+      deliveryMode: "direct",
+      sendText: async ({ to, text, threadId }) => {
+        deliveredText({ to, text, threadId });
+        return { channel: "telegram", messageId: "delivered-telegram-1" };
+      },
+    };
+    resetGlobalHookRunner();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+        },
+      ]),
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+      const request = params as Record<string, unknown>;
+      const runId = String(request.idempotencyKey);
+      const current = loadSessionEntry({ sessionKey, storePath });
+      if (!current) {
+        throw new Error("expected claimed Telegram recovery session");
+      }
+      expect(
+        buildCurrentRunRestartRecoveryClaim({
+          deliveryContext,
+          entry: current,
+          runId,
+        }),
+      ).toMatchObject({
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoveryDeliveryRunId: runId,
+      });
+      const result = {
+        payloads: [{ text: "recovered private-topic reply" }],
+        meta: { durationMs: 1 },
+      };
+      await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        opts: {
+          message: String(request.message),
+          deliver: request.deliver === true,
+          bestEffortDeliver: request.bestEffortDeliver === true,
+          channel: String(request.channel),
+          to: String(request.to),
+          accountId: String(request.accountId),
+          threadId: String(request.threadId),
+          sessionKey,
+          runId,
+        },
+        outboundSession: { key: sessionKey, agentId: "main" },
+        sessionEntry: current,
+        payloads: result.payloads,
+        result,
+      } as Parameters<typeof deliverAgentCommandResult>[0]);
+      return { runId, status: "ok" };
+    });
+
+    try {
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({
+        sessionKey,
+        channel: "telegram",
+        to: "telegram:12345",
+        accountId: "work",
+        threadId: "99",
+      });
+      expect(deliveredText).toHaveBeenCalledWith({
+        to: "telegram:12345",
+        text: "recovered private-topic reply",
+        threadId: "99",
+      });
+      const completed = loadSessionEntry({ sessionKey, storePath });
+      expect(completed).toMatchObject({ status: "done", abortedLastRun: false });
+      expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
+      if (!completed) {
+        throw new Error("expected completed Telegram recovery session");
+      }
+      expect(
+        buildCurrentRunRestartRecoveryClaim({
+          deliveryContext,
+          entry: completed,
+          runId: "telegram-follow-up-run",
+          sourceIngress: "channel",
+          sourceRunId: "telegram-follow-up-source",
+        }),
+      ).toMatchObject({
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoveryDeliveryRunId: "telegram-follow-up-run",
+        restartRecoveryDeliverySourceRunId: "telegram-follow-up-source",
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
