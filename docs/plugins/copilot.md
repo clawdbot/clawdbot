@@ -251,8 +251,8 @@ instead of persisting a false replay.
 
 Persistence failures fail closed. The first write failure marks the journal
 failed, aborts the in-flight SDK session, and flags the attempt's replay as
-unvalidated so the next run revalidates instead of trusting a partial
-transcript. Only the post-append transcript update notification is
+unvalidated so the next run creates a fresh SDK session instead of trusting a
+partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
 
 ## Side questions (`/btw`)
