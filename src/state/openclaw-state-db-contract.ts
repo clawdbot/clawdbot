@@ -17,6 +17,7 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_launch_containers",
   "node_worker_launches",
   "operator_approval_execution_identities",
+  "operator_approval_standing_grants",
   "execution_decision_facts",
   "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
@@ -24,6 +25,7 @@ export const FIRST_USE_STATE_TABLES = [
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
   "idx_node_worker_launches_terminal_completed",
+  "idx_operator_approval_standing_grants_binding",
   "execution_identity_contexts_run_created_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
