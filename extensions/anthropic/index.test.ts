@@ -101,6 +101,7 @@ describe("anthropic provider replay hooks", () => {
       modelArg: "--model",
       sessionArgs: ["--session-id", "{sessionId}"],
     });
+    expect(backend.config.reliability?.watchdog?.resume).toBeUndefined();
   });
 
   it("lets native session discovery be disabled without disabling Anthropic", () => {

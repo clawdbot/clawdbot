@@ -4397,7 +4397,7 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       useResume: true,
       trigger: "cron",
@@ -4407,7 +4407,7 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       runTimeoutOverrideMs: 600_000,
       useResume: true,
@@ -4418,12 +4418,29 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       useResume: true,
       trigger: "user",
     });
     expect(timeoutMs).toBe(180_000);
+  });
+
+  it("preserves explicit backend watchdog tuning for resumed cron runs", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "agent-cli",
+        reliability: {
+          watchdog: {
+            resume: { noOutputTimeoutRatio: 0.2, minMs: 1_000, maxMs: 120_000 },
+          },
+        },
+      },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(120_000);
   });
 });
 
