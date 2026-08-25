@@ -23,18 +23,27 @@ function remainingExtractTimeMs(deadlineMs: number): number {
   return remainingMs;
 }
 
-async function waitForExtractDeadline<T>(promise: Promise<T>, deadlineMs: number): Promise<T> {
+async function waitForExtractDeadline<T>(
+  operation: () => Promise<T>,
+  deadlineMs: number,
+): Promise<T> {
   const timeoutMs = remainingExtractTimeMs(deadlineMs);
   let timer: NodeJS.Timeout | undefined;
   try {
+    // Arm the deadline before starting I/O, then observe the operation even if
+    // the timer wins so a late filesystem failure cannot become unhandled.
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("llama-server archive extraction timed out")),
+        timeoutMs,
+      );
+    });
     return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("llama-server archive extraction timed out")),
-          timeoutMs,
-        );
+      operation().then((result) => {
+        remainingExtractTimeMs(deadlineMs);
+        return result;
       }),
+      timeout,
     ]);
   } finally {
     clearTimeout(timer);
@@ -57,7 +66,7 @@ function assertSiblingLinkTarget(entryPath: string, target: string): void {
  */
 async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise<ArchiveSymlink[]> {
   const symlinks: ArchiveSymlink[] = [];
-  const archiveStat = await waitForExtractDeadline(fsp.stat(archivePath), deadlineMs);
+  const archiveStat = await waitForExtractDeadline(() => fsp.stat(archivePath), deadlineMs);
   if (archiveStat.size > MAX_TAR_PREFLIGHT_ARCHIVE_BYTES) {
     throw new Error("llama-server archive exceeds the preflight size limit");
   }
@@ -136,21 +145,21 @@ async function restoreArchiveSymlinks(
   symlinks: ArchiveSymlink[],
   deadlineMs: number,
 ): Promise<void> {
-  const destRealDir = await waitForExtractDeadline(fsp.realpath(destDir), deadlineMs);
+  const destRealDir = await waitForExtractDeadline(() => fsp.realpath(destDir), deadlineMs);
   for (const symlink of symlinks) {
     const linkPath = path.resolve(destRealDir, symlink.entryPath);
     // Resolve the parent through realpath instead of comparing spellings: the
     // reported bypass came from lexical entry-path checks that Windows separators
     // and drive prefixes walk straight through.
     const parentRealDir = await waitForExtractDeadline(
-      fsp.realpath(path.dirname(linkPath)),
+      () => fsp.realpath(path.dirname(linkPath)),
       deadlineMs,
     );
     if (parentRealDir !== destRealDir && !parentRealDir.startsWith(destRealDir + path.sep)) {
       throw new Error(`unsafe link path in llama-server archive: ${symlink.entryPath}`);
     }
     await waitForExtractDeadline(
-      fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath))),
+      () => fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath))),
       deadlineMs,
     );
   }

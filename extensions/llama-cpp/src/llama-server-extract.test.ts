@@ -162,6 +162,9 @@ describe("extractLlamaServerArchive", () => {
       await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
     });
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const realpath = vi.spyOn(fs, "realpath").mockImplementationOnce(async () => {
+      throw new Error("expired filesystem operation started");
+    });
     vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
       const buildDir = path.join(params.destDir, "llama-build");
       await fs.mkdir(buildDir, { recursive: true });
@@ -172,6 +175,7 @@ describe("extractLlamaServerArchive", () => {
     await expect(
       extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
     ).rejects.toThrow(/extraction timed out/u);
+    expect(realpath).not.toHaveBeenCalled();
     await expect(fs.lstat(path.join(destDir, "llama-build", "libllama.so"))).rejects.toThrow();
   });
 
