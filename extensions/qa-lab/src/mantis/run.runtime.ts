@@ -516,7 +516,7 @@ export async function runMantisBeforeAfter(
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
-    await throwMantisRunFailure({
+    return throwMantisRunFailure({
       error,
       generationDir,
       generationRelative,

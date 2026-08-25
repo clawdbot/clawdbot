@@ -3,14 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const mantisFailureArtifactPath = Symbol("mantisFailureArtifactPath");
 
-export type MantisFailureArtifactError = Error & {
-  readonly [mantisFailureArtifactPath]: string;
-};
-
-export function attachMantisFailureArtifact(
-  error: unknown,
-  errorPath: string,
-): MantisFailureArtifactError {
+export function attachMantisFailureArtifact(error: unknown, errorPath: string): Error {
   const artifactLine = `Mantis error details: ${errorPath}`;
   const attachedError =
     error instanceof Error
@@ -20,7 +13,7 @@ export function attachMantisFailureArtifact(
     attachedError.message = `${attachedError.message}\n${artifactLine}`;
   }
   Object.defineProperty(attachedError, mantisFailureArtifactPath, { value: errorPath });
-  return attachedError as MantisFailureArtifactError;
+  return attachedError;
 }
 
 export function findMantisFailureArtifactPath(
@@ -31,8 +24,9 @@ export function findMantisFailureArtifactPath(
     return undefined;
   }
   seen.add(error);
-  if (mantisFailureArtifactPath in error) {
-    return (error as MantisFailureArtifactError)[mantisFailureArtifactPath];
+  const attachedPath = Object.getOwnPropertyDescriptor(error, mantisFailureArtifactPath)?.value;
+  if (typeof attachedPath === "string") {
+    return attachedPath;
   }
   if (error instanceof AggregateError) {
     for (const nestedError of error.errors) {
