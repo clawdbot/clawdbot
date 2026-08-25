@@ -8,6 +8,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelListCallback,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -111,6 +112,45 @@ describe("resolveModelSelection", () => {
       matchingProviders: [],
     });
   });
+
+  it("resolves opaque callbacks only against their current authorized provider and model", () => {
+    const provider = "ollama";
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    const callback = parseModelCallbackData(buildModelSelectionCallbackData({ provider, model }));
+    expect(callback?.type).toBe("select-ref");
+    if (callback?.type !== "select-ref") {
+      throw new Error("Expected an opaque model callback");
+    }
+
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider, "openai"],
+        byProvider: new Map([
+          [provider, new Set([model])],
+          ["openai", new Set([model])],
+        ]),
+      }),
+    ).toEqual({ kind: "resolved", provider, model });
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider],
+        byProvider: new Map([[provider, new Set(["replacement"])]]),
+      }),
+    ).toEqual({ kind: "ambiguous", model: callback.digest, matchingProviders: [] });
+    expect(
+      resolveModelSelection({
+        callback,
+        providers: [provider, provider],
+        byProvider: new Map([[provider, new Set([model])]]),
+      }),
+    ).toEqual({
+      kind: "ambiguous",
+      model: callback.digest,
+      matchingProviders: [provider, provider],
+    });
+  });
 });
 
 describe("buildModelSelectionCallbackData", () => {
@@ -124,9 +164,48 @@ describe("buildModelSelectionCallbackData", () => {
     );
   });
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
-    const tooLongModel = "x".repeat(80);
-    expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  it("keeps oversized provider-scoped models selectable within Telegram's callback limit", () => {
+    const provider = "ollama";
+    const model = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    expect(Buffer.byteLength(`mdl_sel_${provider}/${model}`, "utf8")).toBe(72);
+    expect(Buffer.byteLength(`mdl_sel/${model}`, "utf8")).toBe(65);
+
+    const callback = buildModelSelectionCallbackData({ provider, model });
+    expect(callback).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.byteLength(callback ?? "", "utf8")).toBeLessThanOrEqual(64);
+    expect(buildModelSelectionCallbackData({ provider, model })).toBe(callback);
+  });
+
+  it("preserves unambiguous provider ownership for non-legacy provider identifiers", () => {
+    for (const provider of ["~", "team/provider", "研究所", "x".repeat(80)]) {
+      const callback = buildModelSelectionCallbackData({ provider, model: "model" });
+      expect(callback, provider).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.byteLength(callback, "utf8"), provider).toBeLessThanOrEqual(64);
+    }
+  });
+});
+
+describe("opaque provider list callbacks", () => {
+  it("keeps arbitrary provider identifiers selectable without exceeding Telegram's limit", () => {
+    for (const provider of ["~", "team/provider", "研究所", "x".repeat(80)]) {
+      const callback = buildProviderKeyboard([{ id: provider, count: 1 }])[0]?.[0]?.callback_data;
+      expect(callback, provider).toMatch(/^mdl1~p:[A-Za-z0-9_-]{43}:1$/);
+      expect(Buffer.byteLength(callback ?? "", "utf8"), provider).toBeLessThanOrEqual(64);
+      const parsed = parseModelCallbackData(callback ?? "");
+      expect(parsed?.type).toBe("list-ref");
+      if (parsed?.type === "list-ref") {
+        expect(resolveModelListCallback({ callback: parsed, providers: [provider] })).toEqual({
+          provider,
+          page: 1,
+        });
+        expect(
+          resolveModelListCallback({ callback: parsed, providers: ["other"] }),
+        ).toBeUndefined();
+        expect(
+          resolveModelListCallback({ callback: parsed, providers: [provider, provider] }),
+        ).toBeUndefined();
+      }
+    }
   });
 });
 
@@ -522,7 +601,7 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("keeps models that exceed callback_data limits selectable", () => {
     const models = [
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
@@ -535,10 +614,10 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[1]?.[0]?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
   });
 });
