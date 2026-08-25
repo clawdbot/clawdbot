@@ -147,6 +147,11 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(true);
     }
+    expect(
+      classifyFailoverReason(
+        "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
+      ),
+    ).toBe("context_overflow");
   });
 
   it("excludes context window too small errors", () => {

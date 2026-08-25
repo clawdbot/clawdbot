@@ -133,13 +133,6 @@ export const overflowCases = [
       },
     ],
     [
-      "patterns-context-input-longer-than-model",
-      {
-        message:
-          "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
-      },
-    ],
-    [
       "patterns-context-ds4",
       {
         message: "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
