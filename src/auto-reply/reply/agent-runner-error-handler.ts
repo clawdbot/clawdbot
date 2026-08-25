@@ -17,10 +17,7 @@ import {
   renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -498,12 +495,7 @@ export async function handleAgentExecutionError(params: {
       : turn.opts?.abortSignal?.aborted === true
         ? turn.opts.abortSignal
         : undefined;
-  const abortLifecycleFields = {
-    ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
-    ...(isReplyOperationRestartAbort(turn.replyOperation)
-      ? { aborted: true as const, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON }
-      : {}),
-  };
+  const abortLifecycleFields = resolveAgentRunErrorLifecycleFields(err, abortedSignal);
   const failedLifecycleTerminal = takePendingLifecycleTerminal();
   if (failedLifecycleTerminal) {
     failedLifecycleTerminal.emit("error", err, { fallbackExhaustedFailure: true });
