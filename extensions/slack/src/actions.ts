@@ -720,6 +720,8 @@ export async function downloadSlackFile(
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
+  const isFileAllowed = (file: SlackFileInfoSummary) =>
+    !lacksSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
   // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
@@ -728,7 +730,7 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (lacksSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (!isFileAllowed(file)) {
     return null;
   }
 
@@ -743,6 +745,7 @@ export async function downloadSlackFile(
       },
     ],
     client,
+    isRefreshedFileAllowed: isFileAllowed,
     token,
     maxBytes: opts.maxBytes,
   });

@@ -212,6 +212,7 @@ const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
 async function fetchFreshSlackFileUrl(params: {
   file: SlackFile;
   client?: SlackWebClient;
+  isRefreshedFileAllowed?: (file: SlackFile) => boolean;
 }): Promise<string | null> {
   if (!params.file.id || !params.client) {
     return null;
@@ -219,6 +220,10 @@ async function fetchFreshSlackFileUrl(params: {
   try {
     const info = await params.client.files.info({ file: params.file.id });
     const freshFile = info.file as SlackFile | undefined;
+    if (freshFile && params.isRefreshedFileAllowed?.(freshFile) === false) {
+      logVerbose(`slack: refreshed file metadata rejected for file id=${params.file.id}`);
+      return null;
+    }
     const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
     if (freshUrl) {
       logVerbose(`slack: refreshed file URL via files.info for file id=${params.file.id}`);
@@ -320,6 +325,7 @@ function resolveForwardedAttachmentImageUrl(
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   client?: SlackWebClient;
+  isRefreshedFileAllowed?: (file: SlackFile) => boolean;
   token: string;
   maxBytes: number;
   readIdleTimeoutMs?: number;
@@ -331,6 +337,12 @@ export async function resolveSlackMedia(params: {
   const files = params.files ?? [];
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
+  const refreshFileUrl = (file: SlackFile) =>
+    fetchFreshSlackFileUrl({
+      file,
+      client: params.client,
+      isRefreshedFileAllowed: params.isRefreshedFileAllowed,
+    });
 
   const { results } = await runTasksWithConcurrency({
     tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
@@ -341,7 +353,7 @@ export async function resolveSlackMedia(params: {
         return preloaded;
       }
       const eventUrl = file.url_private_download ?? file.url_private;
-      const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
+      const url = eventUrl ?? (await refreshFileUrl(file));
       if (!url) {
         return null;
       }
@@ -359,7 +371,7 @@ export async function resolveSlackMedia(params: {
         return result;
       }
 
-      const freshUrl = await fetchFreshSlackFileUrl({ file, client: params.client });
+      const freshUrl = await refreshFileUrl(file);
       if (!freshUrl) {
         return null;
       }

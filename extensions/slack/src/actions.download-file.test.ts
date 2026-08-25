@@ -3,7 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveSlackMedia = vi.fn();
+const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor/media.js", () => ({
@@ -53,6 +53,14 @@ function expectNoMediaDownload(result: Awaited<ReturnType<typeof downloadSlackFi
   expect(resolveSlackMedia).not.toHaveBeenCalled();
 }
 
+function requireRefreshedFileAdmission() {
+  const admission = resolveSlackMedia.mock.calls[0]?.[0].isRefreshedFileAllowed;
+  if (!admission) {
+    throw new Error("Expected refreshed Slack file admission");
+  }
+  return admission;
+}
+
 function expectResolveSlackMediaCalledWithDefaults(client: ReturnType<typeof createClient>) {
   expect(resolveSlackMedia).toHaveBeenCalledWith({
     files: [
@@ -65,6 +73,7 @@ function expectResolveSlackMediaCalledWithDefaults(client: ReturnType<typeof cre
       },
     ],
     client,
+    isRefreshedFileAllowed: expect.any(Function),
     token: "xoxb-test",
     maxBytes: 1024,
   });
@@ -173,6 +182,7 @@ describe("downloadSlackFile", () => {
         },
       ],
       client,
+      isRefreshedFileAllowed: expect.any(Function),
       token: "xoxb-test",
       maxBytes: 1024,
     });
@@ -310,6 +320,35 @@ describe("downloadSlackFile", () => {
     expect(result).toEqual(makeResolvedSlackMedia());
   });
 
+  it("reapplies the requested channel and thread scope to refreshed metadata", async () => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({
+        shares: { private: { C123: [{ ts: "111.111" }] } },
+      }),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+
+    await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+      threadId: "111.111",
+    });
+
+    const isAllowed = requireRefreshedFileAdmission();
+    expect(
+      isAllowed(makeSlackFileInfo({ shares: { private: { C123: [{ ts: "111.111" }] } } })),
+    ).toBe(true);
+    expect(
+      isAllowed(makeSlackFileInfo({ shares: { private: { C999: [{ ts: "111.111" }] } } })),
+    ).toBe(false);
+    expect(
+      isAllowed(makeSlackFileInfo({ shares: { private: { C123: [{ ts: "222.222" }] } } })),
+    ).toBe(false);
+  });
+
   it("returns null when file metadata does not prove the requested channel", async () => {
     const client = createClient();
     mockSuccessfulMediaDownload(client);
@@ -364,6 +403,7 @@ describe("downloadSlackFile", () => {
         },
       ],
       client,
+      isRefreshedFileAllowed: expect.any(Function),
       token: "xoxb-from-cfg",
       maxBytes: 1024,
     });
