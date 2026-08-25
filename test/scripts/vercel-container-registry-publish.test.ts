@@ -112,7 +112,7 @@ function architectureForRef(ref: string): "amd64" | "arm64" | undefined {
 }
 
 function requireCommandRef(args: string[]): string {
-  const ref = args[3];
+  const ref = args[3] === "--raw" ? args[4] : args[3];
   if (!ref) {
     throw new Error(`Expected an imagetools image reference in ${JSON.stringify(args)}.`);
   }
@@ -139,6 +139,8 @@ function successfulExecutor(
   options: {
     changedTargetRef?: string;
     currentAliasVersion?: string;
+    sourceVersions?: Record<string, string>;
+    unattestedSourceRef?: string;
     version?: string;
   } = {},
 ) {
@@ -150,11 +152,26 @@ function successfulExecutor(
     }
     const ref = requireCommandRef(args);
     if (args.at(-1)?.includes(".Image")) {
-      return imageConfig(ref.includes("@") ? version : (options.currentAliasVersion ?? version));
+      return imageConfig(
+        ref.includes("@")
+          ? (options.sourceVersions?.[ref] ?? version)
+          : (options.currentAliasVersion ?? version),
+      );
+    }
+    if (ref === `${sourceImage}@${attestationDigest}`) {
+      return JSON.stringify({
+        artifactType: "application/vnd.docker.attestation.manifest.v1+json",
+        layers: ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"].map(
+          (predicate) => ({ annotations: { "in-toto.io/predicate-type": predicate } }),
+        ),
+      });
     }
     if (ref.startsWith(sourceImage)) {
       const architecture = architectureForRef(ref);
-      return indexManifest(architecture ? [architecture] : ["amd64", "arm64"]);
+      return indexManifest(
+        architecture ? [architecture] : ["amd64", "arm64"],
+        ref !== options.unattestedSourceRef,
+      );
     }
     if (args.at(-1) === "--raw") {
       return indexManifest(["amd64", "arm64"], false);
@@ -235,13 +252,13 @@ describe("Vercel Container Registry publishing", () => {
     const calls: string[][] = [];
     const execFileSyncImpl = successfulExecutor(calls);
 
-    publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+    const plan = publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
       execFileSyncImpl,
       log: () => {},
     });
 
     const firstCreate = calls.findIndex((args) => args[2] === "create");
-    expect(firstCreate).toBe(3);
+    expect(firstCreate).toBeGreaterThan(0);
     expect(calls.slice(0, firstCreate).every((args) => args[2] === "inspect")).toBe(true);
     expect(
       calls
@@ -249,7 +266,7 @@ describe("Vercel Container Registry publishing", () => {
         .map((args) => requireCommandRef(args))
         .every((ref) => ref.includes("@sha256:")),
     ).toBe(true);
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(plan.copies.length);
     expect(calls[firstCreate]).toEqual([
       "buildx",
       "imagetools",
@@ -275,13 +292,13 @@ describe("Vercel Container Registry publishing", () => {
 
   it("fails before writing when an immutable source is missing", () => {
     const calls: string[][] = [];
-    const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
-      calls.push(args);
-      if (calls.length === 2) {
+    const execute = successfulExecutor(calls);
+    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
+      if (requireCommandRef(args) === `${sourceImage}@${slimSourceDigest}`) {
+        calls.push(args);
         throw new Error("manifest unknown");
       }
-      const architecture = architectureForRef(requireCommandRef(args));
-      return indexManifest(architecture ? [architecture] : ["amd64", "arm64"]);
+      return execute(command, args);
     });
 
     expect(() =>
@@ -290,6 +307,36 @@ describe("Vercel Container Registry publishing", () => {
         log: () => {},
       }),
     ).toThrow("manifest unknown");
+    expect(calls.some((args) => args[2] === "create")).toBe(false);
+  });
+
+  it("rejects an unattested immutable source before any registry write", () => {
+    const calls: string[][] = [];
+    const unattestedSourceRef = `${sourceImage}@${browserSourceDigest}`;
+    const execFileSyncImpl = successfulExecutor(calls, { unattestedSourceRef });
+
+    expect(() =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+    ).toThrow(`${unattestedSourceRef}: missing attestation manifest for linux/amd64`);
+    expect(calls.some((args) => args[2] === "create")).toBe(false);
+  });
+
+  it("rejects an attested source from another release before any registry write", () => {
+    const calls: string[][] = [];
+    const mismatchedSourceRef = `${sourceImage}@${browserSourceDigest}`;
+    const execFileSyncImpl = successfulExecutor(calls, {
+      sourceVersions: { [mismatchedSourceRef]: "2026.7.1" },
+    });
+
+    expect(() =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+    ).toThrow(`${mismatchedSourceRef} reports version 2026.7.1, expected 2026.7.2`);
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
 
