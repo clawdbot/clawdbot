@@ -196,8 +196,8 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
   }
   return (
     isHeartbeatAckEvent(lower) ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
+    lower.startsWith("heartbeat poll") ||
+    lower.startsWith("heartbeat wake")
   );
 }
 

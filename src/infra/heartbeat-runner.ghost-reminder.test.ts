@@ -312,16 +312,26 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
-  it("uses CRON_EVENT_PROMPT when an actionable cron event exists", async () => {
-    const { result, sendTelegram, calledCtx } = await runCronReminderCase(
-      "openclaw-cron-",
-      (sessionKey) => {
-        enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
+  it.each([
+    "Reminder: Check Base Scout results",
+    "Reminder: investigate heartbeat wake failures",
+    "Reminder: review heartbeat poll results",
+  ])("uses CRON_EVENT_PROMPT for actionable cron events: %s", async (reminder) => {
+    const { result, sendTelegram, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-",
+      replyText: "Relay this reminder now",
+      reason: "cron:reminder-job",
+      enqueue: (key) => {
+        enqueueSystemEvent(reminder, { sessionKey: key, contextKey: "cron:reminder-job" });
       },
-    );
+    });
+
     expect(result.status).toBe("ran");
-    expectCronEventPrompt(calledCtx, "Reminder: Check Base Scout results");
-    expect(sendTelegram).toHaveBeenCalled();
+    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).toContain(reminder);
+    expect(sendTelegram).toHaveBeenCalledOnce();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 
   it("runs the tagged cron payload outside heartbeat active hours", async () => {

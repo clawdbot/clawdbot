@@ -155,6 +155,8 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },
     { value: "heartbeat wake: noop", expected: false },
+    { value: "Cron: investigate heartbeat wake failures", expected: true },
+    { value: "Reminder: review heartbeat poll results", expected: true },
     { value: "exec finished: ok", expected: false },
     { value: "Exec finished (node=abc, code 0)", expected: false },
     { value: "Exec completed (abc12345, code 0)", expected: false },
