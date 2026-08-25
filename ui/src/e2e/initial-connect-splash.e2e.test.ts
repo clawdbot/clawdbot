@@ -317,6 +317,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     await loading.waitFor({ state: "detached" });
     await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
     const readySectionTops = await Promise.all(
       sectionTitles.map(
         async (name) => (await page.getByRole("heading", { name }).boundingBox())!.y,
