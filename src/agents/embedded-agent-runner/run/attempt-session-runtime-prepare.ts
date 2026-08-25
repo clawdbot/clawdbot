@@ -51,6 +51,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   sessionManager: Pick<
     SessionManagerInput,
     | "replayAllowedToolNames"
+    | "trustedLocalMediaToolNames"
     | "resolveActiveContextEnginePluginId"
     | "sessionAgentId"
     | "transcriptLifecycle"
@@ -102,6 +103,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     effectiveWorkspace: input.effectiveWorkspace,
     onSessionManagerCreated: input.lifecycle.onSessionManagerCreated,
     replayAllowedToolNames: input.sessionManager.replayAllowedToolNames,
+    trustedLocalMediaToolNames: input.sessionManager.trustedLocalMediaToolNames,
     resolveActiveContextEnginePluginId: input.sessionManager.resolveActiveContextEnginePluginId,
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,

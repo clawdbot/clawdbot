@@ -328,6 +328,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
     builtinToolNames: input.builtinToolNames,
+    trustedLocalMediaToolNames: input.builtinToolNames,
     coreBuiltinToolNames: input.coreBuiltinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),

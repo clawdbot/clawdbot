@@ -401,6 +401,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   effectiveWorkspace: string;
   onSessionManagerCreated: (sessionManager: AttemptSessionManager) => void;
   replayAllowedToolNames: ReadonlySet<string>;
+  trustedLocalMediaToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   sessionAgentId: string;
   transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
@@ -461,6 +462,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
       allowedToolNames: input.replayAllowedToolNames,
+      trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
       trigger: attempt.trigger,
       suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
       suppressTranscriptOnlyAssistantPersistence:

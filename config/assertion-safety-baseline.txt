@@ -2776,7 +2776,7 @@ src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	16
+src/config/sessions/transcript.ts	14
 src/config/sessions/types.ts	1
 src/config/state-dir-dotenv.ts	1
 src/config/talk.ts	1

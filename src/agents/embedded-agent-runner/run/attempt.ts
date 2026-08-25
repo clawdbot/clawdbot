@@ -22,6 +22,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { collectRegisteredToolNames } from "../tool-name-allowlist.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
@@ -283,6 +284,7 @@ export async function runEmbeddedAttempt(
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
+    const trustedLocalMediaToolNames = collectRegisteredToolNames(uncompactedEffectiveTools);
     // Catalog preparation registers global run state before tool projection and
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
     toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
@@ -384,6 +386,7 @@ export async function runEmbeddedAttempt(
             isRawModelRun,
             sessionManager: {
               replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
+              trustedLocalMediaToolNames,
               resolveActiveContextEnginePluginId,
               sessionAgentId,
               transcriptLifecycle,

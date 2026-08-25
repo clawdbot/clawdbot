@@ -1,4 +1,5 @@
 // Verifies guarded session managers emit transcript update events with stable sequence ids.
+import fs from "node:fs";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -7,6 +8,8 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { mergeSessionTranscriptContext } from "../channels/inbound-event/session-transcript-context.runtime.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import {
   onInternalSessionTranscriptUpdate,
@@ -17,6 +20,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { recordToolResultLocalMediaReplayAuthorization } from "./embedded-agent-tool-media.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
@@ -404,6 +408,153 @@ describe("guardSessionManager transcript updates", () => {
     ).toEqual(["run-owning-final", "run-owning-final"]);
     expect(updates.map((update) => update.runId)).toEqual([undefined, "run-owning-final"]);
     getBranchSpy.mockRestore();
+  });
+
+  it("bounds and refreshes persisted media authority through channel context", async () => {
+    const { root, sessionManager: sm, target } = await openPersistedSessionManager();
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    const collision = path.join(root, "media", "generated", "collision.png");
+    const exact = path.join(root, "media", "generated", "exact.png");
+    fs.mkdirSync(path.dirname(collision), { recursive: true });
+    fs.writeFileSync(collision, "collision");
+    fs.writeFileSync(exact, "exact");
+    let inspected = 0;
+    const probeMediaUrls = Array(100_000).fill(exact);
+    const iterateProbeMediaUrls = probeMediaUrls[Symbol.iterator].bind(probeMediaUrls);
+    Object.defineProperty(probeMediaUrls, Symbol.iterator, {
+      *value() {
+        for (const mediaUrl of iterateProbeMediaUrls()) {
+          inspected += 1;
+          yield mediaUrl;
+        }
+      },
+    });
+    const boundedAuthorization = recordToolResultLocalMediaReplayAuthorization(
+      { details: { media: { mediaUrls: probeMediaUrls } } },
+      "exec",
+      new Set(["exec"]),
+    );
+    expect(inspected).toBe(64);
+    expect(
+      asNullableRecord(asNullableRecord(boundedAuthorization.details)?.media)
+        ?.localMediaReplayAuthorized,
+    ).toBe(true);
+    const guarded = guardSessionManager(sm, {
+      runId: "run-allowed",
+      trustedLocalMediaToolNames: new Set(["exec"]),
+    });
+    const appendToolResult = (
+      manager: typeof guarded,
+      id: string,
+      name: string,
+      mediaUrls: readonly string[],
+    ) => {
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id, name, arguments: {} }],
+        timestamp: Date.now(),
+      } as Parameters<typeof manager.appendMessage>[0]);
+      manager.appendMessage({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: name,
+        content: [{ type: "text", text: "done" }],
+        details: { media: { mediaUrls } },
+        isError: false,
+        timestamp: Date.now(),
+      } as Parameters<typeof manager.appendMessage>[0]);
+    };
+    try {
+      guarded.appendMessage({
+        role: "user",
+        content: "inspect",
+        timestamp: Date.now(),
+      } as Parameters<typeof guarded.appendMessage>[0]);
+      for (const [id, name, mediaUrls] of [
+        ["colliding", "Bash", [collision]],
+        ["exact", "exec", [exact]],
+      ] as const) {
+        appendToolResult(guarded, id, name, mediaUrls);
+      }
+      guarded.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `collision ${collision}; exact ${exact}` }],
+        timestamp: Date.now(),
+      } as Parameters<typeof guarded.appendMessage>[0]);
+
+      const deniedRun = guardSessionManager(sm, {
+        runId: "run-denied",
+        trustedLocalMediaToolNames: new Set(),
+      });
+      deniedRun.appendMessage({
+        role: "user",
+        content: "recheck",
+        timestamp: Date.now(),
+      } as Parameters<typeof deniedRun.appendMessage>[0]);
+      appendToolResult(deniedRun, "stale", "exec", [exact]);
+      deniedRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `stale ${exact}` }],
+        timestamp: Date.now(),
+      } as Parameters<typeof deniedRun.appendMessage>[0]);
+
+      const restoredRun = guardSessionManager(sm, {
+        runId: "run-restored",
+        trustedLocalMediaToolNames: new Set(["exec"]),
+      });
+      restoredRun.appendMessage({
+        role: "user",
+        content: "restore",
+        timestamp: Date.now(),
+      } as Parameters<typeof restoredRun.appendMessage>[0]);
+      appendToolResult(restoredRun, "restored", "exec", [exact]);
+      restoredRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `restored ${exact}` }],
+        timestamp: Date.now(),
+      } as Parameters<typeof restoredRun.appendMessage>[0]);
+
+      const authorizations = sm.getEntries().flatMap((entry) => {
+        if (entry.type !== "message" || entry.message.role !== "toolResult") {
+          return [];
+        }
+        return [
+          asNullableRecord(asNullableRecord(entry.message.details)?.media)
+            ?.localMediaReplayAuthorized,
+        ];
+      });
+      expect(deniedRun).toBe(guarded);
+      expect(restoredRun).toBe(guarded);
+      expect(authorizations).toEqual([false, true, false, true]);
+
+      const ctx = {
+        Body: "continue",
+        RawBody: "continue",
+        CommandBody: "continue",
+        SessionTranscriptContext: { historyLimit: 10 },
+      } as FinalizedMsgContext;
+      await mergeSessionTranscriptContext({
+        agentId: target.agentId,
+        ctx,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      });
+      expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
+        "inspect",
+        `collision [unverified media reference removed]/generated/collision.png; exact ${exact}`,
+        "recheck",
+        `stale [unverified media reference removed]/generated/exact.png`,
+        "restore",
+        `restored ${exact}`,
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 
   it("refreshes terminal run ownership when a guarded session manager is reused", async () => {

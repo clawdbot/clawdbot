@@ -1,10 +1,15 @@
 // Media reference helpers resolve media refs to file, URL, or inline payloads.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
+import { MAX_GROUNDING_PATHS } from "./media-grounding-limits.js";
 import { getMediaDir, resolveMediaBufferPath } from "./store.js";
+
+const MAX_GROUNDING_ALIASES = MAX_GROUNDING_PATHS * 16,
+  MAX_GROUNDING_REFERENCE_CHARS = 4_096;
 
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
@@ -284,4 +289,141 @@ async function resolveInboundMediaPath(id: string, source: string): Promise<stri
       { cause: err },
     );
   }
+}
+
+export type ManagedMediaGrounding = {
+  readonly authorizedAliases: readonly string[];
+  readonly caseInsensitivePaths: boolean;
+  readonly rootAliases: readonly string[];
+};
+
+export type ManagedMediaGroundingRoot = Omit<ManagedMediaGrounding, "authorizedAliases"> & {
+  readonly mediaDir: string;
+};
+
+async function resolveManagedMediaPath(
+  candidate: string,
+  mediaDir: string,
+): Promise<string | undefined> {
+  const relative = path.relative(mediaDir, candidate);
+  if (!relative || relativePathEscapesBase(relative)) {
+    return undefined;
+  }
+  const subdir = path.dirname(relative);
+  return await resolveMediaBufferPath(path.basename(relative), subdir === "." ? "" : subdir).catch(
+    () => undefined,
+  );
+}
+
+function prepareManagedMediaPathAliases(value: string, target = new Set<string>()): Set<string> {
+  if (!value || value.length > MAX_GROUNDING_REFERENCE_CHARS) {
+    return target;
+  }
+  const add = (alias: string) => {
+    if (target.size < MAX_GROUNDING_ALIASES && alias.length <= MAX_GROUNDING_REFERENCE_CHARS) {
+      target.add(alias);
+    }
+  };
+  let slash = value.replaceAll("\\", "/").replace(/\/$/u, "");
+  if (/^\/\/\?\/unc\//i.test(slash)) {
+    slash = `//${slash.slice("//?/UNC/".length)}`;
+  } else if (/^\/\/\?\/[a-z]:\//i.test(slash)) {
+    slash = slash.slice("//?/".length);
+  }
+  add(value);
+  add(slash);
+  if (/^[a-z]:\//i.test(slash)) {
+    const [drive, ...segments] = slash.split("/");
+    const encoded = [drive, ...segments.map(encodeURIComponent)].join("/");
+    add(slash.replaceAll("/", "\\"));
+    add(`//?/${slash}`);
+    add(`\\\\?\\${slash.replaceAll("/", "\\")}`);
+    add(`file:///${encoded}`);
+  } else if (slash.startsWith("//")) {
+    const unc = slash.slice(2);
+    const [host, ...segments] = unc.split("/");
+    add(slash.replaceAll("/", "\\"));
+    add(`//?/UNC/${unc}`);
+    add(`\\\\?\\UNC\\${unc.replaceAll("/", "\\")}`);
+    add(`file://${host}/${segments.map(encodeURIComponent).join("/")}`);
+  } else if (slash.startsWith("/")) {
+    const values = slash.startsWith("/private/var/")
+      ? [slash, slash.slice("/private".length)]
+      : slash.startsWith("/var/")
+        ? [slash, `/private${slash}`]
+        : [slash];
+    for (const local of values) {
+      const pathname = pathToFileURL(local).pathname;
+      add(local);
+      add(`file:${pathname.slice(1)}`);
+      add(`file:${pathname}`);
+      add(`file://${pathname}`);
+      add(`file:///${pathname}`);
+      add(`file://localhost${pathname}`);
+      add(`file://localhost/${pathname}`);
+    }
+  }
+  return target;
+}
+
+async function probeCaseInsensitivePath(value: string): Promise<boolean> {
+  const base = path.basename(value);
+  const toggled = base.replace(/[a-z]/i, (char) =>
+    char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
+  );
+  if (toggled === base) {
+    return false;
+  }
+  const original = await fs.stat(value).catch(() => undefined);
+  const alias = await fs.stat(path.join(path.dirname(value), toggled)).catch(() => undefined);
+  return Boolean(original && alias && original.dev === alias.dev && original.ino === alias.ino);
+}
+
+/** Prepares immutable media-root identity once for every replay operation. */
+export async function prepareManagedMediaGroundingRoot(): Promise<ManagedMediaGroundingRoot> {
+  const rootAliases = new Set<string>();
+  const mediaDir = getMediaDir();
+  const realMediaDir = await fs.realpath(mediaDir).catch(() => mediaDir);
+  prepareManagedMediaPathAliases(mediaDir, rootAliases);
+  prepareManagedMediaPathAliases(realMediaDir, rootAliases);
+  const byLength = (left: string, right: string) => right.length - left.length;
+  return {
+    caseInsensitivePaths: await probeCaseInsensitivePath(realMediaDir),
+    mediaDir,
+    rootAliases: [...rootAliases].toSorted(byLength),
+  };
+}
+
+/** Resolves one entry's bounded references against prepared media-root identity. */
+export async function prepareManagedMediaGrounding(
+  root: ManagedMediaGroundingRoot,
+  references: readonly string[],
+): Promise<ManagedMediaGrounding> {
+  const authorizedAliases = new Set<string>();
+  for (const raw of references.slice(0, MAX_GROUNDING_PATHS)) {
+    const source = normalizeMediaReferenceSource(raw);
+    if (
+      !source ||
+      source.length > MAX_GROUNDING_REFERENCE_CHARS ||
+      (/^file:/i.test(source) && /[?#]/u.test(source))
+    ) {
+      continue;
+    }
+    const inbound = await resolveInboundMediaReference(source).catch(() => null);
+    const localPath = inbound?.physicalPath ?? maybeLocalPathFromSource(source);
+    const verified =
+      inbound?.physicalPath ??
+      (localPath ? await resolveManagedMediaPath(localPath, root.mediaDir) : undefined);
+    if (!verified) {
+      continue;
+    }
+    prepareManagedMediaPathAliases(source, authorizedAliases);
+    prepareManagedMediaPathAliases(verified, authorizedAliases);
+  }
+  const byLength = (left: string, right: string) => right.length - left.length;
+  return {
+    authorizedAliases: [...authorizedAliases].toSorted(byLength),
+    caseInsensitivePaths: root.caseInsensitivePaths,
+    rootAliases: root.rootAliases,
+  };
 }

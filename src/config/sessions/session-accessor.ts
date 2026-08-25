@@ -268,6 +268,7 @@ export {
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptConversationSnapshot,
   readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
@@ -284,6 +285,7 @@ export {
 } from "./session-accessor.sqlite-title-probes.js";
 export type {
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptConversationSnapshotRow,
   SessionTranscriptMessageAnchorPage,
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,

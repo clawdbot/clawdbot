@@ -52,6 +52,10 @@ export type SessionTranscriptMessageEventPage = {
   totalMessages: number;
 };
 
+export type SessionTranscriptConversationSnapshotRow = SessionTranscriptMessageEvent & {
+  precedingSameTurn: SessionTranscriptMessageEvent[];
+};
+
 export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPage & {
   found: boolean;
   hasOverreadContext: boolean;
@@ -417,6 +421,64 @@ export function readSessionTranscriptMessageEventPage(
       events: readVisibleMessageRange(projection, start, endExclusive),
       totalMessages,
     };
+  });
+}
+
+export function readSessionTranscriptConversationSnapshot(
+  scope: SessionTranscriptReadScope,
+  options: {
+    offset?: number;
+    select: (event: TranscriptEvent) => boolean;
+    maxResults: number;
+  },
+): SessionTranscriptConversationSnapshotRow[] {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const visible = resolveVisibleMessagePositions(projection);
+    const maxResults = Math.min(
+      DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+      Math.max(0, Math.floor(Number.isFinite(options.maxResults) ? options.maxResults : 0)),
+    );
+    const offset = Math.max(
+      0,
+      Math.floor(Number.isFinite(options.offset) ? (options.offset ?? 0) : 0),
+    );
+    const selected: SessionTranscriptConversationSnapshotRow[] = [];
+    let skipped = 0;
+    let pending: SessionTranscriptConversationSnapshotRow[] = [];
+    scan: for (let end = visible.total; end > 0;) {
+      const start = Math.max(0, end - 250);
+      const chunk = readVisibleMessageRange(projection, start, end);
+      end = start;
+      for (const row of chunk.toReversed()) {
+        // SAFETY: Indexed rows retain message envelopes; losing one could cross turn provenance.
+        const role = (row.event as { message?: { role?: unknown } })?.message?.role;
+        if (role === "user") {
+          pending = [];
+        } else {
+          for (const assistant of pending) {
+            assistant.precedingSameTurn.push(row);
+          }
+          pending = pending.filter((pendingRow) => pendingRow.precedingSameTurn.length < 1_000);
+        }
+        const matches = options.select(row.event);
+        if (matches && skipped < offset) {
+          skipped += 1;
+        } else if (matches && selected.length < maxResults) {
+          const result = { ...row, precedingSameTurn: [] };
+          selected.push(result);
+          if (role === "assistant") {
+            pending.push(result);
+          }
+        }
+        if (skipped >= offset && selected.length >= maxResults && pending.length === 0) {
+          break scan;
+        }
+      }
+    }
+    for (const row of selected) {
+      row.precedingSameTurn.reverse();
+    }
+    return selected.toReversed();
   });
 }
 

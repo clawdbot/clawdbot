@@ -1,6 +1,7 @@
 /** Extracts and trust-filters media from embedded-agent tool results. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { MAX_GROUNDING_PATHS } from "../media/media-grounding-limits.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -127,6 +128,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "write",
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
+const LOCAL_MEDIA_REPLAY_AUTHORIZED = "localMediaReplayAuthorized";
 
 function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
@@ -219,6 +221,60 @@ export function filterToolResultMediaUrls(
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
 }
 
+/** Persist the exact run-local decision that allowed a tool result to expose local media. */
+export function recordToolResultLocalMediaReplayAuthorization<T>(
+  result: T,
+  toolName: string | undefined,
+  trustedLocalMediaToolNames: ReadonlySet<string>,
+): T {
+  if (!isRecord(result)) {
+    return result;
+  }
+  const artifact = extractToolResultMediaArtifact(result, {
+    // Accepted refs and inspected candidates need separate caps: duplicates must
+    // not turn a transcript write into an unbounded structured-media scan.
+    maxMediaCandidates: MAX_GROUNDING_PATHS,
+    maxMediaUrls: MAX_GROUNDING_PATHS,
+  });
+  if (!artifact) {
+    return result;
+  }
+  const authorized = filterToolResultMediaUrls(
+    toolName,
+    artifact.mediaUrls,
+    result,
+    trustedLocalMediaToolNames,
+  ).some((url) => !HTTP_URL_RE.test(url.trim()));
+  const details = readToolResultDetails(result) ?? {};
+  const media = isRecord(details.media) ? details.media : {};
+  return {
+    ...result,
+    details: {
+      ...details,
+      media: { ...media, [LOCAL_MEDIA_REPLAY_AUTHORIZED]: authorized },
+    },
+  };
+}
+
+/** Reapply persisted local-media authority without normalizing stored tool aliases. */
+export function filterPersistedToolResultMediaUrls(
+  toolName: string | undefined,
+  mediaUrls: string[],
+  result: unknown,
+): string[] {
+  const details = readToolResultDetails(result);
+  const media = isRecord(details?.media) ? details.media : undefined;
+  const recorded = media?.[LOCAL_MEDIA_REPLAY_AUTHORIZED];
+  const registeredName = toolName?.trim();
+  const exactNames =
+    recorded === true && registeredName
+      ? new Set([registeredName])
+      : recorded === false
+        ? new Set<string>()
+        : TRUSTED_TOOL_RESULT_MEDIA;
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, exactNames);
+}
+
 /**
  * Extract media file paths from a tool result.
  *
@@ -236,6 +292,12 @@ type ToolResultMediaArtifact = {
   trustedLocalMedia?: boolean;
 };
 
+export type ToolResultMediaArtifactOptions = {
+  acceptMediaUrl?: (mediaUrl: string) => boolean;
+  maxMediaCandidates?: number;
+  maxMediaUrls?: number;
+};
+
 function readToolResultDetailsMedia(
   result: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -247,14 +309,37 @@ function readToolResultDetailsMedia(
   return media;
 }
 
-function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
+function collectStructuredMediaUrls(
+  media: Record<string, unknown>,
+  options: ToolResultMediaArtifactOptions,
+): { hadCandidate: boolean; urls: string[] } {
   const urls: string[] = [];
+  const seen = new Set<string>();
+  const maxMediaUrls = Math.max(
+    0,
+    Math.floor(Number.isFinite(options.maxMediaUrls) ? (options.maxMediaUrls ?? 0) : 0),
+  );
+  const maxMediaCandidates = Math.max(
+    0,
+    Math.floor(Number.isFinite(options.maxMediaCandidates) ? (options.maxMediaCandidates ?? 0) : 0),
+  );
+  let inspectedCandidates = 0;
+  let hadCandidate = false;
   const pushString = (value: unknown) => {
     if (typeof value !== "string") {
       return;
     }
     const normalized = value.trim();
-    if (normalized) {
+    if (!normalized) {
+      return;
+    }
+    hadCandidate = true;
+    if (
+      urls.length < maxMediaUrls &&
+      !seen.has(normalized) &&
+      (options.acceptMediaUrl?.(normalized) ?? true)
+    ) {
+      seen.add(normalized);
       urls.push(normalized);
     }
   };
@@ -276,17 +361,33 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   pushString(media.mediaUrl);
   pushString(media.filePath);
   pushString(media.fileUrl);
-  if (Array.isArray(media.mediaUrls)) {
+  if (
+    inspectedCandidates < maxMediaCandidates &&
+    urls.length < maxMediaUrls &&
+    Array.isArray(media.mediaUrls)
+  ) {
     for (const value of media.mediaUrls) {
+      inspectedCandidates += 1;
       pushString(value);
+      if (inspectedCandidates >= maxMediaCandidates || urls.length >= maxMediaUrls) {
+        break;
+      }
     }
   }
-  if (Array.isArray(media.attachments)) {
+  if (
+    inspectedCandidates < maxMediaCandidates &&
+    urls.length < maxMediaUrls &&
+    Array.isArray(media.attachments)
+  ) {
     for (const attachment of media.attachments) {
+      inspectedCandidates += 1;
       pushAttachment(attachment);
+      if (inspectedCandidates >= maxMediaCandidates || urls.length >= maxMediaUrls) {
+        break;
+      }
     }
   }
-  return uniqueStrings(urls);
+  return { hadCandidate, urls };
 }
 
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
@@ -308,6 +409,7 @@ function hasImageContentBlock(content: unknown[]): boolean {
 
 export function extractToolResultMediaArtifact(
   result: unknown,
+  options: ToolResultMediaArtifactOptions = {},
 ): ToolResultMediaArtifact | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -318,10 +420,14 @@ export function extractToolResultMediaArtifact(
     if (isNonOutboundToolResultMedia(detailsMedia)) {
       return undefined;
     }
-    const mediaUrls = collectStructuredMediaUrls(detailsMedia);
-    if (mediaUrls.length > 0) {
+    const collected = collectStructuredMediaUrls(detailsMedia, {
+      ...options,
+      maxMediaCandidates: options.maxMediaCandidates ?? Number.MAX_SAFE_INTEGER,
+      maxMediaUrls: options.maxMediaUrls ?? Number.MAX_SAFE_INTEGER,
+    });
+    if (collected.hadCandidate) {
       return {
-        mediaUrls,
+        mediaUrls: collected.urls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };

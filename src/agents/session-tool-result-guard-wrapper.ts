@@ -22,6 +22,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { recordToolResultLocalMediaReplayAuthorization } from "./embedded-agent-tool-media.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -35,8 +36,11 @@ type GuardedSessionManager = SessionManager & {
   clearPendingToolResults?: () => void;
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
-  /** Refresh the exact owning run when a caller reuses this guarded manager. */
-  setTranscriptRunId?: (runId: string | undefined) => void;
+  /** Refresh per-run transcript authority when a caller reuses this manager. */
+  setTranscriptRunContext?: (context: {
+    runId: string | undefined;
+    trustedLocalMediaToolNames: ReadonlySet<string> | undefined;
+  }) => void;
 };
 
 /**
@@ -55,6 +59,7 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    trustedLocalMediaToolNames?: ReadonlySet<string>;
     trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
     preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -88,12 +93,19 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
-  if (typeof guardedSessionManager.flushPendingToolResults === "function") {
-    guardedSessionManager.setTranscriptRunId?.(opts?.runId);
+  if (typeof guardedSessionManager.setTranscriptRunContext === "function") {
+    guardedSessionManager.setTranscriptRunContext({
+      runId: opts?.runId,
+      trustedLocalMediaToolNames: opts?.trustedLocalMediaToolNames,
+    });
     return guardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
+  let transcriptRunContext = {
+    runId: opts?.runId,
+    trustedLocalMediaToolNames: opts?.trustedLocalMediaToolNames,
+  };
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
@@ -126,6 +138,14 @@ export function guardSessionManager(
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {
       message = redacted;
+      changed = true;
+    }
+    if (message.role === "toolResult" && transcriptRunContext.trustedLocalMediaToolNames) {
+      message = recordToolResultLocalMediaReplayAuthorization(
+        message,
+        message.toolName,
+        transcriptRunContext.trustedLocalMediaToolNames,
+      );
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
@@ -247,6 +267,11 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunId = guard.setTranscriptRunId;
+  guardedSessionManager.setTranscriptRunContext = (context) => {
+    // Run identity and media authority rotate together. Refresh both before a
+    // reused manager can persist another tool result under stale authority.
+    transcriptRunContext = context;
+    guard.setTranscriptRunId(context.runId);
+  };
   return guardedSessionManager;
 }

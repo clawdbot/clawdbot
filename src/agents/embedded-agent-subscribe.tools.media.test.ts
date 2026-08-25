@@ -32,6 +32,59 @@ describe("extractToolResultMediaArtifact", () => {
     });
   });
 
+  it("stops structured media collection after the accepted limit", () => {
+    let inspected = 0;
+    const mediaUrls = Array.from({ length: 100_000 }, (_, index) => `/tmp/${index}.png`);
+
+    expect(
+      extractToolResultMediaArtifact(
+        { details: { media: { mediaUrls } } },
+        {
+          maxMediaUrls: 64,
+          acceptMediaUrl: () => {
+            inspected += 1;
+            return true;
+          },
+        },
+      )?.mediaUrls,
+    ).toEqual(mediaUrls.slice(0, 64));
+    expect(inspected).toBe(64);
+  });
+
+  it.each([
+    {
+      label: "duplicate",
+      mediaUrls: Array(100_000).fill("/tmp/repeated.png"),
+      acceptMediaUrl: () => true,
+      expected: ["/tmp/repeated.png"],
+    },
+    {
+      label: "rejected",
+      mediaUrls: Array.from({ length: 100_000 }, (_, index) => `/tmp/rejected-${index}.png`),
+      acceptMediaUrl: () => false,
+      expected: [],
+    },
+  ])("bounds raw $label structured media candidates", ({ mediaUrls, acceptMediaUrl, expected }) => {
+    let inspected = 0;
+    const iterateMediaUrls = mediaUrls[Symbol.iterator].bind(mediaUrls);
+    Object.defineProperty(mediaUrls, Symbol.iterator, {
+      *value() {
+        for (const mediaUrl of iterateMediaUrls()) {
+          inspected += 1;
+          yield mediaUrl;
+        }
+      },
+    });
+
+    expect(
+      extractToolResultMediaArtifact(
+        { details: { media: { mediaUrls } } },
+        { acceptMediaUrl, maxMediaCandidates: 64, maxMediaUrls: 64 },
+      )?.mediaUrls,
+    ).toEqual(expected);
+    expect(inspected).toBe(64);
+  });
+
   it("does not deliver explicitly private image results", () => {
     expect(
       extractToolResultMediaArtifact({
