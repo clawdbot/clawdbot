@@ -22,7 +22,10 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import { resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath } from "./desktop-app-paths.js";
+import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
+  resolveMacOSDesktopCodexBundledMarketplaceCandidates,
+} from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
@@ -207,8 +210,9 @@ type PluginInspection =
     };
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
+const BUNDLED_MARKETPLACE_NAME = "openai-bundled";
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
-  "openai-bundled",
+  BUNDLED_MARKETPLACE_NAME,
   "openai-curated",
   "openai-api-curated",
   "openai-curated-remote",
@@ -430,6 +434,7 @@ async function inspectCodexComputerUseWithoutFence(
     signal: params.signal,
     defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
+    migrateLegacyBundledSource: Boolean(managedMarketplacePath),
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -795,6 +800,7 @@ async function resolveMarketplaceRef(params: {
   signal?: AbortSignal;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
+  migrateLegacyBundledSource: boolean;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -818,6 +824,13 @@ async function resolveMarketplaceRef(params: {
     bundledMarketplacePath &&
     shouldAddBundledComputerUseMarketplace(params)
   ) {
+    if (params.migrateLegacyBundledSource) {
+      await migrateLegacyBundledMarketplaceSource({
+        request: params.request,
+        bundledMarketplacePath,
+        legacySources: params.defaultBundledMarketplacePathCandidates,
+      });
+    }
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: bundledMarketplacePath,
     } satisfies CodexRequestObject);
@@ -863,6 +876,35 @@ async function resolveMarketplaceRef(params: {
   }
   const marketplace = candidates[0];
   return marketplace ? { marketplace } : {};
+}
+
+async function migrateLegacyBundledMarketplaceSource(params: {
+  request: CodexComputerUseRequest;
+  bundledMarketplacePath: string;
+  legacySources?: readonly string[];
+}): Promise<void> {
+  const response = await params.request<{
+    config: { marketplaces?: Record<string, { source_type?: string; source?: string }> };
+    origins: Record<string, { name: { type: string } }>;
+  }>("config/read", { includeLayers: false });
+  const bundled = response.config.marketplaces?.[BUNDLED_MARKETPLACE_NAME];
+  const sourceOrigin = response.origins[`marketplaces.${BUNDLED_MARKETPLACE_NAME}.source`];
+  if (bundled?.source_type !== "local" || !bundled.source || sourceOrigin?.name.type !== "user") {
+    return;
+  }
+
+  // Codex hides a reserved marketplace whose old direct source violates its
+  // managed-root policy. Remove only sources OpenClaw previously provisioned.
+  const configuredSource = path.resolve(bundled.source);
+  if (configuredSource === path.resolve(params.bundledMarketplacePath)) {
+    return;
+  }
+  const legacySources =
+    params.legacySources ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  if (!legacySources.some((source) => path.resolve(source) === configuredSource)) {
+    return;
+  }
+  await params.request("marketplace/remove", { marketplaceName: BUNDLED_MARKETPLACE_NAME });
 }
 
 async function listComputerUseMarketplaceCandidates(
