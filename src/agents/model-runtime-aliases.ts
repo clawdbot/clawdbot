@@ -150,7 +150,9 @@ export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   return (
     selectedAuth === "unknown" ||
     (Boolean(selectedAuth?.startsWith("api-key")) &&
-      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
+      (activeAuth.startsWith("oauth") ||
+        activeAuth.startsWith("token") ||
+        activeAuth.startsWith("native")))
   );
 }
 
