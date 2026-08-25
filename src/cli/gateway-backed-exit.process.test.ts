@@ -148,6 +148,7 @@ async function runIsolatedGatewayCli(params: {
   stateDir: string;
   configPath: string;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
 }): Promise<{
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -185,7 +186,7 @@ async function runIsolatedGatewayCli(params: {
         },
         encoding: "utf8",
         killSignal: "SIGKILL",
-        timeout: 20_000,
+        timeout: params.timeoutMs ?? 20_000,
       },
     );
     return { code: 0, signal: null, stdout: result.stdout, stderr: result.stderr };
@@ -235,6 +236,9 @@ describe("gateway-backed CLI process exit", () => {
         root,
         stateDir,
         configPath,
+        // The first source child cold-loads the CLI graph and can contend with
+        // neighboring CI shards before it reaches the Gateway turn.
+        timeoutMs: 45_000,
       });
 
       expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null, stderr: "" });
@@ -244,7 +248,7 @@ describe("gateway-backed CLI process exit", () => {
         result: { payloads: [{ text }] },
       });
     },
-    30_000,
+    60_000,
   );
 
   it.each([

@@ -3121,6 +3121,25 @@ describe("deliverReplies", () => {
     expect(pinChatMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves accepted text delivery when a required pin fails", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockRejectedValue(new Error("pin failed"));
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
+        runtime: createRuntime(),
+        bot: createBot({ sendMessage, pinChatMessage }),
+      }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { messageIds: ["201"], visibleReplySent: true },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(pinChatMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),

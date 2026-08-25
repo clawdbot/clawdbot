@@ -1,66 +1,24 @@
 // @vitest-environment node
-// Sidebar zone and session-section persistence split from settings.node.test.ts
-// to keep both files under the lint size budget.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { loadSettings, saveSettings, type UiSettings } from "./settings.ts";
-
-function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
-  vi.stubGlobal("location", {
-    protocol: params.protocol,
-    host: params.host,
-    hostname: params.host.replace(/:\d+$/, ""),
-    pathname: params.pathname,
-  } as Location);
-}
-
-function expectedGatewayUrl(basePath: string): string {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}${basePath}`;
-}
-
-function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): UiSettings {
-  return {
-    gatewayUrl,
-    token: "",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "system",
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    navCollapsed: false,
-    navWidth: 258,
-    sidebarEntries: [],
-    ...overrides,
-  };
-}
+// Sidebar zone and session-section persistence split from the settings suites
+// to keep each file under the lint size budget.
+import { describe, expect, it } from "vitest";
+import {
+  expectedGatewayUrl,
+  installSettingsStorageLifecycle,
+  makeUiSettings,
+  setTestLocation,
+} from "../test-helpers/settings-node.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
 
 describe("sidebar preference persistence", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    localStorage.clear();
-    sessionStorage.clear();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    saveSettings(loadSettings());
-    vi.unstubAllGlobals();
-  });
+  installSettingsStorageLifecycle();
 
   it("persists sidebar width without leaking tab-local visibility across reloads", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gatewayUrl}`;
 
-    saveSettings(makeSettings(gatewayUrl, { navCollapsed: true, navWidth: 320 }));
+    saveSettings(makeUiSettings(gatewayUrl, { navCollapsed: true, navWidth: 320 }));
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
       string,
@@ -83,7 +41,7 @@ describe("sidebar preference persistence", () => {
 
     const gwUrl = expectedGatewayUrl("");
     saveSettings(
-      makeSettings(gwUrl, {
+      makeUiSettings(gwUrl, {
         sidebarEntries: ["route:tasks", "route:cron"],
         textScale: 100,
       }),
@@ -114,7 +72,7 @@ describe("sidebar preference persistence", () => {
     });
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    const legacy = makeSettings(gwUrl) as unknown as Record<string, unknown>;
+    const legacy = makeUiSettings(gwUrl) as unknown as Record<string, unknown>;
     delete legacy.sidebarEntries;
     legacy.sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
     localStorage.setItem(scopedKey, JSON.stringify(legacy));

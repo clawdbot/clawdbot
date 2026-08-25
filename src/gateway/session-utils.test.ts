@@ -319,6 +319,16 @@ describe("gateway session utils", () => {
   test.each([
     { name: "never read", entry: {}, expected: false },
     {
+      name: "legacy activity without creation provenance",
+      entry: { lastActivityAt: 11 },
+      expected: false,
+    },
+    {
+      name: "activity after creation before first read",
+      entry: { createdAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
       name: "interaction after read",
       entry: { lastReadAt: 10, lastInteractionAt: 11 },
       expected: true,

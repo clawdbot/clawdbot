@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
-const { checkTelemetryUpdateMock } = vi.hoisted(() => ({
+const { checkTelemetryUpdateMock, generateSecureIntMock } = vi.hoisted(() => ({
   checkTelemetryUpdateMock: vi.fn<typeof import("../infra/telemetry.js").checkTelemetryUpdate>(),
+  generateSecureIntMock: vi.fn<typeof import("../infra/secure-random.js").generateSecureInt>(),
+}));
+
+vi.mock("../infra/secure-random.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/secure-random.js")>()),
+  generateSecureInt: generateSecureIntMock,
 }));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -29,11 +35,12 @@ describe("gateway telemetry maintenance", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     checkTelemetryUpdateMock.mockReset();
+    generateSecureIntMock.mockReset();
   });
 
   it("uses one jittered maintenance schedule and silently retries failed checks", async () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    generateSecureIntMock.mockReturnValue(150_000);
     checkTelemetryUpdateMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(null);
     const logHealth = { info: vi.fn(), error: vi.fn() };
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -45,12 +52,14 @@ describe("gateway telemetry maintenance", () => {
       runManagedOutgoingMediaGc: async () => undefined,
     });
 
+    expect(generateSecureIntMock).toHaveBeenNthCalledWith(1, 5 * 60_000);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
     expect(logHealth.error).not.toHaveBeenCalled();
+    expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 
     await vi.advanceTimersByTimeAsync(420_000);
     expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
@@ -63,7 +72,7 @@ describe("gateway telemetry maintenance", () => {
 
   it("never checks telemetry for Nix-managed gateways", async () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
+    generateSecureIntMock.mockReturnValue(0);
     const broadcast = vi.fn();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers({

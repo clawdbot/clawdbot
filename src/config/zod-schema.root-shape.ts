@@ -214,12 +214,6 @@ export const OpenClawSchemaShape = {
   ui: z
     .strictObject({
       seamColor: HexColorSchema.optional(),
-      assistant: z
-        .strictObject({
-          name: z.string().max(50).optional(),
-          avatar: z.string().max(2_000_000).optional(),
-        })
-        .optional(),
       // Operator display prefs. Canonical here (agent-writable via approval,
       // synced across devices); the Control UI mirrors them into local
       // storage for instant boot and offline fallback.

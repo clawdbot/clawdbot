@@ -263,7 +263,13 @@ describe("handleMessageUpdate text signatures", () => {
       // phase; reply lanes still exclude it (covered below).
       {
         stream: "assistant",
-        data: { delta: "Hello", phase: "commentary", itemId: "item-commentary" },
+        data: {
+          text: "Hello",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
       },
       {
         stream: "assistant",
@@ -335,11 +341,23 @@ describe("handleMessageUpdate text signatures", () => {
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
         stream: "assistant",
-        data: { delta: "Work", phase: "commentary", itemId: "item-commentary" },
+        data: {
+          text: "Work",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
       },
       {
         stream: "assistant",
-        data: { delta: "ing...", phase: "commentary", itemId: "item-commentary" },
+        data: {
+          text: "Working...",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
       },
     ]);
     expect(context.state.deltaBuffer).toBe("Working...");
@@ -386,11 +404,23 @@ describe("handleMessageUpdate text signatures", () => {
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
         stream: "assistant",
-        data: { delta: "Working", phase: "commentary", itemId: "item-1" },
+        data: {
+          text: "Working",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-1",
+        },
       },
       {
         stream: "assistant",
-        data: { delta: " now", phase: "commentary", itemId: "item-1" },
+        data: {
+          text: "Working now",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-1",
+        },
       },
     ]);
     expect(context.state.lastAssistantStreamItemId).toBe("item-1");

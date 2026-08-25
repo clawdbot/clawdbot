@@ -3409,16 +3409,26 @@ describe("buildCachedChatItems", () => {
     });
   });
 
-  it("keeps failed queued sends out of the thread", () => {
+  it("keeps failed submitted sends in the thread for inline retry", () => {
     const groups = messageGroups({
       queue: [
-        queuedSend("failed-send-1", "restore me to the composer", 1, "failed", {
+        queuedSend("failed-send-1", "retry me from the transcript", 1, "failed", {
+          sendError: "send failed",
           sendSubmittedAtMs: 10,
         }),
       ],
     });
 
-    expect(groups).toStrictEqual([]);
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))).toMatchObject({
+      content: [{ type: "text", text: "retry me from the transcript" }],
+      __openclaw: {
+        id: "failed-send-1",
+        kind: "pending-send",
+        state: "failed",
+        error: "send failed",
+      },
+    });
   });
 
   it("filters submitted queued sends while chat search is active", () => {

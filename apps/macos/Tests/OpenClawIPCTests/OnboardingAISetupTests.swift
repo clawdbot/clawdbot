@@ -3234,7 +3234,10 @@ struct OnboardingAISetupTests {
         model.manualKey = "old-route-secret"
 
         model.submitManualKey()
+        #expect(model.manualTesting)
+        #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
         model.resetForGatewayChange()
+        #expect(OnboardingController.shared.busyReason == nil)
         config.setToken("route-b-token")
         routeIdentity.set("remote:id:gateway-b")
         await settleQueuedAISetupTasks()

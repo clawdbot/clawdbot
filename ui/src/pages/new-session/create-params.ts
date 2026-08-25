@@ -32,6 +32,7 @@ export function buildDraftSessionCreateParams(draft: {
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
   visibility?: NewSessionVisibility;
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
@@ -64,6 +65,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(projectId ? { projectId } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree

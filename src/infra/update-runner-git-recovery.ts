@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveControlUiDistIndexHealth } from "./control-ui-assets.js";
+import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
@@ -124,14 +124,14 @@ export async function rebuildRolledBackGitRuntime(params: {
         () => true,
         () => false,
       ),
-      resolveControlUiDistIndexHealth({ root: params.gitRoot }),
+      resolveControlUiAssetHealth({ root: params.gitRoot }),
     ]);
     const verified =
       commit === params.expectedSha &&
       buildHead === params.expectedSha &&
       runtimeHead === params.expectedSha &&
       entryExists &&
-      uiHealth.exists;
+      uiHealth.kind === "ready";
     params.steps.push({
       name: "git rollback runtime verify",
       command: `verify rollback runtime ${params.expectedSha}`,
@@ -141,7 +141,7 @@ export async function rebuildRolledBackGitRuntime(params: {
       ...(verified
         ? {}
         : {
-            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.exists})`,
+            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.kind})`,
           }),
     });
     return verified

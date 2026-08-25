@@ -5,6 +5,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/web-awesome-popover.ts";
@@ -39,7 +40,6 @@ import {
   handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
-  readPresenceEntries,
 } from "./new-session-runtime.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
@@ -86,7 +86,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         data: this.data,
         isConnected: this.isConnected,
         isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
+        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(this.context) ?? false,
         visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
         pendingPlacement: this.submission?.pendingPlacement ?? {
@@ -329,7 +329,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private setMessageFromUser(message: string) {
-    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+    if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
+      this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+    }
   }
 
   private renderAgentSelect() {
@@ -577,6 +579,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private renderDraftBlock() {
     const worktreeNameInvalid =
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
+    const capabilities = this.submission.capabilities;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -589,6 +592,12 @@ export class NewSessionPage extends OpenClawLightDomElement {
                   ? "newSession.createOutcomeUnknown"
                   : "newSession.placementSetupInterrupted",
               ),
+              this.submission.pendingPlacement.sessionKey
+                ? {
+                    label: t("common.reset"),
+                    onClick: () => this.submission.clearPendingPlacementRecovery(),
+                  }
+                : undefined,
             )
           : nothing}
         ${renderNewSessionDraftComposer({
@@ -602,7 +611,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.submission.message,
           visibility: this.submission.visibility,
-          draftAvailable: this.submission.canStartAsDraft(),
+          draftAvailable: capabilities.canStartAsDraft(this.context),
+          ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),
@@ -612,15 +622,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
           terminalAction: this.submission.showStartInTerminal()
             ? {
                 canStart: !this.submission.submitting && this.submission.canSubmit("terminal"),
-                disabledReason: this.submission.terminalStartDisabledReason(),
+                disabledReason: this.submission.submitBlock("terminal")?.reason,
                 onStart: () => void this.submission.startInTerminal(),
               }
             : undefined,
-          onInput: (message) => {
-            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-              this.setMessageFromUser(message);
-            }
-          },
+          onInput: (message) => this.setMessageFromUser(message),
           onOpenImage: (item) => {
             this.imageLightbox = item;
           },
@@ -657,11 +663,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
-      onDraftChange: (next) => {
-        if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-          this.setMessageFromUser(next);
-        }
-      },
+      onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
         if (this.submission.submitting || this.submission.pendingPlacement.sessionKey) {

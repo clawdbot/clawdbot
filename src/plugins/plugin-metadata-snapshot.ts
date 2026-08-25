@@ -329,11 +329,31 @@ export function completePluginMetadataSnapshot(params: {
     return params.snapshot;
   }
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  return loadPluginMetadataSnapshot({
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: params.snapshot.index,
     config: params.config,
     env: params.env ?? process.env,
-    index: params.snapshot.index,
     ...(workspaceDir ? { workspaceDir } : {}),
+    includeDisabled: true,
+  });
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const { pluginIds: _pluginIds, ...unscoped } = completed;
+  return freezeSnapshotValue({
+    ...unscoped,
+    configFingerprint: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index: completed.index,
+      policyHash: completed.policyHash,
+      workspaceDir,
+    }),
+    metrics: {
+      ...completed.metrics,
+      manifestRegistryMs,
+      totalMs: completed.metrics.totalMs + manifestRegistryMs,
+    },
   });
 }
 

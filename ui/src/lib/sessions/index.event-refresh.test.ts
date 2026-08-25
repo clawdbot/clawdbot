@@ -36,7 +36,7 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
   };
 }
 
-function createHarness(request: GatewayBrowserClient["request"]) {
+function createHarness(request: GatewayBrowserClient["request"], ownerId?: string) {
   const client = { request } as GatewayBrowserClient;
   let eventListener: ((event: GatewayEventFrame) => void) | undefined;
   const sessions = createSessionCapability({
@@ -46,6 +46,7 @@ function createHarness(request: GatewayBrowserClient["request"]) {
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents(listener) {
@@ -576,6 +577,71 @@ describe("event-driven session list refresh", () => {
       expect(request.mock.calls[2]?.[1]).toMatchObject({ agentId: "main", limit: 120 });
       expect(request.mock.calls[2]?.[1]).not.toHaveProperty("offset");
       expect(sessions.state.result?.sessions).toHaveLength(120);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains owner and appended shared pages when an event replaces the list", async () => {
+    vi.useFakeTimers();
+    const ownerId = "profile-ada";
+    const ownerTail = {
+      key: "agent:main:owner-tail",
+      kind: "direct" as const,
+      updatedAt: 1,
+      createdActor: { type: "human" as const, id: ownerId },
+    };
+    const ownerHead = {
+      key: "agent:main:owner-head",
+      kind: "direct" as const,
+      updatedAt: 3,
+      createdActor: { type: "human" as const, id: ownerId },
+    };
+    const sharedRows = [
+      ownerHead,
+      ...Array.from({ length: 119 }, (_, index) => ({
+        key: `agent:main:shared-${index}`,
+        kind: "direct" as const,
+        updatedAt: 119 - index,
+        createdActor: { type: "human" as const, id: "profile-bob" },
+      })),
+    ];
+    const request = vi.fn(
+      async (method: string, params?: { limit?: number; offset?: number; ownerId?: string }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (params?.ownerId === ownerId) {
+          return sessionsResult(1, [ownerHead, ownerTail]);
+        }
+        const offset = params?.offset ?? 0;
+        return sessionsResult(2, sharedRows.slice(offset, offset + (params?.limit ?? 50)));
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+      ownerId,
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", limit: 60, force: true });
+      await sessions.refresh({ agentId: "main", limit: 60, offset: 60, append: true, force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(121);
+
+      emitEvent(sessionChangedEvent(sharedRows[1]!.key));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request.mock.calls).toHaveLength(5);
+      expect(request.mock.calls.map(([, params]) => params)).toEqual([
+        expect.objectContaining({ ownerId, limit: 60 }),
+        expect.objectContaining({ limit: 60 }),
+        expect.objectContaining({ limit: 60, offset: 60 }),
+        expect.objectContaining({ ownerId, limit: 60 }),
+        expect.objectContaining({ limit: 120 }),
+      ]);
+      expect(sessions.state.result?.sessions).toHaveLength(121);
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(ownerTail.key);
     } finally {
       sessions.dispose();
       vi.useRealTimers();

@@ -405,6 +405,101 @@ suite.define(() => {
     }
   });
 
+  it("keeps the trailing unread dot on one axis with and without a pull-request icon", async () => {
+    const plainKey = "agent:main:unread-plain";
+    const pullRequestKey = "agent:main:unread-pr";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow(plainKey, "Unread plain", Date.now() - 1, { unread: true }),
+          sessionRow(pullRequestKey, "Unread with PR", Date.now() - 2, {
+            unread: true,
+            worktree: {
+              id: "unread-pr-worktree",
+              branch: "fix/unread-pr",
+              repoRoot: "/tmp/openclaw",
+            },
+          }),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      // Worktree rows land in the Coding zone, which starts collapsed.
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      await codingToggle.waitFor({ state: "visible" });
+      await codingToggle.click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+          return requests.some((request) => {
+            const sessionKeys = requireRecord(request.params).sessionKeys;
+            return Array.isArray(sessionKeys) && sessionKeys.includes(pullRequestKey);
+          });
+        })
+        .toBe(true);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [pullRequestKey]: {
+            pullRequests: [
+              {
+                branch: "fix/unread-pr",
+                number: 1,
+                owner: "openclaw",
+                repo: "openclaw",
+                state: "merged",
+                title: "Unread row pull request",
+                url: "https://example.test/openclaw/openclaw/pull/1",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+
+      const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
+      const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
+      await plainRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => pullRequestRow.locator("[data-session-pr-state='merged']").isVisible())
+        .toBe(true);
+
+      const dotInsetFromRowRight = async (row: typeof plainRow) => {
+        const [rowBounds, dotBounds] = await Promise.all([
+          row.boundingBox(),
+          row.locator(".session-unread-dot").boundingBox(),
+        ]);
+        if (!rowBounds || !dotBounds) {
+          throw new Error("Expected visible row and unread dot geometry");
+        }
+        return rowBounds.x + rowBounds.width - (dotBounds.x + dotBounds.width / 2);
+      };
+      // The dot is the trailing glyph either way, so a PR icon ahead of it must
+      // not pull it off the axis dot-only rows share with the action icons.
+      // Centring the whole endcap group as one box moved it 3.5px inboard.
+      expect(await dotInsetFromRowRight(pullRequestRow)).toBeCloseTo(
+        await dotInsetFromRowRight(plainRow),
+        0,
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("draws every row glyph at one size", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

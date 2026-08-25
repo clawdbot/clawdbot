@@ -30,6 +30,7 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "./gateway-cloudflare-access.js";
+import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -57,22 +58,6 @@ type NodeHostRunOptions = {
   displayName?: string;
   installedAppsSharing?: boolean;
 };
-
-function resolveNodeHostGatewayPlatformIdentity(platform: NodeJS.Platform): {
-  platform: string;
-  deviceFamily?: string;
-} {
-  switch (platform) {
-    case "darwin":
-      return { platform: "macos", deviceFamily: "Mac" };
-    case "win32":
-      return { platform: "windows", deviceFamily: "Windows" };
-    case "linux":
-      return { platform: "linux", deviceFamily: "Linux" };
-    default:
-      return { platform: "unknown" };
-  }
-}
 
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
@@ -286,6 +271,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
+  let workerHostingEnabled = preparedRuntime.workerHostingEnabled;
   if (preparedRuntime.workerHostingDisabledReason) {
     writeStderrLine(
       `node host worker hosting disabled: ${preparedRuntime.workerHostingDisabledReason}`,
@@ -517,7 +503,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost:
-          preparedRuntime.workerHostingEnabled && workerCapacity
+          workerHostingEnabled && workerCapacity
             ? {
                 enabled: true,
                 capacity: workerCapacity,
@@ -673,6 +659,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onRunnerCapacityChanged: (capacity) => {
       workerCapacity = capacity;
+      publishRunnerInventory();
+    },
+    onWorkerHostingDisabled: (reason) => {
+      workerHostingEnabled = false;
+      writeStderrLine(`node host worker hosting disabled: ${reason}`);
       publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {

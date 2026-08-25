@@ -25,6 +25,7 @@ export async function getPluginCliCommandDescriptors(
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
+  const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
   try {
     const context = resolvePluginRuntimeLoadContext({ config: cfg, env, logger: quietLogger });
     const snapshot = context.metadataSnapshot;
@@ -32,7 +33,6 @@ export async function getPluginCliCommandDescriptors(
       return [];
     }
     const legacyExternalPluginIds: string[] = [];
-    const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
     const seenPluginIds = new Set<string>();
     let selectedMemoryPluginId: string | null = null;
     const memorySlot = context.config.plugins?.slots?.memory;
@@ -91,6 +91,6 @@ export async function getPluginCliCommandDescriptors(
     }
     return collectUniqueCommandDescriptors(descriptorGroups);
   } catch {
-    return [];
+    return collectUniqueCommandDescriptors(descriptorGroups);
   }
 }

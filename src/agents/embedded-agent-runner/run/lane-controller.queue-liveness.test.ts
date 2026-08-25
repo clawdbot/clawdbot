@@ -207,7 +207,8 @@ describe("queued embedded run context liveness", () => {
     const registeredAt = 1_000;
     const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-    const { controller, params } = createRunController();
+    const onLaneWait = vi.fn();
+    const { controller, params } = createRunController({ onLaneWait });
     registerAgentRunContext(params.runId, {
       lifecycleGeneration: params.lifecycleGeneration,
       registeredAt,
@@ -235,6 +236,7 @@ describe("queued embedded run context liveness", () => {
 
     try {
       await placementEntered.promise;
+      expect(onLaneWait).not.toHaveBeenCalledWith(expect.objectContaining({ waiting: false }));
       expect(readAgentRunIndexVersion()).toBe(versionBeforeQueue);
       clock.mockReturnValue(admissionAt);
       expect(sweepStaleRunContexts()).toBe(0);
@@ -242,6 +244,11 @@ describe("queued embedded run context liveness", () => {
 
       placementAdmitted.resolve();
       await remoteStarted.promise;
+      expect(onLaneWait).toHaveBeenCalledExactlyOnceWith({
+        waitMs: 0,
+        queuedAhead: 0,
+        waiting: false,
+      });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
       expect(readAgentRunIndexVersion()).toBe(versionBeforeQueue + 1);
       expect(localTurn).not.toHaveBeenCalled();

@@ -225,6 +225,57 @@ describe("resolveProviderAuths plugin boundary", () => {
     ]);
   });
 
+  it("excludes native credential providers from plugin OAuth resolution", async () => {
+    const store = {
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "native-access",
+          refresh: "native-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "anthropic:managed": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "managed-access",
+          refresh: "managed-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValue(store as never);
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store as never);
+    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:claude-cli", "anthropic:managed"]);
+    resolveApiKeyForProfileMock.mockImplementation(async (params) => {
+      const profileId = (params as { profileId: string }).profileId;
+      return profileId === "anthropic:managed"
+        ? { apiKey: "managed-access", provider: "anthropic" }
+        : { apiKey: "native-access", provider: "claude-cli" };
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          resolveOAuthToken: (options: {
+            excludeProfileIds: string[];
+          }) => Promise<{ token: string } | null>;
+        };
+      };
+      return params.context.resolveOAuthToken({
+        excludeProfileIds: ["anthropic:claude-cli"],
+      });
+    });
+
+    await expect(resolveProviderAuthsForTest({ providers: ["anthropic"] })).resolves.toEqual([
+      { provider: "anthropic", token: "managed-access" },
+    ]);
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledTimes(1);
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "anthropic:managed" }),
+    );
+  });
+
   it("does not synthesize Codex app-server auth for generic OpenAI usage", async () => {
     await withTempHome(async (homeDir) => {
       await expect(

@@ -642,8 +642,8 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const setSession = async (rawKey: string) => {
-    applySessionSelection(resolveSessionSelection(rawKey));
+  const setSession = async (rawKey: string, agentId?: string) => {
+    applySessionSelection(resolveSessionSelection(rawKey, agentId));
     await loadHistory();
   };
 

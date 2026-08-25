@@ -7,7 +7,7 @@ import {
   listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "./live-model-filter.js";
+} from "./test-helpers/live-model-dynamic-candidates.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
   if (provider === "openai") {

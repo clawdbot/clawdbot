@@ -656,6 +656,76 @@ describe("google provider plugin hooks", () => {
     bridge.close();
   });
 
+  it("reopens the provider bridge after an explicit close", async () => {
+    let firstConnected = false;
+    let replacementConnected = false;
+    const first = createMockRealtimeBridge(async () => {
+      firstConnected = true;
+    });
+    first.bridge.isConnected = vi.fn(() => firstConnected);
+    const replacement = createMockRealtimeBridge(async () => {
+      replacementConnected = true;
+    });
+    replacement.close.mockImplementation(() => {
+      replacementConnected = false;
+    });
+    replacement.bridge.isConnected = vi.fn(() => replacementConnected);
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(first.bridge)
+      .mockReturnValueOnce(replacement.bridge);
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(vi.fn(), onReady, onClose);
+
+    await bridge.connect();
+    const firstRequest = createRealtimeBridgeMock.mock.calls[0]?.[0];
+    expect(bridge.isConnected()).toBe(true);
+
+    bridge.close();
+    bridge.sendAudio(Buffer.from([0x01]));
+    expect(bridge.isConnected()).toBe(false);
+
+    const reconnectPromise = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x02]));
+    await reconnectPromise;
+    signalRealtimeBridgeReady();
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(first.sendAudio).not.toHaveBeenCalled();
+    expect(replacement.connect).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.sendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x02]));
+    firstRequest?.onReady?.();
+    firstRequest?.onClose?.("error");
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+  });
+
+  it("fences a provider generation closed during lazy load before reconnecting", async () => {
+    const first = createMockRealtimeBridge();
+    const replacement = createMockRealtimeBridge();
+    replacement.bridge.isConnected = vi.fn(() => replacement.connect.mock.calls.length > 0);
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(first.bridge)
+      .mockReturnValueOnce(replacement.bridge);
+    const { bridge } = createLazyRealtimeBridge();
+
+    const staleConnect = bridge.connect();
+    bridge.close();
+    const replacementConnect = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x02]));
+    await Promise.all([staleConnect, replacementConnect]);
+    signalRealtimeBridgeReady();
+
+    expect(first.connect).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(replacement.connect).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.sendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x02]));
+    expect(bridge.isConnected()).toBe(true);
+  });
+
   it("reports and cleans up a lazy realtime connect failure before reconnecting", async () => {
     const failure = new Error("Google realtime connect rejected");
     const errorCallbackFailure = new Error("Google realtime error callback rejected");

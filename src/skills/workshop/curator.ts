@@ -14,6 +14,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import {
+  readSkillReviewOutcomes,
+  type SkillCollectionReviewStatus,
+  type SkillExperienceReviewStatus,
+} from "./collection-review-state.js";
 
 const log = createSubsystemLogger("skills/curator");
 const CURATOR_STATE_ID = 1;
@@ -30,6 +35,8 @@ export type SkillCuratorStatus = {
   lastAttemptAtMs: number | null;
   lastSuccessAtMs: number | null;
   lastError: string | null;
+  collectionReview: Record<string, SkillCollectionReviewStatus>;
+  experienceReview: Record<string, SkillExperienceReviewStatus>;
   counts: Record<SkillLifecycleState, number>;
   skills: Array<{
     skillFile: string;
@@ -99,6 +106,7 @@ export function getSkillCuratorStatus(
     database.db,
     kysely.selectFrom("skill_curator_state").selectAll().where("id", "=", CURATOR_STATE_ID),
   );
+  const reviewOutcomes = readSkillReviewOutcomes(options);
   const rows = executeSqliteQuerySync(
     database.db,
     kysely
@@ -135,6 +143,8 @@ export function getSkillCuratorStatus(
     lastAttemptAtMs: state?.last_attempt_at_ms ?? null,
     lastSuccessAtMs: state?.last_success_at_ms ?? null,
     lastError: state?.last_error ?? null,
+    collectionReview: reviewOutcomes.collectionReviews,
+    experienceReview: reviewOutcomes.experienceReviews,
     counts,
     skills,
     overlaps: parseOverlapCandidates(state?.last_result_json),

@@ -20,7 +20,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
-import { runGit } from "../../agents/worktrees/git.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -48,6 +48,7 @@ import {
   decodeUtf8Strict,
   listWorkspacePath,
   normalizeRelativePath,
+  openWorkspaceRoot,
   readWorkspaceFile,
   readWorkspaceFilePrefix,
   resolveWorkspacePath,
@@ -60,6 +61,7 @@ import {
   workspaceStatKind,
   type WorkspaceDirEntry,
   type WorkspaceFileUpdateResult,
+  type WorkspaceRoot,
 } from "./workspace-fs.js";
 
 type FileKind = "modified" | "read";
@@ -85,7 +87,9 @@ const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
-const TOUCHED_FILES_CACHE_LIMIT = 16;
+// Control UI requests fan out per visible session; keep enough folds to avoid
+// eviction and full-transcript reparsing across realistic concurrent viewers.
+const TOUCHED_FILES_CACHE_LIMIT = 256;
 const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
 const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
 // Matches file-type's documented default buffer sample while keeping metadata
@@ -459,7 +463,7 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { includeContent?: boolean } = {},
+  opts: { includeContent?: boolean; workspaceRoot?: WorkspaceRoot } = {},
 ): Promise<SessionFileEntry> {
   const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
@@ -471,7 +475,7 @@ async function toSessionFileEntry(
     return { ...base, missing: true };
   }
   const browserPath = toDisplayPath(root!, resolved);
-  const stat = await statWorkspacePath(root!, browserPath);
+  const stat = await statWorkspacePath(opts.workspaceRoot ?? root!, browserPath);
   if (!stat || workspaceStatKind(stat) !== "file") {
     return { ...base, missing: true };
   }
@@ -603,7 +607,7 @@ function matchesSearch(entryPath: string, name: string, query: string): boolean 
 }
 
 async function searchBrowserEntries(params: {
-  root: string;
+  root: string | WorkspaceRoot;
   query: string;
   relevance: ReadonlyMap<string, SessionFileRelevance>;
 }): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: boolean }> {
@@ -648,6 +652,7 @@ async function searchBrowserEntries(params: {
 
 async function buildBrowserResult(params: {
   root: string | undefined;
+  workspaceRoot?: WorkspaceRoot;
   fileRoot: string | undefined;
   path?: string;
   search?: string;
@@ -660,7 +665,7 @@ async function buildBrowserResult(params: {
   const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   if (search) {
     const result = await searchBrowserEntries({
-      root: params.root,
+      root: params.workspaceRoot ?? params.root,
       query: search,
       relevance,
     });
@@ -676,11 +681,11 @@ async function buildBrowserResult(params: {
   if (!resolved) {
     return undefined;
   }
-  const stat = await statWorkspacePath(params.root, browserPath);
+  const stat = await statWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
   if (!stat || workspaceStatKind(stat) !== "directory") {
     return undefined;
   }
-  const dirents = await listWorkspacePath(params.root, browserPath);
+  const dirents = await listWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
   if (!dirents) {
     return undefined;
   }
@@ -752,25 +757,21 @@ async function buildListResult(params: {
 }> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
-  let gitCheckout: boolean | undefined;
-  if (loaded.diffCwd) {
-    try {
-      const result = await runGit(loaded.diffCwd, ["rev-parse", "--show-toplevel"]);
-      gitCheckout = result.code === 0 && Boolean(result.stdout.trim());
-    } catch {
-      gitCheckout = false;
-    }
-  }
+  const gitCheckout = loaded.diffCwd ? insideGitCheckout(loaded.diffCwd) : undefined;
+  const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
       )
     : loaded.files;
   const files = await Promise.all(
-    workspaceFiles.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    workspaceFiles.map((file) =>
+      toSessionFileEntry(file, loaded.root, loaded.fileRoot, { workspaceRoot }),
+    ),
   );
   const browser = await buildBrowserResult({
     root,
+    workspaceRoot,
     fileRoot: loaded.fileRoot,
     path: params.path,
     search: params.search,

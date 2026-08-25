@@ -298,7 +298,9 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     message.includes(`Cannot find module "${specifier}"`);
   const launcherPath = fileURLToPath(import.meta.url);
   const bunLauncherImporterMiss =
-    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
+    message.includes(` from '${launcherPath}'`) ||
+    message.includes(` from "${launcherPath}"`) ||
+    message.includes(` imported from ${launcherPath}`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
   const expectedPath = fileURLToPath(expectedUrl);

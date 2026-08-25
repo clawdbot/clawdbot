@@ -34,6 +34,18 @@ const CONTAINER_NODE_EXECUTABLE = "node";
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/u;
 const ENCODED_LAUNCH_PATTERN = /^[A-Za-z0-9_-]+$/u;
+// `.State.Running` is false both before a container starts and after it exits.
+// A created or initialized container still owns an admitted workload, so its
+// launch must never be finalized or fenced as if the worker had already ended.
+const OWNED_CONTAINER_STATUSES = new Set([
+  "created",
+  "initialized",
+  "running",
+  "paused",
+  "restarting",
+  "stopping",
+]);
+const ENDED_CONTAINER_STATUSES = new Set(["exited", "stopped", "dead", "removing"]);
 
 function hostNamespace(bundleRoot: string): string {
   return createHash("sha256").update(path.resolve(bundleRoot)).digest("hex").slice(0, 32);
@@ -343,8 +355,8 @@ export async function inspectNodeWorkerContainer(
 ): Promise<"live" | "dead" | "reused" | "unknown"> {
   try {
     const format = expected
-      ? `{{.State.Running}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
-      : "{{.State.Running}}";
+      ? `{{.State.Status}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
+      : "{{.State.Status}}";
     const state = await runContainerCommand(engine, [
       "inspect",
       "--type",
@@ -353,7 +365,7 @@ export async function inspectNodeWorkerContainer(
       format,
       containerId,
     ]);
-    const [running, owner, gateway, launch, extra] = state.split("\t");
+    const [status = "", owner, gateway, launch, extra] = state.split("\t");
     if (expected) {
       if (
         extra !== undefined ||
@@ -366,7 +378,11 @@ export async function inspectNodeWorkerContainer(
     } else if (owner !== undefined) {
       return "unknown";
     }
-    return running === "true" ? "live" : running === "false" ? "dead" : "unknown";
+    return OWNED_CONTAINER_STATUSES.has(status)
+      ? "live"
+      : ENDED_CONTAINER_STATUSES.has(status)
+        ? "dead"
+        : "unknown";
   } catch (error) {
     return missingContainer(error) ? "dead" : "unknown";
   }

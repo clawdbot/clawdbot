@@ -762,6 +762,39 @@ describe("handleInlineActions", () => {
     );
   });
 
+  it("keeps literal $ patterns in bundle command arguments", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    const ctx = buildTestCtx({
+      Body: "/office_hours price $$ and $& here",
+      CommandBody: "/office_hours price $$ and $& here",
+    });
+    const skillCommands = officeHoursSkillCommands();
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/office_hours price $$ and $& here",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/office_hours price $$ and $& here",
+        commandBodyNormalized: "/office_hours price $$ and $& here",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands,
+      },
+    });
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(ctx.Body).toBe("Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here");
+    const commandArgs = mockObjectArg(handleCommandsMock, "handleCommands");
+    expect(requireRecord(commandArgs.ctx, "handleCommands ctx").Body).toBe(
+      "Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here",
+    );
+  });
+
   it("loads workspace skills when /skill gets an empty preloaded command list", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });

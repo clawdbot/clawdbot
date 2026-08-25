@@ -120,7 +120,6 @@ import {
 
 const {
   activateGatewayScheduledServices,
-  runGatewayPostReadyMaintenance,
   scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
@@ -811,24 +810,22 @@ describe("server-runtime-services", () => {
   });
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {
+    vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
     const recordPostReadyMemory = vi.fn();
 
-    await runGatewayPostReadyMaintenance({
-      startMaintenance: vi.fn(async () => {
-        throw new Error("timers unavailable");
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        startMaintenance: vi.fn(async () => {
+          throw new Error("timers unavailable");
+        }),
+        cronState: createTestCronState(cron),
+        log,
+        recordPostReadyMemory,
       }),
-      applyMaintenance: vi.fn(),
-      shouldStartCron: () => true,
-      markCronStartHandled: vi.fn(),
-      cronState: createTestCronState(cron),
-      cronReconciliation: createTestCronReconciliation(),
-      cronConfig: {} as never,
-      logCron: { error: vi.fn() },
-      log,
-      recordPostReadyMemory,
-    });
+    );
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(log.warn).toHaveBeenCalledWith(
       "gateway post-ready maintenance startup failed: Error: timers unavailable",

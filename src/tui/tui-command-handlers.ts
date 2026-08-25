@@ -76,7 +76,7 @@ type CommandHandlerContext = {
   closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
-  setSession: (key: string) => Promise<void>;
+  setSession: (key: string, agentId?: string) => Promise<void>;
   refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
@@ -219,8 +219,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const setAgent = async (id: string) => {
-    state.currentAgentId = normalizeAgentId(id);
-    await setSession("");
+    await setSession("", normalizeAgentId(id));
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
@@ -308,17 +307,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSelector = (
-    selector: {
-      onSelect?: (item: SelectItem) => void;
-      onCancel?: () => void;
-    },
+    selector: { onSelect?: (item: SelectItem) => void; onCancel?: () => void },
     onSelect: (value: string) => Promise<void>,
     request: { overlay?: OverlayHandle },
   ) => {
+    const selection = captureSessionSelection();
     selector.onSelect = (item) => {
       void (async () => {
         try {
-          await onSelect(item.value);
+          if (isCurrentSessionSelection(selection)) {
+            await onSelect(item.value);
+          }
         } catch (err) {
           // A rejected selection must not strand the overlay open with an
           // unhandled rejection; close it and surface the cause in chat.

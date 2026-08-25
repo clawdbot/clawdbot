@@ -1,4 +1,5 @@
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -220,6 +221,84 @@ describe("MCP App standalone host", () => {
       expect.stringMatching(/script-src 'sha256-[^']+';.*connect-src 'self'/u),
     );
   });
+
+  it.each([
+    { label: "public shell", path: "/__openclaw__/mcp-app", expectedStatus: 200 },
+    {
+      label: "authenticated multibyte view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 200,
+      authorized: true,
+    },
+    {
+      label: "unauthorized view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 401,
+    },
+    {
+      label: "saturated view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 429,
+      authorized: true,
+      saturated: true,
+    },
+  ])(
+    "keeps GET and HEAD metadata aligned over HTTP for $label",
+    async ({ path, expectedStatus, authorized, saturated }) => {
+      const originalHtml = view.html;
+      view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
+      const ticket = authorized
+        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket
+        : undefined;
+      view.activeRequests = saturated ? 4 : 0;
+      const server = createServer((req, res) => {
+        void handleMcpAppStandaloneHttpRequest(req, res, {
+          sandboxPort: 18_790,
+          nowMs,
+          ticketSecret: secret,
+        }).catch((error: unknown) => {
+          res.statusCode = 500;
+          res.end(String(error));
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      try {
+        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        const headers = ticket ? { Authorization: `MCP-App ${ticket}` } : undefined;
+        const get = await fetch(`${origin}${path}`, { headers });
+        const body = Buffer.from(await get.arrayBuffer());
+        const head = await fetch(`${origin}${path}`, { method: "HEAD", headers });
+
+        expect(get.status).toBe(expectedStatus);
+        expect(head.status).toBe(expectedStatus);
+        expect(get.headers.get("content-length")).toBe(String(body.byteLength));
+        expect(head.headers.get("content-length")).toBe(String(body.byteLength));
+        expect((await head.arrayBuffer()).byteLength).toBe(0);
+        expect(head.headers.get("cache-control")).toBe("no-store");
+
+        if (path.endsWith("/view")) {
+          expect(head.headers.get("vary")).toBe("Authorization");
+        }
+        if (expectedStatus === 401) {
+          expect(head.headers.get("www-authenticate")).toBe("MCP-App");
+        }
+        if (authorized && !saturated) {
+          expect(body.toString()).toContain("caf\u00e9 \ud83e\udd9e");
+          expect(JSON.parse(body.toString())).toMatchObject({ operationTimeoutMs: 65_000 });
+        }
+      } finally {
+        view.html = originalHtml;
+        view.activeRequests = 0;
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("executes serialized fetch deadlines with visible outcomes", async () => {
     const shell = await request({ url: "/__openclaw__/mcp-app" });

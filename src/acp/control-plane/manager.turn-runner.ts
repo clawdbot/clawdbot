@@ -16,6 +16,7 @@ import {
 } from "./manager.backend-failover.js";
 import {
   appendBackgroundTaskProgressSummary,
+  bindBackgroundTaskExecution,
   createBackgroundTaskRecord,
   markBackgroundTaskRunning,
   markBackgroundTaskTerminal,
@@ -87,9 +88,10 @@ export async function runManagerTurn(params: {
           text: input.text,
         })
       : null;
-  if (taskContext) {
-    createBackgroundTaskRecord(taskContext, turnStartedAt);
-  }
+  const taskRecord = taskContext
+    ? createBackgroundTaskRecord(taskContext, turnStartedAt)
+    : undefined;
+  let taskExecutionBound = false;
   let taskProgressSummary = "";
   const initialResolution = params.resolveSession({
     cfg: input.cfg,
@@ -267,6 +269,10 @@ export async function runManagerTurn(params: {
             onBeforePrompt: input.onBeforePrompt,
             onPromptStarted: async ({ authoritative }) => {
               promptStarted = authoritative;
+              if (authoritative && taskRecord && !taskExecutionBound) {
+                taskExecutionBound = true;
+                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              }
               try {
                 await input.onLifecycle?.({
                   type: "prompt_submitted",

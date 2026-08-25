@@ -13,7 +13,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import {
@@ -208,6 +208,7 @@ describe("skill collection backup and restore", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "external", description: "Operator procedure", body: "# External original\n" },
     ]);
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
     await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
@@ -219,7 +220,6 @@ describe("skill collection backup and restore", () => {
           description: "Updated Workshop procedure",
           content: "# Owned updated\n",
         },
-        { action: "keep", name: "external" },
       ],
     });
     const externalFile = path.join(workspaceDir, "skills", "external", "SKILL.md");
@@ -270,6 +270,7 @@ describe("skill collection backup and restore", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "created", description: "Operator procedure", body: "# Operator\n" },
     ]);
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
     expect(listWritableSkillCollection(workspaceDir, { env: testState.env })).toEqual([
       expect.objectContaining({ name: "created", workshopOwned: false }),
       expect.objectContaining({ name: "dropped", workshopOwned: true }),
@@ -281,8 +282,6 @@ describe("skill collection backup and restore", () => {
         env: testState.env,
         ...(await readCollectionReceipt()),
         plan: [
-          { action: "keep", name: "created" },
-          { action: "keep", name: "dropped" },
           {
             action: "write",
             name: "updated",
@@ -352,6 +351,7 @@ describe("skill collection backup and restore", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "external", description: "Operator procedure", body: "# External original\n" },
     ]);
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
     const result = await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
@@ -363,7 +363,6 @@ describe("skill collection backup and restore", () => {
           description: "Updated Workshop procedure",
           content: "# Owned updated\n",
         },
-        { action: "keep", name: "external" },
       ],
     });
     const backupDir = path.join(

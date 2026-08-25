@@ -1,6 +1,7 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -19,11 +20,11 @@ import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
   buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
-  canStartSessionAsDraft,
   type NewSessionVisibility,
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -65,6 +66,7 @@ export class DraftSubmissionFlow {
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
   readonly draftPersistence: NewSessionDraftPersistence;
+  readonly capabilities: NewSessionCapabilityController;
 
   constructor(
     private readonly gateway: DraftGatewayState,
@@ -72,6 +74,8 @@ export class DraftSubmissionFlow {
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
+    this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
+    this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
@@ -140,10 +144,12 @@ export class DraftSubmissionFlow {
     message: string;
     attachments: ChatAttachment[];
     visibility: NewSessionVisibility;
+    toolOverrides?: NewSessionCapabilityController["toolOverrides"];
   }) {
     this.draftPersistence.noteDraftReplaced();
     this.messageValue = state.message;
     this.visibilityValue = state.visibility;
+    this.capabilities.restoreToolOverrides(state.toolOverrides);
     this.attachmentDraft.restore(state.attachments);
   }
 
@@ -196,15 +202,6 @@ export class DraftSubmissionFlow {
     return PAGE_RENDERED_GATES.has(block.gate) ? undefined : block.reason;
   }
 
-  canStartAsDraft(): boolean {
-    return canStartSessionAsDraft({
-      allowedVisibilities:
-        this.read().context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
-      hasMultipleIdentities:
-        this.read().context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
-    });
-  }
-
   showStartInTerminal(): boolean {
     const { context, data } = this.read();
     return Boolean(
@@ -234,6 +231,7 @@ export class DraftSubmissionFlow {
       model: this.place.modelControl.selected,
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
+      toolOverrides: this.capabilities.toolOverrides,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
       projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
@@ -285,10 +283,6 @@ export class DraftSubmissionFlow {
     return this.submitBlock()?.reason;
   }
 
-  terminalStartDisabledReason(): string | undefined {
-    return this.submitBlock("terminal")?.reason;
-  }
-
   incognitoDisabledReason(): string | undefined {
     const access = readSessionMethodAccess(this.read().context?.gateway.snapshot, {
       method: "sessions.create",
@@ -320,6 +314,7 @@ export class DraftSubmissionFlow {
         submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
         pendingAttachmentReads: this.attachmentDraft.pendingReads,
         hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
+        hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
         submissionSnapshot: () => this.read(),
         requiresModelSetup: () => this.requiresModelSetup(),
         submissionAccess: () => this.submissionAccess(),
@@ -389,6 +384,7 @@ export class DraftSubmissionFlow {
       ? (this.submissionOutcomeUnknownValue ?? "placement-interrupted")
       : null;
     this.visibilityValue = "normal";
+    this.capabilities.reset();
     this.attachmentDraft.reset({ release: true });
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {
@@ -491,7 +487,8 @@ export class DraftSubmissionFlow {
         this.buildDraftSessionCreateParams({
           message: placementTarget ? "" : message,
           visibility:
-            this.visibilityValue === "draft" && !this.canStartAsDraft()
+            this.visibilityValue === "draft" &&
+            !this.capabilities.canStartAsDraft(this.read().context)
               ? "normal"
               : this.visibilityValue,
           attachments: placementTarget ? undefined : draftAttachments,
@@ -566,11 +563,13 @@ export class DraftSubmissionFlow {
             submissionAgentId,
           );
           if (cleanupError) {
-            this.pendingPlacement.promoteToDispatching(result.key);
-            this.pendingPlacement.retryAllowed = true;
+            if (ownsSubmissionRecovery()) {
+              this.pendingPlacement.promoteToDispatching(result.key);
+              this.pendingPlacement.retryAllowed = true;
+            }
             this.error = t("newSession.placementStartFailed", { error: cleanupError });
             this.callbacks.requestUpdate();
-          } else {
+          } else if (ownsSubmissionRecovery()) {
             this.clearPendingPlacementRecovery();
           }
           return;
@@ -630,10 +629,12 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
         });
       if (result.initialRun.status === "started") {
+        const { hello, selfUser } = context.gateway.snapshot;
+        const sender = resolveCurrentUserIdentity(hello, submissionClient.instanceId, selfUser);
         prepareInitialUserMessageHandoff(
           context.initialUserMessage,
           result.key,
-          { text: message, attachments, createdAt: submittedAt },
+          { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
           submissionClient,
           { runId: result.initialRun.runId, messageSeq: result.initialRun.messageSeq },
         );
@@ -643,9 +644,6 @@ export class DraftSubmissionFlow {
         return;
       }
       this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
-      if (requestId !== this.submitRequestToken) {
-        return;
-      }
       await this.startedSession.navigate(context, {
         client: submissionClient,
         key: result.key,

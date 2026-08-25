@@ -38,6 +38,7 @@ export function buildCodexMessagesSnapshot(params: {
   upstreamUserText: string | undefined;
   reasoningText: string | undefined;
   planText: string | undefined;
+  asyncMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
@@ -66,7 +67,14 @@ export function buildCodexMessagesSnapshot(params: {
       : params.commentaryMessages.map(({ itemId, message }) =>
           attachCodexMirrorIdentity(message, `${params.turnId}:commentary:${itemId}`),
         );
-  const visibleWorkMessages = [...commentaryMessages, ...params.toolMessages].toSorted(
+  const asyncMessages = params.asyncMessages.map(({ itemId, message }) =>
+    attachCodexMirrorIdentity(message, `${params.turnId}:async:${itemId}`),
+  );
+  const visibleWorkMessages = [
+    ...commentaryMessages,
+    ...asyncMessages,
+    ...params.toolMessages,
+  ].toSorted(
     (left, right) =>
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );

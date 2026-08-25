@@ -1,6 +1,9 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshotPluginIdScope } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -36,29 +39,36 @@ function mergeRegistries(registries: readonly PluginManifestRegistry[]): PluginM
   return { plugins, diagnostics };
 }
 
-export function resolveConfigWidePluginManifestRegistry(params: {
+type ResolveConfigWidePluginMetadataParams = {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   allowCurrent?: boolean;
   pluginIds?: readonly string[];
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
-}): PluginManifestRegistry {
+  onSnapshotResolved?: (snapshot: PluginMetadataSnapshot) => void;
+};
+
+export function resolveConfigWidePluginManifestRegistry(
+  params: ResolveConfigWidePluginMetadataParams,
+): PluginManifestRegistry {
   const env = params.env ?? process.env;
   const dirs = listAgentWorkspaceDirs(params.config, env);
-  return mergeRegistries(
-    (dirs.length ? dirs : [undefined]).map(
-      (workspaceDir) =>
-        resolvePluginMetadataSnapshot({
-          config: params.config,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-          env,
-          allowCurrent: params.allowCurrent,
-          allowWorkspaceScopedCurrent: true,
-          ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
-          ...(params.pluginIdScope ? { pluginIdScope: params.pluginIdScope } : {}),
-        }).manifestRegistry,
-    ),
-  );
+  const workspaceDirs: Array<string | undefined> = dirs.length ? dirs : [undefined];
+  const resolveSnapshot = (workspaceDir: string | undefined) =>
+    resolvePluginMetadataSnapshot({
+      config: params.config,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+      env,
+      allowCurrent: params.allowCurrent,
+      allowWorkspaceScopedCurrent: true,
+      ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
+      ...(params.pluginIdScope ? { pluginIdScope: params.pluginIdScope } : {}),
+    });
+  const firstSnapshot = resolveSnapshot(workspaceDirs[0]);
+  const snapshots = [firstSnapshot, ...workspaceDirs.slice(1).map(resolveSnapshot)];
+  const manifestRegistry = mergeRegistries(snapshots.map((snapshot) => snapshot.manifestRegistry));
+  params.onSnapshotResolved?.(firstSnapshot);
+  return manifestRegistry;
 }

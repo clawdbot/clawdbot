@@ -78,7 +78,9 @@ describe("resolveReferencedReplyMediaList", () => {
       512,
     );
 
-    expect(result).toEqual([{ path: "/tmp/reply-image.png", contentType: "image/png" }]);
+    expect(result).toEqual([
+      { path: "/tmp/reply-image.png", contentType: "image/png", fileName: "reply-image.png" },
+    ]);
     expect(readRemoteMediaBuffer).toHaveBeenCalledWith(
       expect.objectContaining({
         url: attachment.url,

@@ -163,6 +163,7 @@ export function createPageState(
     connected: false,
     connectionEpoch: 0,
     hello: null,
+    selfUser: null,
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,

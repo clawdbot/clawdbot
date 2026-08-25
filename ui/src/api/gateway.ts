@@ -2,7 +2,6 @@ import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
   ConnectErrorDetailCodes,
-  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   formatConnectErrorMessage,
@@ -294,9 +293,7 @@ export class GatewayBrowserClient {
               this.maxPayloadBytes !== undefined &&
               new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
             ) {
-              throw new Error(
-                "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-              );
+              throw new GatewayPayloadLimitError();
             }
             socket.send(data);
           },
@@ -484,14 +481,16 @@ export class GatewayBrowserClient {
         role,
         scopes,
         device,
+        // Tests bind these compact wire literals to the canonical capability registry.
         caps: [
-          GATEWAY_CLIENT_CAPS.AGENT_KIND,
-          GATEWAY_CLIENT_CAPS.APPROVALS,
-          GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
-          GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
-          GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-          GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
-          GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+          "agent-kind",
+          "approvals",
+          "task-suggestions",
+          "terminal-offset-seq",
+          "tool-events",
+          "inline-widgets",
+          "ui-commands",
+          "usage-refreshing",
         ],
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,
@@ -745,5 +744,14 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
+  }
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
   }
 }

@@ -2265,7 +2265,23 @@ describe("runWithModelFallback", () => {
           }),
         }),
     ],
-  ])("aborts fallback on %s device capacity failures", async (_label, makeError) => {
+    [
+      "workspace reconciliation",
+      () =>
+        Object.assign(new Error("cloud worker workspace result could not be reconciled"), {
+          name: "WorkerWorkspaceReconciliationError",
+        }),
+    ],
+    [
+      "wrapped workspace reconciliation",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("cloud worker workspace result could not be reconciled"), {
+            name: "WorkerWorkspaceReconciliationError",
+          }),
+        }),
+    ],
+  ])("aborts fallback on %s worker coordination failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
     const onError = vi.fn();

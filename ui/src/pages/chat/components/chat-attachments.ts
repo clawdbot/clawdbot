@@ -504,15 +504,20 @@ export function handleChatAttachmentMenuSelection(
   return true;
 }
 
-export function renderChatAttachmentMenuTrigger(disabled: boolean | undefined) {
+export function renderChatAttachmentMenuTrigger(
+  disabled: boolean | undefined,
+  selection?: { active: boolean; label: string },
+) {
   return html`
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach"
-      aria-label=${t("chat.composer.addAttachment")}
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${selection?.active
+        ? "agent-chat__input-btn--selected"
+        : ""}"
+      aria-label=${selection?.active ? selection.label : t("chat.composer.addAttachment")}
       ?disabled=${disabled}
-      title=${t("chat.composer.addAttachment")}
+      title=${selection?.active ? selection.label : t("chat.composer.addAttachment")}
     >
       ${icons.plus}
     </button>
@@ -533,19 +538,6 @@ export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
       <span slot="icon" aria-hidden="true">${fileIcon}</span>
       <span>${t("chat.composer.attachFileOption")}</span>
     </wa-dropdown-item>
-  `;
-}
-
-export function renderChatAttachmentMenu(props: ChatAttachmentControlsProps) {
-  return html`
-    <wa-dropdown
-      class="agent-chat__attach-menu"
-      placement="top-start"
-      aria-label=${t("chat.composer.addAttachment")}
-      @wa-select=${handleChatAttachmentMenuSelection}
-    >
-      ${renderChatAttachmentMenuTrigger(props.disabled)} ${renderChatAttachmentMenuOptions()}
-    </wa-dropdown>
   `;
 }
 

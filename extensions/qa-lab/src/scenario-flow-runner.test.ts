@@ -231,10 +231,10 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText: `Built ${artifactFile}`,
-      failureMessage: "missing OpenClaw update_plan signal",
+      failureMessage: "missing OpenClaw progress_card signal",
       currentSummary: {
         eventCursor: 9,
-        successfulToolCallCounts: { update_plan: 1 },
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -254,7 +254,7 @@ function runPlanningEvidenceFixture(
         { identity: "old-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
         { identity: "old-turn:assistant", text: fixture.outboundText },
       ],
-      successfulToolCallCounts: { update_plan: 1 },
+      successfulToolCallCounts: { progress_card: 1 },
     },
     currentSummary,
   ];

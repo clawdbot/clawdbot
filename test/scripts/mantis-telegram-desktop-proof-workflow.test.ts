@@ -12,7 +12,10 @@ type Step = {
   env?: Record<string, string>;
   with?: Record<string, unknown>;
 };
-type Workflow = { jobs?: Record<string, { steps?: Step[] }> };
+type Workflow = {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
+  jobs?: Record<string, { steps?: Step[] }>;
+};
 
 function workflow() {
   return parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
@@ -23,6 +26,14 @@ function proofSteps() {
 }
 
 describe("Mantis Telegram proof workflow", () => {
+  it("queues every proof behind the shared Telegram user", () => {
+    expect(workflow().concurrency).toEqual({
+      group: "mantis-telegram-visible-proof",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
+  });
+
   it("gives one Codex run unrestricted scenario ownership", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     const agent = readFileSync("scripts/mantis/telegram-visible-run-agent.sh", "utf8");

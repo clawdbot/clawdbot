@@ -120,31 +120,17 @@ vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
-vi.mock("./session-transcript-readers.js", () => ({
-  readRecentSessionMessagesWithStatsAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [], totalMessages: 0 };
-  },
-  readSessionMessagesAsync: async () => [],
-  readSessionMessagesWithSourceAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [] };
-  },
-}));
-
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   resolveCursorSeq: (_cursor: string | undefined) => undefined,
-  resolveSessionHistoryTailReadOptions: (limit: number) => ({
-    maxMessages: limit * 20 + 20,
-    maxLines: limit * 20 + 20,
-  }),
+  readSessionHistoryRawSnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { rawMessages: [] };
+  },
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),

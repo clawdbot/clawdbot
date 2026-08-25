@@ -151,6 +151,33 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
+  it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);

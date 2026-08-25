@@ -1661,77 +1661,124 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "missing-lock-plugin"))).toBe(false);
   });
 
-  it("repairs omitted current-platform packages with a fresh npm cache", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const packageName = "@openclaw/codex-fixture";
-    const platformPackage = "@vendor/codex-platform";
-    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-    const platformPackageLocation = path.posix.join(
-      "node_modules",
-      packageName,
-      "node_modules",
-      platformPackage,
-    );
-    const warnings: string[] = [];
-    mockNpmViewAndInstall({
-      spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: "codex-fixture",
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        install: { requiredPlatformPackages: [platformPackage] },
-      },
-    });
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    let managedInstallAttempts = 0;
-    let repairCacheDir = "";
-    runCommandWithTimeoutMock.mockImplementation(
-      async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
-        const result = await delegate(argv, options);
-        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
-          managedInstallAttempts += 1;
-          if (managedInstallAttempts === 1) {
+  it.each(["omitted", "missing package manifest", "missing native executable"])(
+    "repairs a current-platform package that is %s with a fresh npm cache",
+    async (initialPackageState) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const packageName = "@openclaw/codex-fixture";
+      const platformPackage = "@vendor/codex-platform";
+      const canonicalPackage = "@vendor/codex";
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      const platformPackageLocation = path.posix.join(
+        "node_modules",
+        packageName,
+        "node_modules",
+        platformPackage,
+      );
+      const warnings: string[] = [];
+      mockNpmViewAndInstall({
+        spec: `${packageName}@1.0.0`,
+        packageName,
+        version: "1.0.0",
+        pluginId: "codex-fixture",
+        npmRoot,
+        expectedDependencySpec: "1.0.0",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          install: { requiredPlatformPackages: [platformPackage] },
+        },
+      });
+      const delegate = runCommandWithTimeoutMock.getMockImplementation();
+      if (!delegate) {
+        throw new Error("expected npm mock implementation");
+      }
+      let managedInstallAttempts = 0;
+      let repairCacheDir = "";
+      let removedIncompletePackageBeforeRepair = false;
+      runCommandWithTimeoutMock.mockImplementation(
+        async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+          const isTargetInstall =
+            isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot;
+          const packageDir = path.join(npmProjectRoot, ...platformPackageLocation.split("/"));
+          if (isTargetInstall && managedInstallAttempts === 1) {
+            removedIncompletePackageBeforeRepair = !fs.existsSync(packageDir);
+          }
+          const result = await delegate(argv, options);
+          if (isTargetInstall) {
+            managedInstallAttempts += 1;
             writeMissingCurrentPlatformOptionalPackage({
               npmRoot: npmProjectRoot,
               packageName: platformPackage,
               packageLocation: platformPackageLocation,
             });
-          } else {
-            repairCacheDir = options.env?.npm_config_cache ?? "";
-            const packageDir = path.join(npmProjectRoot, ...platformPackageLocation.split("/"));
-            fs.mkdirSync(packageDir, { recursive: true });
-            fs.writeFileSync(
-              path.join(packageDir, "package.json"),
-              JSON.stringify({ name: platformPackage, version: "1.0.0-platform" }),
-              "utf8",
-            );
+            const lockPath = path.join(npmProjectRoot, "package-lock.json");
+            const lockfile = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+              packages: Record<string, unknown>;
+            };
+            lockfile.packages[`node_modules/${canonicalPackage}`] = {
+              bin: { codex: "bin/codex.js" },
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(lockfile), "utf8");
+            if (managedInstallAttempts === 1) {
+              if (initialPackageState !== "omitted") {
+                fs.mkdirSync(packageDir, { recursive: true });
+              }
+              if (initialPackageState === "missing native executable") {
+                fs.writeFileSync(
+                  path.join(packageDir, "package.json"),
+                  JSON.stringify({
+                    name: canonicalPackage,
+                    version: "1.0.0-platform",
+                    files: ["vendor"],
+                  }),
+                  "utf8",
+                );
+                const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
+                fs.mkdirSync(nativeBinDir, { recursive: true });
+                fs.writeFileSync(path.join(nativeBinDir, "codex-helper"), "helper", "utf8");
+              }
+            } else {
+              repairCacheDir = options.env?.npm_config_cache ?? "";
+              fs.mkdirSync(packageDir, { recursive: true });
+              fs.writeFileSync(
+                path.join(packageDir, "package.json"),
+                JSON.stringify({
+                  name: canonicalPackage,
+                  version: "1.0.0-platform",
+                  files: ["vendor"],
+                }),
+                "utf8",
+              );
+              const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
+              fs.mkdirSync(nativeBinDir, { recursive: true });
+              const executableName = process.platform === "win32" ? "codex.exe" : "codex";
+              fs.writeFileSync(path.join(nativeBinDir, executableName), "native executable", {
+                encoding: "utf8",
+                mode: 0o755,
+              });
+            }
           }
-        }
-        return result;
-      },
-    );
+          return result;
+        },
+      );
 
-    const result = await installPluginFromNpmSpec({
-      spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: (message) => warnings.push(message) },
-    });
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: (message) => warnings.push(message) },
+      });
 
-    expect(result.ok).toBe(true);
-    expect(managedInstallAttempts).toBe(2);
-    expect(repairCacheDir).toContain("openclaw-npm-cache-");
-    expect(fs.existsSync(repairCacheDir)).toBe(false);
-    expect(warnings).toContain(
-      `npm omitted current-platform package(s) ${platformPackage}; retrying once with a fresh cache.`,
-    );
-  });
+      expect(result.ok).toBe(true);
+      expect(managedInstallAttempts).toBe(2);
+      expect(removedIncompletePackageBeforeRepair).toBe(true);
+      expect(repairCacheDir).toContain("openclaw-npm-cache-");
+      expect(fs.existsSync(repairCacheDir)).toBe(false);
+      expect(warnings).toContain(
+        `npm left current-platform package(s) ${platformPackage} missing or incomplete; retrying once with a fresh cache.`,
+      );
+    },
+  );
 
   it("rejects installs that still omit current-platform packages after repair", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
@@ -1789,7 +1836,7 @@ describe("installPluginFromNpmSpec", () => {
     }
     expect(managedInstallAttempts).toBe(2);
     expect(result.error).toContain(
-      `npm install reported success but omitted required current-platform package(s): ${platformPackage}`,
+      `npm install reported success but left required current-platform package(s) missing or incomplete: ${platformPackage}`,
     );
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });

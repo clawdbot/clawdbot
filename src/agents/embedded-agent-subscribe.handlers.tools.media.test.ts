@@ -37,6 +37,7 @@ function createMockContext(overrides?: {
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
+      pendingToolMediaAttachments: [],
       pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
       messagingToolSentTexts: [],
@@ -293,6 +294,70 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
+  });
+
+  it("aligns retained attachment metadata after filtering local media and merging duplicates", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls.push("https://example.com/existing.png");
+    ctx.state.pendingToolMediaAttachments?.push({});
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "generated-media",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrls: [
+              "/tmp/private.png",
+              "https://example.com/existing.png",
+              "https://example.com/video.mp4",
+            ],
+            attachments: [
+              { type: "image", path: "/tmp/private.png", name: "private.png" },
+              {
+                type: "image",
+                url: "https://example.com/existing.png",
+                name: "existing.png",
+                width: 320,
+              },
+              {
+                type: "video",
+                url: "https://example.com/video.mp4",
+                name: "friendly-video.mp4",
+                durationMs: 5_000,
+                width: 1280,
+                height: 720,
+                trustedLocalMedia: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual([
+      "https://example.com/existing.png",
+      "https://example.com/video.mp4",
+    ]);
+    expect(ctx.state.pendingToolMediaAttachments).toEqual([
+      {
+        type: "image",
+        url: "https://example.com/existing.png",
+        name: "existing.png",
+        width: 320,
+      },
+      {
+        type: "video",
+        url: "https://example.com/video.mp4",
+        name: "friendly-video.mp4",
+        durationMs: 5_000,
+        width: 1280,
+        height: 720,
+      },
+    ]);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("https://example.com/video.mp4")).toBe(false);
   });
 
   it("does NOT emit local media for MCP-provenance results", async () => {

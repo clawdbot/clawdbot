@@ -85,7 +85,11 @@ export type NodeWorkerSupervisorTransport = {
     node: NodeWorkerSupervisorNodeProof,
     observation: NodeWorkerBundleStatusObservation | undefined,
   ): boolean;
-  isCurrent(node: NodeWorkerSupervisorNodeProof, requireLaunchEligibility?: boolean): boolean;
+  isCurrent(
+    node: NodeWorkerSupervisorNodeProof,
+    requireLaunchEligibility?: boolean,
+    requiredCommands?: readonly string[],
+  ): boolean;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
     command: NodeWorkerPrivateCommand;
@@ -194,6 +198,7 @@ function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
   requireLaunchEligibility: boolean,
+  requiredCommands: readonly string[] = [],
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -206,7 +211,8 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requireLaunchEligibility || current.workerHost.capacity.available > 0)
+    (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
+    requiredCommands.every((command) => current.commands.includes(command))
   );
 }
 
@@ -497,8 +503,8 @@ export function registerNodeRegistryPrivateRuntime(
       }
       return true;
     },
-    isCurrent: (node, requireLaunchEligibility = false) =>
-      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility),
+    isCurrent: (node, requireLaunchEligibility = false, requiredCommands = []) =>
+      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility, requiredCommands),
     invoke: async (params) => {
       if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {

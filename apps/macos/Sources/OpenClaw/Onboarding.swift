@@ -746,7 +746,7 @@ struct OnboardingView: View {
 
     var pageOrder: [Int] {
         Self.pageOrder(
-            for: self.state.connectionMode,
+            for: self.selectedConnectionMode,
             requiresCLIInstall: !self.cliInstalled)
     }
 

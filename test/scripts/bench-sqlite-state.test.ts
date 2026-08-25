@@ -49,4 +49,11 @@ describe("scripts/bench-sqlite-state", () => {
       help: true,
     });
   });
+
+  it("includes bounded transcript pages in the existing SQLite smoke benchmark", () => {
+    const result = runBench(["--profile", "smoke"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("SQLITE_PERF_TRANSCRIPT_ROWS=128");
+  });
 });

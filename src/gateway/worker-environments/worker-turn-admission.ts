@@ -150,7 +150,7 @@ export function requireActivePlacement(
 ): ActiveWorkerPlacement {
   const failureDetail =
     placement.state === "failed"
-      ? `: ${withCurrentWorkerBuildRemediation(placement.terminalReason ?? placement.recoveryError)}`
+      ? `: ${withCurrentWorkerBuildRemediation(placement.recoveryError)}`
       : "";
   if (
     placement.state !== "active" ||

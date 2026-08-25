@@ -568,9 +568,10 @@ export async function editMessageFeishu(params: {
   const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);
   const content = buildFeishuPostMessageContent({ messageText: normalizedText });
   assertFeishuPostWithinEnvelope(content, "Feishu message edit");
-  const response = await client.im.message.patch({
+  // Feishu's PATCH endpoint only edits cards; rich-post edits require the typed PUT endpoint.
+  const response = await client.im.message.update({
     path: { message_id: messageId },
-    data: { content },
+    data: { msg_type: "post", content },
   });
 
   if (response.code !== 0) {

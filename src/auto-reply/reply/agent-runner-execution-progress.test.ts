@@ -78,7 +78,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       ).toBe(0);
 
       for (const event of [
-        { stream: "assistant", data: { phase: "commentary", text: "Working" } },
+        {
+          stream: "item",
+          data: { kind: "preamble", phase: "update", progressText: "Working" },
+        },
         { stream: "tool", data: { phase: "start", name: "read", toolCallId: "call-1" } },
         {
           stream: "tool",
