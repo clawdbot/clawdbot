@@ -28,10 +28,31 @@ import { runAgentAttempt } from "./attempt-execution.js";
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
+const continuationRuntimeState = vi.hoisted(() => ({ failScheduling: false }));
 const sessionAccessorState = vi.hoisted(() => ({
   failPatch: false,
+  failPatchCall: undefined as number | undefined,
+  patchCalls: 0,
+  replaceChainBeforePatchCall: undefined as number | undefined,
+  replacementChainId: undefined as string | undefined,
   runtimeConfigAfterPatch: undefined as OpenClawConfig | undefined,
 }));
+
+vi.mock("../../auto-reply/continuation/lazy.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../auto-reply/continuation/lazy.runtime.js")>();
+  return {
+    ...actual,
+    scheduleContinuationWorkBatch: async (
+      ...args: Parameters<typeof actual.scheduleContinuationWorkBatch>
+    ): ReturnType<typeof actual.scheduleContinuationWorkBatch> => {
+      if (continuationRuntimeState.failScheduling) {
+        throw new Error("synthetic continuation scheduling failure");
+      }
+      return await actual.scheduleContinuationWorkBatch(...args);
+    },
+  };
+});
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
@@ -40,8 +61,22 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
     patchSessionEntryCore: async (
       ...args: Parameters<typeof actual.patchSessionEntryCore>
     ): ReturnType<typeof actual.patchSessionEntryCore> => {
-      if (sessionAccessorState.failPatch) {
+      sessionAccessorState.patchCalls += 1;
+      if (
+        sessionAccessorState.failPatch ||
+        sessionAccessorState.patchCalls === sessionAccessorState.failPatchCall
+      ) {
         throw new Error("synthetic continuation reservation failure");
+      }
+      if (
+        sessionAccessorState.patchCalls === sessionAccessorState.replaceChainBeforePatchCall &&
+        sessionAccessorState.replacementChainId
+      ) {
+        await actual.patchSessionEntryCore(
+          args[0],
+          () => ({ continuationChainId: sessionAccessorState.replacementChainId }),
+          args[2],
+        );
       }
       const result = await actual.patchSessionEntryCore(...args);
       if (sessionAccessorState.runtimeConfigAfterPatch) {
@@ -196,7 +231,12 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runEmbeddedAgentMock.mockReset();
     runCliAgentMock.mockReset();
+    continuationRuntimeState.failScheduling = false;
     sessionAccessorState.failPatch = false;
+    sessionAccessorState.failPatchCall = undefined;
+    sessionAccessorState.patchCalls = 0;
+    sessionAccessorState.replaceChainBeforePatchCall = undefined;
+    sessionAccessorState.replacementChainId = undefined;
     sessionAccessorState.runtimeConfigAfterPatch = undefined;
     runEmbeddedAgentMock.mockResolvedValue(makeEmbeddedResult());
     sessionEntry = {
@@ -384,6 +424,122 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     expect(
       peekSystemEvents(sessionKey).some((event) =>
         event.includes("chain state could not be persisted"),
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces scheduling failure while retaining the durable reservation", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "synthetic schedule failure", delaySeconds: 30 });
+      continuationRuntimeState.failScheduling = true;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 2,
+    });
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("scheduling failed; the reserved chain budget remains fail-closed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces rollback failure while retaining the durable reservation", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "synthetic rollback failure", delaySeconds: 30 });
+      sessionAccessorState.runtimeConfigAfterPatch = makeContinuationDisabledConfig();
+      sessionAccessorState.failPatchCall = 2;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 2,
+    });
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("chain-state rollback failed; the reserved budget remains fail-closed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails scheduled work when chain-state finalization cannot persist", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "synthetic finalization failure", delaySeconds: 30 });
+      sessionAccessorState.failPatchCall = 2;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(1);
+    expect(flows[0]).toMatchObject({ status: "failed" });
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("wake was scheduled, but chain-state finalization failed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails scheduled work when the finalization chain guard no longer applies", async () => {
+    const replacementChainId = crypto.randomUUID();
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "chain guard changed", delaySeconds: 30 });
+      sessionAccessorState.replaceChainBeforePatchCall = 2;
+      sessionAccessorState.replacementChainId = replacementChainId;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(1);
+    expect(flows[0]).toMatchObject({ status: "failed" });
+    expect(sessionStore[sessionKey]?.continuationChainId).toBe(replacementChainId);
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("wake was scheduled, but chain-state finalization failed"),
       ),
     ).toBe(true);
   });

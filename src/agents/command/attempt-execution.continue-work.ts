@@ -241,6 +241,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         })
       : null;
   let result: Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>;
+  let failCreatedWork: ((summary: string) => void) | undefined;
   if (reservedRequests.length === 0 || liveBudgetRejection) {
     result = {
       scheduledCount: 0,
@@ -250,6 +251,47 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     };
   } else {
     try {
+      const [
+        { failFlow, getTaskFlowById, listTaskFlowsForOwnerKey, requestFlowCancel },
+        { isContinuationWorkFlow },
+      ] = await Promise.all([
+        import("../../tasks/task-flow-registry.js"),
+        import("../../auto-reply/continuation/work-flow-state.js"),
+      ]);
+      const existingFlowIds = new Set(
+        listTaskFlowsForOwnerKey(params.sessionKey).map((flow) => flow.flowId),
+      );
+      failCreatedWork = (summary) => {
+        for (const flow of listTaskFlowsForOwnerKey(params.sessionKey)) {
+          if (
+            existingFlowIds.has(flow.flowId) ||
+            !isContinuationWorkFlow(flow) ||
+            (flow.status !== "queued" && flow.status !== "running")
+          ) {
+            continue;
+          }
+          const failed = failFlow({
+            flowId: flow.flowId,
+            expectedRevision: flow.revision,
+            currentStep: "spawn-init continuation finalization failed",
+            stateJson: flow.stateJson,
+            blockedSummary: summary,
+          });
+          if (!failed.applied) {
+            const fresh = getTaskFlowById(flow.flowId);
+            if (
+              fresh &&
+              isContinuationWorkFlow(fresh) &&
+              (fresh.status === "queued" || fresh.status === "running")
+            ) {
+              requestFlowCancel({
+                flowId: fresh.flowId,
+                expectedRevision: fresh.revision,
+              });
+            }
+          }
+        }
+      };
       result = await scheduleContinuationWorkBatch({
         sessionKey: params.sessionKey,
         chainState: reservation.reserved,
@@ -273,6 +315,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
       result.cappedCount += unreservedRequestCount;
       result.capped ||= unreservedRequestCount > 0;
     } catch (error) {
+      failCreatedWork?.("continue_work scheduling failed after durable chain reservation.");
       enqueueSystemEvent(
         "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.",
         { sessionKey: params.sessionKey, trusted: true },
@@ -292,6 +335,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     return;
   }
 
+  let finalizationApplied = false;
   try {
     await persistChainState({
       count: result.chainState.currentChainCount,
@@ -302,6 +346,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         if (entry.continuationChainId !== reservation.reserved.chainId) {
           return {};
         }
+        finalizationApplied = true;
         return {
           ...proposed,
           continuationChainCount:
@@ -315,7 +360,11 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         };
       },
     });
+    if (!finalizationApplied) {
+      throw new Error("spawn-init chain finalization guard did not apply");
+    }
   } catch (error) {
+    failCreatedWork?.("continue_work chain-state finalization did not commit.");
     enqueueSystemEvent(
       "[continuation] continue_work wake was scheduled, but chain-state finalization failed; the reserved budget remains fail-closed.",
       { sessionKey: params.sessionKey, trusted: true },
