@@ -33,6 +33,26 @@ export function listConfiguredRefreshInputs(
   options: PreparedModelRuntimeRefreshOptions,
   owners: Map<string, PreparedModelRuntimeOwner>,
 ): PreparedModelRuntimeInput[] {
+  const preservedWorkspaceByAgentDir = new Map<string, Map<string, string>>();
+  for (const owner of owners.values()) {
+    const { agentDir, agentId, preserveWorkspaceDirOnRefresh, workspaceDir } = owner.input;
+    if (
+      owner.provenance !== "configured" ||
+      !agentId ||
+      !preserveWorkspaceDirOnRefresh ||
+      !workspaceDir
+    ) {
+      continue;
+    }
+    let workspacesByDir = preservedWorkspaceByAgentDir.get(agentId);
+    if (!workspacesByDir) {
+      workspacesByDir = new Map();
+      preservedWorkspaceByAgentDir.set(agentId, workspacesByDir);
+    }
+    if (!workspacesByDir.has(agentDir)) {
+      workspacesByDir.set(agentDir, workspaceDir);
+    }
+  }
   const inputs: PreparedModelRuntimeInput[] = [];
   for (const rawInput of listConfiguredOwnerInputs(
     config,
@@ -40,19 +60,14 @@ export function listConfiguredRefreshInputs(
     options.allowGatewaySubagentBinding,
   )) {
     const input = normalizePreparedModelRuntimeInput(rawInput);
-    const preserved = [...owners.values()].find(
-      (owner) =>
-        owner.provenance === "configured" &&
-        owner.input.agentId === input.agentId &&
-        owner.input.agentDir === input.agentDir &&
-        owner.input.preserveWorkspaceDirOnRefresh &&
-        owner.input.workspaceDir,
-    );
+    const preservedWorkspaceDir = input.agentId
+      ? preservedWorkspaceByAgentDir.get(input.agentId)?.get(input.agentDir)
+      : undefined;
     inputs.push(
-      preserved?.input.workspaceDir
+      preservedWorkspaceDir
         ? {
             ...input,
-            workspaceDir: preserved.input.workspaceDir,
+            workspaceDir: preservedWorkspaceDir,
             preserveWorkspaceDirOnRefresh: true,
           }
         : input,
