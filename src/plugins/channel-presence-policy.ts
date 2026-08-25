@@ -164,12 +164,10 @@ function listManifestEnvConfiguredChannelSignals(params: {
         normalizeOptionalLowercaseString(channelId)
           ? packageChannel?.configuredState
           : undefined;
-      const configuredStateEnv = configuredState?.env;
-      const allOf = configuredStateEnv?.allOf ?? [];
-      const anyOf = configuredStateEnv?.anyOf ?? [];
-      const hasEnvContract = allOf.length > 0 || anyOf.length > 0;
+      const allOf = configuredState?.env?.allOf ?? [];
+      const anyOf = configuredState?.env?.anyOf ?? [];
       const hasModuleContract = Boolean(configuredState?.specifier && configuredState.exportName);
-      if (!hasEnvContract && !hasModuleContract) {
+      if (allOf.length === 0 && anyOf.length === 0 && !hasModuleContract) {
         continue;
       }
       const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
