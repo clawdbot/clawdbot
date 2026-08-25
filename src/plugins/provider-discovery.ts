@@ -181,6 +181,14 @@ export async function runProviderCatalog(params: {
     resolveProviderAuth: params.resolveProviderAuth,
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
+    if (
+      params.providerIds !== undefined &&
+      !params.providerIds.some(
+        (providerId) => normalizeProviderId(providerId) === normalizeProviderId(outcome.provider),
+      )
+    ) {
+      continue;
+    }
     params.reportCatalogOutcome?.(outcome);
   }
   return result;

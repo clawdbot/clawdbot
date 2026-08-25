@@ -243,7 +243,12 @@ describe("prepared model runtime Gateway catalog mode", () => {
           beta: { api: "openai-completions" as const, baseUrl: "https://beta.invalid", models: [] },
         },
       },
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          modelPolicy: { allow: ["vllm/*"] },
+        },
+      },
     };
 
     await prepareScopedReadOnlyModelCatalog(
@@ -261,7 +266,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
 
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
         staticCatalogProviderIds: ["anthropic", "local-runtime", "openai"],
       }),
     );
@@ -270,7 +275,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       "/tmp/prepared-static-agent",
       expect.objectContaining({
         providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai"],
+        providerDiscoveryProviderIds: ["anthropic", "local-runtime", "openai", "vllm"],
       }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
