@@ -1,12 +1,16 @@
 /**
  * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, and credential transport.
+ * MCP bundling, session handling, credential transport, and watchdog defaults.
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
+} from "openclaw/plugin-sdk/cli-backend";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
 import { parseClaudeCliJsonlEvent } from "./cli-output.js";
@@ -225,6 +229,12 @@ export function buildAnthropicCliBackend(
       systemPromptMode: "append",
       systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
