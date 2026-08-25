@@ -64,7 +64,7 @@ describe("Codex app-server policy", () => {
     const request = vi.fn((_method: string, _params: unknown, options: { signal?: AbortSignal }) =>
       options.signal === aborted.signal
         ? new Promise((_resolve, reject) => {
-            options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            options.signal?.addEventListener("abort", () => reject(abortError), {
               once: true,
             });
           })
