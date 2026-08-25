@@ -55,7 +55,9 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     return true;
   };
 
-  const normalize = async (msg: WAMessage): Promise<WhatsAppNormalizedInboundMessage | { blocked: true; reason?: string } | null> => {
+  const normalize = async (
+    msg: WAMessage,
+  ): Promise<WhatsAppNormalizedInboundMessage | { blocked: true; reason?: string } | null> => {
     const id = msg.key?.id ?? undefined;
     const remoteJid = msg.key?.remoteJid;
     if (!remoteJid || remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {

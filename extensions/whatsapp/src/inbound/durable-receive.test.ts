@@ -53,7 +53,11 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
 describe("createWhatsAppIngressMonitor", () => {
   it("rejects messages without a native id as a permanent ingress failure", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -81,7 +85,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("releases claims when dispatch throws before adoption", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -110,7 +118,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("propagates failed-retryable results as claim release", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -140,7 +152,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("tombstones after an explicit completed dispatch", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -165,7 +181,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("keeps a second same-lane message pending until the first turn adopts", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -225,7 +245,11 @@ describe("createWhatsAppIngressMonitor", () => {
   it("dispatches accepted pending records older than the legacy 30-day TTL", async () => {
     await withTempState(async (stateDir) => {
       const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -261,7 +285,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -302,7 +330,11 @@ describe("createWhatsAppIngressMonitor", () => {
 
   it("keeps completed and failed replay guards bounded", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
@@ -343,7 +375,11 @@ describe("WhatsApp durable message serialization", () => {
 
   it("carries receive-time skip decisions through admission and replay", async () => {
     await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+      const queue = createChannelIngressQueueForTests<
+        WhatsAppDurableInboundPayload,
+        unknown,
+        { reason?: string }
+      >({
         channelId: "whatsapp",
         accountId: "acct",
         stateDir,
