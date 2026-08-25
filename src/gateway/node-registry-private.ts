@@ -18,12 +18,11 @@ import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import { resolveDispatchTimeoutMs, startNodeInvokeBudget } from "./node-registry.invoke-budget.js";
-import type {
-  NodeInvokeStreamController,
-  PendingInvoke,
-  PendingSystemRunEvent,
-} from "./node-registry.invoke-stream.js";
-import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
+import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
+import {
+  normalizeSystemRunInvokeParams,
+  resolvePendingSystemRunEvent,
+} from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
   resolveNodeRunnerInventoryIssue,
@@ -149,50 +148,6 @@ type NodeRegistryPrivateState = {
 };
 
 const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
-
-function resolvePendingSystemRunEvent(params: {
-  command: string;
-  params?: unknown;
-}): PendingSystemRunEvent | undefined {
-  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
-    return undefined;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const runId = normalizeOptionalString(obj.runId) ?? "";
-  if (!runId) {
-    return undefined;
-  }
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
-  return {
-    runId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  };
-}
-
-function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
-  if (
-    params.command !== "system.run" ||
-    !params.params ||
-    typeof params.params !== "object" ||
-    Array.isArray(params.params)
-  ) {
-    return params.params;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = {
-    ...obj,
-    runId: normalizeOptionalString(obj.runId) || randomUUID(),
-  };
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  if (timeoutMs === undefined) {
-    delete normalized.timeoutMs;
-  } else {
-    normalized.timeoutMs = timeoutMs;
-  }
-  return normalized;
-}
 
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
