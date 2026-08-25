@@ -618,6 +618,7 @@ describe("auditGatewayServiceConfig", () => {
     );
     expect(issue?.detail).toContain("OPENROUTER_API_KEY");
     expect(issue?.detail).toContain("TAVILY_API_KEY");
+    expect(issue?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
   });
 
   it("flags inline managed values expected by the current install plan for old services", async () => {
@@ -674,6 +675,7 @@ describe("auditGatewayServiceConfig", () => {
     expect(issue?.detail).toContain("HTTP_PROXY");
     expect(issue?.detail).toContain("HTTPS_PROXY");
     expect(issue?.detail).toContain("NO_PROXY");
+    expect(issue?.environmentKeys).toEqual(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]);
   });
 
   it("flags lowercase inline proxy environment values using portable key names", async () => {
@@ -687,6 +689,7 @@ describe("auditGatewayServiceConfig", () => {
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
     );
     expect(issue?.detail).toContain("HTTPS_PROXY");
+    expect(issue?.environmentKeys).toEqual(["https_proxy"]);
   });
 
   it("does not flag proxy values loaded only from EnvironmentFile", async () => {

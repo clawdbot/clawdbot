@@ -94,8 +94,13 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayPathMissing: "gateway-path-missing",
+    gatewayPathMissingDirs: "gateway-path-missing-dirs",
+    gatewayPathNonMinimal: "gateway-path-nonminimal",
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayTokenDrift: "gateway-token-drift",
+    gatewayTokenEmbedded: "gateway-token-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
@@ -612,11 +617,15 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
-    mocks.readCommand.mockResolvedValue({
+    const managedDefinition = {
       programArguments: gatewayProgramArguments,
-      environment: {
-        TAVILY_API_KEY: "old-inline-value",
-      },
+      environment: { OPENCLAW_WRAPPER: "/managed-wrapper", TAVILY_API_KEY: "managed" },
+      environmentValueSources: { TAVILY_API_KEY: "file" as const },
+    };
+    mocks.readCommand.mockResolvedValue({
+      ...managedDefinition,
+      environment: { OPENCLAW_WRAPPER: "/operator-wrapper", TAVILY_API_KEY: "old-inline-value" },
+      managedDefinition,
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
@@ -632,6 +641,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           code: "gateway-managed-env-embedded",
           message: "Gateway service embeds managed environment values that should load at runtime.",
           detail: "inline keys: TAVILY_API_KEY",
+          environmentKeys: ["TAVILY_API_KEY"],
           level: "recommended",
         },
       ],
@@ -645,14 +655,28 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "expectedManagedServiceEnvKeys",
       new Set(["TAVILY_API_KEY"]),
     );
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingEnvironment: managedDefinition.environment,
+        existingEnvironmentValueSources: managedDefinition.environmentValueSources,
+      }),
+    );
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs gateway services whose pinned port differs from current config", async () => {
+  it("repairs managed port drift even when an operator overrides the working directory", async () => {
+    mockProcessPlatform("linux");
     mocks.resolveGatewayPort.mockReturnValue(18888);
-    mocks.readCommand.mockResolvedValue({
+    const managedDefinition = {
       programArguments: gatewayProgramArguments,
+      workingDirectory: "/opt/managed-openclaw",
       environment: {},
+    };
+    mocks.readCommand.mockResolvedValue({
+      ...managedDefinition,
+      workingDirectory: "/opt/operator-openclaw",
+      managedDefinition,
+      managedOverrides: { launcher: "working-directory" },
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: ["/usr/bin/node", "/usr/local/bin/openclaw", "gateway", "--port", "18888"],
@@ -680,6 +704,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "install options",
     );
     expect(installOptions.programArguments).toContain("18888");
+    expectNoNoteContaining("operator-owned systemd drop-in", "Gateway service config");
   });
 
   it("repairs gateway services with embedded proxy environment values", async () => {
@@ -702,6 +727,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           code: "gateway-proxy-env-embedded",
           message: "Gateway service embeds proxy environment values that should not be persisted.",
           detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          environmentKeys: ["HTTP_PROXY", "HTTPS_PROXY"],
           level: "recommended",
         },
       ],
@@ -785,6 +811,114 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "relative entrypoint",
+      "dist/index.js",
+      "/opt/openclaw",
+      { launcher: "working-directory" },
+      undefined,
+    ],
+    [
+      "harmless environment with a managed token issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { keys: ["NODE_COMPILE_CACHE"] } },
+      "gateway-token-mismatch",
+    ],
+    [
+      "an operator-owned managed key with a different embedded managed key",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { keys: ["MANAGED_A"] } },
+      "gateway-managed-env-embedded",
+    ],
+    [
+      "a file reset with an inline token issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetFiles: true } },
+      "gateway-token-mismatch",
+    ],
+    [
+      "a file reset with an inline PATH issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetFiles: true } },
+      "gateway-path-missing",
+    ],
+    [
+      "a reset-only proxy removal",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetInline: true } },
+      "gateway-proxy-env-embedded",
+    ],
+  ] as const)(
+    "does not attribute unrelated repair issues to %s",
+    async (_, entrypoint, directory, overrides, issue) => {
+      mockProcessPlatform("linux");
+      const embeddedManagedIssue = issue === "gateway-managed-env-embedded";
+      const managedDefinition = {
+        ...createGatewayCommand(entrypoint),
+        environment: embeddedManagedIssue
+          ? { MANAGED_B: "embedded-base-value" }
+          : issue === "gateway-proxy-env-embedded"
+            ? { HTTPS_PROXY: "http://proxy.local" }
+            : issue === "gateway-path-missing"
+              ? { PATH: "/managed/bin" }
+              : issue
+                ? { OPENCLAW_GATEWAY_TOKEN: "stale-token" }
+                : {},
+      };
+      mocks.readCommand.mockResolvedValue({
+        ...managedDefinition,
+        workingDirectory: directory,
+        environment:
+          "environment" in overrides && "keys" in overrides.environment
+            ? {
+                ...managedDefinition.environment,
+                [overrides.environment.keys[0]]: "operator-owned",
+              }
+            : managedDefinition.environment,
+        managedDefinition,
+        managedOverrides: overrides,
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: !issue,
+        issues: issue
+          ? [
+              {
+                code: issue,
+                message: "repair",
+                level: "recommended",
+                environmentKeys: embeddedManagedIssue
+                  ? ["MANAGED_B"]
+                  : issue === "gateway-proxy-env-embedded"
+                    ? ["HTTPS_PROXY"]
+                    : undefined,
+              },
+            ]
+          : [],
+      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...createGatewayCommand(directory ? path.join(directory, entrypoint) : entrypoint),
+        ...(embeddedManagedIssue
+          ? { environment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "MANAGED_A,MANAGED_B" } }
+          : {}),
+        environmentValueSources: {
+          PATH: "inline",
+          OPENCLAW_GATEWAY_TOKEN: "inline",
+        },
+      });
+
+      await runRepair({ gateway: { auth: { token: "configured-token" } } });
+
+      expectNoNoteContaining("operator-owned systemd drop-in", "Gateway service config");
+      expect(mocks.install).toHaveBeenCalledTimes(issue ? 1 : 0);
+    },
+  );
+
   it("keeps wrapper-managed gateway services aligned during entrypoint drift checks", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
     mocks.readCommand.mockResolvedValue({
@@ -849,6 +983,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readCommand.mockResolvedValue({
       ...createGatewayCommand("/opt/old-openclaw/dist/index.js"),
       sourcePath: "/etc/systemd/system/custom-gateway.service",
+      managedDefinition: createGatewayCommand("/opt/new-openclaw/dist/index.js"),
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: true,
@@ -871,6 +1006,69 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["command", { launcher: "command" as const }, "gateway-port-mismatch"],
+    ["directory", { launcher: "working-directory" as const }, "gateway-entrypoint-mismatch"],
+    ["environment", { environment: { keys: ["tavily_api_key"] } }, "gateway-managed-env-embedded"],
+    ["lowercase proxy", { environment: { keys: ["https_proxy"] } }, "gateway-proxy-env-embedded"],
+    ["file-backed token reset", { environment: { resetFiles: true } }, "gateway-token-mismatch"],
+    [
+      "file-backed managed reset",
+      { environment: { resetFiles: true } },
+      "gateway-managed-env-embedded",
+    ],
+    ["future inline PATH reset", { environment: { resetInline: true } }, "gateway-path-missing"],
+  ])(
+    "does not rewrite a stopped service controlled by a %s drop-in",
+    async (_, overrides, issue) => {
+      mockProcessPlatform("linux");
+      const fileReset = "environment" in overrides && "resetFiles" in overrides.environment;
+      const managedDefinition = {
+        ...createGatewayCommand("/usr/local/bin/openclaw"),
+        environment: { TAVILY_API_KEY: "same-value", https_proxy: "http://proxy.local" },
+      };
+      mocks.readCommand.mockResolvedValue({
+        ...managedDefinition,
+        sourcePath: "/home/test/.config/systemd/user/custom-gateway.service",
+        managedDefinition,
+        managedOverrides: overrides,
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: false,
+        issues: [
+          {
+            code: issue,
+            message: "repair",
+            level: "recommended",
+            environmentKeys:
+              issue === "gateway-proxy-env-embedded" ? ["https_proxy"] : ["TAVILY_API_KEY"],
+          },
+        ],
+      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...managedDefinition,
+        environment: {
+          PATH: "/usr/bin",
+          OPENCLAW_GATEWAY_TOKEN: "future-managed-token",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        },
+        environmentValueSources: {
+          PATH: "inline",
+          OPENCLAW_GATEWAY_TOKEN: fileReset ? "file" : "inline",
+          tavily_api_key: fileReset ? "file" : "inline",
+        },
+      });
+
+      await runRepair({ gateway: {} });
+
+      expectNoteContaining("operator-owned systemd drop-in", "Gateway service config");
+      expectNoteContaining("systemctl --user cat custom-gateway.service", "Gateway service config");
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.stage).not.toHaveBeenCalled();
+    },
+  );
 
   it("repairs entrypoint drift when the systemd unit is stopped", async () => {
     mockProcessPlatform("linux");
@@ -1053,6 +1251,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       },
       async () => {
         setupGatewayTokenRepairScenario();
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: { OPENCLAW_GATEWAY_TOKEN: "operator-drop-in-token" },
+          managedDefinition: {
+            programArguments: gatewayProgramArguments,
+            environment: { OPENCLAW_GATEWAY_TOKEN: "stale-token" },
+          },
+        });
 
         const cfg: OpenClawConfig = {
           gateway: {},
