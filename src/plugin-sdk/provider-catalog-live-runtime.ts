@@ -37,6 +37,7 @@ export type LiveModelCatalogHeaderContext = {
 
 export { clearLiveCatalogCacheForTests };
 export {
+  buildOpenAICompatibleLiveModels,
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogStringField,

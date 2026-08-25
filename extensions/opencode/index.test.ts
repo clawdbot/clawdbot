@@ -712,8 +712,33 @@ describe("opencode provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);
-    expect(second.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);
+    // Shared projector surfaces unknowns via findLiveModelTemplate (prefix >=4) —
+    // deprecated ids like claude-opus-4-8 now template from claude-opus-4-7
+    // and bare unknowns like gpt-6-experimental get fallback templating.
+    expect(first.models.map((model: { id: string }) => model.id).toSorted()).toEqual(
+      [
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-4",
+        "gpt-5.5",
+        "gpt-6-experimental",
+        "kimi-k3",
+        "ling-3.0-flash-free",
+        "minimax-m2.7",
+      ].toSorted(),
+    );
+    expect(second.models.map((model: { id: string }) => model.id).toSorted()).toEqual(
+      [
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-4",
+        "gpt-5.5",
+        "gpt-6-experimental",
+        "kimi-k3",
+        "ling-3.0-flash-free",
+        "minimax-m2.7",
+      ].toSorted(),
+    );
     expect(first.models.find((model) => model.id === "kimi-k3")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
@@ -726,8 +751,10 @@ describe("opencode provider plugin", () => {
       baseUrl: "https://opencode.ai/zen",
       provider: "opencode",
     });
-    const liveOnlyModel = first.models.find((model) => model.id === "gpt-6-experimental");
-    expect(liveOnlyModel).toBeUndefined();
+    const liveOnlyModel = first.models.find(
+      (model: { id: string }) => model.id === "gpt-6-experimental",
+    );
+    expect(liveOnlyModel).toBeDefined();
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockResolvedValueOnce({
@@ -744,7 +771,11 @@ describe("opencode provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(unknownOnly.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
+    // Shared projector templates bare unknown ids off the nearest active prefix
+    // (gpt-6-experimental ← gpt-*) instead of dropping them into static fallback.
+    expect(unknownOnly.models.map((model: { id: string }) => model.id)).toEqual([
+      "gpt-6-experimental",
+    ]);
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));

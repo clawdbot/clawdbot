@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
+  buildOpenAICompatibleLiveModels,
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -486,37 +487,14 @@ export async function resolveOpencodeZenStarterModel(params: {
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
-function readLiveModelId(row: unknown): string | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const candidate = row as { id?: unknown; object?: unknown };
-  if (candidate.object !== undefined && candidate.object !== "model") {
-    return undefined;
-  }
-  if (typeof candidate.id !== "string") {
-    return undefined;
-  }
-  const modelId = candidate.id.trim().toLowerCase();
-  return modelId || undefined;
-}
-
-function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenModelDefinition[] {
-  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  const seen = new Set<string>();
-  const models: OpencodeZenModelDefinition[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    const model = staticModels.get(modelId);
-    if (model) {
-      models.push(model);
-    }
-  }
-  return models;
+function projectOpencodeZenLiveModels(
+  rows: readonly unknown[],
+  fallback: ModelProviderConfig,
+): OpencodeZenModelDefinition[] {
+  // SAFETY: buildOpenAICompatibleLiveModels returns ModelDefinitionConfig[] with
+  // resolved transport from opencode's fallback (api/baseUrl) — safe to narrow
+  // to the provider-specific subtype for live discovery.
+  return buildOpenAICompatibleLiveModels(rows, fallback) as OpencodeZenModelDefinition[];
 }
 
 export async function buildOpencodeZenLiveProviderConfig(

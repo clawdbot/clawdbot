@@ -485,7 +485,11 @@ describe("opencode-go provider plugin", () => {
       fetchGuard,
     });
 
-    expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
+    // Shared projector now surfaces all ids present in the live response
+    // (deprecated/compatibility ids template from nearest active prefix).
+    expect(live.models.map((model: { id: string }) => model.id).toSorted()).toEqual(
+      [...compatibilityModelIds, ...activeModelIds].toSorted(),
+    );
   });
 
   it.each([
