@@ -51,7 +51,7 @@ export function isTextyDocumentAttachment(
   return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
 }
 
-export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
+export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | "text" | null;
 
 export function resolveDocumentPreviewKind(
   attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
@@ -72,20 +72,31 @@ export function resolveDocumentPreviewKind(
   if (extension === "pdf" || mimeType === "application/pdf") {
     return "page";
   }
+  if (isTextyDocumentAttachment(attachment)) {
+    return "text";
+  }
   return null;
 }
 
-export function parseDelimitedPreview(text: string): string[][] {
+export type DelimitedPreview = {
+  rows: string[][];
+  truncated: boolean;
+};
+
+export function parseDelimitedPreview(text: string): DelimitedPreview {
   const delimiter = text.includes("\t") && !text.includes(",") ? "\t" : ",";
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
   let cellCount = 0;
   let quoted = false;
+  let truncated = false;
   const commitCell = () => {
     if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS && cellCount < DOCUMENT_PREVIEW_MAX_CELLS) {
       row.push(cell.trim());
       cellCount += 1;
+    } else {
+      truncated = true;
     }
     cell = "";
   };
@@ -96,8 +107,9 @@ export function parseDelimitedPreview(text: string): string[][] {
     }
     row = [];
   };
+  let index = 0;
   for (
-    let index = 0;
+    ;
     index < text.length &&
     rows.length < DOCUMENT_PREVIEW_MAX_ROWS &&
     cellCount < DOCUMENT_PREVIEW_MAX_CELLS;
@@ -130,13 +142,28 @@ export function parseDelimitedPreview(text: string): string[][] {
       cell += character;
     }
   }
-  if (
-    (cell.length > 0 || row.length > 0) &&
-    rows.length < DOCUMENT_PREVIEW_MAX_ROWS
-  ) {
+  if (index < text.length) {
+    truncated = true;
+  }
+  if ((cell.length > 0 || row.length > 0) && rows.length < DOCUMENT_PREVIEW_MAX_ROWS) {
     commitRow();
   }
-  return rows;
+  return { rows, truncated };
+}
+
+export function activateDocumentPreview(event: Event, source: string): void {
+  event.stopPropagation();
+  const trigger = event.currentTarget;
+  if (!(trigger instanceof HTMLButtonElement)) {
+    return;
+  }
+  const frame = trigger.parentElement?.querySelector<HTMLIFrameElement>("iframe");
+  if (!frame || frame.hasAttribute("src")) {
+    return;
+  }
+  frame.src = source;
+  frame.hidden = false;
+  trigger.hidden = true;
 }
 
 function capPreviewText(text: string): string {

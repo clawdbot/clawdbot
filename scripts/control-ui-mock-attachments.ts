@@ -7,6 +7,8 @@ export const CHAT_ATTACHMENT_FIXTURE_PATH = "/__fixtures/chat-attachments/";
 const MANAGED_IMAGE_FIXTURE_PATH = "/api/chat/media/outgoing/chat-attachment-fixture/";
 const ASSISTANT_MEDIA_FIXTURE_PATH = "/__openclaw__/assistant-media";
 const FIXTURE_MEDIA_TICKET = "chat-attachment-fixture";
+const RENEWING_MEDIA_FIXTURE_ROOT = "/tmp/openclaw-ticket/";
+let renewingMediaTicketGeneration = 0;
 
 type FixtureAsset = {
   body: Buffer;
@@ -133,7 +135,7 @@ function buildVideoAsset(): FixtureAsset {
   }
 }
 
-const chatAttachmentAssets: Record<string, FixtureAsset> = {
+const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
   "sample-image.svg": textAsset(
     `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#172554"/><stop offset="1" stop-color="#be123c"/></linearGradient></defs><rect width="640" height="360" rx="24" fill="url(#g)"/><circle cx="150" cy="128" r="52" fill="#fbbf24" opacity=".9"/><path d="M0 300 190 178l100 64 90-88 260 146H0Z" fill="#0f172a" opacity=".8"/></svg>`,
     "image/svg+xml",
@@ -179,6 +181,13 @@ const chatAttachmentAssets: Record<string, FixtureAsset> = {
     "application/json",
   ),
   "rows.csv": textAsset("name,status\nalpha,ready\nbeta,pending\n", "text/csv"),
+  "wide.csv": textAsset(
+    `${Array.from({ length: 64 }, (_, index) => `column_${index + 1}`).join(",")}\n${Array.from(
+      { length: 64 },
+      (_, index) => `value_${index + 1}`,
+    ).join(",")}\n`,
+    "text/csv",
+  ),
   "report.xlsx": zipAsset(
     {
       "[Content_Types].xml":
@@ -222,7 +231,13 @@ const chatAttachmentAssets: Record<string, FixtureAsset> = {
     "application/zip",
   ),
   "script.js": textAsset("export function ready() {\n  return true;\n}\n", "text/javascript"),
-};
+});
+
+let chatAttachmentAssets: Record<string, FixtureAsset> | undefined;
+
+function getChatAttachmentAssets(): Record<string, FixtureAsset> {
+  return (chatAttachmentAssets ??= buildChatAttachmentAssets());
+}
 
 function fixtureUrl(fileName: string): string {
   return `${CHAT_ATTACHMENT_FIXTURE_PATH}${fileName}`;
@@ -233,6 +248,7 @@ function managedImageUrl(fileName: string): string {
 }
 
 export function buildChatAttachmentHistory(baseTime: number): unknown[] {
+  const assets = getChatAttachmentAssets();
   const documentAttachment = (fileName: string, mimeType: string) => ({
     type: "attachment",
     attachment: {
@@ -240,7 +256,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       label: fileName,
       mimeType,
       url: fixtureUrl(fileName),
-      sizeBytes: chatAttachmentAssets[fileName].body.byteLength,
+      sizeBytes: assets[fileName].body.byteLength,
     },
   });
   const sectionTitle = (text: string, timestamp: number) => ({
@@ -261,14 +277,14 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           url: managedImageUrl("sample-image.svg"),
           alt: "Attachment preview",
           fileName: "sample-image.svg",
-          sizeBytes: chatAttachmentAssets["sample-image.svg"].body.byteLength,
+          sizeBytes: assets["sample-image.svg"].body.byteLength,
         },
         {
           type: "image",
           url: managedImageUrl("sample-image-secondary.svg"),
           alt: "Secondary attachment preview",
           fileName: "sample-image-secondary.svg",
-          sizeBytes: chatAttachmentAssets["sample-image-secondary.svg"].body.byteLength,
+          sizeBytes: assets["sample-image-secondary.svg"].body.byteLength,
         },
       ],
       timestamp: baseTime,
@@ -315,6 +331,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       role: "assistant",
       content: [
         documentAttachment("rows.csv", "text/csv"),
+        documentAttachment("wide.csv", "text/csv"),
         documentAttachment(
           "report.xlsx",
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -333,7 +350,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-audio.wav",
             mimeType: "audio/wav",
             url: fixtureUrl("sample-audio.wav"),
-            sizeBytes: chatAttachmentAssets["sample-audio.wav"].body.byteLength,
+            sizeBytes: assets["sample-audio.wav"].body.byteLength,
             durationMs: 2_000,
           },
         },
@@ -344,7 +361,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-audio-secondary.wav",
             mimeType: "audio/wav",
             url: fixtureUrl("sample-audio-secondary.wav"),
-            sizeBytes: chatAttachmentAssets["sample-audio-secondary.wav"].body.byteLength,
+            sizeBytes: assets["sample-audio-secondary.wav"].body.byteLength,
             durationMs: 2_000,
           },
         },
@@ -362,7 +379,20 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-video.mp4",
             mimeType: "video/mp4",
             url: fixtureUrl("sample-video.mp4"),
-            sizeBytes: chatAttachmentAssets["sample-video.mp4"].body.byteLength,
+            sizeBytes: assets["sample-video.mp4"].body.byteLength,
+            durationMs: 1_500,
+            width: 640,
+            height: 360,
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "video",
+            label: "renewing-ticket-video.mp4",
+            mimeType: "video/mp4",
+            url: `${RENEWING_MEDIA_FIXTURE_ROOT}sample-video.mp4`,
+            sizeBytes: assets["sample-video.mp4"].body.byteLength,
             durationMs: 1_500,
             width: 640,
             height: 360,
@@ -428,7 +458,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
 
 function readFixtureAsset(pathname: string): FixtureAsset | undefined {
   const fileName = decodeURIComponent(pathname).split("/").pop() ?? "";
-  return chatAttachmentAssets[fileName];
+  return getChatAttachmentAssets()[fileName];
 }
 
 function serveAsset(
@@ -483,7 +513,8 @@ function serveAssistantMedia(
   }
   const source = requestUrl.searchParams.get("source") ?? "";
   const fileName = decodeURIComponent(source).split("/").pop() ?? "";
-  const asset = source.startsWith(CHAT_ATTACHMENT_FIXTURE_PATH)
+  const renewingTicket = source.startsWith(RENEWING_MEDIA_FIXTURE_ROOT);
+  const asset = source.startsWith(CHAT_ATTACHMENT_FIXTURE_PATH) || renewingTicket
     ? readFixtureAsset(source)
     : undefined;
   if (requestUrl.searchParams.get("meta") === "1") {
@@ -512,12 +543,19 @@ function serveAssistantMedia(
         : fileName === "sample-audio.wav" || fileName === "sample-audio-secondary.wav"
           ? { durationMs: 2_000, playback: "native" }
           : {};
+    const mediaTicket = renewingTicket
+      ? renewingMediaTicketGeneration++ < 2
+        ? "ticket-A"
+        : "ticket-B"
+      : FIXTURE_MEDIA_TICKET;
+    const mediaTicketExpiresAt =
+      Date.now() + (renewingTicket && mediaTicket === "ticket-A" ? 31_000 : 5 * 60_000);
     res.end(
       JSON.stringify({
         available: true,
         contentType: asset.contentType,
-        mediaTicket: FIXTURE_MEDIA_TICKET,
-        mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        mediaTicket,
+        mediaTicketExpiresAt: new Date(mediaTicketExpiresAt).toISOString(),
         sizeBytes: asset.body.byteLength,
         ...mediaFacts,
       }),
@@ -548,7 +586,7 @@ export function createChatAttachmentFixturePlugin(): Plugin {
         }
         if (pathname.startsWith(MANAGED_IMAGE_FIXTURE_PATH)) {
           const fileName = pathname.slice(MANAGED_IMAGE_FIXTURE_PATH.length).split("/", 1)[0];
-          if (chatAttachmentAssets[fileName]?.contentType.startsWith("image/")) {
+          if (getChatAttachmentAssets()[fileName]?.contentType.startsWith("image/")) {
             serveFixtureAsset(fileName, req, res, next);
             return;
           }

@@ -21,10 +21,12 @@ import {
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import {
+  activateDocumentPreview,
   isTextyDocumentAttachment,
   parseDelimitedPreview,
   resolveDocumentPreviewText,
   resolveDocumentPreviewKind,
+  type AttachmentDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
@@ -326,7 +328,8 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
       ${t("chat.mediaPlayer.preparing")}
     </div>`;
   }
-  const rows = previewText ? parseDelimitedPreview(previewText) : [];
+  const preview = previewText ? parseDelimitedPreview(previewText) : { rows: [], truncated: false };
+  const { rows } = preview;
   if (rows.length === 0) {
     return html`<div class="chat-assistant-attachment-card__preview-unavailable">
       ${t("chat.attachments.previewUnavailable")}
@@ -351,17 +354,26 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
           )}
         </tbody>
       </table>
+      ${preview.truncated
+        ? html`<div class="chat-assistant-attachment-card__table-truncated" role="note">
+            ${t("chat.attachments.previewTruncated")}
+          </div>`
+        : null}
     </div>
   `;
 }
 
 function renderAttachmentDocumentPreview(
-  previewKind: "html" | "page" | "table",
+  previewKind: Exclude<AttachmentDocumentPreviewKind, null>,
   attachment: AttachmentItem["attachment"],
   attachmentUrl: string,
   previewText: string | null | undefined,
 ) {
   const updatePreviewState = (event: Event, state: "ready" | "failed") => {
+    const frame = event.currentTarget as HTMLIFrameElement;
+    if (!frame.hasAttribute("src")) {
+      return;
+    }
     const card = (event.currentTarget as Element).closest<HTMLElement>(
       ".chat-assistant-attachment-card",
     );
@@ -382,29 +394,50 @@ function renderAttachmentDocumentPreview(
   if (previewKind === "html") {
     return html`<div class="chat-assistant-attachment-card__html-preview">
       <iframe
-        src=${attachmentUrl}
+        hidden
         title=${attachment.label}
-        sandbox
+        sandbox=""
         loading="lazy"
         scrolling="no"
         @load=${(event: Event) => updatePreviewState(event, "ready")}
         @error=${(event: Event) => updatePreviewState(event, "failed")}
       ></iframe>
+      <button
+        type="button"
+        class="chat-assistant-attachment-card__preview-load"
+        @click=${(event: Event) => activateDocumentPreview(event, attachmentUrl)}
+        >${t("chat.attachments.loadPreview")}</button
+      >
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
   }
   if (previewKind === "table") {
     return renderAttachmentTablePreview(previewText);
   }
+  if (previewKind === "text") {
+    if (previewText === undefined) {
+      return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+        ${t("chat.mediaPlayer.preparing")}
+      </div>`;
+    }
+    return html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`;
+  }
   const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
     <iframe
-      src=${previewUrl}
+      hidden
       title=${attachment.label}
+      sandbox="allow-scripts"
       loading="lazy"
       @load=${(event: Event) => updatePreviewState(event, "ready")}
       @error=${(event: Event) => updatePreviewState(event, "failed")}
     ></iframe>
+    <button
+      type="button"
+      class="chat-assistant-attachment-card__preview-load"
+      @click=${(event: Event) => activateDocumentPreview(event, previewUrl)}
+      >${t("chat.attachments.loadPreview")}</button
+    >
   </div>`;
 }
 
@@ -476,6 +509,10 @@ export function renderAssistantAttachments(
     const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
       ? (authToken ?? null)
       : null;
+    const hasLiveSidebarSource =
+      isLocalAssistantAttachmentSource(attachment.url) ||
+      (isManagedOutgoingMediaSource(attachment.url) &&
+        Boolean(attachment.artifactId && resolveArtifactDownload));
     const retryUnavailableAttachment =
       availability.status === "unavailable" &&
       (!("recoverable" in availability) || availability.recoverable)
@@ -493,7 +530,7 @@ export function renderAssistantAttachments(
             kind: "attachment",
             attachmentKind: attachment.kind,
             title: attachment.label,
-            src: attachmentUrl,
+            ...(hasLiveSidebarSource ? {} : { src: attachmentUrl }),
             mimeType: attachment.mimeType,
             sourceIdentity: attachment.url,
             playback,
@@ -501,42 +538,46 @@ export function renderAssistantAttachments(
             sizeBytes,
             durationMs: serverDurationMs,
             voiceNote: attachment.isVoiceNote === true,
-            resolveSource: (sidebarUpdate) => {
-              const nextAssistantAvailability = resolveAssistantAttachmentAvailability(
-                attachment.url,
-                localMediaPreviewRoots,
-                resourceBasePath,
-                authToken,
-                sidebarUpdate,
-              );
-              if (nextAssistantAvailability.status !== "available") {
-                return null;
-              }
-              const nextManagedAvailability = resolveManagedAttachmentAvailability(
-                attachment,
-                resolveArtifactDownload,
-                sidebarUpdate,
-              );
-              if (nextManagedAvailability.status !== "available") {
-                return null;
-              }
-              return {
-                src: isLocalAssistantAttachmentSource(attachment.url)
-                  ? buildAssistantAttachmentUrl(
+            ...(hasLiveSidebarSource
+              ? {
+                  resolveSource: (sidebarUpdate: () => void) => {
+                    const nextAssistantAvailability = resolveAssistantAttachmentAvailability(
                       attachment.url,
+                      localMediaPreviewRoots,
                       resourceBasePath,
-                      nextAssistantAvailability.mediaTicket,
-                    )
-                  : nextManagedAvailability.url,
-                playback:
-                  nextAssistantAvailability.playback ?? attachment.playback ?? "native",
-                authToken: isLocalAssistantAttachmentSource(attachment.url)
-                  ? (authToken ?? null)
-                  : null,
-                sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
-                durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,
-              };
-            },
+                      authToken,
+                      sidebarUpdate,
+                    );
+                    if (nextAssistantAvailability.status !== "available") {
+                      return null;
+                    }
+                    const nextManagedAvailability = resolveManagedAttachmentAvailability(
+                      attachment,
+                      resolveArtifactDownload,
+                      sidebarUpdate,
+                    );
+                    if (nextManagedAvailability.status !== "available") {
+                      return null;
+                    }
+                    return {
+                      src: isLocalAssistantAttachmentSource(attachment.url)
+                        ? buildAssistantAttachmentUrl(
+                            attachment.url,
+                            resourceBasePath,
+                            nextAssistantAvailability.mediaTicket,
+                          )
+                        : nextManagedAvailability.url,
+                      playback:
+                        nextAssistantAvailability.playback ?? attachment.playback ?? "native",
+                      authToken: isLocalAssistantAttachmentSource(attachment.url)
+                        ? (authToken ?? null)
+                        : null,
+                      sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
+                      durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,
+                    };
+                  },
+                }
+              : {}),
           })
       : undefined;
     if (attachment.kind === "image") {
@@ -652,14 +693,16 @@ export function renderAssistantAttachments(
     const downloadHref = safeAttachmentHref(attachmentUrl);
     const previewKind = resolveDocumentPreviewKind(attachment);
     const previewText =
-      previewKind === "table" && isTextyDocumentAttachment(attachment)
+      (previewKind === "table" || previewKind === "text") &&
+      isTextyDocumentAttachment(attachment)
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
         : null;
+    const textPreviewFailed = previewKind === "text" && previewText === null;
     const tablePreviewFailed =
       previewKind === "table" &&
       previewText !== undefined &&
-      parseDelimitedPreview(previewText ?? "").length === 0;
-    const showPreview = previewKind !== null && !tablePreviewFailed;
+      parseDelimitedPreview(previewText ?? "").rows.length === 0;
+    const showPreview = previewKind !== null && !tablePreviewFailed && !textPreviewFailed;
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${

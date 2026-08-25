@@ -55,7 +55,8 @@ type AttachmentSidebarContent = {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
-  src: string;
+  /** Static sources only; expiring sources are resolved live through resolveSource. */
+  src?: string;
   mimeType?: string | null;
   sourceIdentity?: string;
   playback?: ChatMediaPlaybackMode;
