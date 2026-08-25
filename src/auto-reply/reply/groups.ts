@@ -187,8 +187,8 @@ export function buildGroupChatContext(params: {
     // Selectivity gates whether to speak; the gate below owns how. Naming the split
     // stops "be extremely selective" from reading as permission to answer privately.
     lines.push("Selectivity governs whether you reply, never how you deliver it.");
-    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
     lines.push(...toolOnlyDelivery.gate);
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
   }
   if (canUseSilentReply) {
     lines.push(

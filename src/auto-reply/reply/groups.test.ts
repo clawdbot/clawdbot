@@ -181,6 +181,28 @@ describe("group runtime loading", () => {
     },
   );
 
+  // Ordering here is load-bearing, not cosmetic. A live model A/B
+  // (scripts/dev/message-tool-only-prompt-live-proof.ts) measured a significant rise in
+  // sends on ambient turns when the group block ended on the delivery gate instead of on
+  // the selectivity sentence: the last thing the prompt says is the thing a weaker model
+  // acts on. Keep the gate before the selectivity close so the block still ends on
+  // "be selective" the way it did before this change.
+  it("closes group message_tool_only guidance with selectivity, after the delivery gate", () => {
+    const prompt = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "discord" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    const gateIndex = prompt.indexOf("If this turn needs no visible group response");
+    const selectivityIndex = prompt.lastIndexOf("Be extremely selective:");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(selectivityIndex).toBeGreaterThan(gateIndex);
+    expect(prompt).toMatch(
+      /Be extremely selective: reply only when directly addressed or clearly helpful\.$/u,
+    );
+  });
+
   it("scopes the whether-versus-how reminder to group message_tool_only turns", () => {
     const selectivitySplit = "Selectivity governs whether you reply, never how you deliver it.";
     expect(
