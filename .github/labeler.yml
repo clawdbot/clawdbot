@@ -4,6 +4,11 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+"plugin: geolocation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/geolocation/**"
+          - "docs/plugins/geolocation.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:

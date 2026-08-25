@@ -440,7 +440,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   // Script notify is carried as the completion summary, so its absence uses
   // the same silent-summary suppression path as NO_REPLY output.
-  if (completionWebhookUrl && (completionSummary || params.evt.status === "error")) {
+  if (completionWebhookUrl && (completionSummary || params.evt.completionStatus === "failed")) {
     const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
     dispatchDetachedCronNotification({
       jobId: params.evt.jobId,

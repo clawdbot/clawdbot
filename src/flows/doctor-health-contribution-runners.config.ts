@@ -67,7 +67,7 @@ export async function runWriteConfigHealth(
           allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
           skipPluginValidation:
             ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-          ...(configResultWritePending && ctx.configResult.explicitSetPaths
+          ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
@@ -146,6 +146,16 @@ export async function runWriteConfigHealth(
   }
   if (options.runPostWriteRepairs === false) {
     return;
+  }
+  const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
+  if (retiredAuthProfileCleanupPlans?.length) {
+    const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
+    for (const plan of retiredAuthProfileCleanupPlans) {
+      if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+        throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
+      }
+    }
+    delete ctx.configResult.retiredAuthProfileCleanupPlans;
   }
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =

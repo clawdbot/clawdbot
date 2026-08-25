@@ -187,10 +187,22 @@ export function buildCloudWorkerDeletePatch(
   if (!Object.hasOwn(profiles, profileId)) {
     return { error: "profileMissing" };
   }
+  const cloudWorkers = isRecord(config.cloudWorkers) ? config.cloudWorkers : null;
+  const projectProfiles = isRecord(cloudWorkers?.projectProfiles)
+    ? cloudWorkers.projectProfiles
+    : {};
+  const removedProjectProfiles = Object.fromEntries(
+    Object.entries(projectProfiles)
+      .filter(([, target]) => target === profileId)
+      .map(([project]) => [project, null]),
+  );
   return {
     patch: {
       cloudWorkers: {
         profiles: { ...profiles, [profileId]: null },
+        ...(Object.keys(removedProjectProfiles).length > 0
+          ? { projectProfiles: removedProjectProfiles }
+          : {}),
       },
     },
   };

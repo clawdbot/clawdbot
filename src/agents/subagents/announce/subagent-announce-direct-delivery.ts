@@ -80,6 +80,7 @@ async function runAnnounceAgentCall(params: {
     forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
       params.agentParams.inputProvenance,
     ),
+    operatorRoleActor: { kind: "system" },
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
     timeoutMs: params.timeoutMs,
     resolveGatewayContext: params.resolveGatewayContext,

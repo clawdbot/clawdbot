@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
 import "../../components/web-awesome-popover.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -261,6 +262,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
+  const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
   return html`<div class="activity-feed__session-row">
     <a
       class="activity-feed__session"
@@ -290,7 +292,11 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
                 data-health=${row.observerDigest?.health ?? nothing}
                 >${headline}</span
               >`
-            : html`<span>${ownerName}</span>`}${scope
+            : html`<span>${ownerName}</span>`}${source
+            ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
+                >· ${source}${scope ? " ·" : ""}</span
+              >`
+            : nothing}${scope
             ? html`<span class="activity-feed__session-scope">${scope}</span>`
             : nothing}
         </span>
@@ -386,6 +392,9 @@ function renderIdentityHeader(
                   >${entry.host ?? t("activityFeed.unknownDevice")}</span
                 >
                 ${device ? html`<span>${device}</span>` : nothing}
+                ${entry.ip
+                  ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
+                  : nothing}
                 ${entry.lastInputSeconds !== undefined
                   ? html`<span
                       >${t("activityFeed.lastInput", {

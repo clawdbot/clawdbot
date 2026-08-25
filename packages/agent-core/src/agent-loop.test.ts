@@ -563,6 +563,33 @@ describe("agentLoop streaming updates", () => {
 });
 
 describe("runAgentLoop deferred tool hydration", () => {
+  function createDeferredToolStream(
+    toolCalls: AssistantMessage["content"],
+    contexts?: Context[],
+  ): StreamFn {
+    let streamCalls = 0;
+    return (_model, context) => {
+      contexts?.push({ ...context, tools: context.tools?.slice() });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const stopReason = streamCalls === 1 ? "toolUse" : "stop";
+        const message: AssistantMessage = {
+          role: "assistant",
+          content: streamCalls === 1 ? toolCalls : [{ type: "text", text: "done" }],
+          api: "faux",
+          provider: "faux",
+          model: "faux-1",
+          usage: TEST_USAGE,
+          stopReason,
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "done", reason: stopReason, message });
+      });
+      return stream;
+    };
+  }
+
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
     const execute = vi.fn(
       async (): Promise<AgentToolResult<unknown>> => ({
@@ -582,49 +609,17 @@ describe("runAgentLoop deferred tool hydration", () => {
       execute,
     };
     const contexts: Context[] = [];
-    let streamCalls = 0;
-    const streamFn: StreamFn = (_model, context) => {
-      contexts.push({ ...context, tools: context.tools?.slice() });
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-hidden",
-                    name: "hidden_search",
-                    arguments: { query: "penguin" },
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-      });
-      return stream;
-    };
+    const streamFn = createDeferredToolStream(
+      [
+        {
+          type: "toolCall",
+          id: "call-hidden",
+          name: "hidden_search",
+          arguments: { query: "penguin" },
+        },
+      ],
+      contexts,
+    );
     const resolveDeferredTool = vi.fn(() => hiddenTool);
 
     const messages = await runAgentLoop(
@@ -655,48 +650,9 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("resolves a missing deferred tool once across pre-scan and preparation", async () => {
-    let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-missing",
-                    name: "missing_deferred",
-                    arguments: {},
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-      });
-      return stream;
-    };
+    const streamFn = createDeferredToolStream([
+      { type: "toolCall", id: "call-missing", name: "missing_deferred", arguments: {} },
+    ]);
     const resolveDeferredTool = vi.fn(() => undefined);
 
     const messages = await runAgentLoop(
@@ -723,48 +679,9 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("converts deferred resolver failures into one error tool result", async () => {
-    let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-failing-deferred",
-                    name: "failing_deferred",
-                    arguments: {},
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-      });
-      return stream;
-    };
+    const streamFn = createDeferredToolStream([
+      { type: "toolCall", id: "call-failing-deferred", name: "failing_deferred", arguments: {} },
+    ]);
     const resolveDeferredTool = vi.fn(async () => {
       throw new Error("deferred hydration failed");
     });
@@ -808,49 +725,17 @@ describe("runAgentLoop deferred tool hydration", () => {
       execute,
     };
     const contexts: Context[] = [];
-    let streamCalls = 0;
-    const streamFn: StreamFn = (_model, context) => {
-      contexts.push({ ...context, tools: context.tools?.slice() });
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-requested-deferred",
-                    name: "requested_deferred",
-                    arguments: {},
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-      });
-      return stream;
-    };
+    const streamFn = createDeferredToolStream(
+      [
+        {
+          type: "toolCall",
+          id: "call-requested-deferred",
+          name: "requested_deferred",
+          arguments: {},
+        },
+      ],
+      contexts,
+    );
 
     const messages = await runAgentLoop(
       [{ role: "user", content: "call requested tool", timestamp: Date.now() }],
@@ -912,50 +797,10 @@ describe("runAgentLoop deferred tool hydration", () => {
       executionMode: "sequential",
       execute,
     };
-    let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        streamCalls += 1;
-        const message =
-          streamCalls === 1
-            ? {
-                role: "assistant" as const,
-                content: [
-                  {
-                    type: "toolCall" as const,
-                    id: "call-hidden-1",
-                    name: "hidden_serial",
-                    arguments: { query: "one" },
-                  },
-                  {
-                    type: "toolCall" as const,
-                    id: "call-hidden-2",
-                    name: "hidden_serial",
-                    arguments: { query: "two" },
-                  },
-                ],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "toolUse" as const,
-                timestamp: Date.now(),
-              }
-            : {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: "done" }],
-                api: "faux",
-                provider: "faux",
-                model: "faux-1",
-                usage: TEST_USAGE,
-                stopReason: "stop" as const,
-                timestamp: Date.now(),
-              };
-        stream.push({ type: "done", reason: message.stopReason, message });
-      });
-      return stream;
-    };
+    const streamFn = createDeferredToolStream([
+      { type: "toolCall", id: "call-hidden-1", name: "hidden_serial", arguments: { query: "one" } },
+      { type: "toolCall", id: "call-hidden-2", name: "hidden_serial", arguments: { query: "two" } },
+    ]);
     const resolveDeferredTool = vi.fn(() => hiddenTool);
 
     await runAgentLoop(
@@ -1028,11 +873,13 @@ describe("agentLoop tool termination", () => {
 
   function createTurnSequenceStream(
     turns: AssistantMessage["content"][],
-    requestMessages: Message[][],
+    requestMessages: Message[][] = [],
+    onRequest?: (context: Context, turn: number) => void,
   ): StreamFn {
     let turnIndex = 0;
     return (_activeModel, context) => {
       requestMessages.push(context.messages.slice());
+      onRequest?.(context, turnIndex + 1);
       const content = turns[turnIndex];
       turnIndex += 1;
       if (!content) {
@@ -1840,26 +1687,17 @@ describe("agentLoop tool termination", () => {
     const executed: string[] = [];
     const providerToolNames: string[][] = [];
     let turn = 0;
-    const streamFn: StreamFn = (_activeModel, context) => {
-      providerToolNames.push(context.tools?.map((tool) => tool.name) ?? []);
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "recovered" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "loop-1", name: "read", arguments: {} }],
+        [{ type: "text", text: "recovered" }],
+      ],
+      [],
+      (context, currentTurn) => {
+        providerToolNames.push(context.tools?.map((tool) => tool.name) ?? []);
+        turn = currentTurn;
+      },
+    );
     const events = await collectEvents(
       agentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
@@ -1902,25 +1740,16 @@ describe("agentLoop tool termination", () => {
   it("does not taint the recovery turn with an unexecuted network tool source", async () => {
     const executed: string[] = [];
     let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "loop-1", name: "fetch", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "recovered" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "loop-1", name: "fetch", arguments: {} }],
+        [{ type: "text", text: "recovered" }],
+      ],
+      [],
+      (_context, currentTurn) => {
+        turn = currentTurn;
+      },
+    );
     const networkTool: AgentTool = {
       ...makeTool("fetch", executed),
       resultContentSource: "network",
@@ -2102,31 +1931,17 @@ describe("agentLoop tool termination", () => {
   it("executes a different recovery action and keeps the one-shot budget spent", async () => {
     const executed: string[] = [];
     let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
-              ])
-            : turn === 2
-              ? makeAssistantMessage([
-                  { type: "toolCall", id: "safe-1", name: "list", arguments: {} },
-                ])
-              : makeAssistantMessage([
-                  { type: "toolCall", id: "loop-2", name: "read", arguments: {} },
-                ]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "loop-1", name: "read", arguments: {} }],
+        [{ type: "toolCall", id: "safe-1", name: "list", arguments: {} }],
+        [{ type: "toolCall", id: "loop-2", name: "read", arguments: {} }],
+      ],
+      [],
+      (_context, currentTurn) => {
+        turn = currentTurn;
+      },
+    );
     const events = await collectEvents(
       agentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
@@ -2180,28 +1995,19 @@ describe("agentLoop tool termination", () => {
     async (toolExecution) => {
       const executed: string[] = [];
       let turn = 0;
-      const streamFn: StreamFn = () => {
-        turn += 1;
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          const message =
-            turn === 1
-              ? makeAssistantMessage([
-                  { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
-                ])
-              : makeAssistantMessage([
-                  { type: "toolCall", id: "safe-1", name: "write", arguments: {} },
-                  { type: "toolCall", id: "loop-2", name: "read", arguments: {} },
-                ]);
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
-          stream.end();
-        });
-        return stream;
-      };
+      const streamFn = createTurnSequenceStream(
+        [
+          [{ type: "toolCall", id: "loop-1", name: "read", arguments: {} }],
+          [
+            { type: "toolCall", id: "safe-1", name: "write", arguments: {} },
+            { type: "toolCall", id: "loop-2", name: "read", arguments: {} },
+          ],
+        ],
+        [],
+        (_context, currentTurn) => {
+          turn = currentTurn;
+        },
+      );
       const events = await collectEvents(
         agentLoop(
           [{ role: "user", content: "run", timestamp: 1 }],
@@ -2338,30 +2144,14 @@ describe("agentLoop tool termination", () => {
   ])(
     "persists $source tool-result taint through the assistant turn",
     async ({ source, tainted }) => {
-      let turn = 0;
       const tool: AgentTool = {
         ...makeTool("fetch", []),
         ...(source ? { resultContentSource: source } : {}),
       };
-      const streamFn: StreamFn = () => {
-        turn += 1;
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          const message =
-            turn === 1
-              ? makeAssistantMessage([
-                  { type: "toolCall", id: "call-fetch", name: tool.name, arguments: {} },
-                ])
-              : makeAssistantMessage([{ type: "text", text: "stored result" }]);
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
-          stream.end();
-        });
-        return stream;
-      };
+      const streamFn = createTurnSequenceStream([
+        [{ type: "toolCall", id: "call-fetch", name: tool.name, arguments: {} }],
+        [{ type: "text", text: "stored result" }],
+      ]);
 
       const stream = agentLoop(
         [{ role: "user", content: "fetch", timestamp: 1 }],
@@ -2394,7 +2184,6 @@ describe("agentLoop tool termination", () => {
   ] as const)(
     "never stamps external provenance on %s %s calls that did not execute",
     async (toolExecution, failure) => {
-      let turn = 0;
       const executed: string[] = [];
       const tool: AgentTool = {
         ...makeTool("network_probe", executed),
@@ -2403,25 +2192,10 @@ describe("agentLoop tool termination", () => {
           ? { parameters: Type.Object({ query: Type.String() }) }
           : {}),
       };
-      const streamFn: StreamFn = () => {
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          turn += 1;
-          const message =
-            turn === 1
-              ? makeAssistantMessage([
-                  { type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} },
-                ])
-              : makeAssistantMessage([{ type: "text", text: "local outcome" }]);
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
-          stream.end();
-        });
-        return stream;
-      };
+      const streamFn = createTurnSequenceStream([
+        [{ type: "toolCall", id: "network-preflight", name: tool.name, arguments: {} }],
+        [{ type: "text", text: "local outcome" }],
+      ]);
       const stream = agentLoop(
         [{ role: "user", content: "network preflight", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
@@ -2469,21 +2243,9 @@ describe("agentLoop tool termination", () => {
           throw tainted ? new Error("remote failure after cancellation") : cancelReason;
         },
       };
-      const streamFn: StreamFn = () => {
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          const message = makeAssistantMessage([
-            { type: "toolCall", id: "network-cancel", name: tool.name, arguments: {} },
-          ]);
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
-          stream.end();
-        });
-        return stream;
-      };
+      const streamFn = createTurnSequenceStream([
+        [{ type: "toolCall", id: "network-cancel", name: tool.name, arguments: {} }],
+      ]);
       const stream = agentLoop(
         [{ role: "user", content: failure, timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
@@ -2558,26 +2320,10 @@ describe("agentLoop tool termination", () => {
   });
 
   it("marks lifecycle events from the concrete hidden tool instance", async () => {
-    let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-wait", name: "wait", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-wait", name: "wait", arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
     const hiddenTool: AgentTool = {
       ...makeTool("wait", []),
       hideFromChannelProgress: true,
@@ -2636,17 +2382,9 @@ describe("agentLoop tool termination", () => {
         };
       },
     };
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "call-delayed", name: tool.name, arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-delayed", name: tool.name, arguments: {} }],
+    ]);
 
     const events = await collectEvents(
       agentLoop(
@@ -2673,29 +2411,17 @@ describe("agentLoop tool termination", () => {
   it("continues after a side-effect tool result when afterToolCall records it without terminate", async () => {
     const executed: string[] = [];
     let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-message", name: "message", arguments: {} },
-              ])
-            : turn === 2
-              ? makeAssistantMessage([
-                  { type: "toolCall", id: "call-exec", name: "exec", arguments: {} },
-                ])
-              : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "call-message", name: "message", arguments: {} }],
+        [{ type: "toolCall", id: "call-exec", name: "exec", arguments: {} }],
+        [{ type: "text", text: "done" }],
+      ],
+      [],
+      (_context, currentTurn) => {
+        turn = currentTurn;
+      },
+    );
     let recordedSideEffect = false;
 
     const stream = agentLoop(
@@ -2737,23 +2463,16 @@ describe("agentLoop tool termination", () => {
 
   it("normalizes a tool result with missing content before the next model turn", async () => {
     const contexts: Context[] = [];
-    let turn = 0;
-    const streamFn: StreamFn = (_activeModel, context) => {
-      contexts.push(context);
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-empty", name: "empty", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({ type: "done", reason: turn === 1 ? "toolUse" : "stop", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "call-empty", name: "empty", arguments: {} }],
+        [{ type: "text", text: "done" }],
+      ],
+      [],
+      (context) => {
+        contexts.push(context);
+      },
+    );
     const tool: AgentTool = {
       name: "empty",
       label: "empty",
@@ -2796,17 +2515,9 @@ describe("agentLoop tool termination", () => {
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => originalResult,
     };
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "call-patched", name: tool.name, arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-patched", name: tool.name, arguments: {} }],
+    ]);
 
     const events = await collectEvents(
       agentLoop(
@@ -2835,26 +2546,10 @@ describe("agentLoop tool termination", () => {
 
   it("marks policy-blocked tool calls as not executed", async () => {
     const executed: string[] = [];
-    let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-cron", name: "cron", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-cron", name: "cron", arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
 
     const stream = agentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
@@ -2886,26 +2581,10 @@ describe("agentLoop tool termination", () => {
     const afterToolOutcome = vi.fn(async () => ({
       details: { observed: "pre-execution" },
     }));
-    let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-edit", name: "edit", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-edit", name: "edit", arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
     const tool: AgentTool = {
       ...makeTool("edit", executed),
       parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
@@ -2948,26 +2627,10 @@ describe("agentLoop tool termination", () => {
   it("runs the finalized-outcome hook after the executed-only hook", async () => {
     const executed: string[] = [];
     const order: string[] = [];
-    let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-read", name: "read", arguments: {} },
-              ])
-            : makeAssistantMessage([{ type: "text", text: "done" }]);
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
 
     const events = await collectEvents(
       agentLoop(
@@ -3003,23 +2666,16 @@ describe("agentLoop tool termination", () => {
   it("preserves a terminal result when the finalized-outcome hook throws", async () => {
     const executed: string[] = [];
     let turn = 0;
-    const streamFn: StreamFn = () => {
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message =
-          turn === 1
-            ? makeAssistantMessage([
-                { type: "toolCall", id: "call-message", name: "message", arguments: {} },
-              ])
-            : makeAssistantMessage([
-                { type: "toolCall", id: "call-exec", name: "exec", arguments: {} },
-              ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [
+        [{ type: "toolCall", id: "call-message", name: "message", arguments: {} }],
+        [{ type: "toolCall", id: "call-exec", name: "exec", arguments: {} }],
+      ],
+      [],
+      (_context, currentTurn) => {
+        turn = currentTurn;
+      },
+    );
 
     const stream = agentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
@@ -3446,21 +3102,12 @@ describe("agentLoop tool termination", () => {
     const afterToolCall = vi.fn(async () => undefined);
     const commitReadyCalls = vi.fn();
     const releaseSkippedCalls = vi.fn();
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "done",
-          reason: "toolUse",
-          message: makeAssistantMessage([
-            { type: "toolCall", id: "call-paid", name: "paid", arguments: {} },
-            { type: "toolCall", id: "call-gated", name: "gated", arguments: {} },
-          ]),
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream([
+      [
+        { type: "toolCall", id: "call-paid", name: "paid", arguments: {} },
+        { type: "toolCall", id: "call-gated", name: "gated", arguments: {} },
+      ],
+    ]);
     const events: AgentEvent[] = [];
 
     const abortedMessages = await runAgentLoop(

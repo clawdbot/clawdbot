@@ -24,7 +24,7 @@ import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
+import { renderSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
   renderChatRunStatusIndicator,
@@ -65,6 +65,7 @@ type ChatComposerViewContext = {
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
   skillMenuHost: SkillMenuHost;
+  slashMenuHost: SlashMenuHost;
   activeSlashMenuOptionId: string | null;
   activeSlashMenuOptionLabel: string;
   slashMenuListboxId: string;
@@ -101,6 +102,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuVisible,
     skillMenuVisible,
     skillMenuHost,
+    slashMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
@@ -210,7 +212,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     : t("chat.composer.offlineHint")}
                 </div>`
               : nothing}
-            ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+            ${slashMenuVisible
+              ? renderSlashMenu(state, slashMenuHost, visibleDraft, requestUpdate)
+              : nothing}
             ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
@@ -342,26 +346,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <div class="agent-chat__composer-input-row">
               ${renderChatComposerPlusMenu({
                 attachments: props,
-                showCapabilities: props.capabilityMenu !== undefined,
-                basePath: props.capabilityMenu?.basePath ?? "",
+                capabilityMenu: props.capabilityMenu,
                 disabled: !canCompose || props.suggestionComposer === true,
                 open: state.capabilityMenuOpen,
                 view: state.capabilityMenuView,
                 toolOverrides: props.toolOverrides,
-                skills: props.capabilityMenu?.skills ?? null,
-                skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
-                skillsError: props.capabilityMenu?.skillsError ?? false,
-                mcpServers: props.capabilityMenu?.mcpServers ?? [],
-                toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
-                toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
-                toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
-                toolAccessMutationBlockedReason:
-                  props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
-                webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
-                mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
-                canAdmin: props.capabilityMenu?.canAdmin ?? false,
-                adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
-                addServerDialog: props.capabilityMenu?.addServerDialog,
                 onOpenChange: (open) => {
                   state.capabilityMenuOpen = open;
                   if (!open) {
@@ -373,12 +362,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   state.capabilityMenuView = view;
                   requestUpdate();
                 },
-                onLoadSkills: props.capabilityMenu?.onLoadSkills ?? (() => {}),
-                onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
-                onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
-                onAddServer: props.capabilityMenu?.onAddServer,
-                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
-                onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
               <div class="agent-chat__composer-combobox">
                 <textarea

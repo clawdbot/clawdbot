@@ -472,6 +472,58 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   });
 
+  it.each([1, 2])(
+    "corrects an expired retryable failure after %i same-run attempt errors",
+    async (failureCount) => {
+      useFakeTime();
+      const harness = createHarness();
+      harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        harness.observer.handleEvent(
+          lifecycleEvent({
+            phase: "error",
+            endedAt: 30_000 + attempt,
+            error: `retryable provider failure ${attempt + 1}`,
+          }),
+        );
+        await advanceAndFlush(15_000);
+      }
+
+      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
+      const failureRevision = broadcastDigest(harness, -1)?.revision;
+      await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
+
+      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+      expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+      expect(broadcastDigest(harness, -1)?.revision).toBeGreaterThan(failureRevision ?? 0);
+    },
+  );
+
+  it("does not let a provisional prior run evict the newer active session owner", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", endedAt: 30_000, error: "retryable provider failure" }),
+    );
+    await advanceAndFlush(15_000);
+
+    await handleLifecycle(harness, { phase: "start", startedAt: 45_000 }, { runId: "run-2" });
+    await handleLifecycle(harness, { phase: "end", endedAt: 50_000 });
+    await handleLifecycle(harness, { phase: "end", endedAt: 80_000 }, { runId: "run-2" });
+
+    expect(
+      observerBroadcasts(harness).some((call) => {
+        const digest = call[1] as SessionObserverDigest;
+        return digest.runId === "run-1" && digest.health === "done";
+      }),
+    ).toBe(false);
+    expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-2" });
+  });
+
   it("retries one transient terminal digest failure", async () => {
     useFakeTime();
     const completeModel = vi

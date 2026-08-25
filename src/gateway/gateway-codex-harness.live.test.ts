@@ -320,7 +320,7 @@ function readCodexNativeUsageSnapshots(
   events: readonly CapturedAgentEvent[],
 ): CodexNativeUsageSnapshot[] {
   return events.flatMap((event) => {
-    if (event.stream !== "codex_app_server.usage") {
+    if (event.stream !== "usage") {
       return [];
     }
     const activeContextTokens = event.data?.activeContextTokens;

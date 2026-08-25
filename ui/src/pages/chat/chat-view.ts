@@ -22,6 +22,7 @@ import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../components/markdown-session-links.ts";
 import type { PersonActivityRouting } from "../../components/person-activity-link.ts";
+import { renderSessionProgressCard } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -32,7 +33,10 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
-import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
@@ -101,7 +105,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     waitingApproval?: boolean;
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
-    progressCard?: ProgressCard | null;
+    /* One live placement per view: the pane picks it, so the composer bar and
+     * the right-gutter dock can never both render the same card. */
+    progressCard?: { card: ProgressCard; placement: "composer" | "dock" } | null;
     onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
@@ -369,6 +375,7 @@ export function renderChat(props: ChatProps) {
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
       onSend: props.onSend,
+      onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
       onSetReply: props.onSetReply,
       replyMessageAccess: props.replyMessageAccess,
       onRewindMessage: props.onRewindMessage,
@@ -405,7 +412,7 @@ export function renderChat(props: ChatProps) {
     waitingApproval: props.waitingApproval,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
-    progressCard: props.progressCard,
+    progressCard: props.progressCard?.placement === "composer" ? props.progressCard.card : null,
     onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
@@ -543,12 +550,7 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          !event.shiftKey &&
-          resolveAsciiShortcutKey(event) === "f"
-        ) {
+        if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
           toggleTranscriptSearch(props.paneId, requestUpdate, event);
         }
@@ -603,6 +605,13 @@ export function renderChat(props: ChatProps) {
                     sessions: props.swarmSessions ?? [],
                     sessionKey: props.sessionKey,
                   })}
+                  ${props.progressCard?.placement === "dock"
+                    ? renderSessionProgressCard(
+                        props.progressCard.card,
+                        "dock",
+                        props.onDismissProgressCard,
+                      )
+                    : nothing}
                   ${showModelSetupSplash ? nothing : chatColumnFooter}
                 </div>
               </div>

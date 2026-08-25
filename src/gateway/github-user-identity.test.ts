@@ -3,6 +3,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   ensureProfileForTailscaleIdentity,
   getUserProfileListItem,
+  syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ControlUiGitHubError } from "./control-ui-github-api.js";
@@ -13,6 +14,17 @@ function githubResponse(body: unknown, status = 200, headers: Record<string, str
     status,
     headers: { "content-type": "application/json", ...headers },
   });
+}
+
+function githubBodyReadFailure() {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(new Error("body read failed"));
+      },
+    }),
+    { status: 200 },
+  );
 }
 
 function accessAssertion(issuer: unknown): string {
@@ -250,6 +262,23 @@ describe("authenticated GitHub identity sync", () => {
         emails: ["ada@example.com"],
         githubIdentity: { login: "steipete" },
       });
+
+      fetchMock
+        .mockResolvedValueOnce(
+          githubResponse({
+            id: 58493,
+            email: "ada@example.com",
+            idp: { type: "github" },
+          }),
+        )
+        .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete-renamed" }));
+      await expect(cloudflareSync({})?.()).resolves.toMatchObject({
+        profileId: result!.profileId,
+      });
+      expect(getUserProfileListItem(result!.profileId).githubIdentity).toMatchObject({
+        login: "steipete-renamed",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -352,39 +381,116 @@ describe("authenticated GitHub identity sync", () => {
         "x-ratelimit-remaining": "0",
       }),
     },
+    { name: "GitHub upstream failure", githubResult: githubResponse({}, 503) },
     { name: "GitHub network failure", githubError: new Error("network unavailable") },
-  ])("preserves prior identity after a $name", async ({ githubResult, githubError }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fetchMock = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(
+  ])(
+    "reattaches the exact cached verified identity after a $name",
+    async ({ githubResult, githubError }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: 58493,
+              email: "ada@example.com",
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
+        const first = await cloudflareSync({})?.();
+        fetchMock.mockResolvedValueOnce(
           githubResponse({
             id: 58493,
             email: "ada@example.com",
             idp: { type: "github" },
           }),
-        )
-        .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
-      const first = await cloudflareSync({})?.();
-      fetchMock.mockResolvedValueOnce(
-        githubResponse({
-          id: 58493,
-          email: "ada@example.com",
-          idp: { type: "github" },
-        }),
-      );
-      if (githubError) {
-        fetchMock.mockRejectedValueOnce(githubError);
-      } else {
-        fetchMock.mockResolvedValueOnce(githubResult!);
-      }
+        );
+        if (githubError) {
+          fetchMock.mockRejectedValueOnce(githubError);
+        } else {
+          fetchMock.mockResolvedValueOnce(githubResult!);
+        }
 
-      await expect(cloudflareSync({})?.()).rejects.toThrow();
-      expect(getUserProfileListItem(first!.profileId).githubIdentity).toMatchObject({
-        login: "steipete",
+        await expect(cloudflareSync({ principal: "ADA@Example.COM" })?.()).resolves.toEqual(first);
+        expect(getUserProfileListItem(first!.profileId).githubIdentity).toMatchObject({
+          login: "steipete",
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(4);
       });
-    });
-  });
+    },
+  );
+
+  it.each([
+    { name: "malformed GitHub response", githubStatus: 200, expectedStatus: 502, malformed: true },
+    {
+      name: "GitHub body read failure",
+      githubStatus: 200,
+      expectedStatus: 502,
+      bodyReadFailure: true,
+    },
+    { name: "non-retryable GitHub request", githubStatus: 400, expectedStatus: 502 },
+    { name: "unauthorized GitHub account", githubStatus: 401 },
+    { name: "GitHub permission denial", githubStatus: 403 },
+    { name: "deleted GitHub account", githubStatus: 404 },
+    { name: "different cached account", githubStatus: 429, accessAccountId: 99999 },
+    { name: "different cached email", githubStatus: 429, principal: "mallory@example.com" },
+    {
+      name: "email and account on different profiles",
+      githubStatus: 429,
+      accessAccountId: 99999,
+      otherProfile: true,
+    },
+    { name: "missing cached identity", githubStatus: 429, seedCache: false },
+  ])(
+    "fails closed for a $name",
+    async ({
+      githubStatus,
+      expectedStatus,
+      malformed,
+      bodyReadFailure,
+      accessAccountId,
+      principal,
+      otherProfile,
+      seedCache,
+    }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        if (seedCache !== false) {
+          syncGitHubIdentity({
+            identity: { accountId: 58493, login: "steipete" },
+            authenticationAlias: { kind: "email", email: "ada@example.com" },
+          });
+        }
+        if (otherProfile) {
+          syncGitHubIdentity({
+            identity: { accountId: 99999, login: "mallory" },
+            authenticationAlias: { kind: "email", email: "mallory@example.com" },
+          });
+        }
+        const authenticatedEmail = principal ?? "ada@example.com";
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: accessAccountId ?? 58493,
+              email: authenticatedEmail,
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(
+            bodyReadFailure
+              ? githubBodyReadFailure()
+              : malformed
+                ? new Response("{", { status: githubStatus })
+                : githubResponse({}, githubStatus),
+          );
+
+        await expect(cloudflareSync({ principal: authenticatedEmail })?.()).rejects.toMatchObject({
+          statusCode: expectedStatus ?? githubStatus,
+        } satisfies Partial<ControlUiGitHubError>);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it("redacts the Access assertion from network failures and retries on the same connection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

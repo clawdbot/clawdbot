@@ -374,30 +374,30 @@ export function registerOnboardCommand(program: Command): void {
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      const rejectOption = (message: string) =>
+        rejectOnboardingOption({ json: Boolean(opts.json) }, defaultRuntime, message);
       if (opts.modern) {
         const unsupportedOptions = listExplicitOptionFlagsExcept(
           commandRuntime,
           MODERN_ONBOARD_OPTION_KEYS,
         );
         if (unsupportedOptions.length > 0) {
-          defaultRuntime.error(
+          rejectOption(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
               "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         if (opts.nonInteractive && opts.acceptRisk !== true) {
-          defaultRuntime.error(
+          rejectOption(
             [
               "Non-interactive setup requires explicit risk acknowledgement.",
               "Read: https://docs.openclaw.ai/security",
               `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         const { runSystemAgentWithInference } =

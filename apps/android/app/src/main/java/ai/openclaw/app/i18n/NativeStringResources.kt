@@ -1234,6 +1234,8 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Show OpenClaw alerts" to R.string.native_0060cbfdd3cf13ba,
     "Show Sidebar" to R.string.native_04efae3fc7825d3a,
     "Show System Apps" to R.string.native_0b914a09797ede88,
+    "Show less" to R.string.native_94ea9b1d33a02975,
+    "Show more" to R.string.native_f5c9bd131486e793,
     "Show recent call history" to R.string.native_00d108e2e6466940,
     "Showing \${visibleApps.size} of \${apps.size}. Refine search for more." to R.string.native_7198eaa9f18ee413,
     "Showing the latest log chunk." to R.string.native_572739b05d138f8a,

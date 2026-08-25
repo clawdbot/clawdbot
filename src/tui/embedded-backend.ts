@@ -9,6 +9,7 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
@@ -135,7 +136,7 @@ type LocalRunState = {
   lifecycleStopReason?: string;
   lifecycleYielded?: boolean;
   toolErrorSummary?: string;
-  finalSent: boolean;
+  terminalState?: "provisional" | "final";
   registered: boolean;
   pendingQueue?: {
     mode: "followup" | "collect";
@@ -451,7 +452,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    this.clearPendingLifecycleErrors();
+    this.pendingLifecycleErrors.forEach(clearTimeout);
+    this.pendingLifecycleErrors.clear();
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
@@ -542,7 +544,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       question,
       finishing: false,
       lifecycleEnded: false,
-      finalSent: false,
       registered: false,
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
@@ -673,7 +674,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.isBtw &&
-        !run.finalSent &&
+        run.terminalState !== "final" &&
         agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
         normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
     );
@@ -810,6 +811,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     const result = await performGatewaySessionReset({
       key,
+      operatorRoleActor: { kind: "system" },
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       reason: reason === "new" ? "new" : "reset",
       commandSource: "tui:embedded",
@@ -829,6 +831,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const result = await createGatewaySession({
       cfg,
+      operatorRoleActor: { kind: "system" },
       ...opts,
       creation: { via: "operator", actor: { type: "human" } },
       armSessionDiffBaselineCapture: true,
@@ -1137,16 +1140,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.pendingLifecycleErrors.delete(runId);
   }
 
-  private clearPendingLifecycleErrors() {
-    this.pendingLifecycleErrors.forEach(clearTimeout);
-    this.pendingLifecycleErrors.clear();
-  }
-
   private scheduleChatError(runId: string, run: LocalRunState, errorMessage?: string) {
     this.clearPendingLifecycleError(runId);
     const timer = setTimeout(() => {
       this.pendingLifecycleErrors.delete(runId);
-      this.emitChatTerminal(runId, run, "error", errorMessage);
+      this.emitChatTerminal(runId, run, "error", errorMessage, "provisional");
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     timer.unref?.();
     this.pendingLifecycleErrors.set(runId, timer);
@@ -1182,15 +1180,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run: LocalRunState,
     state: "final" | "aborted" | "error",
     detail?: string,
+    terminalState: "provisional" | "final" = "final",
   ) {
     this.clearPendingLifecycleError(runId);
-    run.markQueuedRunReady();
-    const alreadyFinal = run.finalSent;
-    run.finishing = false;
-    run.lifecycleEnded = true;
-    run.finalSent = true;
-    if (alreadyFinal) {
+    if (run.terminalState === "final" || run.terminalState === terminalState) {
       return;
+    }
+    run.terminalState = terminalState;
+    if (terminalState === "final") {
+      run.markQueuedRunReady();
+      run.finishing = false;
+      run.lifecycleEnded = true;
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
@@ -1254,7 +1254,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
           (outcome.status === "timeout"
             ? "The provider timed out. Please try again."
             : "Agent run failed.");
-    if (metadata.phase === "error" && state === "error") {
+    if (
+      metadata.phase === "error" &&
+      !isDefinitiveRunLifecycle({ phase: "error", data: metadata })
+    ) {
       this.scheduleChatError(runId, run, diagnostic);
     } else {
       this.emitChatTerminal(runId, run, state, diagnostic);
@@ -1500,7 +1503,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
 
-      if (!run.finalSent) {
+      if (run.terminalState !== "final") {
         const finalText = payloadText(result?.payloads);
         // A completed response is authoritative; keep the stream only when it has no final text.
         if (finalText) {

@@ -1,35 +1,11 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-// Keep this script independent from the translation client loaded by native-app-i18n.
-// Artifact locale assertions below make drift fail instead of silently dropping a language.
-export const APPLE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
-const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
+const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
@@ -783,7 +759,7 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
 }
 
 async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
-  const expectedFiles = APPLE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
+  const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
   const actualFiles = (
     await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
       withFileTypes: true,
@@ -798,7 +774,7 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
     );
   }
   return Promise.all(
-    APPLE_I18N_LOCALES.map(async (locale) => {
+    NATIVE_I18N_LOCALES.map(async (locale) => {
       const artifact = JSON.parse(
         await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
       ) as NativeTranslationArtifact;
@@ -876,7 +852,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
     const sourceEntries = parseInfoPlistStrings(
       await readFile(path.join(ROOT, target.sourcePath), "utf8"),
     );
-    for (const locale of APPLE_I18N_LOCALES) {
+    for (const locale of NATIVE_I18N_LOCALES) {
       const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
       const outputPath = path.join(
         ROOT,
@@ -1007,7 +983,7 @@ export async function checkAppleAppI18n() {
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
       `macosTranslationContradictions=${macosBuild.contradictions.length}`,
-      `locales=${APPLE_I18N_LOCALES.join(",")}`,
+      `locales=${NATIVE_I18N_LOCALES.join(",")}`,
       "\n",
     ].join(" "),
   );

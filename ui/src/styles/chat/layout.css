@@ -12,11 +12,13 @@ openclaw-chat-page {
 
 .chat {
   --chat-thread-max-width: 48rem;
-  /* Half of the transcript's shared side gutter. .chat-thread keeps this strip
-     free on both edges so its scrollbar hugs the pane edge, so overlays that
-     paint across the thread (the header fade) must stop at it or they cover
-     the thumb. */
+  /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
+  /* Composer box insets. The docked progress card derives its own edge from
+     both, so the two never overlap and their bottoms stay on one line. */
+  --chat-composer-side-inset: 36px;
+  --chat-composer-bottom-gap: 14px;
+  --chat-thread-side-inset: clamp(6px, 1vw, 12px);
 
   position: relative;
   display: flex;
@@ -366,7 +368,7 @@ openclaw-chat-page {
   /* Shared gutter plus the responsive side inset that used to be
      .chat-thread's horizontal padding (moved off the scroll container so
      overlay scrollbars sit flush at the pane edge). */
-  width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * clamp(6px, 1vw, 12px));
+  width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
   max-width: var(--chat-thread-max-width);
   margin-inline: auto;
 }
@@ -374,7 +376,7 @@ openclaw-chat-page {
 .chat-inline-approval {
   box-sizing: border-box;
   flex: 0 0 auto;
-  width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * clamp(6px, 1vw, 12px));
+  width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
   max-width: var(--chat-thread-max-width);
   margin: 8px auto;
 }
@@ -427,6 +429,12 @@ openclaw-chat-page {
   display: flow-root;
   width: 100%;
   content-visibility: auto;
+}
+
+/* Message context can extend above its row. Release paint containment only
+   while it is open so the popover stays visible without giving up idle skips. */
+.chat-virtual-row:has(details.msg-meta[open]) {
+  content-visibility: visible;
 }
 
 .chat-virtual-row--first > :first-child {
@@ -1682,9 +1690,11 @@ button.chat-reply-preview--message:disabled {
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  width: calc(100% - 36px);
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
   max-width: var(--chat-thread-max-width, 48rem);
-  margin: 8px auto 14px;
+  margin: 8px auto var(--chat-composer-bottom-gap, 14px);
 }
 
 /* Floating tray pinned to the conversation's top-right (the positioned
@@ -3151,6 +3161,24 @@ button.chat-pr__diff {
   background: var(--bg-hover);
 }
 
+.agent-chat__input-btn--selected:not(:disabled) {
+  position: relative;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.agent-chat__input-btn--selected::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--bg);
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
 .agent-chat__input-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -4095,6 +4123,11 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat {
+    --chat-thread-gutter: 16px;
+    --chat-thread-side-inset: 0px;
+  }
+
   .agent-chat__input {
     --chat-box-inset: 4px;
     --chat-composer-control-height: 44px;

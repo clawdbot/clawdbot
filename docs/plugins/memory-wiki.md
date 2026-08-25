@@ -387,7 +387,7 @@ Key toggles:
 | ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
 | `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
 | `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
-| `vault.path`                               | global default `~/.openclaw/wiki/main`         | exact vault globally; agent-scope parent defaults to `~/.openclaw/wiki`       |
+| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`       |
 | `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
 | `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
@@ -398,6 +398,11 @@ Key toggles:
 | `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
 | `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
 | `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+
+The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
+set, default wiki vaults use that directory instead. Explicit `vault.path`
+values keep their configured location, and `~/` still expands against the home
+directory.
 
 ### Per-agent vaults
 
@@ -436,8 +441,9 @@ normalized agent id:
 
 This resolves to `~/.openclaw/wiki/support` and
 `~/.openclaw/wiki/marketing`. If `vault.path` is omitted in agent scope, the
-parent defaults to `~/.openclaw/wiki`. The default `main` agent therefore keeps
-the existing `~/.openclaw/wiki/main` path.
+parent defaults to `<state-dir>/wiki`, where the state directory is
+`~/.openclaw` or the value of `OPENCLAW_STATE_DIR`. The default `main` agent
+therefore uses `<state-dir>/wiki/main`.
 
 Agent tools, compiled prompt digests, and the wiki supplement exposed through
 `memory_search` / `memory_get` resolve the vault from the active agent context.

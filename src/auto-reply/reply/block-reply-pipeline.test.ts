@@ -56,6 +56,9 @@ describe("createBlockReplyContentKey", () => {
     });
     expect(a).toBe(b);
     expect(a).not.toBe(c);
+    expect(createBlockReplyContentKey({ location: { latitude: 1, longitude: 2 } })).not.toBe(
+      createBlockReplyContentKey({ location: { latitude: 3, longitude: 4 } }),
+    );
   });
 });
 
@@ -190,6 +193,17 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       expected: [
         { mediaUrl: "file:///voice.ogg", audioAsVoice: true },
         { text: "After", audioAsVoice: true },
+      ],
+    },
+    {
+      name: "distinct portable location replies",
+      payloads: [
+        { location: { latitude: 1, longitude: 2 } },
+        { location: { latitude: 3, longitude: 4 } },
+      ],
+      expected: [
+        { location: { latitude: 1, longitude: 2 } },
+        { location: { latitude: 3, longitude: 4 } },
       ],
     },
   ])("preserves streamed delivery order for $name", async ({ payloads, expected }) => {

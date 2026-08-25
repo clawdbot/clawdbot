@@ -16,6 +16,7 @@ import {
   deriveCopilotApiBaseUrlFromToken,
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
+  readClaudeCliCredentialsCached,
   removeProviderAuthProfilesWithLock,
   resolveCopilotApiToken,
 } from "./provider-auth.js";
@@ -30,6 +31,13 @@ const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TO
 describe("provider auth public SDK", () => {
   it("retains provider-scoped profile removal", () => {
     expect(removeProviderAuthProfilesWithLock).toBeTypeOf("function");
+  });
+
+  it("keeps the retired Claude credential reader as a null-only compatibility export", () => {
+    const onStoredCredentialUnreadable = vi.fn();
+
+    expect(readClaudeCliCredentialsCached({ onStoredCredentialUnreadable })).toBeNull();
+    expect(onStoredCredentialUnreadable).not.toHaveBeenCalled();
   });
 });
 

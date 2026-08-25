@@ -22,6 +22,7 @@ import {
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type {
@@ -890,16 +891,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
   it("normalizes an unloaded palette toggle shortcut to open", async () => {
     const element = createLazyElementSpec("command palette");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.commandPaletteElement = element;
     const openPalette = vi.fn();
-    Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-    Object.defineProperty(shell, "commandPalette", {
-      get: () =>
-        customElements.get(element.tagName)
-          ? { isOpen: false, openPalette, togglePalette: vi.fn() }
-          : undefined,
-    });
+    const shell = configureLazyPaletteShell(element, openPalette);
+    stubRenderedWhenDefined(shell);
     const event = new KeyboardEvent("keydown", {
       key: "л",
       code: "KeyK",

@@ -115,11 +115,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  resetTheme: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  resetThemeMode: () => void;
-  setAccent: (accent: string) => void;
-  resetAccent: () => void;
+  setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;
@@ -135,7 +132,6 @@ export type ConfigProps = {
   textScale: number;
   textScaleOverridden: boolean;
   setTextScale: (value: number) => void;
-  resetTextScale: () => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;

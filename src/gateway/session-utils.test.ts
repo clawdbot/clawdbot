@@ -319,6 +319,16 @@ describe("gateway session utils", () => {
   test.each([
     { name: "never read", entry: {}, expected: false },
     {
+      name: "legacy activity without creation provenance",
+      entry: { lastActivityAt: 11 },
+      expected: false,
+    },
+    {
+      name: "activity after creation before first read",
+      entry: { createdAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
       name: "interaction after read",
       entry: { lastReadAt: 10, lastInteractionAt: 11 },
       expected: true,
@@ -3845,17 +3855,30 @@ describe("gateway session utils", () => {
         defaults: {
           model: { primary: "local/custom-reasoner" },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true }, { id: "work" }, { id: "missing" }],
       },
     } as OpenClawConfig;
+    const catalogEntry = {
+      provider: "local",
+      id: "custom-reasoner",
+      name: "Custom Reasoner",
+    };
+    const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
+    const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = listAgentsForGateway(cfg, [
-      { provider: "local", id: "custom-reasoner", name: "Custom Reasoner", reasoning: true },
-    ]);
-    const agent = result.agents.find((row) => row.id === "main");
+    const result = listAgentsForGateway(cfg, disabledCatalog, {
+      modelCatalogByAgentId: new Map([
+        ["main", disabledCatalog],
+        ["work", enabledCatalog],
+        ["missing", undefined],
+      ]),
+    });
+    const agentsById = new Map(result.agents.map((agent) => [agent.id, agent]));
 
-    expect(agent?.thinkingDefault).toBe("medium");
-    expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+    expect(agentsById.get("main")?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(agentsById.get("work")?.thinkingDefault).toBe("medium");
+    expect(agentsById.get("work")?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+    expect(agentsById.get("missing")?.thinkingLevels?.map((level) => level.id)).toContain("high");
   });
 
   describe("listAgentsForGateway resolved model projection", () => {

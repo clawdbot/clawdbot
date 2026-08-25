@@ -1299,10 +1299,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [430, 720],
-    [1366, 900],
-  ] as const)("keeps activity disclosures compact at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
+    { label: "narrow desktop", width: 430, height: 720, hasTouch: false },
+    { label: "desktop", width: 1366, height: 900, hasTouch: false },
+    { label: "mobile touch", width: 430, height: 720, hasTouch: true },
+  ])("keeps activity disclosures compact on $label", async ({ width, height, hasTouch }) => {
+    const page = await openBrowserPage(width, height, { hasTouch, isolated: true });
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
@@ -1320,21 +1321,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
         const chevron = activity.querySelector<HTMLElement>(".chat-tool-row__chevron")!;
+        const toolRows = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".chat-activity-group__body .chat-tool-msg-summary",
+          ),
+        ];
+        const firstToolStyle = getComputedStyle(toolRows[0]!);
+        const firstToolRect = toolRows[0]!.getBoundingClientRect();
+        const secondToolRect = toolRows[1]!.getBoundingClientRect();
         return {
           activity: getComputedStyle(activity).userSelect,
           activityBackground: getComputedStyle(activity).backgroundColor,
+          activityPaddingBlock: [
+            getComputedStyle(activity).paddingTop,
+            getComputedStyle(activity).paddingBottom,
+          ],
           chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
-          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-            .userSelect,
+          tool: firstToolStyle.userSelect,
+          toolPaddingBlock: [firstToolStyle.paddingTop, firstToolStyle.paddingBottom],
+          toolRowGap: secondToolRect.top - firstToolRect.bottom,
         };
       });
-      expect(styles).toEqual({
+      const { toolRowGap, ...disclosureStyles } = styles;
+      expect(disclosureStyles).toEqual({
         activity: "text",
         activityBackground: "rgba(0, 0, 0, 0)",
+        activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
         // Summary gap (8px) less the chevron's own -3px inset.
         chevronGap: 5,
         tool: "text",
+        toolPaddingBlock: ["3px", "3px"],
       });
+      expect(toolRowGap).toBeGreaterThanOrEqual(0);
+      expect(toolRowGap).toBeLessThanOrEqual(2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1724,6 +1743,86 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("paints open message context above its virtual row", async () => {
+    const page = await openBrowserPage(900, 500);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread chat-thread--direct" style="width: 720px; height: 400px;">
+            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 720px;">
+              <div class="chat-virtual-sizer" style="height: 400px;">
+                <div
+                  class="chat-virtual-row"
+                  data-previous-row
+                  style="height: 100px; transform: translateY(0px);"
+                >
+                  <div class="chat-group tool">
+                    <div class="chat-group-messages">Previous transcript row</div>
+                  </div>
+                </div>
+                <div
+                  class="chat-virtual-row"
+                  data-context-row
+                  style="transform: translateY(100px); contain-intrinsic-block-size: auto 28px;"
+                >
+                  <div class="chat-group assistant chat-group--with-footer">
+                    <div class="chat-group-messages"></div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <details class="msg-meta" open>
+                          <summary class="msg-meta__summary">
+                            <time class="chat-group-timestamp">just now</time>
+                          </summary>
+                          <span class="msg-meta__details">
+                            <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
+                            <span class="msg-meta__tokens">↑19.6k</span>
+                            <span class="msg-meta__tokens">↓126</span>
+                            <span class="msg-meta__cache">R2.4k</span>
+                            <span class="msg-meta__model">gpt-5.5</span>
+                          </span>
+                        </details>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await waitForLayoutSettled(page, "[data-context-row], .msg-meta__details");
+
+      const layout = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-context-row]")!;
+        const popover = row.querySelector<HTMLElement>(".msg-meta__details")!;
+        const rowRect = row.getBoundingClientRect();
+        const popoverRect = popover.getBoundingClientRect();
+        const sample = {
+          x: popoverRect.left + Math.min(10, popoverRect.width / 2),
+          y: Math.min(rowRect.top - 1, popoverRect.bottom - 1),
+        };
+        const target = document.elementFromPoint(sample.x, sample.y);
+        return {
+          paintedAboveRow:
+            sample.y >= popoverRect.top &&
+            sample.y < rowRect.top &&
+            target !== null &&
+            popover.contains(target),
+          popoverBottom: popoverRect.bottom,
+          popoverTop: popoverRect.top,
+          rowTop: rowRect.top,
+        };
+      });
+
+      expect(layout.popoverTop).toBeLessThan(layout.rowTop);
+      expect(layout.popoverBottom).toBeGreaterThan(layout.rowTop - 1);
+      expect(layout.paintedAboveRow).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps attributed user avatar fallbacks beside the message after identity resolution", async () => {
     const page = await openBrowserPage(860, 900);
     try {
@@ -2108,11 +2207,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [393, 852],
     [1366, 900],
   ] as const)(
-    "anchors received bubbles left and sent bubbles right at %sx%s",
+    "anchors message roles and balances transcript width at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
         const roles = await page.evaluate(() => {
+          const transcriptViewport = document.querySelector<HTMLElement>(".chat-thread")!;
+          const widthProbe = document.createElement("div");
+          widthProbe.style.width = "100%";
+          widthProbe.style.height = "0";
+          transcriptViewport.append(widthProbe);
+          const transcriptAvailableWidth = widthProbe.getBoundingClientRect().width;
+          widthProbe.remove();
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
@@ -2129,6 +2235,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             assistantLane: rectFor(".chat-group.assistant .chat-group-messages"),
             assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
+            transcript: rectFor(".chat-thread-inner"),
+            transcriptViewport: rectFor(".chat-thread"),
+            transcriptAvailableWidth,
             userLane: rectFor(".chat-group.user .chat-group-messages"),
             userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
           };
@@ -2136,9 +2245,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         const assistantLane = expectControlRect(roles.assistantLane, "assistant message lane");
         const assistantBubble = expectControlRect(roles.assistantBubble, "assistant bubble");
+        const transcript = expectControlRect(roles.transcript, "transcript");
+        const transcriptViewport = expectControlRect(
+          roles.transcriptViewport,
+          "transcript viewport",
+        );
         const userLane = expectControlRect(roles.userLane, "user message lane");
         const userBubble = expectControlRect(roles.userBubble, "user bubble");
 
+        expect(
+          Math.abs(
+            transcript.x +
+              transcript.width / 2 -
+              (transcriptViewport.x + transcriptViewport.width / 2),
+          ),
+        ).toBeLessThanOrEqual(1);
+        if (width <= 768) {
+          expect(roles.transcriptAvailableWidth - transcript.width).toBeCloseTo(32, 0);
+        } else {
+          expect(transcript.width).toBeCloseTo(768, 0);
+        }
         expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
         expect(
           Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),

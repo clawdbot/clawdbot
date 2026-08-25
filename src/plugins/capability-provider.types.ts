@@ -188,15 +188,15 @@ export class WorkerProviderError extends Error {
   }
 }
 
-/** Plugin registrations declare exactly one mode; the internal paired-device owner can carry both. */
-export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
+/** Cloud-worker lifecycle capability shared by plugin and internal providers. */
+export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
-  /** Omission advertises no placement support; external providers declare one transport mode. */
-  supportedExecutionModes?: Scope extends "internal"
-    ? readonly [WorkerExecutionMode] | readonly ["worker-turn", "remote-exec"]
-    : readonly [WorkerExecutionMode];
+  /** Omission advertises no placement support; multiple modes use their canonical order. */
+  supportedExecutionModes?:
+    | readonly [WorkerExecutionMode]
+    | readonly ["worker-turn", "remote-exec"];
   /**
    * Provision before preparing an installation when the lease transport decides whether an
    * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.
@@ -212,6 +212,7 @@ export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      executionMode?: WorkerExecutionMode;
       machineClass?: string;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
     },

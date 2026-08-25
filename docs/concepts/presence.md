@@ -25,7 +25,7 @@ Presence entries are structured objects with fields like:
 
 - `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human-friendly host name
-- `ip`: best-effort IP address
+- `ip`: best-effort IP address; the [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
 - `timeZone`: self-reported IANA zone (for example `Europe/Vienna`); browsers report it during connect, and it stays useful when the connecting IP is loopback, tunneled, or CGNAT

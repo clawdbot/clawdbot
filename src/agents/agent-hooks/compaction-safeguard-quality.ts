@@ -1,6 +1,7 @@
 /** Quality contract, fallback, and audit helpers for compaction safeguard summaries. */
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
@@ -18,6 +19,7 @@ const REQUIRED_SUMMARY_SECTIONS = [
   "## Pending user asks",
   "## Exact identifiers",
 ] as const;
+const QUALITY_PROTECTED_SECTION_START = 3;
 const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
@@ -91,6 +93,128 @@ function hasRequiredSummarySections(summary: string): boolean {
     cursor = index + 1;
   }
   return true;
+}
+
+type SummaryQualityRetentionPlan = {
+  minimumChars: number;
+  render: (maxChars: number) => string | null;
+};
+
+function parseRequiredSummarySectionContents(summary: string): string[] | null {
+  const contents = REQUIRED_SUMMARY_SECTIONS.map(() => new Array<string>());
+  const preamble: string[] = [];
+  let sectionIndex = -1;
+
+  for (const line of summary.split(/\r?\n/u)) {
+    const nextHeading = REQUIRED_SUMMARY_SECTIONS[sectionIndex + 1];
+    if (nextHeading && line.trim() === nextHeading) {
+      sectionIndex += 1;
+      continue;
+    }
+    (sectionIndex < 0 ? preamble : contents[sectionIndex])?.push(line);
+  }
+  if (sectionIndex !== REQUIRED_SUMMARY_SECTIONS.length - 1) {
+    return null;
+  }
+  contents[0]?.unshift(...preamble);
+  return contents.map((lines) => lines.join("\n").trim());
+}
+
+/** Plan truncation that keeps audit-required headings, pending asks, and exact identifiers. */
+export function createSummaryQualityRetentionPlan(
+  summary: string,
+  truncatedMarker: string,
+  params: {
+    auditSummary?: string;
+    identifiers: string[];
+    latestAsk: string | null;
+    requiredAskContext?: string;
+    identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
+  },
+): SummaryQualityRetentionPlan | null {
+  const contents = parseRequiredSummarySectionContents(summary);
+  if (!contents) {
+    return null;
+  }
+  const enforceIdentifiers = (params.identifierPolicy ?? "strict") === "strict";
+  const auditSummary = params.auditSummary ?? summary;
+  if (
+    enforceIdentifiers &&
+    params.identifiers.some((identifier) => !summaryIncludesIdentifier(auditSummary, identifier))
+  ) {
+    return null;
+  }
+  if (!hasAskOverlap(auditSummary, params.latestAsk)) {
+    return null;
+  }
+  const pendingAsk = contents[QUALITY_PROTECTED_SECTION_START] ?? "";
+  const requiredAskContext = params.requiredAskContext?.trim() ?? "";
+  const exactIdentifiers = contents[QUALITY_PROTECTED_SECTION_START + 1] ?? "";
+  const missingIdentifiers = enforceIdentifiers
+    ? params.identifiers.filter(
+        (identifier) => !summaryIncludesIdentifier(exactIdentifiers, identifier),
+      )
+    : [];
+  const protectedContents = [
+    [
+      pendingAsk,
+      requiredAskContext && !pendingAsk.includes(requiredAskContext) ? requiredAskContext : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    [exactIdentifiers, ...missingIdentifiers].filter(Boolean).join("\n"),
+  ];
+  const marker = truncatedMarker.trim();
+  const protectedBlocks = REQUIRED_SUMMARY_SECTIONS.slice(QUALITY_PROTECTED_SECTION_START).map(
+    (heading, index) => {
+      const content = protectedContents[index];
+      return content ? `${heading}\n${content}` : heading;
+    },
+  );
+  const optionalHeadings = REQUIRED_SUMMARY_SECTIONS.slice(0, QUALITY_PROTECTED_SECTION_START);
+  const optionalContents = contents.slice(0, QUALITY_PROTECTED_SECTION_START);
+  const optionalScaffolds = optionalHeadings.map((heading, index) =>
+    optionalContents[index] ? `${heading}\n` : heading,
+  );
+  const minimumSummary = [...optionalScaffolds, marker, ...protectedBlocks].join("\n\n");
+
+  return {
+    minimumChars: minimumSummary.length,
+    render(maxChars) {
+      const bodyHasRequiredAskContext = !requiredAskContext || summary.includes(requiredAskContext);
+      const bodyHasIdentifiers =
+        !enforceIdentifiers ||
+        params.identifiers.every((identifier) => summaryIncludesIdentifier(summary, identifier));
+      if (summary.length <= maxChars && bodyHasRequiredAskContext && bodyHasIdentifiers) {
+        return summary;
+      }
+      if (maxChars < minimumSummary.length) {
+        return null;
+      }
+      const contentBudget = maxChars - minimumSummary.length;
+      const totalContentChars = optionalContents.reduce(
+        (total, content) => total + content.length,
+        0,
+      );
+      const allocations = optionalContents.map((content) =>
+        totalContentChars > 0
+          ? Math.floor((contentBudget * content.length) / totalContentChars)
+          : 0,
+      );
+      let remainder = contentBudget - allocations.reduce((total, chars) => total + chars, 0);
+      for (const [index, content] of optionalContents.entries()) {
+        const allocation = allocations[index] ?? 0;
+        const extra = Math.min(remainder, Math.max(0, content.length - allocation));
+        allocations[index] = allocation + extra;
+        remainder -= extra;
+      }
+      const optionalBlocks = optionalHeadings.map((heading, index) => {
+        const content = truncateUtf16Safe(optionalContents[index] ?? "", allocations[index] ?? 0);
+        return content ? `${heading}\n${content}` : heading;
+      });
+      return [...optionalBlocks, marker, ...protectedBlocks].join("\n\n");
+    },
+  };
 }
 
 /** Return a structured fallback summary when model output is missing/invalid. */
@@ -174,24 +298,36 @@ function tokenizeAskOverlapText(text: string): string[] {
     .filter((token) => token.length > 0);
 }
 
-function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
+function resolveAskOverlapRequirement(latestAsk: string | null): {
+  tokens: string[];
+  requiredMatches: number;
+} | null {
   if (!latestAsk) {
-    return true;
+    return null;
   }
   const askTokens = uniqueStrings(tokenizeAskOverlapText(latestAsk)).slice(
     0,
     MAX_ASK_OVERLAP_TOKENS,
   );
   if (askTokens.length === 0) {
-    return true;
+    return null;
   }
   const meaningfulAskTokens = askTokens.filter(
     (token) => token.length > 1 && !isQueryStopWordToken(token),
   );
   const tokensToCheck = meaningfulAskTokens.length > 0 ? meaningfulAskTokens : askTokens;
-  const summaryTokens = new Set(tokenizeAskOverlapText(summary));
-  const overlapCount = tokensToCheck.filter((token) => summaryTokens.has(token)).length;
   const requiredMatches = tokensToCheck.length >= MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH ? 2 : 1;
+  return { tokens: tokensToCheck, requiredMatches };
+}
+
+function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
+  const requirement = resolveAskOverlapRequirement(latestAsk);
+  if (!requirement) {
+    return true;
+  }
+  const summaryTokens = new Set(tokenizeAskOverlapText(summary));
+  const overlapCount = requirement.tokens.filter((token) => summaryTokens.has(token)).length;
+  const { requiredMatches } = requirement;
   return overlapCount >= requiredMatches;
 }
 

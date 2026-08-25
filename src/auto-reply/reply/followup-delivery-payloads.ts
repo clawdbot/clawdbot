@@ -11,8 +11,13 @@ import {
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
 } from "./origin-routing.js";
-import { applyReplyThreading, filterMessagingToolReplyPayload } from "./reply-payloads.js";
-import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
+import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
+import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
+import {
+  createReplyDeliveryContext,
+  createReplyToModeFilterForChannel,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 
 /** Strips empty/heartbeat payloads, applies threading, and dedupes message-tool sends. */
 export function resolveFollowupDeliveryPayloads(params: {
@@ -75,22 +80,18 @@ export function resolveFollowupDeliveryPayloads(params: {
       sanitizedPayloads.push(sanitized);
     }
   }
-  const replyTaggedPayloads = applyReplyThreading({
-    payloads: sanitizedPayloads,
-    replyToMode,
-    replyToChannel,
-  }).map((payload) =>
-    setReplyPayloadMetadata(payload, {
-      replyDelivery,
-      ...(replyDeliverySource ? { replyDeliverySource } : {}),
-    }),
-  );
   const originatingTo = resolveOriginMessageTo({
     originatingTo: params.originatingTo,
   });
-  return replyTaggedPayloads.flatMap((payload) =>
+  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  return sanitizedPayloads.flatMap((payload) =>
     filterMessagingToolReplyPayload({
-      payload,
+      payload: applyReplyToMode.preview(
+        setReplyPayloadMetadata(applyReplyTagsToPayload(payload), {
+          replyDelivery,
+          ...(replyDeliverySource ? { replyDeliverySource } : {}),
+        }),
+      ),
       config: params.cfg,
       messageProvider: replyMessageProvider,
       messagingToolSentTargets: params.sentTargets,
@@ -99,6 +100,8 @@ export function resolveFollowupDeliveryPayloads(params: {
       accountId,
       sentMediaUrls: params.sentMediaUrls,
       sentTexts: params.sentTexts,
-    }),
+    })
+      .filter(isRenderablePayload)
+      .map(applyReplyToMode),
   );
 }

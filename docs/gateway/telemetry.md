@@ -94,7 +94,8 @@ When you explicitly enable feature statistics, the same daily request becomes a
   "features": {
     "channels": ["discord", "telegram"],
     "providerFamilies": ["anthropic", "openai"],
-    "pluginsEnabled": 7,
+    "plugins": ["codex", "diagnostics-otel"],
+    "pluginsEnabled": 9,
     "sessionsLast24h": 14
   }
 }
@@ -107,10 +108,17 @@ When you explicitly enable feature statistics, the same daily request becomes a
 | `platform`                  | Operating system and CPU architecture.                                    |
 | `node`                      | Running Node.js version.                                                  |
 | `surface`                   | Request origin: `gateway` or `cli`.                                       |
-| `features.channels`         | Enabled channel plugin names, sorted alphabetically.                      |
-| `features.providerFamilies` | Configured provider names, sorted alphabetically; never model names.      |
-| `features.pluginsEnabled`   | Number of enabled plugins, without plugin names or configuration details. |
+| `features.channels`         | Publicly known enabled channel plugin names, sorted alphabetically.       |
+| `features.providerFamilies` | Publicly known configured provider names; never model names.              |
+| `features.plugins`          | Publicly known enabled plugin names, sorted alphabetically.               |
+| `features.pluginsEnabled`   | Total enabled plugins, including privately developed plugins never named. |
 | `features.sessionsLast24h`  | Number of sessions observed during the preceding 24 hours.                |
+
+OpenClaw names only plugins and channels that are bundled with OpenClaw or
+already appear in its official plugin catalog. Privately developed plugins are
+counted but never named because a private plugin name could identify its
+organization. Subtract `features.plugins.length` from `features.pluginsEnabled`
+to find the number of unnamed private plugins.
 
 The sender and `openclaw telemetry show` use the same payload builder, so the
 JSON displayed by the CLI is the same payload the sender would use at that
@@ -156,6 +164,19 @@ Set `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` to force feature statistics off,
 even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 feature-statistics body.
+
+## Automated environments
+
+OpenClaw sends nothing when it detects an automated environment, meaning the
+`CI` environment variable is set to a truthy value. Continuous integration jobs
+are not installations: they would outnumber real operators by orders of
+magnitude and make version and platform counts meaningless, and your pipeline
+should not report to us on every job.
+
+This applies to both tiers, so a CI job sends no update check and no feature
+statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
+because a configured endpoint means the run is deliberately exercising this
+path.
 
 ## Disable every automatic update request
 

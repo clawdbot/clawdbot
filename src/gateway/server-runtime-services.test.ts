@@ -120,12 +120,10 @@ import {
 
 const {
   activateGatewayScheduledServices,
-  runGatewayPostReadyMaintenance,
   scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
-  startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
@@ -174,32 +172,25 @@ describe("server-runtime-services", () => {
     resetGatewayWorkAdmission();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
-    const services = startGatewayRuntimeServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
+  it("starts channel health without activating scheduled services", () => {
+    startGatewayChannelHealthMonitor({
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
         isManuallyStopped: vi.fn(),
       } as never,
-      log: createLog(),
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
-
-    services.heartbeatRunner.stop();
-    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
       const monitor = startGatewayChannelHealthMonitor({
-        cfg: {} as never,
         channelManager: {} as never,
         env: { [envKey]: "1" },
       });
@@ -819,24 +810,22 @@ describe("server-runtime-services", () => {
   });
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {
+    vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
     const recordPostReadyMemory = vi.fn();
 
-    await runGatewayPostReadyMaintenance({
-      startMaintenance: vi.fn(async () => {
-        throw new Error("timers unavailable");
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        startMaintenance: vi.fn(async () => {
+          throw new Error("timers unavailable");
+        }),
+        cronState: createTestCronState(cron),
+        log,
+        recordPostReadyMemory,
       }),
-      applyMaintenance: vi.fn(),
-      shouldStartCron: () => true,
-      markCronStartHandled: vi.fn(),
-      cronState: createTestCronState(cron),
-      cronReconciliation: createTestCronReconciliation(),
-      cronConfig: {} as never,
-      logCron: { error: vi.fn() },
-      log,
-      recordPostReadyMemory,
-    });
+    );
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(log.warn).toHaveBeenCalledWith(
       "gateway post-ready maintenance startup failed: Error: timers unavailable",

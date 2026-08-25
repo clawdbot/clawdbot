@@ -275,6 +275,73 @@ describe("agent event handler", () => {
     });
   });
 
+  it("retains standalone warnings and Guardian decisions in the client-owned reconnect snapshot", () => {
+    const { chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+
+    emitAgentEvents(handler, "provider-run", [
+      ["notice", { phase: "warning", message: "Custom execution rules were not applied." }],
+      [
+        "codex_app_server.guardian",
+        { phase: "started", reviewId: "network-review", targetItemId: null, status: "inProgress" },
+      ],
+      [
+        "codex_app_server.guardian",
+        { phase: "completed", reviewId: "network-review", targetItemId: null, status: "denied" },
+      ],
+    ]);
+
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).toMatchObject([
+      {
+        runId: "client-run",
+        sessionKey: "session-1",
+        stream: "notice",
+        data: { phase: "warning", message: "Custom execution rules were not applied." },
+      },
+      {
+        runId: "client-run",
+        sessionKey: "session-1",
+        stream: "codex_app_server.guardian",
+        data: { phase: "completed", reviewId: "network-review", status: "denied" },
+      },
+    ]);
+
+    emitAgentEvent(
+      handler,
+      "provider-run",
+      "codex_app_server.guardian",
+      {
+        phase: "strict_review_required",
+        reviewId: "command-review",
+        targetItemId: "command-item",
+      },
+      { seq: 4 },
+    );
+    expect(
+      chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1)?.data,
+    ).toMatchObject({ phase: "strict_review_required", reviewId: "command-review" });
+
+    emitAgentEvent(
+      handler,
+      "provider-run",
+      "codex_app_server.guardian",
+      {
+        phase: "completed",
+        reviewId: "command-review",
+        targetItemId: "command-item",
+        status: "approved",
+      },
+      { seq: 5 },
+    );
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({ reviewId: "command-review" }),
+        }),
+      ]),
+    );
+  });
+
   it("records, replaces, dismisses, and clears normalized plan snapshots", () => {
     const { chatRunState, handler } = createHarness();
     registerChatRun(chatRunState, "provider-run", "session-1", "client-run");

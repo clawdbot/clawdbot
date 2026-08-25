@@ -17,9 +17,9 @@ struct OpenClawChatSwarmActivityState: Equatable {
     }
 
     mutating func observe(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
-        guard let groupID = Self.normalized(event.swarmGroupId) else { return false }
-        let kind = Self.normalized(event.kind)
-        let text = Self.normalized(event.text)
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmGroupId) else { return false }
+        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
+        let text = ChatPayloadDecoding.trimmedNonEmptyString(event.text)
         if let text, kind == "phase" || kind == "log" {
             if kind == "phase" {
                 let rankKey = Self.phaseRankKey(groupID: groupID, phase: text)
@@ -46,8 +46,8 @@ struct OpenClawChatSwarmActivityState: Equatable {
             return true
         }
 
-        guard let childKey = Self.normalized(event.sessionKey) else { return true }
-        if let phase = Self.normalized(event.swarmPhase) {
+        guard let childKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return true }
+        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) {
             Self.setBounded(
                 &self.phaseByChild,
                 key: childKey,
@@ -70,7 +70,7 @@ struct OpenClawChatSwarmActivityState: Equatable {
 
     func decorate(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
         sessions.map { row in
-            guard let groupID = Self.normalized(row.swarmGroupId) else { return row }
+            guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(row.swarmGroupId) else { return row }
             let phase = self.phaseByChild[row.key] ?? row.swarmPhase
             let rank = phase.flatMap { self.phaseRankByGroupPhase[Self.phaseRankKey(groupID: groupID, phase: $0)] }
                 ?? row.swarmPhaseRank
@@ -81,11 +81,6 @@ struct OpenClawChatSwarmActivityState: Equatable {
             decorated.swarmLog = log
             return decorated
         }
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
     }
 
     private static func phaseRankKey(groupID: String, phase: String) -> String {
@@ -253,7 +248,7 @@ enum SelfContainedSwarmHelpers {
     }
 
     static func isActivityNote(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
-        let kind = self.normalized(event.kind)
+        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
         return kind == "phase" || kind == "log"
     }
 
@@ -261,15 +256,17 @@ enum SelfContainedSwarmHelpers {
         _ event: OpenClawChatSessionsChangedEvent,
         matchesParent: (String) -> Bool) -> Bool
     {
-        if let parent = normalized(event.parentSessionKey) ?? normalized(event.spawnedBy) {
+        if let parent = ChatPayloadDecoding.trimmedNonEmptyString(event.parentSessionKey)
+            ?? ChatPayloadDecoding.trimmedNonEmptyString(event.spawnedBy)
+        {
             return matchesParent(parent)
         }
-        let kind = self.normalized(event.kind)
+        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
         if kind == "phase" || kind == "log" {
-            guard let sessionKey = normalized(event.sessionKey) else { return false }
+            guard let sessionKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return false }
             return matchesParent(sessionKey)
         }
-        guard let groupID = normalized(event.swarmGroupId) else { return false }
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmGroupId) else { return false }
         return self.generatedGroupBelongsToParent(groupID, matchesParent: matchesParent)
     }
 
@@ -280,11 +277,6 @@ enum SelfContainedSwarmHelpers {
         let parts = groupID.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.first == "swarm", parts.count > 2 else { return false }
         return matchesParent(parts.dropFirst().dropLast().joined(separator: ":"))
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

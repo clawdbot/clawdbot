@@ -1,4 +1,3 @@
-// One footer bell owns the sidebar's canonical operational conditions.
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
@@ -42,11 +41,13 @@ import {
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
-import "./tooltip.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
+import "./tooltip.ts";
 
 type SidebarAttentionPanelRenderer =
   typeof import("./sidebar-attention-panel.runtime.ts").renderSidebarAttentionPanel;
+type SidebarAttentionPanelRuntime = typeof import("./sidebar-attention-panel.runtime.ts");
+type UpdateProgressWatcher = (listener: (progress: UpdateProgress) => void) => () => void;
 
 // A visibility change only refetches a connection-scoped stale snapshot.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
@@ -79,9 +80,7 @@ class SidebarAttention extends OpenClawLightDomElement {
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
-  @property({ attribute: false }) watchUpdateProgress:
-    | ((listener: (progress: UpdateProgress) => void) => () => void)
-    | undefined = undefined;
+  @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -94,7 +93,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
   private panelTrigger: HTMLElement | null = null;
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
-  private panelLoad: Promise<SidebarAttentionPanelRenderer> | null = null;
+  private panelLoad: Promise<SidebarAttentionPanelRuntime> | null = null;
   private nativeUpdateDeclined = false;
 
   private readonly loadTask = new Task(this, {
@@ -180,6 +179,10 @@ class SidebarAttention extends OpenClawLightDomElement {
     .watch(
       () => this.context?.overlays,
       (overlays, notify) => overlays.subscribe(() => notify()),
+    )
+    .watch(
+      () => this.context?.scopeUpgrade,
+      (scopeUpgrade, notify) => scopeUpgrade.subscribe(notify),
     )
     .watch(
       () => this.context?.sessions,
@@ -469,19 +472,18 @@ class SidebarAttention extends OpenClawLightDomElement {
   };
 
   private async openPanel(trigger: HTMLElement) {
-    this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts").then(
-      (module) => module.renderSidebarAttentionPanel,
-    );
-    const panelRenderer = await this.panelLoad;
+    this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts");
+    const panelRuntime = await this.panelLoad;
     if (!this.isConnected) {
       return;
     }
+    this.context?.scopeUpgrade.activate(panelRuntime.ScopeUpgradeController);
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
     this.panelTrigger = trigger;
-    this.panelRenderer = panelRenderer;
+    this.panelRenderer = panelRuntime.renderSidebarAttentionPanel;
     this.panelPosition =
       rect.top < globalThis.innerHeight / 2
         ? { left, anchor: "top", top: Math.max(8, rect.bottom + 8) }
@@ -639,7 +641,11 @@ class SidebarAttention extends OpenClawLightDomElement {
     const items = this.currentItems().toSorted(
       (left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind],
     );
-    const count = approvalQueue.length + items.length + (updateSurface ? 1 : 0);
+    const count =
+      approvalQueue.length +
+      items.length +
+      (updateSurface ? 1 : 0) +
+      (this.context.scopeUpgrade.state.phase === "hidden" ? 0 : 1);
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
     });
@@ -729,6 +735,7 @@ class SidebarAttention extends OpenClawLightDomElement {
             overflowBelow: this.overflowBelow,
             panelPosition: this.panelPosition,
             selectedTab: this.selectedTab,
+            scopeUpgrade: this.context.scopeUpgrade,
             updateSurface,
             watchUpdateProgress: this.watchUpdateProgress,
           })

@@ -38,6 +38,7 @@ function threadStartResult() {
       updatedAt: 1,
       status: { type: "idle" },
       cwd: "/tmp/finalizer",
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,

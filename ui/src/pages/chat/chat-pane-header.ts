@@ -4,11 +4,6 @@ import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-r
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
-import {
-  openScopeUpgradeDetails,
-  renderScopeUpgradeTrigger,
-  scopeUpgradeStatusUsesSessionHeader,
-} from "../../app/device-scope-upgrade.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -92,16 +87,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       return [];
     }
     const actions: HeaderMenuStatusAction[] = [];
-    if (scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)) {
-      actions.push({
-        id: "access",
-        label: t("connection.scopeUpgrade.status"),
-        icon: icons.shieldQuestion,
-        tone: "warn",
-        onActivate: openScopeUpgradeDetails,
-      });
-    }
-
     const overlay = this.context.overlays.snapshot;
     if (overlay.controlUiRefreshRequired) {
       actions.push({
@@ -282,14 +267,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const accessStatusAction =
-      this.active &&
-      !this.narrow &&
-      scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)
-        ? renderScopeUpgradeTrigger(
-            "btn btn--ghost btn--icon chat-icon-btn scope-upgrade-status-trigger",
-          )
-        : nothing;
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
     const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
@@ -471,7 +448,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      panelActions: html`${accessStatusAction}${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,

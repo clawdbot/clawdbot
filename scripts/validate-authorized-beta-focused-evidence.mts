@@ -301,8 +301,35 @@ function requireJob(params: {
   }
 }
 
+function jobLogArgs(jobId: string, allowEscapeSequences = true) {
+  const args = ["api", `repos/${REPOSITORY}/actions/jobs/${jobId}/logs`];
+  if (allowEscapeSequences) {
+    args.push("--allow-escape-sequences");
+  }
+  return args;
+}
+
+function isUnknownAllowEscapeSequencesFlag(error: unknown) {
+  if (typeof error !== "object" || error === null || !("stderr" in error)) {
+    return false;
+  }
+  const stderr = error.stderr;
+  return (
+    typeof stderr === "string" &&
+    stderr.replace(/\r\n?/gu, "\n").split("\n").includes("unknown flag: --allow-escape-sequences")
+  );
+}
+
 function requireJobLogTarget(jobId: string, targetSha: string) {
-  const log = gh(["api", `repos/${REPOSITORY}/actions/jobs/${jobId}/logs`]);
+  let log: string;
+  try {
+    log = gh(jobLogArgs(jobId));
+  } catch (error) {
+    if (!isUnknownAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    log = gh(jobLogArgs(jobId, false));
+  }
   if (!log.includes(targetSha)) {
     fail(`job ${jobId} log does not bind target ${targetSha}`);
   }
@@ -350,13 +377,18 @@ function requireHistoricalExecutionPlan(policy: AuthorizedBetaFocusedPolicy) {
       fail("historical execution plan children must be an array");
     }
     const childRuns = new Map(
-      plan.children.map((entry: unknown) => {
+      plan.children.flatMap((entry: unknown) => {
         if (!isRecord(entry)) {
           fail("historical execution plan child must be an object");
         }
+        if (entry.selected !== true) {
+          return [];
+        }
         return [
-          exactString(entry.key, "historical execution plan child key"),
-          exactJsonId(entry.runId, "historical execution plan child run id"),
+          [
+            exactString(entry.key, "historical execution plan child key"),
+            exactJsonId(entry.runId, "historical execution plan child run id"),
+          ],
         ];
       }),
     );

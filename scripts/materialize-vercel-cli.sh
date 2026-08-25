@@ -8,8 +8,8 @@ github_output="${3:-}"
 
 package_json="${source_root}/package.json"
 package_lock="${source_root}/package-lock.json"
-expected_lock_sha256="db00a6dd0cab114931bc2b5a09c5a0556020c3652381019e2f817cc0426e782c"
-expected_vercel_integrity="sha512-Mv1807Ptxhy6cQne5xV/2dD+bUGYRtpV3sLVPXEW115RBN6K/ssuvOww8eNfdGucFH9C+p5ccQF07XSyAvBPLQ=="
+expected_lock_sha256="218f2254dddf8f978541736031e8cf5a3e7d368b71e98d47a67322bbe17f3897"
+expected_vercel_integrity="sha512-sxCp4+S0QlO+LEvGxboxB5tbDZvVE4gO2YeRuGvdamK5CYHTOK4WDHE3u+E8VIe8FVK9mtjKeo4Jnxez5MfNdw=="
 test -f "${package_json}"
 test -f "${package_lock}"
 if [[ -e "${destination}" || -L "${destination}" ]]; then
@@ -53,7 +53,7 @@ vercel_version="$(
   VERCEL_CLI_ROOT="${destination}" \
     node -p "require(require('node:path').join(process.env.VERCEL_CLI_ROOT, 'node_modules/vercel/package.json')).version"
 )"
-[[ "${vercel_version}" == "58.4.4" ]] || {
+[[ "${vercel_version}" == "59.1.3" ]] || {
   echo "Pinned Vercel CLI version mismatch: ${vercel_version}" >&2
   exit 1
 }

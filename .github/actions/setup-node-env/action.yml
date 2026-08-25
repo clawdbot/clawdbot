@@ -139,7 +139,7 @@ runs:
       if: inputs.cache-mode != 'off' && runner.os != 'Windows' && runner.environment != 'github-hosted'
       id: node-toolchain-restore
       continue-on-error: true
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/openclaw-node-toolchain/node
         key: openclaw-node-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
@@ -203,7 +203,7 @@ runs:
       id: dependency-cache
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       continue-on-error: true
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           node_modules
@@ -246,7 +246,7 @@ runs:
     - name: Restore Vitest transform cache
       id: vitest-cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
         key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -298,7 +298,7 @@ runs:
     - name: Restore Node compile cache
       id: node-compile-cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-node-compile-cache
         key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
@@ -321,7 +321,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        npm install -g bun@1.3.14
+        npm install -g bun@1.4.0
 
     - name: Runtime versions
       shell: bash
@@ -457,7 +457,7 @@ runs:
     - name: Restore build-all cache
       id: build-all-cache
       if: inputs.cache-mode != 'off' && inputs.build-all-cache-scope != ''
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .artifacts/build-all-cache
         # Exact keys deduplicate concurrent jobs. Coarse restore supplies the

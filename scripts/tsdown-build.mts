@@ -12,10 +12,10 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -1714,15 +1714,7 @@ export async function runTsdownBuildInvocation(
   });
 }
 
-function isMainModule() {
-  const argv1 = process.argv[1];
-  if (!argv1) {
-    return false;
-  }
-  return import.meta.url === pathToFileURL(argv1).href;
-}
-
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const args = parseTsdownBuildArgs(process.argv.slice(2));
   if (args.help) {
     console.log(tsdownBuildUsage());

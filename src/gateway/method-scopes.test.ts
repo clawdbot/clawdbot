@@ -528,7 +528,7 @@ describe("method scope resolution", () => {
     );
   });
 
-  it("requires admin for incognito session creation and inheritance", () => {
+  it("requires admin for sensitive session creation parameters", () => {
     const incognitoKey = "agent:main:dashboard:incognito-parent";
     for (const params of [
       { agentId: "main", incognito: true },
@@ -537,10 +537,10 @@ describe("method scope resolution", () => {
       { parentSessionKey: incognitoKey, fork: true },
       { parentSessionKey: incognitoKey, spawnDepth: 1 },
       { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+      { agentId: "main", toolOverrides: { skills: { release: false } } },
     ]) {
-      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
-        "operator.admin",
-      ]);
+      const required = resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params);
+      expect(required).toEqual(["operator.admin"]);
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
       ).toEqual({ allowed: false, missingScope: "operator.admin" });
@@ -928,11 +928,12 @@ describe("operator scope authorization", () => {
   });
 
   it.each([
+    "users.setRole",
     "exec.approvals.get",
     "exec.approvals.set",
     "exec.approvals.node.get",
     "exec.approvals.node.set",
-  ])("requires admin scope for exec approval policy method %s", (method) => {
+  ])("requires admin scope for sensitive policy method %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",

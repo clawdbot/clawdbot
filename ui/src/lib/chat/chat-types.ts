@@ -43,7 +43,8 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "reviewing" | "strict-review-required" | "warning";
+  source?: "system";
   command?: string;
   riskLevel?: string;
   rationale?: string;
@@ -103,6 +104,7 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      boundaryId?: string;
       tone?: "danger";
     }
   | {

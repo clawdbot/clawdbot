@@ -5,6 +5,10 @@ import type { ControlUiSessionPullRequest } from "../../../../src/gateway/contro
 import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -164,11 +168,11 @@ export function sidebarPanelDefinitions(
     ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
-      shortcut: "Ctrl+`",
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     }),
     definePanel("browser", "browser", icons.globe, browser, { available: browserAvailable }),
     definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
-      shortcut: "⇧⌘B",
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
     definePanel(
       "companion",

@@ -54,6 +54,8 @@ const {
     pid: 12345,
     command: "openclaw update --yes --channel beta --timeout 2700",
     logPath: "/tmp/openclaw-handoff.log",
+    handoffId: "auto-handoff-id",
+    installRoot: "/opt/openclaw",
   })),
   versionMock: { value: "1.0.0" },
 }));
@@ -77,13 +79,8 @@ vi.mock("./openclaw-root.js", async () => {
   };
 });
 
-vi.mock("./restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-      return 300_000;
-    }
-    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
-  },
+vi.mock("./restart.js", async () => ({
+  ...(await vi.importActual<typeof import("./restart.js")>("./restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
@@ -313,6 +310,8 @@ describe("update-startup", () => {
       pid: 12345,
       command: "openclaw update --yes --channel beta --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
+      handoffId: "auto-handoff-id",
+      installRoot: "/opt/openclaw",
     });
     resetUpdateAvailableStateForTest();
   });
@@ -1911,9 +1910,11 @@ describe("update-startup", () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it("delegates configured auto-updates to an external supervisor", async () => {
+  it("keeps external auto-update supervision authoritative over native systemd markers", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
     const log = { info: vi.fn() };
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
@@ -1994,6 +1995,8 @@ describe("update-startup", () => {
       pid: 12345,
       command: "openclaw update --yes --channel beta --tag 2.0.0-beta.1 --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
+      handoffId: "started-auto-handoff-id",
+      installRoot: await fs.realpath(installRoot),
     });
     const log = { info: vi.fn() };
 
@@ -2036,6 +2039,11 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "update.auto",
+      successorOwner: {
+        kind: "managed-update-handoff",
+        handoffId: "started-auto-handoff-id",
+        installRoot: await fs.realpath(installRoot),
+      },
       skipCooldown: true,
       skipDeferral: true,
     });
@@ -2130,6 +2138,7 @@ describe("update-startup", () => {
       expect.objectContaining({
         root: "/opt/openclaw",
         timeoutMs: 45 * 60 * 1000,
+        restartDrainTimeoutMs: 300_000,
         channel: "beta",
         tag: "2.0.0-beta.1",
         restartDelayMs: 2000,
@@ -2139,6 +2148,11 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 2000,
       reason: "update.auto",
+      successorOwner: {
+        kind: "managed-update-handoff",
+        handoffId: "auto-handoff-id",
+        installRoot: "/opt/openclaw",
+      },
       skipCooldown: true,
       skipDeferral: true,
     });

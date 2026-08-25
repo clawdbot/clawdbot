@@ -864,8 +864,10 @@ describe("toStreamingMarkdownHtml", () => {
     ) => ReturnType<typeof splitStableStreamingMarkdown>;
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
-    for (let index = 0; index < 96; index += 1) {
-      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(50)}\n`;
+    // The ratio catches a reverted full-rescan path without making runner load
+    // part of the assertion by spending most of the test timeout on the baseline.
+    for (let index = 0; index < 48; index += 1) {
+      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(30)}\n`;
       prefixes.push(prefix);
     }
     const measure = (streamKey?: string) => {

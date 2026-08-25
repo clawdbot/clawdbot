@@ -77,7 +77,7 @@ Live model tests are split into two layers so failures are isolated:
 - "Direct model" tells you whether the provider/model can answer at all with the given key.
 - "Gateway smoke" tells you whether the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
-The curated model lists below live in `src/agents/live-model-filter.ts` and
+The curated model lists below live in `src/agents/test-helpers/live-model-dynamic-candidates.ts` and
 change over time; treat the arrays there as the source of truth, not this
 page.
 
@@ -584,7 +584,7 @@ Notes:
 
 ## Live: model matrix (what we cover)
 
-Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/live-model-filter.ts`, in this priority order:
+Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/test-helpers/live-model-dynamic-candidates.ts`, in this priority order:
 
 | Provider/model                                | Notes      |
 | --------------------------------------------- | ---------- |

@@ -1666,6 +1666,7 @@ describe("gateway sessions patch", () => {
     );
     expect(changed.execNode).toBe("worker-2");
     expect(changed.execCwd).toBeUndefined();
+    expect(changed.execHost).toBe("node");
 
     const cleared = expectPatchOk(
       await runPatch({
@@ -1679,7 +1680,28 @@ describe("gateway sessions patch", () => {
     );
     expect(cleared.execNode).toBeUndefined();
     expect(cleared.execCwd).toBeUndefined();
+    expect(cleared.execHost).toBeUndefined();
   });
+
+  test.each(["auto", "gateway", "sandbox"] as const)(
+    "preserves explicit %s exec hosting when clearing a stale node binding",
+    async (execHost) => {
+      const cleared = expectPatchOk(
+        await runPatch({
+          store: mainStoreEntry({
+            execHost,
+            execNode: "worker-1",
+            execCwd: "/workspace/on-worker-1",
+          }),
+          patch: { key: MAIN_SESSION_KEY, execNode: null },
+        }),
+      );
+
+      expect(cleared.execHost).toBe(execHost);
+      expect(cleared.execNode).toBeUndefined();
+      expect(cleared.execCwd).toBeUndefined();
+    },
+  );
 
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({

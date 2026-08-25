@@ -459,6 +459,10 @@
   color: var(--danger);
 }
 
+.sidebar-issues-panel__details[data-attention-kind="scopeUpgrade"] .sidebar-issues-panel__icon {
+  color: var(--warn);
+}
+
 .sidebar-issues-panel__dismiss {
   display: inline-grid;
   width: 24px;
@@ -720,10 +724,4 @@
 
 .sidebar-approval-row__message--error {
   color: var(--danger);
-}
-
-.exec-approval-description {
-  overflow-wrap: anywhere;
-  color: var(--muted-strong);
-  line-height: 1.4;
 }
