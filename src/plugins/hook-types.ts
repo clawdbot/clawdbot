@@ -1096,6 +1096,7 @@ type PluginHookBeforeInstallSkillInstallSpec = {
   package?: string;
   module?: string;
   url?: string;
+  sha256?: string;
   archive?: string;
   extract?: boolean;
   stripComponents?: number;
