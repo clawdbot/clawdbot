@@ -122,6 +122,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForChatScrollIdle(page);
+      await gateway.waitForRequest("agent.identity.get");
+      const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await expect.poll(() => thread.count()).toBe(1);
       const initialDistance = await thread.evaluate((element) => {
@@ -129,12 +131,13 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(initialDistance).toBeLessThanOrEqual(8);
-      const storedScrollTop = await thread.evaluate((element) => {
+      await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
         transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
-        return transcript.scrollTop;
       });
+      await waitForChatScrollIdle(page);
+      const storedScrollTop = await thread.evaluate((element) => element.scrollTop);
       expect(storedScrollTop).toBeGreaterThan(0);
 
       const sessionLink = (sessionKey: string) =>
@@ -144,6 +147,9 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
+        initialIdentityRequestCount,
+      );
       const firstVisitDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;

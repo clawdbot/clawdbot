@@ -319,6 +319,16 @@ describe("gateway session utils", () => {
   test.each([
     { name: "never read", entry: {}, expected: false },
     {
+      name: "legacy activity without creation provenance",
+      entry: { lastActivityAt: 11 },
+      expected: false,
+    },
+    {
+      name: "activity after creation before first read",
+      entry: { createdAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
       name: "interaction after read",
       entry: { lastReadAt: 10, lastInteractionAt: 11 },
       expected: true,
@@ -617,6 +627,33 @@ describe("gateway session utils", () => {
     expect(listed.offset).toBe(2);
     expect(listed.nextOffset).toBe(4);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session list search includes the session group name", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:roadmap": {
+        sessionId: "roadmap",
+        displayName: "Quarterly roadmap",
+        category: "Team Planning",
+        updatedAt: 2,
+      },
+      "agent:main:other": {
+        sessionId: "other",
+        displayName: "Unrelated",
+        category: "Personal",
+        updatedAt: 1,
+      },
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "team planning" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["agent:main:roadmap"]);
   });
 
   test("session list search includes direct-session origin display labels", () => {

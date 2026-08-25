@@ -77,6 +77,16 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       advisory:
         description: Treat package Telegram failures as advisory for the caller
         required: false
@@ -163,6 +173,16 @@ on:
         required: false
         default: ""
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -408,6 +428,7 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: ${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}
           OPENCLAW_SKIP_DOCKER_BUILD: "1"
           OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local
           OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.package_spec }}
@@ -415,6 +436,7 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: convex
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
+          OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: ${{ inputs.rtt_scenario }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"

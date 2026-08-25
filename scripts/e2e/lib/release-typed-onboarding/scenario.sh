@@ -105,6 +105,8 @@ exec 3>"$input_fifo"
 
 wait_for_log "Continue?" 60
 send $'y\r' 0.4
+wait_for_log "Help make OpenClaw better?" 60
+send $'\r' 0.4
 wait_for_log "What should we call your first agent?" 60
 send $'\r' 0.4
 wait_for_log "to search" 60

@@ -7,7 +7,7 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import type { QaSuiteScenarioResult } from "./suite.js";
+import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite.js";
 import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
   QaTestFileScenario,
@@ -87,11 +87,64 @@ function createDeferred() {
   return { promise, resolve };
 }
 
-function trackMaxActiveFlowRuns() {
-  const run = runQaFlowSuite.getMockImplementation();
-  if (!run) {
+function requireDefaultQaFlowSuiteImplementation() {
+  const implementation = runQaFlowSuite.getMockImplementation();
+  if (!implementation) {
     throw new Error("expected default QA flow suite mock implementation");
   }
+  return implementation;
+}
+
+function requireDefaultQaTestFileImplementation() {
+  const implementation = runQaTestFileScenarios.getMockImplementation();
+  if (!implementation) {
+    throw new Error("expected default QA test-file mock implementation");
+  }
+  return implementation;
+}
+
+function blockNextQaFlowSuite() {
+  const implementation = requireDefaultQaFlowSuiteImplementation();
+  const started = createDeferred();
+  const blocked = createDeferred();
+  runQaFlowSuite.mockImplementationOnce(async (params) => {
+    started.resolve();
+    await blocked.promise;
+    return await implementation(params);
+  });
+  return { started: started.promise, release: blocked.resolve };
+}
+
+function blockNextQaTestFileRun() {
+  const implementation = requireDefaultQaTestFileImplementation();
+  const started = createDeferred();
+  const blocked = createDeferred();
+  runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+    started.resolve();
+    await blocked.promise;
+    return await implementation(params);
+  });
+  return { started: started.promise, release: blocked.resolve };
+}
+
+async function runFailFastQaSuite(label: string, overrides: QaSuiteRunParams = {}) {
+  return await runQaSuite({
+    repoRoot: await makeTempRepo(`qa-suite-${label}-`),
+    outputDir: `.artifacts/qa-e2e/${label}`,
+    concurrency: 8,
+    failFast: true,
+    scenarioIds: [
+      "dm-chat-baseline",
+      "group-visible-reply-tool",
+      "control-ui-chat-flow-playwright",
+      "docker-npm-onboard-channel-agent",
+    ],
+    ...overrides,
+  });
+}
+
+function trackMaxActiveFlowRuns() {
+  const run = requireDefaultQaFlowSuiteImplementation();
   let active = 0;
   let maxActive = 0;
   runQaFlowSuite.mockImplementation(async (params) => {
@@ -110,10 +163,7 @@ function trackMaxActiveFlowRuns() {
 }
 
 function mockFlowPartitionFailures(failuresByScenarioId: ReadonlyMap<string, readonly Error[]>) {
-  const run = runQaFlowSuite.getMockImplementation();
-  if (!run) {
-    throw new Error("expected default QA flow suite mock implementation");
-  }
+  const run = requireDefaultQaFlowSuiteImplementation();
   const attempts = new Map<string, number>();
   runQaFlowSuite.mockImplementation(async (params) => {
     const scenarioId = params?.scenarioIds?.[0];
@@ -437,10 +487,7 @@ describe("qa suite runtime launcher", () => {
 
   it("expands profile scenarios across every eligible pluggable channel", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-channels-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementation(async (params) => {
       const result = await defaultFlowImplementation(params);
       if (params?.channelId === "matrix" && params.scenarioIds?.includes("thread-isolation")) {
@@ -948,10 +995,7 @@ describe("qa suite runtime launcher", () => {
 
   it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-channels-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementation(async (params) => {
       const result = await defaultFlowImplementation(params);
       const scenarioIds: readonly string[] = params?.scenarioIds ?? [];
@@ -1182,10 +1226,7 @@ describe("qa suite runtime launcher", () => {
 
   it("projects a skipped native producer as a skipped unified scenario", async () => {
     const repoRoot = await makeTempRepo("qa-suite-native-skip-");
-    const defaultImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultImplementation) {
-      throw new Error("expected default QA test-file scenario mock implementation");
-    }
+    const defaultImplementation = requireDefaultQaTestFileImplementation();
     runQaTestFileScenarios.mockImplementationOnce(async (params) => {
       const result = await defaultImplementation(params);
       return {
@@ -1216,40 +1257,7 @@ describe("qa suite runtime launcher", () => {
 
   it("serializes test-file runner partitions in one checkout", async () => {
     const repoRoot = await makeTempRepo("qa-suite-test-file-serial-");
-    let releaseVitest!: () => void;
-    let markVitestStarted!: () => void;
-    const vitestStarted = new Promise<void>((resolve) => {
-      markVitestStarted = resolve;
-    });
-    const vitestBlocked = new Promise<void>((resolve) => {
-      releaseVitest = resolve;
-    });
-    runQaTestFileScenarios.mockImplementationOnce(
-      async (params: {
-        outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
-      }) => {
-        markVitestStarted();
-        await vitestBlocked;
-        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        const scenario = params.scenarios[0];
-        if (!scenario) {
-          throw new Error("expected scenario");
-        }
-        return {
-          outputDir: params.outputDir,
-          executionKind: scenario.execution.kind,
-          evidencePath,
-          results: params.scenarios.map((scenarioItem) => ({
-            durationMs: 1,
-            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
-            scenario: scenarioItem,
-            status: "pass",
-          })),
-        };
-      },
-    );
+    const vitest = blockNextQaTestFileRun();
 
     const runPromise = runQaSuite({
       repoRoot,
@@ -1257,12 +1265,12 @@ describe("qa suite runtime launcher", () => {
       concurrency: 8,
       scenarioIds: ["gateway-smoke", "control-ui-chat-flow-playwright"],
     });
-    await vitestStarted;
+    await vitest.started;
     await Promise.resolve();
 
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
 
-    releaseVitest();
+    vitest.release();
     await runPromise;
 
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
@@ -1375,10 +1383,7 @@ describe("qa suite runtime launcher", () => {
       state: {} as QaLabServerHandle["state"],
       stop: vi.fn(),
     } satisfies QaLabServerHandle;
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementationOnce(async (params) => {
       params?.lab?.setScenarioRun({
         kind: "suite",
@@ -1480,10 +1485,7 @@ describe("qa suite runtime launcher", () => {
 
   it("serializes channel-driver isolated flow workers under explicit concurrency", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-isolated-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     const isolatedScenarioIds = new Set([
       "runtime-tool-image-generate",
       "runtime-inventory-drift-check",
@@ -1566,37 +1568,7 @@ describe("qa suite runtime launcher", () => {
 
   it("respects serial concurrency across unified suite partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-");
-    let releaseFlow!: () => void;
-    let markFlowStarted!: () => void;
-    const flowStarted = new Promise<void>((resolve) => {
-      markFlowStarted = resolve;
-    });
-    const flowBlocked = new Promise<void>((resolve) => {
-      releaseFlow = resolve;
-    });
-    runQaFlowSuite.mockImplementationOnce(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
-        markFlowStarted();
-        await flowBlocked;
-        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-        const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
-        return {
-          outputDir,
-          evidencePath,
-          reportPath: path.join(outputDir, "qa-suite-report.md"),
-          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-          report: "# QA Suite Report\n",
-          scenarios: scenarioIds.map((scenarioId) => ({
-            name: scenarioId,
-            status: "pass",
-            steps: [],
-          })),
-          watchUrl: "http://127.0.0.1:43124",
-        };
-      },
-    );
+    const flow = blockNextQaFlowSuite();
 
     const runPromise = runQaSuite({
       repoRoot,
@@ -1608,13 +1580,13 @@ describe("qa suite runtime launcher", () => {
         "control-ui-chat-flow-playwright",
       ],
     });
-    await flowStarted;
+    await flow.started;
     await Promise.resolve();
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
 
-    releaseFlow();
+    flow.release();
     await runPromise;
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
@@ -1622,7 +1594,6 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("stops unified suite partitions after the first failed flow scenario", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-fail-fast-flow-");
     const scenarioRuns: Array<Parameters<QaLabServerHandle["setScenarioRun"]>[0]> = [];
     const lab = {
       baseUrl: "http://127.0.0.1:43124",
@@ -1634,10 +1605,7 @@ describe("qa suite runtime launcher", () => {
       state: {} as QaLabServerHandle["state"],
       stop: vi.fn(),
     } satisfies QaLabServerHandle;
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementationOnce(async (params) => {
       const result = await defaultFlowImplementation(params);
       return {
@@ -1651,19 +1619,7 @@ describe("qa suite runtime launcher", () => {
       };
     });
 
-    const result = await runQaSuite({
-      lab,
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/fail-fast-flow",
-      concurrency: 8,
-      failFast: true,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "group-visible-reply-tool",
-        "control-ui-chat-flow-playwright",
-        "docker-npm-onboard-channel-agent",
-      ],
-    });
+    const result = await runFailFastQaSuite("fail-fast-flow", { lab });
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
@@ -1705,11 +1661,7 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("stops pending flow and script partitions after a native scenario fails", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-fail-fast-native-");
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultTestFileImplementation) {
-      throw new Error("expected default QA test-file scenario mock implementation");
-    }
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     runQaTestFileScenarios.mockImplementationOnce(async (params) => {
       const result = await defaultTestFileImplementation(params);
       return {
@@ -1723,18 +1675,7 @@ describe("qa suite runtime launcher", () => {
       };
     });
 
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/fail-fast-native",
-      concurrency: 8,
-      failFast: true,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "group-visible-reply-tool",
-        "control-ui-chat-flow-playwright",
-        "docker-npm-onboard-channel-agent",
-      ],
-    });
+    const result = await runFailFastQaSuite("fail-fast-native");
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
@@ -1755,28 +1696,13 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("fails and stops when a started flow partition omits its scenario result", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-flow-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementationOnce(async (params) => ({
       ...(await defaultFlowImplementation(params)),
       scenarios: [],
     }));
 
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/fail-fast-missing-flow",
-      concurrency: 8,
-      failFast: true,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "group-visible-reply-tool",
-        "control-ui-chat-flow-playwright",
-        "docker-npm-onboard-channel-agent",
-      ],
-    });
+    const result = await runFailFastQaSuite("fail-fast-missing-flow");
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
@@ -1819,28 +1745,13 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("fails and stops when a started native partition omits its scenario result", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-");
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultTestFileImplementation) {
-      throw new Error("expected default QA test-file scenario mock implementation");
-    }
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
       ...(await defaultTestFileImplementation(params)),
       results: [],
     }));
 
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/fail-fast-missing-native",
-      concurrency: 8,
-      failFast: true,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "group-visible-reply-tool",
-        "control-ui-chat-flow-playwright",
-        "docker-npm-onboard-channel-agent",
-      ],
-    });
+    const result = await runFailFastQaSuite("fail-fast-missing-native");
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
@@ -1874,11 +1785,7 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("stops later native execution kinds after a started kind omits its result", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-kind-");
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultTestFileImplementation) {
-      throw new Error("expected default QA test-file scenario mock implementation");
-    }
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
       ...(await defaultTestFileImplementation(params)),
       results: [],
@@ -1890,13 +1797,7 @@ describe("qa suite runtime launcher", () => {
       "control-ui-chat-flow-playwright",
       "docker-npm-onboard-channel-agent",
     ];
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/fail-fast-missing-native-kind",
-      concurrency: 8,
-      failFast: true,
-      scenarioIds,
-    });
+    const result = await runFailFastQaSuite("fail-fast-missing-native-kind", { scenarioIds });
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
@@ -2010,10 +1911,7 @@ describe("qa suite runtime launcher", () => {
 
   it("continues every unified partition after a failure when fail-fast is disabled", async () => {
     const repoRoot = await makeTempRepo("qa-suite-continue-after-failure-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     runQaFlowSuite.mockImplementationOnce(async (params) => {
       const result = await defaultFlowImplementation(params);
       return {
@@ -2054,37 +1952,7 @@ describe("qa suite runtime launcher", () => {
 
   it("runs script scenarios after flow Gateways stop without serializing Playwright", async () => {
     const repoRoot = await makeTempRepo("qa-suite-script-isolation-");
-    let releaseFlow!: () => void;
-    let markFlowStarted!: () => void;
-    const flowStarted = new Promise<void>((resolve) => {
-      markFlowStarted = resolve;
-    });
-    const flowBlocked = new Promise<void>((resolve) => {
-      releaseFlow = resolve;
-    });
-    runQaFlowSuite.mockImplementationOnce(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
-        markFlowStarted();
-        await flowBlocked;
-        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-        const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
-        return {
-          outputDir,
-          evidencePath,
-          reportPath: path.join(outputDir, "qa-suite-report.md"),
-          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-          report: "# QA Suite Report\n",
-          scenarios: scenarioIds.map((scenarioId) => ({
-            name: scenarioId,
-            status: "pass",
-            steps: [],
-          })),
-          watchUrl: "http://127.0.0.1:43124",
-        };
-      },
-    );
+    const flow = blockNextQaFlowSuite();
 
     const runPromise = runQaSuite({
       repoRoot,
@@ -2096,7 +1964,7 @@ describe("qa suite runtime launcher", () => {
         "docker-npm-onboard-channel-agent",
       ],
     });
-    await flowStarted;
+    await flow.started;
     await vi.waitFor(() => {
       expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
     });
@@ -2110,7 +1978,7 @@ describe("qa suite runtime launcher", () => {
       }),
     );
 
-    releaseFlow();
+    flow.release();
     await runPromise;
 
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
@@ -2126,11 +1994,8 @@ describe("qa suite runtime launcher", () => {
 
   it("settles flow and native work, then runs serial scripts before a bounded parallel tail", async () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultFlowImplementation || !defaultTestFileImplementation) {
-      throw new Error("expected default QA suite mock implementations");
-    }
+    const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     const flow = createDeferred();
     const native = createDeferred();
     const serial = createDeferred();
@@ -2238,10 +2103,7 @@ describe("qa suite runtime launcher", () => {
   it("reuses the prepared Docker env object when a script partition retries", async () => {
     const repoRoot = await makeTempRepo("qa-suite-docker-prep-retry-");
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
-    const defaultImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultImplementation) {
-      throw new Error("expected default QA test-file mock implementation");
-    }
+    const defaultImplementation = requireDefaultQaTestFileImplementation();
     prepareDockerE2eEnvironment.mockResolvedValueOnce(preparedEnv);
     runQaTestFileScenarios
       .mockRejectedValueOnce(new QaSuiteInfraError("transport_ready_timeout", "retry"))
@@ -2279,10 +2141,7 @@ describe("qa suite runtime launcher", () => {
 
   it("keeps selected evidence order and successful siblings when a parallel script rejects", async () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-script-rejection-");
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultTestFileImplementation) {
-      throw new Error("expected default QA test-file mock implementation");
-    }
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     const first = createDeferred();
     runQaTestFileScenarios.mockImplementation(async (params) => {
       const scenario = params.scenarios[0] as QaTestFileScenario | undefined;
@@ -2346,10 +2205,7 @@ describe("qa suite runtime launcher", () => {
 
   it("serializes every fail-fast script and stops before post-failure work", async () => {
     const repoRoot = await makeTempRepo("qa-suite-fail-fast-scripts-");
-    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
-    if (!defaultTestFileImplementation) {
-      throw new Error("expected default QA test-file mock implementation");
-    }
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     const first = createDeferred();
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
     const started: string[] = [];
@@ -2447,37 +2303,7 @@ describe("qa suite runtime launcher", () => {
 
   it("accounts for isolated flow worker weight in unified suite concurrency", async () => {
     const repoRoot = await makeTempRepo("qa-suite-weighted-");
-    let releaseShared!: () => void;
-    let markSharedStarted!: () => void;
-    const sharedStarted = new Promise<void>((resolve) => {
-      markSharedStarted = resolve;
-    });
-    const sharedBlocked = new Promise<void>((resolve) => {
-      releaseShared = resolve;
-    });
-    runQaFlowSuite.mockImplementationOnce(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
-        markSharedStarted();
-        await sharedBlocked;
-        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-        const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
-        return {
-          outputDir,
-          evidencePath,
-          reportPath: path.join(outputDir, "qa-suite-report.md"),
-          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-          report: "# QA Suite Report\n",
-          scenarios: scenarioIds.map((scenarioId) => ({
-            name: scenarioId,
-            status: "pass",
-            steps: [],
-          })),
-          watchUrl: "http://127.0.0.1:43124",
-        };
-      },
-    );
+    const shared = blockNextQaFlowSuite();
 
     const runPromise = runQaSuite({
       repoRoot,
@@ -2489,7 +2315,7 @@ describe("qa suite runtime launcher", () => {
         "control-ui-chat-flow-playwright",
       ],
     });
-    await sharedStarted;
+    await shared.started;
     await Promise.resolve();
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
@@ -2497,7 +2323,7 @@ describe("qa suite runtime launcher", () => {
       expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
     });
 
-    releaseShared();
+    shared.release();
     await runPromise;
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
@@ -2506,67 +2332,8 @@ describe("qa suite runtime launcher", () => {
 
   it("starts native suite proof before isolated flow work fills the weighted queue", async () => {
     const repoRoot = await makeTempRepo("qa-suite-native-before-isolated-");
-    let releaseShared!: () => void;
-    let markSharedStarted!: () => void;
-    const sharedStarted = new Promise<void>((resolve) => {
-      markSharedStarted = resolve;
-    });
-    const sharedBlocked = new Promise<void>((resolve) => {
-      releaseShared = resolve;
-    });
-    let releaseTestFile!: () => void;
-    let markTestFileStarted!: () => void;
-    const testFileStarted = new Promise<void>((resolve) => {
-      markTestFileStarted = resolve;
-    });
-    const testFileBlocked = new Promise<void>((resolve) => {
-      releaseTestFile = resolve;
-    });
-    runQaFlowSuite.mockImplementationOnce(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
-        markSharedStarted();
-        await sharedBlocked;
-        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-        const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
-        return {
-          outputDir,
-          evidencePath,
-          reportPath: path.join(outputDir, "qa-suite-report.md"),
-          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-          report: "# QA Suite Report\n",
-          scenarios: scenarioIds.map((scenarioId) => ({
-            name: scenarioId,
-            status: "pass",
-            steps: [],
-          })),
-          watchUrl: "http://127.0.0.1:43124",
-        };
-      },
-    );
-    runQaTestFileScenarios.mockImplementationOnce(
-      async (params: {
-        outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
-      }) => {
-        markTestFileStarted();
-        await testFileBlocked;
-        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        return {
-          outputDir: params.outputDir,
-          executionKind: params.scenarios[0]?.execution.kind ?? "playwright",
-          evidencePath,
-          results: params.scenarios.map((scenarioItem) => ({
-            durationMs: 1,
-            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
-            scenario: scenarioItem,
-            status: "pass",
-          })),
-        };
-      },
-    );
+    const shared = blockNextQaFlowSuite();
+    const testFile = blockNextQaTestFileRun();
 
     const runPromise = runQaSuite({
       repoRoot,
@@ -2578,15 +2345,15 @@ describe("qa suite runtime launcher", () => {
         "control-ui-chat-flow-playwright",
       ],
     });
-    await sharedStarted;
-    await testFileStarted;
+    await shared.started;
+    await testFile.started;
     await Promise.resolve();
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
 
-    releaseTestFile();
-    releaseShared();
+    testFile.release();
+    shared.release();
     await runPromise;
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
@@ -2604,14 +2371,7 @@ describe("qa suite runtime launcher", () => {
     await Promise.all(
       priorArtifactPaths.map((artifactPath) => fs.writeFile(artifactPath, "stale")),
     );
-    let releaseTestFile!: () => void;
-    let markTestFileStarted!: () => void;
-    const testFileStarted = new Promise<void>((resolve) => {
-      markTestFileStarted = resolve;
-    });
-    const testFileBlocked = new Promise<void>((resolve) => {
-      releaseTestFile = resolve;
-    });
+    const testFile = blockNextQaTestFileRun();
     runQaFlowSuite.mockRejectedValueOnce(
       new Error("flow partition failed", {
         cause: Object.assign(new Error("unrelated capacity failure"), {
@@ -2619,29 +2379,6 @@ describe("qa suite runtime launcher", () => {
         }),
       }),
     );
-    runQaTestFileScenarios.mockImplementationOnce(
-      async (params: {
-        outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
-      }) => {
-        markTestFileStarted();
-        await testFileBlocked;
-        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
-        return {
-          outputDir: params.outputDir,
-          executionKind: params.scenarios[0]?.execution.kind ?? "playwright",
-          evidencePath,
-          results: params.scenarios.map((scenarioItem) => ({
-            durationMs: 1,
-            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
-            scenario: scenarioItem,
-            status: "pass",
-          })),
-        };
-      },
-    );
-
     const runPromise = runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/reject-settle",
@@ -2652,7 +2389,7 @@ describe("qa suite runtime launcher", () => {
     void runPromise.then(() => {
       completed = true;
     });
-    await testFileStarted;
+    await testFile.started;
     await Promise.resolve();
 
     expect(completed).toBe(false);
@@ -2660,7 +2397,7 @@ describe("qa suite runtime launcher", () => {
       await expect(fs.access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
     }
 
-    releaseTestFile();
+    testFile.release();
     const result = await runPromise;
     expect(completed).toBe(true);
     expect(result.executionKind).toBe("suite");

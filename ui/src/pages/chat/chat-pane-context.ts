@@ -171,7 +171,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.reconcileWaitingApprovalSnapshot();
     if (reconciledLocalCompletion) {
       void retryReconnectableQueuedChatSends(state);
-    } else {
+    } else if (this.presented) {
       state.requestUpdate?.();
     }
   }
@@ -258,13 +258,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         }
         state.chatSending = false;
         state.chatSendingScopeKey = null;
+        invalidateAssistantIdentityCache(state.client);
       }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
       this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
-      invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
       retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();
@@ -287,6 +287,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
       this.sessionSharingStates = new Map();
+      state.guardianNotices = [];
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
@@ -302,6 +303,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    state.selfUser = snapshot.selfUser ?? null;
     if (sourceChanged) {
       retireSessionWorkspaceCheckout(state, this.presented);
     }

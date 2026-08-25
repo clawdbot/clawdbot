@@ -5,7 +5,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
@@ -41,7 +40,7 @@ export {
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
-  readClaudeCliCredentials?: () => { type: string } | null;
+  detectClaudeLoginState?: typeof detectClaudeLoginState;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
@@ -101,19 +100,6 @@ function describeCliDetail(state: CliLoginState, loginHint: string): string {
   return "installed";
 }
 
-function classifyClaudeCliAuth(
-  credential: { type: string } | null,
-  env: NodeJS.ProcessEnv,
-): CliAuthKind | undefined {
-  if (env.ANTHROPIC_API_KEY?.trim() || credential?.type === "api_key_helper") {
-    return "api-key";
-  }
-  if (credential?.type === "oauth" || credential?.type === "token") {
-    return "claude-subscription";
-  }
-  return undefined;
-}
-
 function describeGeminiCliDetail(credentials: boolean | undefined): string {
   return credentials === true
     ? "installed; credentials found"
@@ -137,6 +123,30 @@ async function classifyCodexLoginStatus(
     return { credentials: true, authKind: "api-key" };
   }
   return { credentials: true };
+}
+
+async function detectClaudeLoginState(
+  probe: typeof probeLocalCommand,
+  command: string,
+): Promise<CliLoginState> {
+  const status = await probe(command, ["auth", "status", "--text"], { timeoutMs: 3_000 });
+  if (status.timedOut) {
+    return { credentials: undefined };
+  }
+  if (status.error) {
+    return { credentials: false };
+  }
+  const method = status.version?.replace(/^Login method:\s*/iu, "").trim();
+  return {
+    credentials: true,
+    ...(method
+      ? {
+          authKind: /api\s*key/iu.test(method)
+            ? ("api-key" as const)
+            : ("claude-subscription" as const),
+        }
+      : {}),
+  };
 }
 
 // Deliberately boolean-shaped: this signature is reachable from the exported
@@ -219,9 +229,6 @@ export async function detectInferenceBackends(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const readClaude =
-    options.deps?.readClaudeCliCredentials ??
-    (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
   const readCodex =
     options.deps?.readCodexCliCredentials ??
     (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
@@ -268,19 +275,14 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
-    const claudeCredential = readClaude();
-    const credentials = detectCliCredentialState({
-      probe: claudeProbe,
-      hasStoredCredentials: claudeCredential !== null,
-      platform,
-    });
-    if (credentials === true && claudeCredential?.type === "oauth") {
+    const loginState = options.deps?.detectClaudeLoginState
+      ? await options.deps.detectClaudeLoginState(probe, claudeProbe.command)
+      : await detectClaudeLoginState(probe, claudeProbe.command);
+    const credentials = loginState.credentials;
+    if (credentials === true && loginState.authKind === "claude-subscription") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
-    const detail = describeCliDetail(
-      { credentials, authKind: classifyClaudeCliAuth(claudeCredential, env) },
-      "run `claude auth login`",
-    );
+    const detail = describeCliDetail(loginState, "run `claude auth login`");
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,

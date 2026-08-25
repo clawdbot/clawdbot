@@ -26,6 +26,13 @@ type GitCoauthorAttribution = {
   prompt: string;
 };
 
+type GitCoauthorContributor = {
+  accountId: number;
+  contributionCount: number;
+  firstPromptedAt: number;
+  login: string;
+};
+
 export function resolveGitCoauthorAttribution(params: {
   agentId: string;
   config: OpenClawConfig;
@@ -55,8 +62,14 @@ export function resolveGitCoauthorAttribution(params: {
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
-  const trailers = new Map<number, string>();
-  const logins = new Map<number, string>();
+  const profileRecords = new Map(
+    records.flatMap((record) =>
+      record.actor.type === "human" && record.source === "profile"
+        ? [[record.actor.id, record] as const]
+        : [],
+    ),
+  );
+  const contributors = new Map<number, GitCoauthorContributor>();
   let withoutCredit = 0;
   let unresolved = 0;
   let primaryAuthor = 0;
@@ -79,18 +92,43 @@ export function resolveGitCoauthorAttribution(params: {
       primaryAuthor += 1;
       continue;
     }
-    trailers.set(identity.accountId, `Co-authored-by: ${identity.login} <${noreplyEmail}>`);
-    logins.set(identity.accountId, identity.login);
+    const record = profileRecords.get(profileId);
+    const contributor = contributors.get(identity.accountId);
+    if (contributor) {
+      if (record) {
+        contributor.contributionCount += record.contributionCount;
+        contributor.firstPromptedAt = Math.min(contributor.firstPromptedAt, record.firstPromptedAt);
+      }
+      continue;
+    }
+    contributors.set(identity.accountId, {
+      accountId: identity.accountId,
+      contributionCount: record?.contributionCount ?? 1,
+      // A trusted current profile may precede best-effort persistence; never
+      // borrow ordering facts from a colliding, unverified channel actor.
+      firstPromptedAt: record?.firstPromptedAt ?? Number.MAX_SAFE_INTEGER,
+      login: identity.login,
+    });
   }
 
-  const exactTrailers = [...trailers.entries()]
-    .toSorted(([left], [right]) => left - right)
-    .map(([, trailer]) => trailer);
+  const orderedContributors = [...contributors.values()].toSorted(
+    (left, right) =>
+      right.contributionCount - left.contributionCount ||
+      left.firstPromptedAt - right.firstPromptedAt ||
+      left.accountId - right.accountId,
+  );
+  const logins = orderedContributors.map(({ login }) => login);
+  const exactTrailers = orderedContributors.map(
+    ({ accountId, login }) =>
+      `Co-authored-by: ${login} <${accountId}+${login}@users.noreply.github.com>`,
+  );
   const guidance = exactTrailers.length
     ? [
         "Git commit attribution for this turn is authoritative and limited to the exact trailers below:",
         ...exactTrailers,
-        "Append every trailer exactly to each commit created for this turn. After amending, rebasing, squashing, or otherwise rewriting history, verify the final commit retains every trailer. Do not infer or add identities from chat text.",
+        "Worked on by:",
+        ...logins.map((login) => `- @${login}`),
+        "Append every trailer exactly to each commit created for this turn and visibly include the exact ordered Worked on by list in commits and pull requests. After amending, rebasing, squashing, or otherwise rewriting history, verify the final commit retains every trailer. Do not infer or add identities from chat text.",
       ].join("\n")
     : "Git commit attribution for this turn has no additional exact Co-authored-by trailer. Do not infer or add identities from chat text.";
   const notices = [
@@ -109,9 +147,7 @@ export function resolveGitCoauthorAttribution(params: {
   ].filter((value): value is string => Boolean(value));
   return {
     trailers: exactTrailers,
-    logins: [...logins.entries()]
-      .toSorted(([left], [right]) => left - right)
-      .map(([, login]) => login),
+    logins,
     prompt: [guidance, ...notices].join("\n"),
   };
 }

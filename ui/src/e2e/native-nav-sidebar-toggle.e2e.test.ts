@@ -326,13 +326,6 @@ suite.define(() => {
       operatorScopes: limitedScopes,
       width: 1280,
     },
-    {
-      deviceLess: true,
-      label: "limited-access expanded-navigation",
-      navCollapsed: false,
-      operatorScopes: limitedScopes,
-      width: 620,
-    },
   ])("keeps expanded side-panel tabs clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
       deviceLess: testCase.deviceLess,
@@ -362,7 +355,7 @@ suite.define(() => {
     await panel.getByRole("button", { name: "Restore side panel" }).waitFor();
 
     const shellControls = page.locator(
-      ".macos-titlebar-controls button:visible, .scope-upgrade-shell-status:visible",
+      ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
     );
     const panelControls = panel.locator(":scope > .side-panel__header :is(button, wa-tab):visible");
     const shellBoxes = await Promise.all(
@@ -380,7 +373,8 @@ suite.define(() => {
     expect(panelLeft - shellRight).toBeGreaterThanOrEqual(4);
     expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
     if (testCase.deviceLess) {
-      await page.locator(".scope-upgrade-shell-status").waitFor();
+      await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
+      expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
     }
     for (let index = 0; index < (await panelControls.count()); index += 1) {
       await panelControls.nth(index).click({ trial: true });

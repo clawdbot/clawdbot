@@ -42,6 +42,9 @@ type VisibleHistoryProjection = {
 function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
+  if (projection.state.activeEventCount === projection.state.activeMessageCount) {
+    return { boundaries: [], total: projection.state.activeMessageCount };
+  }
   const visibleMessages = resolveVisibleMessagePositions(projection);
   const db = getActiveTranscriptKysely(projection.database);
   const rows = executeSqliteQuerySync(

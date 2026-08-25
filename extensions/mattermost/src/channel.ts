@@ -28,10 +28,7 @@ import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-run
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   type MessagePresentation,
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
-  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -68,8 +65,14 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
 import type { MattermostSendResult } from "./mattermost/send.js";
-import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import {
+  looksLikeMattermostTargetId,
+  normalizeMattermostMessagingTarget,
+  resolveMattermostPresentation,
+  requiresMattermostMediaUpload,
+} from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupContract } from "./setup-core.js";
@@ -77,33 +80,6 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
-
-function buildMattermostPresentationButtons(presentation: MessagePresentation) {
-  return presentation.blocks
-    .filter((block) => block.type === "buttons")
-    .map((block) =>
-      block.buttons.flatMap((button) => {
-        if (button.action) {
-          return [];
-        }
-        const value = resolveMessagePresentationControlValue(button);
-        return value
-          ? [
-              {
-                id: value,
-                text: button.label,
-                callback_data: value,
-                context: {
-                  callback_data: value,
-                },
-                style: button.style,
-              },
-            ]
-          : [];
-      }),
-    )
-    .filter((row) => row.length > 0);
-}
 
 const MATTERMOST_PRESENTATION_CAPABILITIES = {
   supported: true,
@@ -567,15 +543,10 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost send requires a target (to).");
     }
 
-    const presentation = normalizeMessagePresentation(params.presentation);
-    const message = presentation
-      ? renderMessagePresentationFallbackText({
-          text: typeof params.message === "string" ? params.message : "",
-          presentation,
-        })
-      : typeof params.message === "string"
-        ? params.message
-        : "";
+    const { text: message, buttons } = resolveMattermostPresentation({
+      text: typeof params.message === "string" ? params.message : undefined,
+      presentation: params.presentation,
+    });
     // Mattermost post root_id is the thread root. A generic replyTo can name
     // the current child post, so prefer threadId unless the caller supplied the
     // Mattermost-specific replyToId root directly.
@@ -586,8 +557,6 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl = resolveMattermostSendAttachmentMedia(params);
-    const buttons = presentation ? buildMattermostPresentationButtons(presentation) : [];
-
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
@@ -636,7 +605,7 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     throw new Error("Mattermost react requires messageId (post id)");
   }
 
-  const emojiName = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
+  const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
   if (!emojiName) {
     throw new Error("Mattermost react requires emoji");
   }
@@ -699,11 +668,6 @@ function readMattermostStringArrayParam(params: Record<string, unknown>, key: st
     return normalized ? [normalized] : [];
   }
   return [];
-}
-
-function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
-  const normalized = normalizeOptionalString(mediaUrl);
-  return Boolean(normalized && !/^https?:\/\//i.test(normalized));
 }
 
 function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
@@ -803,15 +767,14 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     if (payload.mediaUrls && payload.mediaUrls.length > 1) {
       return null;
     }
-    const buttons = buildMattermostPresentationButtons(presentation);
-    const hasButtons = buttons.some((row) => row.length > 0);
-    if (!hasButtons && !hasMattermostPresentationNavigation(presentation)) {
+    const { text, buttons } = resolveMattermostPresentation({ text: payload.text, presentation });
+    if (!buttons.length && !hasMattermostPresentationNavigation(presentation)) {
       return null;
     }
     return {
       ...payload,
-      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      ...(hasButtons
+      text,
+      ...(buttons.length
         ? {
             channelData: {
               ...payload.channelData,

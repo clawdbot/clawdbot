@@ -5,7 +5,7 @@
  * Prerequisites: Docker or Podman, Node >=22.19, pnpm install, and the selected image.
  * Usage:
  *   OPENCLAW_SANDBOX_E2E_ENGINE=podman \
- *   OPENCLAW_SANDBOX_E2E_IMAGE=alpine:3.20 \
+ *   OPENCLAW_SANDBOX_E2E_IMAGE=alpine:3.24 \
  *   node --import tsx scripts/e2e-sandbox-bind-conflict.mts
  */
 import { spawnSync } from "node:child_process";

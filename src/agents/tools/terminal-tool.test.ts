@@ -13,13 +13,15 @@ import {
 import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createTerminalTool } from "./terminal-tool.js";
 
 const callInProcessGatewayTool = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const getInProcessGatewayToolContext = vi.hoisted(() => vi.fn());
 
 vi.mock("./in-process-gateway.js", () => ({
   callInProcessGatewayTool,
-  getInProcessGatewayToolContext: vi.fn(),
+  getInProcessGatewayToolContext,
 }));
 
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
@@ -85,6 +87,7 @@ describe("terminal tool", () => {
   beforeEach(() => {
     resetAgentRunRegistryForTest();
     callInProcessGatewayTool.mockClear();
+    getInProcessGatewayToolContext.mockReset();
   });
 
   it("uses a flat action enum and the owner-only core gate", () => {
@@ -103,6 +106,176 @@ describe("terminal tool", () => {
     const schema = tool.parameters as { properties?: Record<string, unknown> };
     expect(schema.properties).not.toHaveProperty("show");
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("terminal");
+  });
+
+  it("uses the admitted caller Gateway before ambient context", async () => {
+    const callerManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const callerList = vi.spyOn(callerManager, "listAgent");
+    const ambientList = vi.spyOn(ambientManager, "listAgent");
+    const gatewayContextResolver = vi.fn();
+    gatewayContextResolver.mockReturnValue(makeContext(callerManager));
+    getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+    });
+
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        gatewayContextResolver,
+      },
+      async () => await tool.execute("list", { action: "list" }),
+    );
+
+    expect(result.details).toEqual({ sessions: [] });
+    expect(callerList).toHaveBeenCalledOnce();
+    expect(ambientList).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the admitted caller Gateway has retired", async () => {
+    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const ambientList = vi.spyOn(ambientManager, "listAgent");
+    getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+    });
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => undefined,
+        },
+        async () => await tool.execute("list", { action: "list" }),
+      ),
+    ).rejects.toThrow("terminal unavailable");
+    expect(ambientList).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the admitted Gateway after task lookup before opening", async () => {
+    const callerSpawn = vi.fn(async () => makeBackend());
+    const ambientSpawn = vi.fn(async () => makeBackend());
+    const callerManager = new TerminalSessionManager({ emit: vi.fn(), spawn: callerSpawn });
+    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: ambientSpawn });
+    let callerLive = true;
+    const gatewayContextResolver = vi.fn();
+    gatewayContextResolver.mockImplementation(() =>
+      callerLive ? makeContext(callerManager) : undefined,
+    );
+    getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
+    const lookupTaskByRunIdForChildSession = vi.fn(async () => {
+      callerLive = false;
+      return undefined;
+    });
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+      runId: "run-1",
+      lookupTaskByRunIdForChildSession,
+    });
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver,
+        },
+        async () => await tool.execute("open", { action: "open" }),
+      ),
+    ).rejects.toThrow("terminal unavailable");
+    expect(gatewayContextResolver).toHaveBeenCalledTimes(2);
+    expect(callerSpawn).not.toHaveBeenCalled();
+    expect(ambientSpawn).not.toHaveBeenCalled();
+    expect(getInProcessGatewayToolContext).not.toHaveBeenCalled();
+  });
+
+  it("closes a terminal when the admitted Gateway retires during open", async () => {
+    const spawned = deferred<ReturnType<typeof makeBackend>>();
+    const backend = makeBackend();
+    const callerSpawn = vi.fn(() => spawned.promise);
+    const callerManager = new TerminalSessionManager({ emit: vi.fn(), spawn: callerSpawn });
+    const ambientSpawn = vi.fn(async () => makeBackend());
+    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: ambientSpawn });
+    let callerLive = true;
+    const gatewayContextResolver = vi.fn();
+    gatewayContextResolver.mockImplementation(() =>
+      callerLive ? makeContext(callerManager) : undefined,
+    );
+    getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+    });
+
+    const opening = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        gatewayContextResolver,
+      },
+      async () => await tool.execute("open", { action: "open", command: "echo unsafe" }),
+    );
+    await vi.waitFor(() => expect(callerSpawn).toHaveBeenCalledOnce());
+    callerLive = false;
+    spawned.resolve(backend);
+
+    await expect(opening).rejects.toThrow("terminal unavailable");
+    expect(gatewayContextResolver).toHaveBeenCalledTimes(2);
+    expect(backend.writes).toEqual([]);
+    expect(backend.killed).toBe(true);
+    expect(callerManager.size).toBe(0);
+    expect(ambientSpawn).not.toHaveBeenCalled();
+    expect(getInProcessGatewayToolContext).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambient Gateway context pinned across task lookup", async () => {
+    const firstSpawn = vi.fn(async () => makeBackend());
+    const secondSpawn = vi.fn(async () => makeBackend());
+    const firstManager = new TerminalSessionManager({ emit: vi.fn(), spawn: firstSpawn });
+    const secondManager = new TerminalSessionManager({ emit: vi.fn(), spawn: secondSpawn });
+    getInProcessGatewayToolContext
+      .mockReturnValueOnce(makeContext(firstManager))
+      .mockReturnValue(makeContext(secondManager));
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+      runId: "run-1",
+      lookupTaskByRunIdForChildSession: vi.fn(async () => undefined),
+    });
+
+    await expect(tool.execute("open", { action: "open" })).resolves.toMatchObject({
+      details: { ok: true },
+    });
+    expect(getInProcessGatewayToolContext).toHaveBeenCalledOnce();
+    expect(firstSpawn).toHaveBeenCalledOnce();
+    expect(secondSpawn).not.toHaveBeenCalled();
+  });
+
+  it("uses ambient Gateway context without an admitted caller", async () => {
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const list = vi.spyOn(manager, "listAgent");
+    getInProcessGatewayToolContext.mockReturnValue(makeContext(manager));
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
+    });
+
+    await expect(tool.execute("list", { action: "list" })).resolves.toMatchObject({
+      details: { sessions: [] },
+    });
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("opens in the background, reads, writes, resizes, lists, and closes its terminal", async () => {

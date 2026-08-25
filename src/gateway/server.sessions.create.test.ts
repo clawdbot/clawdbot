@@ -1433,6 +1433,86 @@ test("sessions.create rejects draft visibility when policy disables drafts", asy
   });
 });
 
+test("sessions.create persists explicit tool overrides before the first turn", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const sessionKey = "agent:main:dashboard:create-tool-overrides";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("tool-overrides-parent", {
+        toolOverrides: { skills: { inherited: false } },
+      }),
+    },
+  });
+  const requested = {
+    mcpServers: { zeta: false, alpha: true },
+    mcpToolsDeny: { github: ["write", "read", "write"] },
+    skills: { release: false },
+    webSearch: false,
+  };
+  const normalized = {
+    mcpServers: { alpha: true, zeta: false },
+    mcpToolsDeny: { github: ["read", "write"] },
+    skills: { release: false },
+    webSearch: false,
+  };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const observed: Array<unknown> = [];
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    observed.push(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.toolOverrides);
+    respond(true, { runId: "create-tool-overrides-run", status: "started" });
+  });
+  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+
+  try {
+    const created = await directSessionReq<{
+      entry?: { toolOverrides?: unknown };
+      runStarted?: boolean;
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        key: sessionKey,
+        parentSessionKey,
+        message: "run with the selected capabilities",
+        toolOverrides: requested,
+      },
+      client,
+    );
+
+    expect(created).toMatchObject({
+      ok: true,
+      payload: { entry: { toolOverrides: normalized }, runStarted: true },
+    });
+    expect(observed).toEqual([normalized]);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.toolOverrides).toEqual(
+      normalized,
+    );
+
+    const retried = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", key: sessionKey, toolOverrides: requested },
+      client,
+    );
+    expect(retried.ok).toBe(true);
+
+    const mismatch = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", key: sessionKey, toolOverrides: { skills: { release: true } } },
+      client,
+    );
+    expect(mismatch).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create toolOverrides requires a new session",
+      },
+    });
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",

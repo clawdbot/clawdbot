@@ -674,26 +674,78 @@ describe("agents delete command", () => {
   });
 
   it("deregisters the agent database after offline deletion", async () => {
-    await withStateDirEnv("openclaw-agents-delete-registry-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-agents-delete-registry-", async ({ tempRoot, stateDir }) => {
+      const mainAgentDir = path.join(tempRoot, "main-agent");
       const cfg: OpenClawConfig = {
         agents: {
           list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            {
+              id: "main",
+              agentDir: mainAgentDir,
+              workspace: path.join(stateDir, "workspace-main"),
+            },
             { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
           ],
         },
       };
       await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
       const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
+      const externalDatabaseDir = path.join(tempRoot, "external-databases");
+      await fs.mkdir(externalDatabaseDir);
+      await fs.mkdir(mainAgentDir);
+      const externalDatabasePath = path.join(externalDatabaseDir, "ops.sqlite");
+      const sharedDatabasePath = path.join(externalDatabaseDir, "shared.sqlite");
+      const survivorOwnedDatabasePath = path.join(mainAgentDir, "ops.sqlite");
+      const externalDatabasePaths = [
+        externalDatabasePath,
+        `${externalDatabasePath}-wal`,
+        `${externalDatabasePath}-shm`,
+        `${externalDatabasePath}-journal`,
+      ];
+      await Promise.all(
+        [...externalDatabasePaths, sharedDatabasePath, survivorOwnedDatabasePath].map(
+          (sqlitePath) => fs.writeFile(sqlitePath, ""),
+        ),
+      );
+      const canonicalExternalDatabaseDir = await fs.realpath(externalDatabaseDir);
+      const canonicalMainAgentDir = await fs.realpath(mainAgentDir);
       registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: externalDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: survivorOwnedDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "main", path: sharedDatabasePath });
       recordAgentProvenance("ops", { createdVia: "operator" });
       recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "ops" });
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).not.toContain(
-        "ops",
+      for (const sqlitePath of externalDatabasePaths) {
+        expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(
+          path.join(canonicalExternalDatabaseDir, path.basename(sqlitePath)),
+          { allowedRoots: [canonicalExternalDatabaseDir] },
+        );
+      }
+      expect(readJsonLogs()[0]?.removed).toEqual(
+        expect.arrayContaining(
+          externalDatabasePaths.map((sqlitePath) => ({ path: sqlitePath, method: "trash" })),
+        ),
+      );
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        path.join(canonicalExternalDatabaseDir, path.basename(sharedDatabasePath)),
+        expect.anything(),
+      );
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        path.join(canonicalMainAgentDir, path.basename(survivorOwnedDatabasePath)),
+        expect.anything(),
+      );
+      expect((await fs.stat(survivorOwnedDatabasePath)).isFile()).toBe(true);
+      const registeredDatabases = listOpenClawRegisteredAgentDatabases();
+      expect(registeredDatabases.map((entry) => entry.agentId)).not.toContain("ops");
+      expect(registeredDatabases).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "main", path: sharedDatabasePath }),
+        ]),
       );
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
       expect(readAgentProvenance("ops")).toBeUndefined();

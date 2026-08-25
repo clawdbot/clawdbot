@@ -339,6 +339,18 @@ function createSlackSendReceipt(params: {
   });
 }
 
+function createSlackSendReceiptFromResults(
+  results: readonly SlackSendResult[],
+  threadTs?: string,
+): MessageReceipt {
+  const receipt = createMessageReceiptFromOutboundResults({ results, threadId: threadTs });
+  const thread = threadTs ? { threadId: threadTs } : {};
+  for (const [index, part] of receipt.parts.entries()) {
+    Object.assign(part, { index, ...thread });
+  }
+  return Object.assign(receipt, thread);
+}
+
 function resolveToken(params: {
   explicit?: string;
   accountId: string;
@@ -1134,6 +1146,7 @@ async function sendMessageSlackQueuedInner(params: {
         accountId: account.accountId,
         token: delivery.credential,
       });
+  const deliveredResults: SlackSendResult[] = [];
   const reportDelivery = async (
     result: SlackSendResult,
     deliveredBlocks?: (Block | KnownBlock)[],
@@ -1154,6 +1167,7 @@ async function sendMessageSlackQueuedInner(params: {
           },
         }
       : result;
+    deliveredResults.push(deliveryResult);
     await opts.onDeliveryResult?.(deliveryResult);
     return deliveryResult;
   };
@@ -1213,7 +1227,6 @@ async function sendMessageSlackQueuedInner(params: {
     orderedBlockDeliveryPlan?.skipOriginalBlocks
       ? orderedBlockDeliveryPlan
       : undefined;
-  const sentMessageIds: string[] = [];
   let lastMessageId = "";
   let deliveredChannelId = channelId;
   let canonicalDeliveredThreadTs: string | undefined;
@@ -1310,7 +1323,6 @@ async function sendMessageSlackQueuedInner(params: {
         lastMessageId = response.ts;
         deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
         canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-        sentMessageIds.push(response.ts);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
         const fallbackDelivery = await reportDelivery(
@@ -1331,11 +1343,10 @@ async function sendMessageSlackQueuedInner(params: {
           questionDelivery = fallbackDelivery;
         }
       }
-      const messageId = lastMessageId;
       const deliveredThreadTs =
         canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
       return {
-        messageId,
+        messageId: lastMessageId,
         channelId: deliveredChannelId,
         threadTs: deliveredThreadTs,
         // Core replaces per-card progress with this aggregate; retain the
@@ -1348,12 +1359,7 @@ async function sendMessageSlackQueuedInner(params: {
               },
             }
           : {}),
-        receipt: createSlackSendReceipt({
-          platformMessageIds: sentMessageIds,
-          channelId: deliveredChannelId,
-          kind: fallbackMessages.some((message) => message.blocks) ? "card" : "text",
-          threadTs: deliveredThreadTs,
-        }),
+        receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
       };
     }
   }
@@ -1391,7 +1397,6 @@ async function sendMessageSlackQueuedInner(params: {
       onPlatformSendDispatch: dispatchOnce,
       ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
     });
-    sentMessageIds.push(lastMessageId);
     await reportDelivery({
       messageId: lastMessageId,
       channelId,
@@ -1409,8 +1414,7 @@ async function sendMessageSlackQueuedInner(params: {
   }
 
   for (const [partIndex, chunk] of chunksToPost.entries()) {
-    const carriesPrimaryMessageOptions =
-      partIndex === 0 && !opts.mediaUrl && sentMessageIds.length === 0;
+    const carriesPrimaryMessageOptions = partIndex === 0 && !opts.mediaUrl;
     const baseMetadata = carriesPrimaryMessageOptions ? opts.metadata : undefined;
     // Every post carries its index/count so reconciliation proves the complete
     // logical text send and never mistakes a partial chunk fanout for success.
@@ -1442,7 +1446,6 @@ async function sendMessageSlackQueuedInner(params: {
     lastMessageId = response.ts;
     deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
     canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-    sentMessageIds.push(response.ts);
     await reportDelivery({
       messageId: response.ts,
       channelId: deliveredChannelId,
@@ -1458,19 +1461,13 @@ async function sendMessageSlackQueuedInner(params: {
     });
   }
 
-  const messageId = lastMessageId;
   const deliveredThreadTs =
     canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
   return {
-    messageId,
+    messageId: lastMessageId,
     channelId: deliveredChannelId,
     threadTs: deliveredThreadTs,
-    receipt: createSlackSendReceipt({
-      platformMessageIds: sentMessageIds,
-      channelId: deliveredChannelId,
-      kind: opts.mediaUrl ? "media" : "text",
-      threadTs: deliveredThreadTs,
-    }),
+    receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

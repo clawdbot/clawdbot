@@ -790,20 +790,16 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      const failedGroup = page.locator(".chat-group.user", { hasText: message });
+      const failedStatus = failedGroup.locator(".chat-send-status");
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
 
       await page.reload();
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
@@ -856,12 +852,11 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
-      await expect
-        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
-        .toContain(message);
-      await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
-        .toContain(runError);
+      const failedGroup = page.locator(".chat-group.user", { hasText: message });
+      const failedStatus = failedGroup.locator(".chat-send-status");
+      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
+      expect(await failedStatus.textContent()).toContain("Not sent");
+      expect(await failedStatus.getAttribute("title")).toBe(runError);
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
       expect(retry.params).toMatchObject({

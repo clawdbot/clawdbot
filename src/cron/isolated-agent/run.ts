@@ -93,6 +93,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
 }): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
@@ -264,6 +265,7 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
       pluginRegistry: prepared.context.pluginRegistry,
+      executionIdentity: params.executionIdentity,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>

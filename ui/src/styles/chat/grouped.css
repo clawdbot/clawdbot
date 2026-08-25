@@ -186,6 +186,11 @@
   pointer-events: auto;
 }
 
+.chat-group-footer--send-failure {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* Shared threads keep the author name visible beside the gutter avatar. The
    other footer details stay focusable but leave the row layout until reveal. */
 .chat-group-footer--persistent-identity {
@@ -284,6 +289,18 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-send-status {
+  display: inline-flex;
+  order: 2;
+  align-items: center;
+  gap: 4px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: auto;
 }
 
 .chat-author-avatar {
@@ -392,6 +409,23 @@
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.chat-group-footer .chat-send-status__retry {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  color: var(--danger);
+  font: inherit;
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+
+.chat-group-footer .chat-send-status__retry:hover {
+  color: var(--danger);
+  text-decoration: underline;
 }
 
 /* Chat divider (e.g., compaction marker) */

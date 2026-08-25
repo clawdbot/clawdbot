@@ -169,6 +169,7 @@ describe("GPT-Live offer broker", () => {
       }
       expect(reservation).not.toHaveProperty("model");
       expect(reservation).not.toHaveProperty("voice");
+      expect(reservation.offerResponseMaxBytes).toBe(256 * 1024);
       const response = createResponseHarness();
       const handling = realtime.handler(
         createRequest({

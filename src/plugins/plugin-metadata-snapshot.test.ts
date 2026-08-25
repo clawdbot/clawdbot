@@ -1,6 +1,9 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
@@ -453,8 +456,8 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses the lifecycle-owned current snapshot", () => {
-    const config = {};
+  it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
+    const config = { plugins: { entries: { demo: { enabled: true } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -463,13 +466,25 @@ describe("plugin metadata snapshot", () => {
       diagnostics: [],
     });
     const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
-    setCurrentPluginMetadataSnapshot(snapshot, { config, env: {} });
+    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, { config, env: {} });
+    const ignored = { ...snapshot, registrySource: "persisted" as const };
+    adoptCurrentPluginMetadataSnapshotIfAbsent(ignored, {
+      config: structuredClone(config),
+      env: {},
+    });
     loadPluginRegistrySnapshotWithMetadata.mockClear();
     loadPluginManifestRegistryForInstalledIndex.mockClear();
 
-    expect(resolvePluginMetadataSnapshot({ config, env: {} })).toBe(snapshot);
+    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
+      snapshot,
+    );
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+
+    setCurrentPluginMetadataSnapshot(ignored, { config, env: {} });
+    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
+      ignored,
+    );
   });
 
   it("propagates the current-snapshot bypass to the registry reader", () => {

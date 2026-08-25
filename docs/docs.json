@@ -1830,6 +1830,7 @@
                       "cli/security",
                       "cli/setup",
                       "cli/status",
+                      "cli/triage",
                       "cli/uninstall",
                       "cli/update"
                     ]

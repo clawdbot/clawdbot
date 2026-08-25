@@ -90,7 +90,7 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /exceed context limit/i,
   /exceeds the model'?s maximum context/i,
   /max_tokens[\s\S]*exceed[\s\S]*context/i,
-  /input length[\s\S]*exceed[\s\S]*context/i,
+  /input(?: length[\s\S]*exceed[\s\S]*context| \([\d,]+\s*tokens?\) is longer than (?:the )?model'?s context length)/i,
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
   // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.

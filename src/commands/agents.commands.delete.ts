@@ -6,10 +6,15 @@ import {
   isSharedAuthStoreOwner,
 } from "../agents/agent-delete-safety.js";
 import {
+  isPathOwnedByAnotherRegisteredAgent,
+  normalizeAgentDirRegistryPath,
+} from "../agents/agent-dir-registry.js";
+import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
 import {
+  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
@@ -44,10 +49,15 @@ import {
   isGatewayTransportError,
 } from "../gateway/call.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
-import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  unregisterOpenClawAgentDatabases,
+} from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
@@ -352,8 +362,32 @@ export async function agentsDeleteCommand(
     }
   }
   if (deleteFiles) {
+    // Directory ownership is process-local; prepare every survivor before filtering journal paths,
+    // or a deleted agent's database nested beneath a survivor's agentDir could be trashed.
+    for (const survivingAgentId of listAgentIds(result.config)) {
+      resolveAgentDir(result.config, survivingAgentId);
+    }
+    const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
+    const survivingDatabasePaths = new Set(
+      listOpenClawRegisteredAgentDatabases()
+        .filter((entry) => normalizeAgentId(entry.agentId) !== agentId)
+        .flatMap((entry) => resolveSqliteDatabaseFilePaths(entry.path))
+        .map((pathname) => normalizeAgentDirRegistryPath(pathname)),
+    );
+    const databasePaths = deletion.entry.databasePaths.filter((pathname) => {
+      const canonicalPath = normalizeAgentDirRegistryPath(pathname);
+      return (
+        !isPathInside(canonicalAgentDir, canonicalPath) &&
+        !survivingDatabasePaths.has(canonicalPath) &&
+        !isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) &&
+        findOverlappingWorkspaceAgentIds(result.config, agentId, canonicalPath).length === 0
+      );
+    });
     await removePath(agentDir);
     await removePath(sessionsDir);
+    for (const databasePath of databasePaths) {
+      await removePath(databasePath);
+    }
   }
   if (workspaceCleanupError) {
     throw workspaceCleanupError;

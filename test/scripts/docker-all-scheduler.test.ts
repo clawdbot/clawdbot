@@ -1229,10 +1229,10 @@ postgres Created
     expect(resolveDockerPreflightPlatform("x64")).toBe("linux/amd64");
     expect(resolveDockerPreflightPlatform("arm64")).toBe("linux/arm64");
     expect(dockerPreflightSmokeCommand("x64")).toBe(
-      "docker run --rm --platform 'linux/amd64' alpine:3.20 true",
+      "docker run --rm --platform 'linux/amd64' alpine:3.24 true",
     );
     expect(dockerPreflightSmokeCommand("arm64")).toBe(
-      "docker run --rm --platform 'linux/arm64' alpine:3.20 true",
+      "docker run --rm --platform 'linux/arm64' alpine:3.24 true",
     );
   });
 

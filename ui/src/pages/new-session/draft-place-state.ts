@@ -439,6 +439,7 @@ export class DraftPlaceState {
     this.preferredProjectRestore = "";
     this.whereSelectedByUser = false;
     this.projectSelectedByUser = false;
+    this.deviceIdValue = "";
     this.cloudProfileIdValue = "";
     this.autoDeviceValue = false;
     this.repositoryState.reset();

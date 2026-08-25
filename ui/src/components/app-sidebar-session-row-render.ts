@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
@@ -26,6 +27,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
@@ -42,10 +44,7 @@ import {
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
-import {
-  renderSidebarSessionSubtitle,
-  resolveSidebarSessionSubtitle,
-} from "./session-row-subtitle.ts";
+import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
@@ -58,6 +57,7 @@ export interface SessionListHost {
   readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -72,7 +72,6 @@ export interface SessionListHost {
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
-  readonly fullyShownChildSessionKeys: ReadonlySet<string>;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
@@ -111,6 +110,7 @@ export interface SessionListHost {
   ): SessionPullRequestIndicatorState;
   mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
+  isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
@@ -149,11 +149,10 @@ export interface SessionListHost {
 
 export function visibleSessionChildren(params: {
   session: SidebarRecentSession;
-  fullyShownChildSessionKeys: ReadonlySet<string>;
+  fullyShown: boolean;
 }): readonly SidebarRecentSession[] {
-  const showAllChildren = params.fullyShownChildSessionKeys.has(params.session.key);
   // Active, running, and attention-bearing branches must bypass the quiet-child cap.
-  return showAllChildren
+  return params.fullyShown
     ? params.session.children
     : params.session.children.filter(
         (child, index) =>
@@ -173,7 +172,7 @@ export function renderRecentSession(params: {
     params: { key: session.key, pinned: !session.pinned },
   });
   const label = display?.label ?? session.label;
-  const { subtitle, narration } = resolveSidebarSessionSubtitle({
+  const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
@@ -564,7 +563,7 @@ export function renderSessionTree(params: {
   const expanded = host.isSessionChildrenExpanded(session);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: host.fullyShownChildSessionKeys,
+    fullyShown: host.isSessionChildrenFullyShown(session.key),
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div
@@ -581,8 +580,10 @@ export function renderSessionTree(params: {
                 role=${ifDefined(listItem ? "list" : undefined)}
                 aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
               >
-                ${visibleChildren.map((child) =>
-                  renderSessionTree({ host, session: child, listItem }),
+                ${repeat(
+                  visibleChildren,
+                  (child) => child.key,
+                  (child) => renderSessionTree({ host, session: child, listItem }),
                 )}
               </div>`
             : nothing}

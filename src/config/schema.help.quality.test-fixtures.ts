@@ -276,7 +276,6 @@ export const TARGET_KEYS = [
   "logging.redactPatterns",
   "update",
   "ui",
-  "ui.assistant",
   "plugins",
   "plugins.enabled",
   "plugins.allow",
@@ -491,7 +490,5 @@ export const FINAL_BACKLOG_TARGET_KEYS = [
   "skills.load.extraDirs",
   "skills.load.watch",
   "skills.workshop.allowSymlinkTargetWrites",
-  "ui.assistant.avatar",
-  "ui.assistant.name",
   "ui.seamColor",
 ] as const;

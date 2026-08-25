@@ -288,13 +288,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes Z.AI fallback repro script changes through its regression test", () => {
-    expectChangedTargets(
-      ["scripts/zai-fallback-repro.ts"],
-      ["test/scripts/zai-fallback-repro.test.ts"],
-    );
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expectChangedTargets(
       ["src/config/types.messages.ts", "src/config/zod-schema.core.ts"],

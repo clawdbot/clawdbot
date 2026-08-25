@@ -525,22 +525,6 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
-export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform) && platform !== "win32";
-}
-
-export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
-  return true;
-}
-
 export function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -562,10 +546,6 @@ export function shouldRunMainChannelDevUpdate(ref: string) {
     return false;
   }
   return resolveExpectedDevUpdateRef(ref) === "main";
-}
-
-export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
-  return platform === "win32";
 }
 
 export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {

@@ -10,8 +10,9 @@ const mocks = vi.hoisted(() => ({
   markSentinelFailure: vi.fn(async () => undefined),
   printResult: vi.fn(),
   readConfig: vi.fn(),
+  readServiceState: vi.fn(),
   restart: vi.fn(async () => undefined),
-  restartService: vi.fn(async () => true),
+  restartService: vi.fn(async (_params: { serviceInstallEnv?: NodeJS.ProcessEnv | null }) => true),
   restoreWindowsAutoStart: vi.fn(async () => true),
   tryInstallCompletion: vi.fn(async () => undefined),
   tryWriteCompletionCache: vi.fn(async () => undefined),
@@ -23,6 +24,10 @@ vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfig,
+}));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: mocks.readServiceState,
 }));
 vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => callback(),
@@ -46,6 +51,9 @@ vi.mock("./update-command-plugins.js", () => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   tryWriteCompletionCache: mocks.tryWriteCompletionCache,
+}));
+vi.mock("./restart-helper.js", () => ({
+  prepareRestartScript: vi.fn(async () => null),
 }));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
@@ -94,6 +102,7 @@ const successfulPluginUpdate = {
 async function finishSuccessfulPackageSwitch(params: {
   previousRoot: string;
   packageRoot: string;
+  restartEnvironment?: NodeJS.ProcessEnv;
 }): Promise<void> {
   await finishUpdate({
     result: {
@@ -105,19 +114,23 @@ async function finishSuccessfulPackageSwitch(params: {
     },
     root: params.packageRoot,
     previousInstallRoot: params.previousRoot,
-    installKindChanged: true,
+    installKindChanged: !params.restartEnvironment,
     configSnapshot: validConfigSnapshot,
     requestedChannel: null,
     storedChannel: null,
     channel: "stable",
     downgradeRisk: true,
-    shouldRestart: false,
+    shouldRestart: Boolean(params.restartEnvironment),
     opts: {},
     showProgress: false,
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
     startedAt: Date.now(),
     updateStepTimeoutMs: 1_000,
+    ...(params.restartEnvironment && {
+      preManagedServiceStop: { stopped: true, serviceMatchesMutationRoot: true },
+      ownedManagedUpdateEnv: params.restartEnvironment,
+    }),
   } as unknown as FinishUpdateParams);
 }
 
@@ -286,6 +299,106 @@ describe("successful update finalization ordering", () => {
       unlink.mockRestore();
       process.env.PATH = previousPath;
       await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("removes inherited operator overrides from the managed install environment", async () => {
+    const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
+    const managedEnvironment = { ANTHROPIC_API_KEY: "managed-provider", MANAGED_VALUE: "base" };
+    const effectiveEnvironment = {
+      ...managedEnvironment,
+      ANTHROPIC_API_KEY: "drop-in-provider",
+      OPENAI_API_KEY: "operator-only-provider",
+    };
+    mocks.readServiceState.mockResolvedValueOnce({
+      installed: true,
+      loadState: { status: "loaded" },
+      env: effectiveEnvironment,
+      command: {
+        programArguments,
+        environment: effectiveEnvironment,
+        managedDefinition: { programArguments, environment: managedEnvironment },
+        managedOverrides: {
+          environment: { keys: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "UNSET_PROVIDER_KEY"] },
+        },
+      },
+    });
+    vi.stubEnv("ANTHROPIC_API_KEY", effectiveEnvironment.ANTHROPIC_API_KEY);
+    vi.stubEnv("OPENAI_API_KEY", effectiveEnvironment.OPENAI_API_KEY);
+    vi.stubEnv("UNSET_PROVIDER_KEY", "removed-by-drop-in");
+    vi.stubEnv("GEMINI_API_KEY", "allowed-runtime-credential");
+    vi.stubEnv("HOME", os.homedir());
+    vi.stubEnv("OPENCLAW_HOME", "");
+    vi.stubEnv("OPENCLAW_PROFILE", "caller-only-profile");
+    const callerStateDir = path.join(os.homedir(), ".openclaw-caller-only-profile");
+    vi.stubEnv("OPENCLAW_STATE_DIR", callerStateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerStateDir, "openclaw.json"));
+    try {
+      const ownedUpdateEnvironment: NodeJS.ProcessEnv = { ...process.env, ...effectiveEnvironment };
+      for (const key of ["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
+        delete ownedUpdateEnvironment[key];
+      }
+      await finishSuccessfulPackageSwitch({
+        previousRoot: "/tmp/openclaw-update",
+        packageRoot: "/tmp/openclaw-update",
+        restartEnvironment: ownedUpdateEnvironment,
+      });
+
+      const installEnv = mocks.restartService.mock.lastCall?.[0].serviceInstallEnv;
+      expect(installEnv?.OPENAI_API_KEY).toBeUndefined();
+      expect(installEnv?.UNSET_PROVIDER_KEY).toBeUndefined();
+      expect(installEnv?.ANTHROPIC_API_KEY).toBe("managed-provider");
+      expect(installEnv?.MANAGED_VALUE).toBe("base");
+      expect(installEnv?.GEMINI_API_KEY).toBe("allowed-runtime-credential");
+      expect(installEnv?.OPENCLAW_PROFILE).toBeUndefined();
+      expect(installEnv?.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(installEnv?.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    ["unknown", true],
+    ["inline reset", { resetInline: true }],
+    ["environment-file reset", { resetFiles: true }],
+  ] as const)("skips unsafe metadata refresh for %s ownership", async (_, environment) => {
+    const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
+    mocks.readServiceState.mockResolvedValueOnce({
+      installed: true,
+      loadState: { status: "loaded" },
+      env: {},
+      command: {
+        programArguments,
+        managedDefinition: { programArguments },
+        managedOverrides: { environment },
+      },
+    });
+
+    vi.stubEnv("HOME", os.homedir());
+    vi.stubEnv("OPENCLAW_PROFILE", "default");
+    for (const key of ["OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
+      vi.stubEnv(key, "");
+    }
+    try {
+      await finishSuccessfulPackageSwitch({
+        previousRoot: "/tmp/openclaw-update",
+        packageRoot: "/tmp/openclaw-update",
+        restartEnvironment: process.env,
+      });
+
+      expect(mocks.restartService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shouldRestart: true,
+          refreshServiceEnv: false,
+          serviceInstallEnv: null,
+        }),
+      );
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        expect.stringContaining("metadata refresh was skipped because systemd drop-in environment"),
+      );
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

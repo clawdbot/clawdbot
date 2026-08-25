@@ -26,6 +26,11 @@ on:
         default: workflow_dispatch
         type: string
 
+concurrency:
+  group: mantis-telegram-visible-proof
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   actions: read
   contents: read

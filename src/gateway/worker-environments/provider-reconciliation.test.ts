@@ -97,6 +97,156 @@ describe("worker environment service", () => {
     });
   });
 
+  it.each([
+    ["SSH", { leaseId: "lease-direct-only-ssh", ssh: support.SSH_ENDPOINT }],
+    ["node", { leaseId: "lease-direct-only-node", node: { deviceId: "device-direct-only-node" } }],
+  ] as const)(
+    "P1: preserves a direct-only %s lease after profile removal and reconciliation",
+    async (_transport, lease) => {
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const workerService = support.createService(
+        support.createProvider({
+          supportedExecutionModes: undefined,
+          provision: async () => lease,
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await workerService.create("development", `request-${lease.leaseId}`);
+      support.testState.config.cloudWorkers!.profiles = {};
+
+      await workerService.reconcileOnce();
+
+      expect(environment.profileSnapshot).not.toHaveProperty("executionMode");
+      expect(inspect).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: lease.leaseId,
+      });
+    },
+  );
+
+  it("P1: destroys a persisted SSH lease when provider capabilities and its profile are removed", async () => {
+    const leaseId = "lease-unadvertised-persisted-ssh";
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["remote-exec"],
+      provision: async () => ({ leaseId, ssh: support.SSH_ENDPOINT }),
+      inspect,
+      destroy,
+    });
+    const workerService = support.createService(provider);
+    const environment = await workerService.create(
+      "development",
+      "request-unadvertised-persisted-ssh",
+      undefined,
+      "remote-exec",
+    );
+    provider.supportedExecutionModes = undefined;
+    support.testState.config.cloudWorkers!.profiles = {};
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: expect.stringContaining("remote-exec"),
+    });
+  });
+
+  it.each([
+    { name: "all placement capabilities", supportedExecutionModes: undefined },
+    { name: "its exact remote-exec capability", supportedExecutionModes: ["worker-turn"] as const },
+  ])(
+    "destroys a persisted node lease when its provider loses $name",
+    async ({ supportedExecutionModes }) => {
+      const leaseId = "lease-unadvertised-persisted-node";
+      const deviceId = "device-unadvertised-persisted-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provisionBeforeInstallation: true,
+        provision: async () => ({ leaseId, node: { deviceId } }),
+        inspect,
+        destroy,
+      });
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+      });
+      const environment = await workerService.create(
+        "development",
+        "request-unadvertised-persisted-node",
+        undefined,
+        "remote-exec",
+      );
+      provider.supportedExecutionModes = supportedExecutionModes;
+      support.getDevelopmentProfile().settings = { region: "edited" };
+
+      await workerService.reconcileOnce();
+
+      expect(inspect).not.toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+        nodeDeviceId: null,
+        lastError: expect.stringMatching(/node|remote-exec/u),
+      });
+    },
+  );
+
+  it.each([
+    ["remote-exec-only", ["remote-exec"]],
+    ["dual-mode", ["worker-turn", "remote-exec"]],
+  ] as const)(
+    "preserves a persisted node lease after restarting with a %s provider",
+    async (_label, supportedExecutionModes) => {
+      const leaseId = "lease-persisted-multimode-node";
+      const deviceId = "device-persisted-multimode-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const initial = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          provisionBeforeInstallation: true,
+          provision: async () => ({ leaseId, node: { deviceId } }),
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await initial.create(
+        "development",
+        "request-persisted-multimode-node",
+        undefined,
+        "remote-exec",
+      );
+      await initial.stop();
+
+      const restarted = support.createService(
+        support.createProvider({ supportedExecutionModes, inspect, destroy }),
+      );
+      await restarted.reconcileOnce();
+
+      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId,
+        nodeDeviceId: deviceId,
+        sshEndpoint: null,
+      });
+    },
+  );
+
   it("reconciles one exact environment without sweeping its siblings", async () => {
     support.seedReady("worker-target");
     support.seedReady("worker-sibling");

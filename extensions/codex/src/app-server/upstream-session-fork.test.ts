@@ -82,7 +82,8 @@ function forkResponse(threadId = "thread-forked") {
     thread: {
       id: threadId,
       sessionId: "session-forked",
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       createdAt: 1715299200,
       updatedAt: 1715299200,
       cwd: "/tmp",

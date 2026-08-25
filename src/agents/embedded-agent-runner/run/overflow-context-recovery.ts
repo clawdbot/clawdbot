@@ -172,15 +172,25 @@ export async function recoverEmbeddedRunOverflow(
         currentTokenCount: overflowTokenCountForCompaction,
       });
       compactResult = compaction.result;
-      if (compactResult.ok && compactResult.compacted) {
+      const sessionAfterCompaction = input.getActiveSession();
+      const stillOwnsCompactionTarget =
+        sessionAfterCompaction.id === activeSession.id &&
+        sessionAfterCompaction.file === activeSession.file;
+      if (!stillOwnsCompactionTarget) {
+        compactResult = {
+          ok: false,
+          compacted: false,
+          reason: "active session changed during overflow compaction",
+        };
+      } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
-        const sessionAfterCompaction = input.getActiveSession();
+        const adoptedSession = input.getActiveSession();
         await runContextEngineMaintenance({
           contextEngine: input.contextEngine,
-          sessionId: sessionAfterCompaction.id,
+          sessionId: adoptedSession.id,
           sessionKey: runParams.sessionKey,
-          sessionTarget: sessionAfterCompaction.target,
-          sessionFile: sessionAfterCompaction.file,
+          sessionTarget: adoptedSession.target,
+          sessionFile: adoptedSession.file,
           reason: "compaction",
           runtimeContext: compaction.runtimeContext,
           runtimeSettings: compaction.runtimeSettings,
@@ -204,6 +214,7 @@ export async function recoverEmbeddedRunOverflow(
         config: runParams.config,
         sessionKey: runParams.sessionKey,
         agentId: input.sessionAgentId,
+        sessionPersistence: runParams.sessionPersistence,
       });
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
@@ -322,9 +333,15 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+  const currentReplayMetadata =
+    input.attempt.currentAttemptReplayMetadata ?? input.attempt.replayMetadata;
+  const sideEffectCaution = currentReplayMetadata.hadPotentialSideEffects
+    ? " Completed tool actions were not replayed; verify their effects before retrying."
+    : "";
   const userText =
     "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
+    sideEffectCaution;
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

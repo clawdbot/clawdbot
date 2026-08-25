@@ -2171,7 +2171,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup trusted release harness for Bun smoke");
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
-    expect(workflow).toContain("npm install -g bun@1.3.14");
+    expect(workflow).toContain("npm install -g bun@1.4.0");
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install candidate-payload smoke");
     expect(workflow).toContain("working-directory: .release-harness");

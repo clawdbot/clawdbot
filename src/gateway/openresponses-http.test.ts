@@ -1411,6 +1411,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
       expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
+      expect(parseSseData(findSseEvent(deltaEvents, "response.output_item.added"))).toMatchObject({
+        item: { content: [] },
+      });
+      expect(parseSseData(findSseEvent(deltaEvents, "response.content_part.added"))).toMatchObject({
+        content_index: 0,
+        part: { type: "output_text", text: "" },
+      });
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
