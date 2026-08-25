@@ -258,10 +258,17 @@ function renderAttachmentTablePreview(
     preview.truncated ||
     rows.length > DOCUMENT_PREVIEW_VISIBLE_ROWS ||
     columnCount > DOCUMENT_PREVIEW_VISIBLE_COLUMNS;
+  const bottomTruncated = preview.truncated || rows.length > DOCUMENT_PREVIEW_VISIBLE_ROWS;
   const mediumTruncated = columnCount > 5;
   const narrowTruncated = columnCount > 3;
   return html`
-    <div class="chat-assistant-attachment-card__table-wrap">
+    <div
+      class="chat-assistant-attachment-card__table-wrap"
+      ?data-right-truncated=${alwaysTruncated}
+      ?data-bottom-truncated=${bottomTruncated}
+      ?data-medium-truncated=${mediumTruncated}
+      ?data-narrow-truncated=${narrowTruncated}
+    >
       <table class="chat-assistant-attachment-card__table">
         <thead>
           <tr>
@@ -284,17 +291,6 @@ function renderAttachmentTablePreview(
           )}
         </tbody>
       </table>
-      ${alwaysTruncated || mediumTruncated || narrowTruncated
-        ? html`<div
-            class="chat-assistant-attachment-card__table-truncated"
-            role="note"
-            ?data-always-truncated=${alwaysTruncated}
-            ?data-medium-truncated=${mediumTruncated}
-            ?data-narrow-truncated=${narrowTruncated}
-          >
-            ${t("chat.attachments.previewTruncated")}
-          </div>`
-        : null}
     </div>
   `;
 }

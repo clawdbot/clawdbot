@@ -74,9 +74,10 @@ describe("parseDelimitedPreview", () => {
 
     expect(container.querySelectorAll("thead th")).toHaveLength(8);
     expect(container.querySelectorAll("tbody tr")).toHaveLength(3);
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__table-truncated"),
-    ).not.toBeNull();
+    const tableWrap = container.querySelector(".chat-assistant-attachment-card__table-wrap");
+    expect(tableWrap?.hasAttribute("data-right-truncated")).toBe(true);
+    expect(tableWrap?.hasAttribute("data-bottom-truncated")).toBe(true);
+    expect(container.textContent).not.toContain("Preview truncated");
   });
 
   it.each([
