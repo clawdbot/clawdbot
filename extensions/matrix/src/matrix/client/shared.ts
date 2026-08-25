@@ -395,7 +395,7 @@ function beginGenerationRetirement(params: {
           () => true,
           () => false,
         );
-      state.client.stopWithoutPersist();
+      await state.client.stopWithoutPersist();
       if (decryptionsDrained) {
         if (poisonDisposition === "replace-after-stop") {
           deleteSharedClientState(state);
@@ -414,7 +414,7 @@ function beginGenerationRetirement(params: {
     } catch (error) {
       state.poisonError = toRetirementError(error);
       try {
-        state.client.stopWithoutPersist();
+        await state.client.stopWithoutPersist();
       } finally {
         deleteSharedClientState(state);
       }
@@ -424,7 +424,7 @@ function beginGenerationRetirement(params: {
       if (state.releaseMode === "persist") {
         await state.client.stopAndPersist();
       } else if (state.releaseMode === "discard") {
-        state.client.stopWithoutPersist();
+        await state.client.stopWithoutPersist();
       } else {
         await state.client.stopAndPersist().catch(() => state.client.stopWithoutPersist());
       }

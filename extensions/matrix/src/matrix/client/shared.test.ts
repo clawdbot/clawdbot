@@ -50,7 +50,7 @@ function createMockClient(name: string, callOrder: string[] = []) {
     stopAndPersist: vi.fn(async () => {
       callOrder.push("persist");
     }),
-    stopWithoutPersist: vi.fn(() => {
+    stopWithoutPersist: vi.fn(async () => {
       callOrder.push("discard");
     }),
     drainPendingDecryptions: vi.fn(async (reason: string) => {
@@ -794,6 +794,31 @@ describe("shared Matrix client generations", () => {
 
     expect(client.stopAndPersist).not.toHaveBeenCalled();
     expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a discarded generation unavailable until async cleanup settles", async () => {
+    const discard = createDeferred<void>();
+    const client = createMockClient("main");
+    const replacementClient = createMockClient("replacement");
+    client.stopWithoutPersist.mockReturnValue(discard.promise);
+    createMatrixClientMock.mockResolvedValueOnce(client).mockResolvedValueOnce(replacementClient);
+    const auth = authFor("main");
+    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+
+    const release = lease.release({ mode: "discard" });
+    await vi.waitFor(() => {
+      expect(client.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    });
+    const replacementPromise = acquireSharedMatrixClient({ auth, startClient: false });
+    await Promise.resolve();
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+
+    discard.resolve();
+    await release;
+    const replacement = await replacementPromise;
+    expect(replacement.client).toBe(replacementClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+    await replacement.release({ mode: "discard" });
   });
 
   it("preserves and propagates an earlier persist requirement when final lease discards", async () => {

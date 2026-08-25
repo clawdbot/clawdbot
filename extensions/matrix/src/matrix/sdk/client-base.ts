@@ -148,6 +148,8 @@ export abstract class MatrixClientBase {
   protected transactionScopePromise: Promise<string> | null = null;
   private readonly messageWireDispatchGuards = new Map<string, MatrixMessageWireDispatchGuard>();
   private sdkStopped = false;
+  private idbPersistPromise: Promise<void> | null = null;
+  private idbPersistAbortController: AbortController | null = null;
 
   readonly dms = {
     update: async (): Promise<boolean> => {
@@ -273,6 +275,25 @@ export abstract class MatrixClientBase {
   }
 
   protected idbPersistTimer: ReturnType<typeof setInterval> | null = null;
+
+  private startPeriodicIdbPersist(persistIdbToDisk: MatrixCryptoRuntime["persistIdbToDisk"]): void {
+    if (this.idbPersistPromise) {
+      return;
+    }
+    const abortController = new AbortController();
+    const persistPromise = persistIdbToDisk({
+      snapshotPath: this.idbSnapshotPath,
+      databasePrefix: this.cryptoDatabasePrefix,
+      abortSignal: abortController.signal,
+    })
+      .catch(noop)
+      .finally(() => {
+        this.idbPersistPromise = null;
+        this.idbPersistAbortController = null;
+      });
+    this.idbPersistAbortController = abortController;
+    this.idbPersistPromise = persistPromise;
+  }
 
   protected async ensureCryptoSupportInitialized(): Promise<void> {
     if (
@@ -547,10 +568,6 @@ export abstract class MatrixClientBase {
     if (this.sdkStopped) {
       return;
     }
-    if (this.idbPersistTimer) {
-      clearInterval(this.idbPersistTimer);
-      this.idbPersistTimer = null;
-    }
     this.currentSyncState = null;
     this.currentSyncError = undefined;
     this.client.stopClient();
@@ -583,15 +600,23 @@ export abstract class MatrixClientBase {
       .catch(noop);
   }
 
-  async stopAndPersist(): Promise<void> {
-    if (this.stopPersistPromise) {
-      await this.stopPersistPromise;
-      return;
-    }
-    this.stopPersistPromise = (async () => {
+  private async stopClientGeneration(persist: boolean): Promise<void> {
+    if (persist) {
       await this.quiesceSync();
-      this.stopSdkClient();
-      this.decryptBridge?.stop();
+    } else {
+      await this.quiesceSync().catch(noop);
+      this.syncStore?.discardPendingSyncCursorPersistence();
+    }
+    if (this.idbPersistTimer) {
+      clearInterval(this.idbPersistTimer);
+      this.idbPersistTimer = null;
+    }
+    this.idbPersistAbortController?.abort();
+    const activePeriodicPersist = this.idbPersistPromise;
+    this.stopSdkClient();
+    this.decryptBridge?.stop();
+    await activePeriodicPersist;
+    if (persist) {
       const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
       await runtime.persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
@@ -600,15 +625,34 @@ export abstract class MatrixClientBase {
       });
       this.syncStore?.markCleanShutdown();
       await this.syncStore?.flush();
-    })();
+    }
+  }
+
+  async stopAndPersist(): Promise<void> {
+    if (!this.stopPersistPromise) {
+      const stopPromise = this.stopClientGeneration(true);
+      const guardedStop = stopPromise.catch((error: unknown) => {
+        if (this.stopPersistPromise === guardedStop) {
+          this.stopPersistPromise = null;
+        }
+        throw error;
+      });
+      this.stopPersistPromise = guardedStop;
+    }
     await this.stopPersistPromise;
   }
 
-  stopWithoutPersist(): void {
-    this.syncStore?.discardPendingSyncCursorPersistence();
-    this.stopSdkClient();
-    this.decryptBridge?.stop();
-    this.stopPersistPromise = Promise.resolve();
+  async stopWithoutPersist(): Promise<void> {
+    if (this.stopPersistPromise) {
+      try {
+        await this.stopPersistPromise;
+        return;
+      } catch {
+        // A failed durable stop still requires non-persisting cleanup.
+      }
+    }
+    this.stopPersistPromise = this.stopClientGeneration(false);
+    await this.stopPersistPromise;
   }
 
   protected async bootstrapCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
@@ -691,10 +735,7 @@ export abstract class MatrixClientBase {
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        persistIdbToDisk({
-          snapshotPath: this.idbSnapshotPath,
-          databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop);
+        this.startPeriodicIdbPersist(persistIdbToDisk);
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
       this.idbPersistTimer.unref?.();
     } catch (err) {
