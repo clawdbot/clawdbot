@@ -3,13 +3,6 @@
 // must target the module that defines the symbol rather than a re-export facade;
 // a facade also evaluates its siblings and drags their graphs onto cold start.
 export {
-  abortEmbeddedAgentRun,
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../../agents/embedded-agent-runner/runs.js";
-export { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
-export { getRuntimeConfig } from "../../config/config.js";
-export {
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";

@@ -4363,6 +4363,33 @@ describe("agent event handler", () => {
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
 
+  it("forwards restart recovery provenance to terminal persistence", () => {
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+    });
+    registerAgentRunContext("run-recovery", {
+      mainSessionRestartRecovery: true,
+      sessionKey: "session-recovery",
+    });
+    const stop = onAgentRuntimeEvent(handler);
+
+    emitRuntimeAgentEvent({
+      runId: "run-recovery",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    stop();
+
+    const persistParams = requireRecord(
+      requireMockArg(persistGatewaySessionLifecycleEventMock, 0, 0, "persist lifecycle params"),
+      "persist lifecycle params",
+    );
+    expect(requireRecord(persistParams.event, "persist lifecycle event")).toMatchObject({
+      mainSessionRestartRecovery: true,
+      runId: "run-recovery",
+    });
+  });
+
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
     ["tool", { phase: "start", name: "read", toolCallId: "owned-tool" }],

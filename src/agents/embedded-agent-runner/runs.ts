@@ -65,8 +65,6 @@ import {
 
 export {
   getActiveEmbeddedRunCount,
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
