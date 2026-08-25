@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS frames (
   batch_id INTEGER REFERENCES batches(id) ON DELETE SET NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_frames_day ON frames (day, captured_at_ms);
+CREATE INDEX IF NOT EXISTS idx_logbook_frames_captured_at ON frames (captured_at_ms);
 CREATE INDEX IF NOT EXISTS idx_logbook_frames_unbatched ON frames (batch_id) WHERE batch_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_logbook_frames_batch ON frames (batch_id, captured_at_ms) WHERE batch_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS observations (
   text TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_observations_day ON observations (day, start_ms);
+CREATE INDEX IF NOT EXISTS idx_logbook_observations_batch ON observations (batch_id);
 CREATE TABLE IF NOT EXISTS cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day TEXT NOT NULL,
@@ -80,6 +83,7 @@ CREATE TABLE IF NOT EXISTS cards (
   updated_ms INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_cards_day ON cards (day, start_ms);
+CREATE INDEX IF NOT EXISTS idx_logbook_cards_keyframe ON cards (keyframe_id) WHERE keyframe_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS standups (
   day TEXT PRIMARY KEY,
   text TEXT NOT NULL,

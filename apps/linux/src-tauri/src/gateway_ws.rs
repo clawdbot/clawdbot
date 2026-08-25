@@ -431,6 +431,7 @@ struct GatewayClientInner {
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
     canvas_surface: Mutex<CanvasSurfaceState>,
+    user_accent: Mutex<Option<String>>,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -453,6 +454,7 @@ impl GatewayClient {
                 agents_cache: Mutex::new(None),
                 identity: Mutex::new(None),
                 canvas_surface: Mutex::new(CanvasSurfaceState::default()),
+                user_accent: Mutex::new(None),
                 connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
                 reconnect_paused: AtomicBool::new(false),
@@ -540,7 +542,12 @@ impl GatewayClient {
         webview
             .emit(
                 GATEWAY_STATE_EVENT,
-                GatewayStateEvent::new(self.connection_state(), notice, self.canvas_surface_url()),
+                GatewayStateEvent::new(
+                    self.connection_state(),
+                    notice,
+                    self.canvas_surface_url(),
+                    self.user_accent(),
+                ),
             )
             .map_err(|error| format!("Could not report Gateway connectivity: {error}"))
     }
@@ -898,7 +905,15 @@ impl GatewayClient {
             inline_widgets_available,
         )
         .map_err(RequestFailure::transport)?;
-        let dispatch = |frame: &Value| dispatch_chat_event(app, frame);
+        let config_changed = AtomicBool::new(false);
+        let dispatch = |frame: &Value| {
+            dispatch_chat_event(app, frame);
+            if frame.get("type").and_then(Value::as_str) == Some("event")
+                && frame.get("event").and_then(Value::as_str) == Some("config.changed")
+            {
+                config_changed.store(true, Ordering::SeqCst);
+            }
+        };
         let hello =
             match request_on_socket(&mut socket, "connect", params, REQUEST_TIMEOUT, &dispatch)
                 .await
@@ -923,10 +938,12 @@ impl GatewayClient {
         );
 
         let agents = request_agents_list(&mut socket, REQUEST_TIMEOUT, &dispatch).await?;
+        let accent = request_gateway_accent(&mut socket, &dispatch).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
             return Ok(());
         }
         self.cache_agents(agents);
+        self.set_user_accent(generation, accent);
         self.set_connection_state(app, GatewayConnectionState::Up, None);
         let mut last_gateway_activity = Instant::now();
 
@@ -938,6 +955,16 @@ impl GatewayClient {
                 )
             {
                 return Ok(());
+            }
+            if config_changed.swap(false, Ordering::SeqCst) {
+                let accent = request_gateway_accent(&mut socket, &dispatch).await?;
+                if self.inner.config_generation.load(Ordering::SeqCst) != generation {
+                    return Ok(());
+                }
+                if self.set_user_accent(generation, accent) {
+                    self.emit_connection_state(app, GatewayConnectionState::Up, None);
+                }
+                last_gateway_activity = Instant::now();
             }
             tokio::select! {
                 command = receiver.recv() => {
@@ -966,7 +993,7 @@ impl GatewayClient {
                     }
                 }
                 incoming = socket.next() => {
-                    handle_idle_message(app, &mut socket, incoming).await?;
+                    handle_idle_message(&dispatch, &mut socket, incoming).await?;
                     last_gateway_activity = Instant::now();
                 }
                 _ = tokio::time::sleep(DRIVER_TICK) => {
@@ -1077,6 +1104,27 @@ impl GatewayClient {
         self.canvas_surface_state().url
     }
 
+    fn set_user_accent(&self, generation: u64, accent: Option<String>) -> bool {
+        let mut current = self
+            .inner
+            .user_accent
+            .lock()
+            .expect("gateway user accent mutex poisoned");
+        if self.inner.config_generation.load(Ordering::SeqCst) != generation || *current == accent {
+            return false;
+        }
+        *current = accent;
+        true
+    }
+
+    fn user_accent(&self) -> Option<String> {
+        self.inner
+            .user_accent
+            .lock()
+            .expect("gateway user accent mutex poisoned")
+            .clone()
+    }
+
     fn is_connected(&self) -> bool {
         self.connection_state() == GatewayConnectionState::Up
     }
@@ -1098,6 +1146,7 @@ impl GatewayClient {
                 .lock()
                 .expect("gateway agents cache mutex poisoned") = None;
             self.set_canvas_surface_url(self.inner.config_generation.load(Ordering::SeqCst), None);
+            self.set_user_accent(self.inner.config_generation.load(Ordering::SeqCst), None);
         }
         let notice_changed = {
             let mut current = self
@@ -1120,10 +1169,19 @@ impl GatewayClient {
         if !state_changed && !notice_changed {
             return;
         }
+        self.emit_connection_state(app, state, notice);
+    }
+
+    fn emit_connection_state(
+        &self,
+        app: &AppHandle,
+        state: GatewayConnectionState,
+        notice: Option<String>,
+    ) {
         let _ = app.emit_to(
             QUICKCHAT_LABEL,
             GATEWAY_STATE_EVENT,
-            GatewayStateEvent::new(state, notice, self.canvas_surface_url()),
+            GatewayStateEvent::new(state, notice, self.canvas_surface_url(), self.user_accent()),
         );
     }
 }
@@ -1136,6 +1194,8 @@ struct GatewayStateEvent {
     notice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     canvas_surface_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accent: Option<String>,
 }
 
 impl GatewayStateEvent {
@@ -1143,11 +1203,13 @@ impl GatewayStateEvent {
         state: GatewayConnectionState,
         notice: Option<String>,
         canvas_surface_url: Option<String>,
+        accent: Option<String>,
     ) -> Self {
         Self {
             state: state.event_name(),
             notice,
             canvas_surface_url,
+            accent,
         }
     }
 }
@@ -1507,6 +1569,34 @@ where
     })
 }
 
+async fn request_gateway_accent<F>(
+    socket: &mut GatewaySocket,
+    dispatch: &F,
+) -> Result<Option<String>, RequestFailure>
+where
+    F: Fn(&Value),
+{
+    let config =
+        request_on_socket(socket, "config.get", json!({}), REQUEST_TIMEOUT, dispatch).await?;
+    Ok(gateway_user_accent(&config))
+}
+
+fn gateway_user_accent(config: &Value) -> Option<String> {
+    [
+        config.pointer("/config/ui/prefs/accent"),
+        config.pointer("/config/ui/seamColor"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .find(|value| {
+        value.len() == 7
+            && value.starts_with('#')
+            && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+    })
+    .map(str::to_ascii_lowercase)
+}
+
 struct ValidatedHello {
     device_token: Option<String>,
     tick_watch_timeout: Duration,
@@ -1695,11 +1785,14 @@ async fn next_json(socket: &mut GatewaySocket) -> Result<Value, RequestFailure> 
     }
 }
 
-async fn handle_idle_message(
-    app: &AppHandle,
+async fn handle_idle_message<F>(
+    dispatch: &F,
     socket: &mut GatewaySocket,
     incoming: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-) -> Result<(), RequestFailure> {
+) -> Result<(), RequestFailure>
+where
+    F: Fn(&Value),
+{
     let message = incoming
         .ok_or_else(|| RequestFailure::transport("Gateway connection closed."))?
         .map_err(|error| {
@@ -1708,7 +1801,7 @@ async fn handle_idle_message(
     match message {
         Message::Text(text) => {
             if let Ok(value) = serde_json::from_str::<Value>(text.as_ref()) {
-                dispatch_chat_event(app, &value);
+                dispatch(&value);
             }
             Ok(())
         }
@@ -2095,6 +2188,31 @@ mod tests {
     }
 
     #[test]
+    fn gateway_user_accent_prefers_valid_user_preferences() {
+        for (config, expected) in [
+            (
+                json!({ "config": { "ui": { "prefs": { "accent": "#ABC123" }, "seamColor": "#654321" } } }),
+                Some("#abc123"),
+            ),
+            (
+                json!({ "config": { "ui": { "prefs": { "accent": "invalid" }, "seamColor": "#654321" } } }),
+                Some("#654321"),
+            ),
+            (
+                json!({ "config": { "ui": { "prefs": { "accent": "abc123" }, "seamColor": "#12345" } } }),
+                None,
+            ),
+            (
+                json!({ "config": { "ui": { "prefs": { "accent": "#12345g" }, "seamColor": " #654321" } } }),
+                None,
+            ),
+            (json!({ "config": {} }), None),
+        ] {
+            assert_eq!(gateway_user_accent(&config).as_deref(), expected);
+        }
+    }
+
+    #[test]
     fn sleep_gateway_routes_are_loopback_only() {
         for route in [
             "ws://localhost:18789",
@@ -2158,6 +2276,7 @@ mod tests {
             GatewayConnectionState::Up,
             None,
             Some("https://gateway.example/__openclaw__/cap/fixture-capability".to_string()),
+            Some("#abc123".to_string()),
         ))
         .expect("serialize gateway state");
 
@@ -2165,6 +2284,7 @@ mod tests {
             event["canvasSurfaceUrl"],
             "https://gateway.example/__openclaw__/cap/fixture-capability"
         );
+        assert_eq!(event["accent"], "#abc123");
         assert!(event.get("canvas_surface_url").is_none());
     }
 
