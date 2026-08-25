@@ -111,8 +111,8 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(commentaryEvent?.data?.phase).toBe("commentary");
     expect(commentaryEvent?.data).toMatchObject({
       text: "Working...",
-      delta: "",
-      replace: true,
+      delta: "Working...",
+      replace: undefined,
       phase: "commentary",
       itemId: "item_commentary",
     });

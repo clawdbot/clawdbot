@@ -331,26 +331,19 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
-    if (isResponsesCommentary && chunk) {
+    // Every commentary transport accumulates its raw chunks so continuation markers can
+    // span deltas and message_end can dedupe against the buffer. Only Responses displays
+    // from that buffer; other transports re-extract an already-cumulative snapshot.
+    if (chunk) {
       ctx.state.deltaBuffer += chunk;
       ctx.state.deltaBufferIsCommentary = true;
     }
     const commentaryText = isResponsesCommentary
       ? ctx.state.deltaBuffer
       : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
-    const commentaryData =
-      commentaryText && (chunk || !hadResponsesCommentaryText)
-        ? buildAssistantStreamData({
-            text: commentaryText,
-            replace: true,
-            phase: "commentary",
-            itemId: deliveryItemId,
-          })
-        : undefined;
-    if (commentaryData) {
+    if (commentaryText && (chunk || !hadResponsesCommentaryText)) {
       emitResolvedCommentaryDisplay(ctx, commentaryText, {
         itemId: deliveryItemId,
-        preferReplace: true,
       });
     }
     return;

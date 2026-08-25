@@ -504,6 +504,27 @@ describe("handleAssistantFailover", () => {
       });
     });
 
+    it("warns when a classified stream timeout rotates a failed profile", async () => {
+      const warn = vi.fn();
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          terminal: { kind: "ok" },
+          failoverReason: "timeout",
+          billingFailure: false,
+          lastProfileId: "profile-timeout",
+          advanceAuthProfile: vi.fn(async () => true),
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(warn).toHaveBeenCalledWith(
+        "Profile profile-timeout timed out. Trying next account...",
+      );
+    });
+
     it("preserves harness-owned timeout policy when profile rotation is exhausted", async () => {
       const outcome = await handleAssistantFailover(
         makeParams({

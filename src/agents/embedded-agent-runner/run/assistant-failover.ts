@@ -144,7 +144,7 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
-    const timeoutFailure = terminal.timedOut;
+    const timeoutFailure = terminal.timedOut || params.failoverReason === "timeout";
     const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
       if (!failureReason) {

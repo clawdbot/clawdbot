@@ -272,18 +272,6 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       reason: params.failoverReason,
     };
   }
-  if (params.failoverReason === "timeout" && !params.harnessOwnsTransport) {
-    if (params.fallbackConfigured && params.failoverFailure) {
-      return {
-        action: "fallback_model",
-        reason: "timeout",
-      };
-    }
-    return {
-      action: "surface_error",
-      reason: params.failoverReason,
-    };
-  }
   if (isTerminalFormatFailure(params)) {
     return {
       action: "surface_error",

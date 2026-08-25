@@ -115,6 +115,7 @@ export function emitCommentaryDisplayTransition(
   const useDelta = !params.preferReplace && appendDelta && nextText.startsWith(previousText);
   const data = useDelta
     ? buildAssistantStreamData({
+        text: nextText,
         delta: appendDelta,
         phase: "commentary",
         itemId: params.itemId,
