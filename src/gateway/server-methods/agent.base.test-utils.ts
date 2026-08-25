@@ -1491,13 +1491,7 @@ describe("gateway agent handler", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
-      mocks.readTranscriptStatsSync.mockReturnValue({
-        eventCount: 1,
-        lastMutationAtMs: now - 1_000,
-        lastObservedMutationAtMs: now - 10_000,
-        maxSeq: 0,
-        sizeBytes: 64,
-      });
+      mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync.mockReturnValue(true);
 
       await withTestDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
         const sessionsDir = `${root}/sessions`;
