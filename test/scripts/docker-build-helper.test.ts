@@ -4520,7 +4520,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "npm install -g --prefix /tmp/openclaw-proof",
       "corepack prepare pnpm@11.22.0 --activate",
       "pnpm add --global --allow-build=openclaw",
-      "bun@1.3.14",
+      "bun@1.4.0",
       'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",

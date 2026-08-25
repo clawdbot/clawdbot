@@ -1346,7 +1346,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          install-bun: "false"
+          install-bun: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
           # Same-repo Blacksmith runs restore the dependency cache published by
@@ -1427,6 +1427,11 @@ jobs:
 
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
+
+      - name: Smoke test built CLI with Bun
+        run: |
+          bun openclaw.mjs --help
+          bun openclaw.mjs status --json --timeout 1
 
       # Doctor index proof, singleton smoke, and startup-memory check are
       # independent dist readers; Blacksmith runners have the cores to overlap

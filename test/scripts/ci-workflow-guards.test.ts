@@ -7405,13 +7405,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRunContract).not.toContain("--testTimeout");
   });
 
-  it("does not rebuild Control UI after build:ci-artifacts", () => {
+  it("builds artifacts once and smoke-tests the built CLI with Node and Bun", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const setupStep = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
     const buildDistStep = buildArtifactSteps.find(
       (step: WorkflowStep) => step.name === "Build dist",
     );
+    const nodeHelpSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test CLI launcher help",
+    );
+    const nodeStatusSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test CLI launcher status json",
+    );
+    const bunSmoke = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Smoke test built CLI with Bun",
+    );
 
+    expect(setupStep.with["install-bun"]).toBe("true");
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
       "Build Control UI",
@@ -7419,6 +7432,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(buildArtifactSteps.some((step: WorkflowStep) => step.run === "pnpm ui:build")).toBe(
       false,
     );
+    expect(nodeHelpSmoke.run).toBe("node openclaw.mjs --help");
+    expect(nodeStatusSmoke.run).toBe("node openclaw.mjs status --json --timeout 1");
+    expect(bunSmoke.run).toContain("bun openclaw.mjs --help");
+    expect(bunSmoke.run).toContain("bun openclaw.mjs status --json --timeout 1");
   });
 
   it("keeps source-only Control UI locale drift advisory", () => {
