@@ -13,7 +13,7 @@ const MAX_TAR_PREFLIGHT_EXTRACTED_BYTES = 512 * MEBIBYTE;
 const MAX_TAR_PREFLIGHT_ENTRY_BYTES = 256 * MEBIBYTE;
 const MAX_TAR_PREFLIGHT_META_ENTRY_BYTES = MEBIBYTE;
 
-type ArchiveSymlink = { entryPath: string; target: string };
+type ArchiveAlias = { entryPath: string; target: string };
 
 function remainingExtractTimeMs(deadlineMs: number): number {
   const remainingMs = deadlineMs - Date.now();
@@ -52,7 +52,7 @@ async function waitForExtractDeadline<T>(
 
 function assertSiblingLinkTarget(entryPath: string, target: string): void {
   // A target without a separator can only ever resolve inside the entry's own
-  // directory, so restoring it cannot move bytes outside the extract root.
+  // directory, so materializing it cannot read bytes outside the extract root.
   if (!target || target === "." || target === ".." || /[\\/]/u.test(target)) {
     throw new Error(`unsafe link target in llama-server archive: ${entryPath} -> ${target}`);
   }
@@ -64,8 +64,8 @@ function assertSiblingLinkTarget(entryPath: string, target: string): void {
  * fs-safe rejects every archive link entry, so read the link table from the tar
  * headers and keep only same-directory aliases; anything else fails the install.
  */
-async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise<ArchiveSymlink[]> {
-  const symlinks: ArchiveSymlink[] = [];
+async function readTarAliases(archivePath: string, deadlineMs: number): Promise<ArchiveAlias[]> {
+  const aliases: ArchiveAlias[] = [];
   const archiveStat = await waitForExtractDeadline(() => fsp.stat(archivePath), deadlineMs);
   if (archiveStat.size > MAX_TAR_PREFLIGHT_ARCHIVE_BYTES) {
     throw new Error("llama-server archive exceeds the preflight size limit");
@@ -100,7 +100,7 @@ async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise
           if (entry.type === "SymbolicLink") {
             const target = typeof entry.linkpath === "string" ? entry.linkpath : "";
             assertSiblingLinkTarget(entryPath, target);
-            symlinks.push({ entryPath, target });
+            aliases.push({ entryPath, target });
           }
           entry.resume();
         } catch (error) {
@@ -137,29 +137,64 @@ async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise
     parser.once("end", () => finish());
     input.pipe(parser);
   });
-  return symlinks;
+  return aliases;
 }
 
-async function restoreArchiveSymlinks(
+function resolveArchiveAliasSource(
+  alias: ArchiveAlias,
+  aliasesByPath: ReadonlyMap<string, ArchiveAlias>,
+): string {
+  const seen = new Set([path.posix.normalize(alias.entryPath)]);
+  let sourcePath = path.posix.join(path.posix.dirname(alias.entryPath), alias.target);
+  for (;;) {
+    if (seen.has(sourcePath)) {
+      throw new Error(`cyclic alias in llama-server archive: ${alias.entryPath}`);
+    }
+    const sourceAlias = aliasesByPath.get(sourcePath);
+    if (!sourceAlias) {
+      return sourcePath;
+    }
+    seen.add(sourcePath);
+    sourcePath = path.posix.join(path.posix.dirname(sourceAlias.entryPath), sourceAlias.target);
+  }
+}
+
+async function materializeArchiveAliases(
   destDir: string,
-  symlinks: ArchiveSymlink[],
+  aliases: ArchiveAlias[],
   deadlineMs: number,
 ): Promise<void> {
   const destRealDir = await waitForExtractDeadline(() => fsp.realpath(destDir), deadlineMs);
-  for (const symlink of symlinks) {
-    const linkPath = path.resolve(destRealDir, symlink.entryPath);
+  const aliasesByPath = new Map(
+    aliases.map((alias) => [path.posix.normalize(alias.entryPath), alias]),
+  );
+  for (const alias of aliases) {
+    const aliasPath = path.resolve(destRealDir, alias.entryPath);
     // Resolve the parent through realpath instead of comparing spellings: the
     // reported bypass came from lexical entry-path checks that Windows separators
     // and drive prefixes walk straight through.
     const parentRealDir = await waitForExtractDeadline(
-      () => fsp.realpath(path.dirname(linkPath)),
+      () => fsp.realpath(path.dirname(aliasPath)),
       deadlineMs,
     );
     if (parentRealDir !== destRealDir && !parentRealDir.startsWith(destRealDir + path.sep)) {
-      throw new Error(`unsafe link path in llama-server archive: ${symlink.entryPath}`);
+      throw new Error(`unsafe alias path in llama-server archive: ${alias.entryPath}`);
+    }
+    const sourceRealPath = await waitForExtractDeadline(
+      () =>
+        fsp.realpath(path.resolve(destRealDir, resolveArchiveAliasSource(alias, aliasesByPath))),
+      deadlineMs,
+    );
+    if (sourceRealPath !== destRealDir && !sourceRealPath.startsWith(destRealDir + path.sep)) {
+      throw new Error(`unsafe alias target in llama-server archive: ${alias.entryPath}`);
     }
     await waitForExtractDeadline(
-      () => fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath))),
+      () =>
+        fsp.copyFile(
+          sourceRealPath,
+          path.join(parentRealDir, path.basename(aliasPath)),
+          fs.constants.COPYFILE_EXCL | fs.constants.COPYFILE_FICLONE,
+        ),
       deadlineMs,
     );
   }
@@ -178,7 +213,7 @@ async function withStagedArchiveDestination(
     published = true;
   } finally {
     if (!published) {
-      // Restoration happens only in this unpublished tree. Cleanup removes the
+      // Alias materialization happens only in this unpublished tree. Cleanup removes the
       // stage before rejection, so a late filesystem promise cannot reach destDir.
       await fsp.rm(stagingDir, { recursive: true, force: true });
     }
@@ -205,10 +240,10 @@ export async function extractLlamaServerArchive(params: {
       });
       return;
     }
-    // TAR alias discovery and restoration are part of extraction, so all three
+    // TAR alias discovery and materialization are part of extraction, so all three
     // phases share one deadline instead of granting each pass a fresh budget.
     const deadlineMs = Date.now() + EXTRACT_TIMEOUT_MS;
-    const symlinks = await readTarSymlinks(params.archivePath, deadlineMs);
+    const aliases = await readTarAliases(params.archivePath, deadlineMs);
     await extractArchive({
       archivePath: params.archivePath,
       destDir: stagingDir,
@@ -218,6 +253,8 @@ export async function extractLlamaServerArchive(params: {
       entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
       onFiltered: "skip-entry",
     });
-    await restoreArchiveSymlinks(stagingDir, symlinks, deadlineMs);
+    // Preserve loader-visible SONAME names as regular files. The shared
+    // extractor remains the sole link policy owner and publishes no links.
+    await materializeArchiveAliases(stagingDir, aliases, deadlineMs);
   });
 }

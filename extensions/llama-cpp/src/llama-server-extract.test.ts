@@ -55,7 +55,7 @@ async function createZipArchive(
 }
 
 describe("extractLlamaServerArchive", () => {
-  it("restores the SONAME aliases that the loader needs from tar assets", async () => {
+  it("materializes the SONAME aliases that the loader needs as regular files", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
       await fs.writeFile(path.join(buildDir, "libllama.so.0.1.0"), "shared-object");
@@ -67,8 +67,8 @@ describe("extractLlamaServerArchive", () => {
     await extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
 
     const buildDir = path.join(destDir, "llama-build");
-    expect(await fs.readlink(path.join(buildDir, "libllama.so.0"))).toBe("libllama.so.0.1.0");
-    expect(await fs.readlink(path.join(buildDir, "libllama.so"))).toBe("libllama.so.0");
+    expect((await fs.lstat(path.join(buildDir, "libllama.so.0"))).isFile()).toBe(true);
+    expect((await fs.lstat(path.join(buildDir, "libllama.so"))).isFile()).toBe(true);
     expect(await fs.readFile(path.join(buildDir, "libllama.so"), "utf8")).toBe("shared-object");
   });
 
@@ -82,6 +82,19 @@ describe("extractLlamaServerArchive", () => {
       extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
     ).rejects.toThrow(/unsafe link target/u);
     await expect(fs.lstat(path.join(destDir, "llama-build", "llama-server"))).rejects.toThrow();
+  });
+
+  it("rejects cyclic tar aliases instead of publishing filesystem links", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.symlink("alias-b", path.join(buildDir, "alias-a"));
+      await fs.symlink("alias-a", path.join(buildDir, "alias-b"));
+    });
+
+    await expect(
+      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
+    ).rejects.toThrow(/cyclic alias/u);
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
   it("rejects a tar hard link instead of dropping it silently", async () => {
@@ -155,7 +168,7 @@ describe("extractLlamaServerArchive", () => {
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
-  it("does not restore tar aliases after the shared deadline expires", async () => {
+  it("does not materialize tar aliases after the shared deadline expires", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
       await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
@@ -179,30 +192,30 @@ describe("extractLlamaServerArchive", () => {
     await expect(fs.lstat(path.join(destDir, "llama-build", "libllama.so"))).rejects.toThrow();
   });
 
-  it("does not publish an alias that finishes after the shared deadline", async () => {
+  it("does not publish an alias copy that finishes after the shared deadline", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
       await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
       await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
     });
-    const enteredSymlink = Promise.withResolvers<void>();
-    const realSymlink = fs.symlink.bind(fs);
+    const enteredCopy = Promise.withResolvers<void>();
+    const realCopyFile = fs.copyFile.bind(fs);
     vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
       const buildDir = path.join(params.destDir, "llama-build");
       await fs.mkdir(buildDir, { recursive: true });
       await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
     });
     vi.useFakeTimers({ now: 1_000 });
-    vi.spyOn(fs, "symlink").mockImplementationOnce(async (target, linkPath) => {
-      enteredSymlink.resolve();
+    vi.spyOn(fs, "copyFile").mockImplementationOnce(async (source, destination, mode) => {
+      enteredCopy.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, 10 * 60_000 + 1_000);
       });
-      await realSymlink(target, linkPath);
+      await realCopyFile(source, destination, mode);
     });
 
     const extraction = extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
-    await enteredSymlink.promise;
+    await enteredCopy.promise;
     await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
 
     await expect(extraction).rejects.toThrow(/extraction timed out/u);
