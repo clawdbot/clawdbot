@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  appendTranscriptEvent,
   persistSessionTranscriptTurn,
   readSessionTranscriptBoundedActiveContextCore,
   upsertSessionEntryCore,
@@ -82,5 +83,43 @@ it("reserves the transcript header inside the exact byte limit", async () => {
     expect(context.events[0]).toMatchObject({ id: scope.sessionId, type: "session" });
     expect(context.serializedBytes).toBe(headerBytes);
     expect(context.truncated).toBe(true);
+  });
+});
+
+it("retains the latest compaction boundary before a truncated tail", async () => {
+  await withBoundedContextScope(async (scope) => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "old", parentId: null, message: { role: "user", content: "old" } }],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "summary",
+      parentId: "old",
+      timestamp: "2026-08-25T00:00:00.000Z",
+      summary: "earlier work",
+      firstKeptEntryId: "old",
+      tokensBefore: 100,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "middle", parentId: "summary", message: { role: "user", content: "middle" } },
+        { eventId: "new", parentId: "middle", message: { role: "assistant", content: "new" } },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+      maxBytes: 2048,
+      maxEvents: 1,
+    });
+
+    expect(context.events.map((event) => (event as { id?: string }).id)).toEqual([
+      scope.sessionId,
+      "summary",
+      "new",
+    ]);
+    expect(context.events.at(-1)).toMatchObject({ parentId: "summary" });
+    expect(context.boundaryCount).toBe(1);
   });
 });

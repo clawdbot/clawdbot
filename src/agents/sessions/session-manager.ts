@@ -109,6 +109,7 @@ export class SessionManager extends SessionManagerBranching {
   ): SessionManager {
     const { cwd, ...limits } = options;
     const context = readSessionTranscriptBoundedActiveContextCore(target, limits);
+    // SAFETY: The accessor returns the same persisted transcript event union consumed by open().
     const entries = context.events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",

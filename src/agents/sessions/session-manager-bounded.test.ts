@@ -37,7 +37,10 @@ it("bounds runtime hydration while preserving older durable transcript rows on r
   expect(manager.getEntries()).toHaveLength(2);
   expect(
     manager.removeTrailingEntries(
-      (entry) => entry.type === "message" && entry.message.content === "latest",
+      (entry) =>
+        entry.type === "message" &&
+        "content" in entry.message &&
+        entry.message.content === "latest",
     ),
   ).toBe(1);
   await expect(loadTranscriptEvents(scope)).resolves.toMatchObject([
