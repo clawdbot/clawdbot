@@ -11,8 +11,7 @@
     "tar": "7.5.22"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "jszip": "3.10.1"
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
