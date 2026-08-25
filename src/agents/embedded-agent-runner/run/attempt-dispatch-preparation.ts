@@ -5,6 +5,7 @@ import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
+import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { createEmbeddedRunReplayState } from "../replay-state.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -203,6 +204,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
     startupStagesEmitted = true;
   }
+  const fallbackReason = input.resolveRuntimeFallbackReason();
+  recordAdmittedModelRoutingDecision({
+    token: params.admittedRunContext?.executionIdentityToken,
+    requestedProvider: runInput.provider,
+    requestedModel: requestedModelId ?? runInput.modelId,
+    selectedProvider: provider,
+    selectedModel: modelId,
+    selectionMode:
+      runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "explicit" : "automatic",
+    credentialProfileId: runtime.lastProfileId,
+    fallbackReason,
+  });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
     transcriptOwnership: params.sessionManager
@@ -227,8 +240,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       provider,
       modelId,
       requestedModelId,
-      fallbackActive: modelId !== requestedModelId || Boolean(input.resolveRuntimeFallbackReason()),
-      fallbackReason: input.resolveRuntimeFallbackReason(),
+      fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
+      fallbackReason,
       agentHarnessId: runtime.agentHarness.id,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,

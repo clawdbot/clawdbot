@@ -14,6 +14,10 @@ import {
   pruneExpiredExecutionDecisionFacts,
   recordExecutionDecisionFact,
 } from "./execution-decision-facts.js";
+import {
+  processExecutionDecisionWork,
+  type ExecutionDecisionWork,
+} from "./execution-decision-work.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 import {
   processExecutionIdentityAdmissionWork,
@@ -37,7 +41,8 @@ type AuditMaintenanceAttempt = "settled" | "more" | "retry";
 type AuditWriterRequest =
   | { type: "record-event"; input: AuditEventInput }
   | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork }
-  | { type: "record-execution-decision"; receipt: DecisionReceiptV1 };
+  | { type: "record-execution-decision"; receipt: DecisionReceiptV1 }
+  | { type: "record-execution-decision-work"; work: ExecutionDecisionWork };
 
 export type AuditEventWriter = {
   ready: Promise<void>;
@@ -46,6 +51,8 @@ export type AuditEventWriter = {
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   /** For decision owners without a native durable record; approvals must not use this path. */
   recordExecutionDecision: (receipt: DecisionReceiptV1) => boolean;
+  /** Raw private refs are projected only after this work reaches the FIFO owner. */
+  recordExecutionDecisionWork: (work: ExecutionDecisionWork) => boolean;
   stop: () => Promise<void>;
 };
 
@@ -162,6 +169,10 @@ export function createAuditEventWriter(
           processExecutionIdentityAdmissionWork(request.work, database);
           return;
         }
+        if (request.type === "record-execution-decision-work") {
+          processExecutionDecisionWork(request.work, database);
+          return;
+        }
         recordExecutionDecisionFact(request.receipt, database);
       });
       return "settled";
@@ -173,7 +184,10 @@ export function createAuditEventWriter(
       resetLockContention();
       if (request.type === "record-execution-identity") {
         fail(executionIdentityFailureMessage(error));
-      } else if (request.type === "record-execution-decision") {
+      } else if (
+        request.type === "record-execution-decision" ||
+        request.type === "record-execution-decision-work"
+      ) {
         fail("audit execution decision rejected");
       } else {
         fail(error);
@@ -301,6 +315,8 @@ export function createAuditEventWriter(
     record: (input) => enqueue({ type: "record-event", input }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
     recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
+    recordExecutionDecisionWork: (work) =>
+      enqueue({ type: "record-execution-decision-work", work }),
     stop: () => {
       if (stopPromise) {
         return stopPromise;
