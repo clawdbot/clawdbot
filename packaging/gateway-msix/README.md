@@ -69,9 +69,20 @@ downloads and verifies the official Node.js runtime, then creates an unsigned
 NativeAOT MSIX. `scripts\Build-LocalMSIX.ps1` can reuse a successful workflow
 payload or a local payload directory.
 
-Pull-request, push, and manual workflow runs publish unsigned x64 and ARM64
-packages for validation. Official signing and release promotion are separate
-release-owner concerns and are not enabled by the unsigned build workflow.
+Pull-request and push runs publish unsigned x64 and ARM64 packages for
+validation. Manual runs support:
+
+- `unsigned`: build unsigned validation artifacts from the selected ref;
+- `test`: sign both architectures with a temporary runner-generated
+  certificate and publish the certificate with the artifacts;
+- `official`: require a stable `vYYYY.M.PATCH` tag matching `package.json`,
+  verify both unsigned packages and their embedded payloads, use the protected
+  `release-signing` environment and Azure OIDC, then upload signed packages and
+  checksums to the existing OpenClaw GitHub release.
+
+Official signing can run only from the immutable release tag supplied in
+`release_tag`. The workflow derives the MSIX version from the OpenClaw release
+version and does not maintain a second commit pin.
 
 ## Installed data
 
