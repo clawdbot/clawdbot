@@ -2713,6 +2713,27 @@ EOF`,
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
+  it("waits inline for cron approvals so the isolated run survives until the decision", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "pwd && df -h",
+      trigger: "cron",
+    });
+
+    expect(result.pendingResult).toBeUndefined();
+    expect(result.deniedResult).toBeUndefined();
+    expect(result.allowWithoutEnforcedCommand).toBe(true);
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { decision: "allow-once", deniedReason: null },
     { decision: "deny", deniedReason: "user-denied" },

@@ -423,6 +423,14 @@ Each allowlist entry supports:
 
 ## Cron standing grants
 
+Approvals raised by cron runs are delivered only to connected approval
+surfaces (Control UI, TUI, macOS app) — never to chat channels, which would
+repeat a card on every occurrence. While a reviewer surface is connected, the
+scheduled run waits for the decision like an interactive run; cron jobs are
+single-flight, so at most one card per job is pending at a time. With no
+approval surface connected, the request is denied immediately and the run's
+error explains the policy fix, exactly as before.
+
 When an approval originates from a cron job's isolated run, resolving it with
 **allow always** does not write a JSON allowlist entry. Instead the Gateway
 mints a scoped standing grant bound to that exact agent, cron job, job

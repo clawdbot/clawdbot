@@ -188,6 +188,7 @@ export function createExecApprovalHandlers(
         approvalReviewerDeviceIds?: string[];
         requireDeliveryRoute?: boolean;
         suppressDelivery?: boolean;
+        deliverToApprovalClientsOnly?: boolean;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -472,6 +473,10 @@ export function createExecApprovalHandlers(
         approvalKind: "exec",
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
+        // The gateway-derived cron fact wins even when an older in-process
+        // caller omits the flag: cron cards belong on approval surfaces only.
+        deliverToApprovalClientsOnly:
+          p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
         deliverRequest: () =>
           runApprovalRequestDeliveries({
             context,

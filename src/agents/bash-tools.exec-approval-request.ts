@@ -64,6 +64,7 @@ type RequestExecApprovalDecisionParams = {
   approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  deliverToApprovalClientsOnly?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -103,6 +104,7 @@ function buildExecApprovalRequestToolParams(
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -339,10 +341,12 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    // Cron has no live reviewer. Register for audit/fallback resolution without
-    // exposing an operator-visible request that the scheduled run cannot answer.
-    suppressDelivery:
-      params.suppressDelivery === true || params.trigger === "cron" ? true : undefined,
+    suppressDelivery: params.suppressDelivery,
+    // Cron has no chat turn to answer from, so its cards go only to connected
+    // approval clients (Control UI/TUI); allow-always there mints a standing
+    // grant that ends the recurrence. With no client connected, the request
+    // still registers and expires no-route into the headless denial (#128031).
+    deliverToApprovalClientsOnly: params.trigger === "cron" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };
