@@ -640,7 +640,7 @@ extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
 extensions/lobster/index.ts	2
 extensions/lobster/src/lobster-runner.ts	4
-extensions/lobster/src/lobster-tool.ts	2
+extensions/lobster/src/lobster-tool.ts	1
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
