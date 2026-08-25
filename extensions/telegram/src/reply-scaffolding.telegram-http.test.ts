@@ -1,16 +1,18 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
+import {
+  createReplyDispatcher,
+  dispatchInboundMessage,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { sendMessageTelegram } from "../../../extensions/telegram/runtime-api.js";
-import type { ReplyPayload } from "../types.js";
-import { buildReplyPayloads } from "./agent-runner-payloads.js";
-import { buildHistoryContext } from "./history.js";
-import { markInboundContextLabel } from "./inbound-context-marker.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { sendMessageTelegram } from "./send.js";
 
 describe("reply scaffolding through final preparation and Telegram HTTP", () => {
   let server: Server;
   let apiRoot: string;
+  let messageSequence = 0;
   const sockets = new Set<Socket>();
   const delivered: string[] = [];
 
@@ -70,34 +72,43 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
 
   async function prepareAndDispatch(payload: ReplyPayload, conversationContext?: string) {
     const errors: unknown[] = [];
+    const cfg = {
+      channels: {
+        telegram: { botToken: "123456:telegram-plugin-http-fixture", apiRoot },
+      },
+    };
     const dispatcher = createReplyDispatcher({
       deliver: async (prepared) => {
-        await sendMessageTelegram("123", prepared.text ?? "", {
-          cfg: {
-            channels: {
-              telegram: { botToken: "123456:telegram-http-fixture", apiRoot },
-            },
-          },
-        });
+        await sendMessageTelegram("123", prepared.text ?? "", { cfg });
       },
       onError: (error) => {
         errors.push(error);
       },
     });
-    const { replyPayloads } = await buildReplyPayloads({
-      payloads: [payload],
-      conversationContext,
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      replyToMode: "off",
-    });
-    for (const prepared of replyPayloads) {
-      dispatcher.sendFinalReply(prepared);
+    if (conversationContext) {
+      const messageId = `reply-scaffolding-${++messageSequence}`;
+      await dispatchInboundMessage({
+        cfg,
+        ctx: {
+          Body: conversationContext,
+          BodyForAgent: conversationContext,
+          ChatType: "direct",
+          From: "123",
+          MessageSid: messageId,
+          Provider: "telegram",
+          SessionKey: `agent:test:${messageId}`,
+          Surface: "telegram",
+          To: "456",
+        },
+        dispatcher,
+        outboundHooks: "disabled",
+        replyResolver: async () => payload,
+      });
+    } else {
+      dispatcher.sendFinalReply(payload);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
     }
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
     expect(errors).toEqual([]);
   }
 
@@ -105,7 +116,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     const conversationContext = buildHistoryContext({
       historyText: "[Telegram] Alice: private history paragraph",
       currentMessage: [
-        markInboundContextLabel("Conversation info:"),
+        "Conversation info: ⟦openclaw:ctx⟧",
         "```json",
         '{"private":"sender metadata"}',
         "```",
