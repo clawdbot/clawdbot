@@ -4537,6 +4537,46 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
   });
 
+  it.each([
+    {
+      name: "MEDIA directives",
+      text: "Caption\nMEDIA:https://example.com/one.png\nMEDIA:https://example.com/two.png",
+      extractMarkdownImages: false,
+    },
+    {
+      name: "Markdown images",
+      text: "Caption ![one](https://example.com/one.png) ![two](https://example.com/two.png)",
+      extractMarkdownImages: true,
+    },
+  ])("delivers explicit attachments and every extracted $name", async (testCase) => {
+    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(
+      async ({ mediaUrl }) => ({ channel: "matrix", messageId: mediaUrl }),
+    );
+    setTestOutbound({
+      ...matrixOutboundForTest,
+      sendMedia,
+      extractMarkdownImages: testCase.extractMarkdownImages,
+    });
+
+    await deliverMatrix({
+      cfg: matrixChunkConfig,
+      payloads: [
+        {
+          text: testCase.text,
+          mediaUrl: "https://example.com/primary.png",
+          mediaUrls: ["https://example.com/explicit.png", "https://example.com/one.png"],
+        },
+      ],
+    });
+
+    expect(sendMedia.mock.calls.map(([params]) => params.mediaUrl)).toEqual([
+      "https://example.com/explicit.png",
+      "https://example.com/one.png",
+      "https://example.com/primary.png",
+      "https://example.com/two.png",
+    ]);
+  });
+
   it("continues on errors when bestEffort is enabled", async () => {
     const { sendMatrix, onError, results } = await runBestEffortPartialFailureDelivery();
 
