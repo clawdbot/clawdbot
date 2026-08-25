@@ -148,11 +148,16 @@ async function closeSessionGatewayForOnboarding(params: {
 
 function getLocalizedGatewayDaemonRuntimeOptions() {
   return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint:
+    hint: t(
       option.value === "node"
-        ? t("wizard.finalize.daemonRuntimeNodeHint")
-        : (option.hint ?? undefined),
-    label: option.value === "node" ? t("wizard.finalize.daemonRuntimeNode") : option.label,
+        ? "wizard.finalize.daemonRuntimeNodeHint"
+        : "wizard.finalize.daemonRuntimeBunHint",
+    ),
+    label: t(
+      option.value === "node"
+        ? "wizard.finalize.daemonRuntimeNode"
+        : "wizard.finalize.daemonRuntimeBun",
+    ),
     value: option.value,
   }));
 }

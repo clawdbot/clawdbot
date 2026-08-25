@@ -23,6 +23,8 @@ vi.mock("node:fs/promises", async () => {
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import {
   renderSystemNodeWarning,
+  resolveBunRuntimeInfo,
+  resolvePreferredBunPath,
   resolvePreferredNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
@@ -52,6 +54,13 @@ function nodeRuntime(
 ) {
   return {
     stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite })}\n`,
+    stderr: "",
+  };
+}
+
+function bunRuntime(bunVersion: string | null, hasNodeSqlite = true) {
+  return {
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite })}\n`,
     stderr: "",
   };
 }
@@ -327,6 +336,86 @@ describe("resolvePreferredNodePath", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("resolvePreferredBunPath", () => {
+  it("uses the stable BUN_INSTALL executable when Bun 1.4 provides node:sqlite", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
+
+    const result = await resolvePreferredBunPath({
+      env: { BUN_INSTALL: "/home/test/.bun", HOME: "/home/test" },
+      runtime: "bun",
+      platform: "linux",
+      execFile,
+      execPath: "/usr/bin/node",
+    });
+
+    expect(result).toBe(bunPath);
+    expect(execFile).toHaveBeenCalledWith(
+      bunPath,
+      ["-e", expect.stringContaining('require("node:sqlite")')],
+      { encoding: "utf8", timeoutMs: 5_000 },
+    );
+  });
+
+  it("continues to PATH when BUN_INSTALL points at an unsupported Bun", async () => {
+    const oldBun = "/home/test/old-bun/bin/bun";
+    const pathBun = "/opt/bun/bin/bun";
+    const execFile = vi.fn(async (file: string) =>
+      file === oldBun ? bunRuntime("1.3.14", true) : bunRuntime("1.4.0", true),
+    );
+
+    const result = await resolvePreferredBunPath({
+      env: { BUN_INSTALL: "/home/test/old-bun", PATH: "/opt/bun/bin" },
+      runtime: "bun",
+      platform: "linux",
+      execFile,
+      execPath: "/usr/bin/node",
+    });
+
+    expect(result).toBe(pathBun);
+    expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves the default Windows Bun executable", async () => {
+    const bunPath = "C:\\Users\\test\\.bun\\bin\\bun.exe";
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
+
+    const result = await resolvePreferredBunPath({
+      env: { USERPROFILE: "C:\\Users\\test" },
+      runtime: "bun",
+      platform: "win32",
+      execFile,
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+    });
+
+    expect(result).toBe(bunPath);
+  });
+
+  it("uses the current Bun executable when no stable install path is available", async () => {
+    const bunPath = "/opt/custom/bun";
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("2.0.0"));
+
+    const result = await resolvePreferredBunPath({
+      env: {},
+      runtime: "bun",
+      platform: "freebsd",
+      execFile,
+      execPath: bunPath,
+    });
+
+    expect(result).toBe(bunPath);
+  });
+
+  it.each([
+    ["Bun is older than 1.4", bunRuntime("1.3.14", true)],
+    ["node:sqlite is unavailable", bunRuntime("1.4.0", false)],
+  ])("rejects a Bun executable when %s", async (_reason, probe) => {
+    const info = await resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe));
+
+    expect(info.supported).toBe(false);
   });
 });
 

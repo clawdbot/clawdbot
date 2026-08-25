@@ -31,6 +31,8 @@ type Semver = {
   patch: number;
 };
 
+const MINIMUM_BUN_VERSION: Semver = { major: 1, minor: 4, patch: 0 };
+
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -91,8 +93,8 @@ function detectRuntime(): RuntimeDetails {
   };
 }
 
-// Bun >=1.4 (Rust rewrite) ships node:sqlite; older Buns do not. Feature-probe
-// instead of version-gating so the guard tracks the actual runtime capability.
+// Bun >=1.4 ships node:sqlite; require the supported release floor and
+// feature-probe so startup also rejects builds missing the actual capability.
 function currentRuntimeProvidesNodeSqlite(): boolean {
   try {
     return Boolean(process.getBuiltinModule?.("node:sqlite"));
@@ -107,7 +109,7 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
     return isSupportedNodeVersion(details.version);
   }
   if (details.kind === "bun") {
-    return details.hasNodeSqlite;
+    return isSupportedBunVersion(details.version) && details.hasNodeSqlite;
   }
   return false;
 }
@@ -120,6 +122,11 @@ export function isCurrentRuntimeSupported(): boolean {
 /** Checks a Node version label against OpenClaw's supported Node version range. */
 export function isSupportedNodeVersion(version: string | null): boolean {
   return isSupportedOpenClawNodeVersion(version);
+}
+
+/** Checks a Bun version label against OpenClaw's minimum supported release. */
+export function isSupportedBunVersion(version: string | null): boolean {
+  return isAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
 }
 
 /** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
@@ -189,11 +196,11 @@ export function assertSupportedRuntime(
   const execLabel = details.execPath ?? "unknown";
   const requirement =
     details.kind === "bun"
-      ? "openclaw cannot run under Bun because the runtime does not provide node:sqlite."
+      ? "openclaw requires Bun 1.4 or newer with node:sqlite support."
       : "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.";
   const retryHint =
     details.kind === "bun"
-      ? "Run OpenClaw with Node; Bun remains supported for installs and package scripts."
+      ? "Upgrade Bun or run OpenClaw with a supported Node release."
       : "Upgrade Node and re-run openclaw.";
 
   runtime.error(
@@ -201,7 +208,9 @@ export function assertSupportedRuntime(
       requirement,
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
-      "Install Node: https://nodejs.org/en/download",
+      details.kind === "bun"
+        ? "Install Bun: https://bun.com/docs/installation"
+        : "Install Node: https://nodejs.org/en/download",
       retryHint,
     ].join("\n"),
   );

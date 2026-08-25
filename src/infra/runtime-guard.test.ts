@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
+  isSupportedBunVersion,
   isSupportedNodeVersion,
   nodeVersionSatisfiesEngine,
   parseSemver,
@@ -54,6 +55,16 @@ describe("runtime-guard", () => {
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);
+  });
+
+  it.each([
+    ["1.4.0", true],
+    ["1.4.1", true],
+    ["2.0.0", true],
+    ["1.3.14", false],
+    [null, false],
+  ] as const)("classifies supported Bun version %s", (version, expected) => {
+    expect(isSupportedBunVersion(version)).toBe(expected);
   });
 
   it("throws via exit when runtime is too old", () => {
@@ -139,13 +150,33 @@ describe("runtime-guard", () => {
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw cannot run under Bun because the runtime does not provide node:sqlite.",
+        "openclaw requires Bun 1.4 or newer with node:sqlite support.",
         "Detected: bun 1.3.14 (exec: /usr/bin/bun).",
         "PATH searched: /usr/bin",
-        "Install Node: https://nodejs.org/en/download",
-        "Run OpenClaw with Node; Bun remains supported for installs and package scripts.",
+        "Install Bun: https://bun.com/docs/installation",
+        "Upgrade Bun or run OpenClaw with a supported Node release.",
       ].join("\n"),
     );
+  });
+
+  it("rejects Bun below 1.4 even when node:sqlite is available", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    };
+
+    expect(() =>
+      assertSupportedRuntime(runtime, {
+        kind: "bun",
+        version: "1.3.14",
+        execPath: "/usr/bin/bun",
+        pathEnv: "/usr/bin",
+        hasNodeSqlite: true,
+      }),
+    ).toThrow("exit");
   });
 
   it("reports unknown runtimes with fallback labels", () => {
