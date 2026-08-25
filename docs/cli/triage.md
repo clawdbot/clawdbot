@@ -20,7 +20,11 @@ Secrets, tokens, raw chat payloads, and raw logs are excluded. Doctor checks rem
 
 ## Agent handoff
 
-Triage prints ready-to-run commands for three routes:
+In an interactive terminal, triage detects the agent handoff routes available on the current machine and asks which one to use. A configured OpenClaw embedded agent appears first, followed by Claude Code when `claude` is on `PATH`, Codex CLI when `codex` is on `PATH`, and an option to just print the commands.
+
+Choosing Claude Code or Codex starts its interactive session directly with the generated prompt. Choosing the embedded agent first verifies the configured model with a live inference check, then runs one OpenClaw agent turn. `--run` requests that same verified embedded route explicitly.
+
+Non-interactive sessions and the print-only choice provide these manual handoff commands instead:
 
 ```bash
 claude "$(cat '<prompt-path>')"
@@ -28,13 +32,13 @@ codex exec - < '<prompt-path>'
 openclaw triage --run
 ```
 
-In an interactive terminal, OpenClaw offers to run one embedded agent turn only after the configured model passes a live inference check. `--run` requests the same verified embedded route explicitly. JSON output and non-interactive sessions never start an agent.
+JSON output also includes `detectedAgents`, listing the external agents found on `PATH`. JSON output and non-interactive sessions never start an agent.
 
 ## Options
 
 | Option        | Effect                                                                           |
 | ------------- | -------------------------------------------------------------------------------- |
-| `--json`      | Emit prompt and archive paths, finding counts, and suggested commands.           |
+| `--json`      | Emit prompt and archive paths, finding counts, detected agents, and commands.    |
 | `--no-export` | Skip the diagnostics archive and only generate the debugging prompt.             |
 | `--run`       | Run one embedded agent turn after checking the model in an interactive terminal. |
 

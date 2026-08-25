@@ -1,12 +1,19 @@
 // Collect read-only doctor findings and sanitized diagnostics for an agent handoff.
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFindingSeverity } from "../flows/health-checks.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import { redactTextForSupport } from "../logging/diagnostic-support-redaction.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { select } from "./configure.shared.js";
 import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
 
 type TriageOptions = {
@@ -15,7 +22,12 @@ type TriageOptions = {
   run?: boolean;
 };
 
-type TriageHandoff = { kind: "print" } | { kind: "offer" } | { kind: "run" };
+type TriageExternalAgent = "claude" | "codex";
+type TriageHandoff =
+  | { kind: "print" }
+  | { kind: "embedded" }
+  | { kind: "external"; agent: TriageExternalAgent; executablePath: string };
+type TriageHandoffMode = TriageHandoff | { kind: "offer" };
 
 async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   if (skipExport) {
@@ -45,12 +57,12 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   }
 }
 
-function resolveTriageHandoff(options: TriageOptions): TriageHandoff {
+function resolveTriageHandoff(options: TriageOptions): TriageHandoffMode {
   if (options.json === true) {
     return { kind: "print" };
   }
   if (options.run === true) {
-    return { kind: "run" };
+    return { kind: "embedded" };
   }
   return process.stdin.isTTY && process.stdout.isTTY ? { kind: "offer" } : { kind: "print" };
 }
@@ -88,14 +100,23 @@ export async function triageCommand(
   for (const finding of findings) {
     findingCounts[finding.severity] += 1;
   }
+  let handoff = resolveTriageHandoff(options);
+  const externalAgents =
+    options.json === true || handoff.kind === "offer"
+      ? (["claude", "codex"] as const).flatMap((agent) => {
+          const executablePath = resolveExecutablePath(agent);
+          return executablePath ? [{ agent, executablePath }] : [];
+        })
+      : [];
+  const detectedAgents = externalAgents.map(({ agent }) => agent);
   const report = {
     promptPath,
     bundlePath: bundle.kind === "available" ? bundle.path : null,
     bundleError: bundle.kind === "unavailable" ? bundle.reason : null,
     findings: findingCounts,
+    detectedAgents,
     suggestedCommands,
   };
-  const handoff = resolveTriageHandoff(options);
   if (options.json === true) {
     writeRuntimeJson(runtime, report);
     return;
@@ -107,11 +128,67 @@ export async function triageCommand(
   } else if (bundle.kind === "unavailable") {
     runtime.log(`Diagnostics export unavailable: ${bundle.reason}`);
   }
-  runtime.log("Ready-to-run agent handoffs:");
-  for (const command of suggestedCommands) {
-    runtime.log(`  ${command}`);
+
+  if (handoff.kind === "offer") {
+    const snapshot = await readConfigFileSnapshot({ observe: false });
+    const config = snapshot.runtimeConfig ?? snapshot.config;
+    const agentId = tryResolveAmbientOwnerAgentId(config);
+    const choices: Parameters<typeof select<TriageHandoff>>[0]["options"] = [];
+    if (
+      snapshot.exists &&
+      snapshot.valid &&
+      agentId &&
+      resolveAgentEffectiveModelPrimary(config, agentId)
+    ) {
+      choices.push({ value: { kind: "embedded" }, label: "OpenClaw embedded agent" });
+    }
+    for (const { agent, executablePath } of externalAgents) {
+      choices.push({
+        value: { kind: "external", agent, executablePath },
+        label: agent === "claude" ? "Claude Code" : "Codex CLI",
+      });
+    }
+    choices.push({ value: { kind: "print" }, label: "Just print the commands" });
+    const selected = await select<TriageHandoff>({
+      message: "Choose an agent to investigate this OpenClaw installation",
+      options: choices,
+    });
+    if (typeof selected === "symbol") {
+      runtime.exit(130);
+      return;
+    }
+    handoff = selected;
   }
-  if (handoff.kind === "print") {
+
+  if (handoff.kind === "print" || handoff.kind === "embedded") {
+    runtime.log("Ready-to-run agent handoffs:");
+    for (const command of suggestedCommands) {
+      runtime.log(`  ${command}`);
+    }
+    if (handoff.kind === "print") {
+      return;
+    }
+  }
+  if (handoff.kind === "external") {
+    let exitCode: number;
+    try {
+      exitCode = await new Promise<number>((resolve, reject) => {
+        // Spawn the detection-resolved path directly. On Windows a .cmd shim
+        // fails here (Node refuses shell-less .cmd spawns) and degrades to the
+        // printed manual command below — accepted over shell-quoting an 8 KiB argv.
+        const child = spawn(handoff.executablePath, [prompt], { stdio: "inherit" });
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
+      });
+    } catch (error) {
+      runtime.error(`Failed to launch ${handoff.agent}: ${scrubDoctorErrorMessage(error)}`);
+      runtime.log(`Run manually: ${suggestedCommands[handoff.agent === "claude" ? 0 : 1]}`);
+      runtime.exit(1);
+      return;
+    }
+    if (exitCode !== 0) {
+      runtime.exit(exitCode);
+    }
     return;
   }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -125,17 +202,11 @@ export async function triageCommand(
   if (!inference.ok) {
     const reason = redactTextForSupport(scrubDoctorErrorMessage(inference.error));
     const message = `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`;
-    if (handoff.kind === "run") {
+    if (options.run === true) {
       throw new Error(message);
     }
     runtime.log(message);
     return;
-  }
-  if (handoff.kind === "offer") {
-    const { promptYesNo } = await import("../cli/prompt.js");
-    if (!(await promptYesNo("Run one embedded OpenClaw agent turn on this prompt?"))) {
-      return;
-    }
   }
   const { agentExecCommand } = await import("./agent-exec.js");
   const result = await agentExecCommand(undefined, { messageFile: promptPath }, runtime);
