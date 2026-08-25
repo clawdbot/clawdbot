@@ -11,8 +11,8 @@ import {
 import { describeRealtimeTalkInputError, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
-const HOLD_ARM_DELAY_MS = 200,
-  HOLD_PROGRESS_MS = 600;
+const HOLD_ARM_DELAY_MS = 150,
+  HOLD_PROGRESS_MS = 350;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
@@ -436,7 +436,7 @@ export class ComposerDictationController {
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
-    // the visible 600ms ring, so the hold affordance cannot steal tap-to-talk.
+    // the visible 350ms ring, so the hold affordance cannot steal tap-to-talk.
     this.holdTimer = globalThis.setTimeout(() => {
       if (this.phase !== "pressing") {
         return;

@@ -126,7 +126,7 @@ function createHarness(
 
 async function startHold(target: HTMLElement): Promise<void> {
   target.dispatchEvent(pointer("pointerdown"));
-  await vi.advanceTimersByTimeAsync(800);
+  await vi.advanceTimersByTimeAsync(500);
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
   );
@@ -243,7 +243,7 @@ describe("ComposerDictationController", () => {
     });
 
     target.dispatchEvent(pointer("pointerdown"));
-    await vi.advanceTimersByTimeAsync(800);
+    await vi.advanceTimersByTimeAsync(500);
     await vi.advanceTimersByTimeAsync(1);
     document.dispatchEvent(pointer("pointerup"));
     target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -263,7 +263,7 @@ describe("ComposerDictationController", () => {
     const { controller, onTap, target } = createHarness();
 
     target.dispatchEvent(pointer("pointerdown"));
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(150);
     expect(controller.arming).toBe(true);
     document.dispatchEvent(pointer("pointerup"));
     target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -285,7 +285,7 @@ describe("ComposerDictationController", () => {
     const { controller, onError, target } = createHarness();
 
     target.dispatchEvent(pointer("pointerdown"));
-    await vi.advanceTimersByTimeAsync(800);
+    await vi.advanceTimersByTimeAsync(500);
     await waitForFast(() =>
       expect(onError).toHaveBeenCalledWith(
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
@@ -319,12 +319,12 @@ describe("ComposerDictationController", () => {
 
     target.dispatchEvent(pointer("pointerdown"));
     expect(controller.arming).toBe(false);
-    await vi.advanceTimersByTimeAsync(199);
+    await vi.advanceTimersByTimeAsync(149);
     expect(controller.arming).toBe(false);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(controller.arming).toBe(true);
-    await vi.advanceTimersByTimeAsync(599);
+    await vi.advanceTimersByTimeAsync(349);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await waitForFast(() =>

@@ -5140,7 +5140,8 @@ button.chat-pr__diff {
     linear-gradient(white 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: chat-dictation-hold-progress calc(var(--duration-slow) * 2) linear forwards;
+  /* Keep the visible fill aligned with HOLD_PROGRESS_MS in composer-dictation.ts. */
+  animation: chat-dictation-hold-progress 350ms linear forwards;
   pointer-events: none;
 }
 
