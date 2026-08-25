@@ -1,11 +1,7 @@
 /** Query helpers for discovering secret target registry entries. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  formatConcreteConfigPath,
-  toDotPath,
-  type ConcreteConfigPathSegment,
-} from "../shared/dot-path.js";
+import { formatConcreteConfigPath, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
 import {
@@ -247,10 +243,7 @@ function discoverSecretTargetsFromEntries(
   discoveryEntries: CompiledTargetRegistryEntry[],
 ): DiscoveredConfigSecretTarget[] {
   const formatDiscoveredPath = (segments: readonly ConcreteConfigPathSegment[]) =>
-    (segments[0] === "plugins" && segments[1] === "entries") ||
-    segments.some((segment) => typeof segment === "number")
-      ? formatConcreteConfigPath(segments, source)
-      : toDotPath(segments.map(String));
+    formatConcreteConfigPath(segments, source);
   const out: DiscoveredConfigSecretTarget[] = [];
   const seen = new Set<string>();
 

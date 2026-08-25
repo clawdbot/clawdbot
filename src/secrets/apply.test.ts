@@ -1263,7 +1263,12 @@ describe("secrets apply", () => {
           openai: {
             ...createOpenAiProviderConfig(),
             headers: {
-              "x-api-key": "sk-header-plaintext",
+              "X.Trace": "sk-header-plaintext",
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": "sk-request-header-plaintext",
+              },
             },
           },
         },
@@ -1273,8 +1278,23 @@ describe("secrets apply", () => {
     const plan = createPlan({
       targets: [
         createOpenAiProviderHeaderTarget({
-          pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
+          path: 'models.providers.openai.headers["X.Trace"]',
+          pathSegments: ["models", "providers", "openai", "headers", "X.Trace"],
         }),
+        {
+          ...createOpenAiProviderHeaderTarget({
+            path: 'models.providers.openai.request.headers["X.Request.Trace"]',
+            pathSegments: [
+              "models",
+              "providers",
+              "openai",
+              "request",
+              "headers",
+              "X.Request.Trace",
+            ],
+          }),
+          type: "models.providers.request.headers",
+        },
       ],
       options: {
         scrubEnv: false,
@@ -1291,11 +1311,15 @@ describe("secrets apply", () => {
         providers?: {
           openai?: {
             headers?: Record<string, unknown>;
+            request?: { headers?: Record<string, unknown> };
           };
         };
       };
     };
-    expect(nextConfig.models?.providers?.openai?.headers?.["x-api-key"]).toEqual(
+    expect(nextConfig.models?.providers?.openai?.headers?.["X.Trace"]).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
+    expect(nextConfig.models?.providers?.openai?.request?.headers?.["X.Request.Trace"]).toEqual(
       OPENAI_API_KEY_ENV_REF,
     );
   });
