@@ -150,9 +150,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   does not read or write the retired workspace JSON and `.attested` sidecars;
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
-  and the CLI are removed. Existing rows and legacy JSON stay untouched and
-  inert until an approved retention and schema-version migration can remove
-  them.
+  and the CLI are removed. The schema 7 migration discards canonical commitment
+  rows. Legacy `commitments.json` stays untouched and inert pending an accepted
+  retention decision.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -202,7 +202,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `7`, and
+- No new file-era runtime stores. The current global schema is version `9`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -299,7 +299,7 @@ The branch already has a real shared SQLite base:
   24.15+, or 25.9+. `package.json`, the CLI runtime guard, installer defaults,
   macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
-  `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
+  `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, and applies
   the build-inlined schema bytes derived from
   `src/state/openclaw-state-schema.sql`.
 - Kysely table types are generated from disposable SQLite databases created
@@ -309,7 +309,7 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 7`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 9`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
@@ -348,7 +348,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 7`; per-agent DBs use version `17`.
+  currently uses `user_version = 9`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -1894,7 +1894,7 @@ Backups remain one archive file:
   creation integrity check.
 - Restore copies snapshots back to their target paths without rewriting their
   recorded schema versions. The normal database open then applies bounded
-  forward migrations to the current global version `7` or per-agent version
+  forward migrations to the current global version `9` or per-agent version
   `17` when required.
 
 ### Phase 6: Worker Runtime
@@ -1948,7 +1948,7 @@ status.
 Restore should rebuild the global database and agent database files from the
 archive snapshots without rewriting their recorded schema versions. Normal
 database open applies bounded forward migrations to the current global version
-`7` or per-agent version `17`. Doctor remains the only owner of file-to-database
+`9` or per-agent version `17`. Doctor remains the only owner of file-to-database
 import. The restore command validates the archive first, then replaces each
 manifest asset from the verified extracted payload.
 
@@ -1956,7 +1956,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 7`; per-agent DBs use version
+   - The global schema now uses `user_version = 9`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
