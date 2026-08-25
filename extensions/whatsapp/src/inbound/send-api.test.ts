@@ -330,27 +330,27 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("does not send native mentions for phone numbers inside unterminated inline code", async () => {
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      resolveOutboundMentions: ({ jid, text }) =>
-        resolveWhatsAppOutboundMentions({
-          chatJid: jid,
-          text,
-          participants: [{ id: "15551234567@s.whatsapp.net" }],
-        }),
-    });
+  it.each(["Run `notify @15551234567", "Run `notify\n@15551234567"])(
+    "does not send native mentions for phone numbers inside unterminated inline code: %j",
+    async (messageText) => {
+      api = createWebSendApi({
+        sock: { sendMessage, sendPresenceUpdate },
+        defaultAccountId: "main",
+        resolveOutboundMentions: ({ jid, text }) =>
+          resolveWhatsAppOutboundMentions({
+            chatJid: jid,
+            text,
+            participants: [{ id: "15551234567@s.whatsapp.net" }],
+          }),
+      });
 
-    await api.sendMessage(
-      "120363000000000000@g.us",
-      markdownToWhatsApp("Run `notify @15551234567"),
-    );
+      await api.sendMessage("120363000000000000@g.us", markdownToWhatsApp(messageText));
 
-    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
-      text: "Run `notify @15551234567",
-    });
-  });
+      expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+        text: messageText,
+      });
+    },
+  );
 
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
