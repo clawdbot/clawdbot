@@ -1039,6 +1039,61 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(result == .noData)
         #expect(await appModel.handleBackgroundRefreshWake())
+
+        let expiredRefresh = Task { @MainActor in
+            await appModel.handleBackgroundRefreshWake()
+        }
+        expiredRefresh.cancel()
+        #expect(await expiredRefresh.value == false)
+    }
+
+    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.expire()
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [false])
+        #expect(wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `completed background refresh ignores later expiration`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [true])
+        #expect(!wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `replaced background refresh settles before its successor`() {
+        let replacedTask = Task { true }
+        let replacementTask = Task { true }
+        var completions: [Bool] = []
+        let replaced = BackgroundWakeRefreshAttempt(wakeTask: replacedTask) {
+            completions.append($0)
+        }
+        let replacement = BackgroundWakeRefreshAttempt(wakeTask: replacementTask) {
+            completions.append($0)
+        }
+
+        replaced.expire()
+        replacement.complete(success: true)
+        replaced.complete(success: true)
+
+        #expect(completions == [false, true])
+        #expect(replacedTask.isCancelled)
+        #expect(!replacementTask.isCancelled)
     }
 
     @Test func `network status timeout never invents offline network facts`() async {

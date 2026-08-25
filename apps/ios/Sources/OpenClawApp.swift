@@ -16,6 +16,40 @@ private struct PendingWatchPromptAction {
 
 private typealias PendingExecApprovalPrompt = ApprovalNotificationPrompt
 
+/// BackgroundTasks expires on a background queue; settle there before a delayed
+/// main-actor waiter can report success or complete the same delivery twice.
+final class BackgroundWakeRefreshAttempt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wakeTask: Task<Bool, Never>?
+    private var completion: ((Bool) -> Void)?
+
+    init(wakeTask: Task<Bool, Never>, completion: @escaping (Bool) -> Void) {
+        self.wakeTask = wakeTask
+        self.completion = completion
+    }
+
+    func complete(success: Bool) {
+        self.lock.lock()
+        guard let completion = self.completion else {
+            self.lock.unlock()
+            return
+        }
+        self.completion = nil
+        let wakeTask = self.wakeTask
+        self.wakeTask = nil
+        self.lock.unlock()
+
+        if !success {
+            wakeTask?.cancel()
+        }
+        completion(success)
+    }
+
+    func expire() {
+        self.complete(success: false)
+    }
+}
+
 @MainActor
 enum OpenClawAppModelRegistry {
     static var appModel: NodeAppModel?
@@ -39,7 +73,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         return bundleId
     }
 
-    private var backgroundWakeTask: Task<Bool, Never>?
+    private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
@@ -280,19 +314,22 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     private func handleBackgroundWakeRefresh(task: BGAppRefreshTask) {
         self.scheduleBackgroundWakeRefresh(afterSeconds: 15 * 60, reason: "reschedule")
-        self.backgroundWakeTask?.cancel()
+        self.backgroundWakeAttempt?.expire()
 
         let wakeTask = Task { @MainActor [weak self] in
             guard let self, let appModel = self.resolvedAppModel() else { return false }
             return await appModel.handleBackgroundRefreshWake(trigger: "bg_app_refresh")
         }
-        self.backgroundWakeTask = wakeTask
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) { success in
+            task.setTaskCompleted(success: success)
+        }
+        self.backgroundWakeAttempt = attempt
         task.expirationHandler = {
-            wakeTask.cancel()
+            attempt.expire()
         }
         Task {
             let applied = await wakeTask.value
-            task.setTaskCompleted(success: applied)
+            attempt.complete(success: applied)
             self.backgroundWakeLogger.info(
                 "Background wake refresh finished applied=\(applied, privacy: .public)")
         }

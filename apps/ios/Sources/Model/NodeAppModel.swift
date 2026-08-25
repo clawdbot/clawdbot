@@ -7797,6 +7797,7 @@ extension NodeAppModel {
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
+        guard !Task.isCancelled else { return false }
         let wakeId = Self.makePushWakeAttemptID()
         let normalizedTrigger = BackgroundAliveBeacon.normalizeTrigger(trigger)
         let receivedMessage =
@@ -7815,7 +7816,7 @@ extension NodeAppModel {
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.handled
+        return !Task.isCancelled && result.handled
     }
 
     func handleSignificantLocationWakeIfNeeded() async {
@@ -9799,6 +9800,9 @@ extension NodeAppModel {
         }
         let now = Date()
         let gatewayConnected = await isGatewayConnected()
+        guard !Task.isCancelled else {
+            return makeResult(false, .unhandled, "cancelled")
+        }
 
         var appliedReconnect = false
         if !gatewayConnected {
@@ -9811,7 +9815,8 @@ extension NodeAppModel {
                 "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
             self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
             await self.resetGatewaySessionsForForcedReconnect()
-            guard generation == self.gatewayConnectGeneration,
+            guard !Task.isCancelled,
+                  generation == self.gatewayConnectGeneration,
                   self.gatewayAutoReconnectEnabled,
                   self.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
             else {
@@ -9826,7 +9831,7 @@ extension NodeAppModel {
             self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
 
             let connected = await waitForGatewayConnection(timeoutMs: 12000, pollMs: 250)
-            guard connected else {
+            guard !Task.isCancelled, connected else {
                 return makeResult(appliedReconnect, .unhandled, "connect_timeout")
             }
             guard generation == self.gatewayConnectGeneration else {
@@ -9841,6 +9846,9 @@ extension NodeAppModel {
         }
 
         let beacon = await publishBackgroundAliveBeacon(trigger: trigger)
+        guard !Task.isCancelled else {
+            return makeResult(appliedReconnect, .unhandled, "cancelled")
+        }
         if beacon.handled {
             let successAtMs = Date().timeIntervalSince1970 * 1000
             UserDefaults.standard.set(successAtMs, forKey: Self.backgroundAliveLastSuccessAtMsKey)
