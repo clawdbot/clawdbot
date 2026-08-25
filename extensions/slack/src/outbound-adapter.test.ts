@@ -1,4 +1,5 @@
 // Slack tests cover outbound adapter plugin behavior.
+import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -26,6 +27,45 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
+  });
+
+  it("sends mirrored question controls once at the Slack message block limit", async () => {
+    sendMessageSlackMock.mockResolvedValue({ messageId: "171.001", channelId: "C123" });
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            {
+              label: "Continue",
+              action: { type: "question" as const, questionId, optionValue: "Continue" },
+            },
+          ],
+        },
+      ],
+    };
+    const payload = {
+      channelData: {
+        askUser: { questionId },
+        slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" as const })) },
+      },
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload,
+      presentation,
+      ctx: { cfg, to: "C123", text: "", payload },
+    });
+
+    await slackOutbound.sendPayload!({ cfg, to: "C123", text: "", payload: rendered! });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks).toHaveLength(50);
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks.at(-1)).toMatchObject({
+      elements: [{ action_id: "openclaw:question_button:1:1" }],
+    });
   });
 
   it("sends payload media first, then finalizes with blocks", async () => {

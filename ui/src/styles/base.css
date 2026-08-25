@@ -89,6 +89,13 @@
   --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
   --inbox-attention-foreground: #ffffff;
 
+  /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
+     #ff4d4d→#991b1b gradient, so dark mode lifts both stops; light mode
+     restores the original artwork below. */
+  --lobster-icon-body: #ff6d5a;
+  --lobster-icon-shade: #c2372b;
+  --lobster-icon-eye: #050810;
+
   /* Link text keeps the accent hue but cannot be --accent: chat paints user
      bubbles from that same token, so a link there fights its own background.
      Derived, not per-theme — --accent-hover is every palette's audited lifted
@@ -543,6 +550,11 @@
   --accent-glow: rgba(189, 69, 49, 0.12);
   --primary: #bd4531;
   --primary-foreground: #ffffff;
+
+  /* Original lobster artwork reads well on light surfaces. */
+  --lobster-icon-body: #ff4d4d;
+  --lobster-icon-shade: #991b1b;
+  --lobster-icon-eye: #050810;
 
   --secondary: #f4f1ec;
   --secondary-foreground: #403c35;

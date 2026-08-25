@@ -41,6 +41,7 @@ import {
   handleReplySkip,
   resetReasoningStepState,
 } from "./bot-message-dispatch-reply.js";
+import { resolveHumanDelayConfig } from "./bot-message-dispatch.agent.runtime.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
@@ -134,6 +135,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           dispatcherOptions: {
             ...replyPipeline,
+            humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
             onBeforeDeliverCancelled: (payload, info) =>
               handleBeforeDeliverCancelled(turn, payload, info),

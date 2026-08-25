@@ -90,7 +90,6 @@ const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 const CHAT_SEND_REPLY_DELAY_MS = 200;
-
 type UpdateFixture = {
   available: UpdateAvailable;
   runResponse: unknown;
@@ -777,6 +776,18 @@ function buildModelProviderMocks(baseTime: number) {
     },
     models: [
       { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        available: true,
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
       {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
@@ -1947,6 +1958,7 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    gatewayBootId: "mock-gateway-boot-1",
     serverBuildId: "mock",
     updateSchedule,
     updateAvailable: updateFixture?.available ?? null,
@@ -2262,6 +2274,9 @@ async function createChatPickerScenario(
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
+        diskTotalBytes: 1_000_000_000_000,
+        diskAvailableBytes: 640_000_000_000,
+        diskPath: "/Users/peter/.openclaw",
         defaultAgentUtilityModel: {
           status: "auto",
           model: "anthropic/claude-haiku-4-5",

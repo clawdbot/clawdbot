@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -289,6 +290,22 @@ function pacingFromJobJson(jobJson: Record<string, unknown>): CronPacing | undef
   };
 }
 
+function createdActorFromJobJson(value: unknown): SessionCreatedActor | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "human" && value.type !== "agent" && value.type !== "system")
+  ) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(typeof value.id === "string" ? value.id : undefined);
+  const label = normalizeOptionalString(typeof value.label === "string" ? value.label : undefined);
+  return {
+    type: value.type,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+  };
+}
+
 function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
@@ -300,6 +317,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
   const pacing = pacingFromJobJson(jobJson);
+  const createdActor = createdActorFromJobJson(jobJson.createdActor);
   const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   const toolsAllowProvenance =
     isRecord(jobJson.toolsAllowProvenance) &&
@@ -319,6 +337,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const createdAtMs = normalizeNumber(row.created_at_ms) ?? Date.now();
   return {
     id: row.job_id,
+    ...(createdActor ? { createdActor } : {}),
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     ...(row.owner_agent_id || row.owner_session_key || ownerAccountId

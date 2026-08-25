@@ -15,6 +15,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
@@ -252,8 +253,70 @@ describe("skill workshop proposals", () => {
     });
   });
 
+  it("lets only an operator apply an update to a user-authored skill", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "handwritten");
+    await writeSkill({
+      dir: skillDir,
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        eventActor: { type: "agent", id: "main" },
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Old body.",
+    );
+
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      eventActor: { type: "gateway" },
+    });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "New body.",
+    );
+  });
+
+  it("keeps an operator apply when autonomous review holds a stale pending snapshot", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "handwritten"),
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const snapshot = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: snapshot.record.id,
+      eventActor: { type: "gateway" },
+    });
+
+    await applyAutonomousSkillProposal({ workspaceDir, proposal: snapshot, reason: "review" });
+
+    const inspected = await inspectSkillProposal(snapshot.record.id, { workspaceDir });
+    expect(inspected?.record.status).toBe("applied");
+    expect(inspected?.record.statusReason).toBeUndefined();
+  });
+
   it.runIf(process.platform !== "win32")(
-    "keeps opted-in trusted workspace skills symlink targets read-only without create provenance",
+    "allows a pending operator review for a user-authored trusted symlink skill",
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
@@ -273,15 +336,14 @@ describe("skill workshop proposals", () => {
           workshop: { allowSymlinkTargetWrites: true },
         },
       };
-      await expect(
-        proposeUpdateSkill({
-          workspaceDir,
-          config,
-          skillName: "shared-skill",
-          content: "# Shared Skill\n\nNew body.\n",
-          supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
-        }),
-      ).rejects.toThrow("Skill Workshop does not own this skill path: shared-skill");
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config,
+        skillName: "shared-skill",
+        content: "# Shared Skill\n\nNew body.\n",
+        supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
+      });
+      expect(proposal.record).toMatchObject({ kind: "update", status: "pending" });
       await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
         "Old body.",
       );

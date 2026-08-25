@@ -21,7 +21,11 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 
-export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
+export {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  readPendingSendFailure,
+} from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
@@ -239,6 +243,8 @@ function sameChatItemsStructuralInput(
 ): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.archiveNotice?.key === next.archiveNotice?.key &&
+    previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&

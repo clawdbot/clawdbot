@@ -223,12 +223,12 @@ private object SystemCalendarDataSource : CalendarDataSource {
   }
 
   private fun findDefaultCalendarId(resolver: ContentResolver): Long? {
-    val projection = arrayOf(CalendarContract.Calendars._ID)
     resolver
       .query(
         CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        "${CalendarContract.Calendars.VISIBLE}=1",
+        arrayOf(CalendarContract.Calendars._ID),
+        "${CalendarContract.Calendars.VISIBLE}=1 AND " +
+          "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
         null,
         // Prefer Android's primary visible calendar, then lowest id for deterministic fallback.
         "${CalendarContract.Calendars.IS_PRIMARY} DESC, ${CalendarContract.Calendars._ID} ASC",
@@ -402,15 +402,15 @@ class CalendarHandler private constructor(
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
     val addRange = normalizeAddRange(start, end, isAllDay)
     return CalendarAddRequest(
-      title = (params["title"] as? JsonPrimitive)?.content?.trim().orEmpty(),
+      title = parseJsonString(params, "title")?.trim().orEmpty(),
       startMs = addRange.start.toEpochMilli(),
       endMs = addRange.end.toEpochMilli(),
       isAllDay = isAllDay,
       timeZoneId = if (isAllDay) "UTC" else TimeZone.getDefault().id,
-      location = (params["location"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      notes = (params["notes"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      location = parseJsonString(params, "location")?.trim()?.ifEmpty { null },
+      notes = parseJsonString(params, "notes")?.trim()?.ifEmpty { null },
       calendarId = (params["calendarId"] as? JsonPrimitive)?.content?.toLongOrNull(),
-      calendarTitle = (params["calendarTitle"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      calendarTitle = parseJsonString(params, "calendarTitle")?.trim()?.ifEmpty { null },
     )
   }
 

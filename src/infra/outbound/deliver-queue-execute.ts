@@ -89,7 +89,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let queuedPostSendState: QueuedPostSendState | undefined;
   let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
+  let platformSendSourceIndex: number | undefined;
   const auditPlatformStartedPayloads = new Set<number>();
+  const platformDispatchedPayloads = new Set<number>();
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
   const settleDeliveryCompletion = async (
@@ -203,6 +205,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     onPlatformSendStart: async (route, sourceIndex) => {
       params.abortSignal?.throwIfAborted();
       platformSendRoute = route;
+      platformSendSourceIndex = sourceIndex;
       if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
         queuedPreSendState = await persistQueuedPreSendState({
           queueId: platformQueueId,
@@ -278,6 +281,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
+      if (platformSendSourceIndex !== undefined) {
+        platformDispatchedPayloads.add(platformSendSourceIndex);
+      }
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       throwIfProducerLeaseLost();
@@ -286,9 +292,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
-    ...(auditPayloadOutcomes || stablePayloadOutcomes
+    ...(params.onPayloadDeliveryOutcome || auditPayloadOutcomes || stablePayloadOutcomes
       ? {
           onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
+            if (
+              outcome.status === "failed" &&
+              platformDispatchedPayloads.has(outcome.index) &&
+              !isProvenDeliveryNotSentError(outcome.error)
+            ) {
+              outcome.sentBeforeError = true;
+            }
             auditPayloadOutcomes?.push(outcome);
             stablePayloadOutcomes?.push(outcome);
             params.onPayloadDeliveryOutcome?.(outcome);
@@ -378,6 +391,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (hadPartialFailure) {
         const partialSendEvidence =
           results.length > 0 ||
+          (platformDispatchedPayloads.size > 0 && !partialFailuresAreProvenNotSent) ||
           (lastPayloadError instanceof OutboundDeliveryError && lastPayloadError.sentBeforeError);
         const postSendState =
           queuedPostSendState ??
@@ -543,7 +557,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       } else if (!platformResultsReturned) {
         const sendEvidence =
           deliveredResults.length > 0 ||
-          (err instanceof OutboundDeliveryError && err.sentBeforeError);
+          (!isProvenDeliveryNotSentError(err) &&
+            (platformDispatchedPayloads.size > 0 ||
+              (err instanceof OutboundDeliveryError && err.sentBeforeError)));
         if (sendEvidence) {
           try {
             queuedPostSendState ??= await persistOwnedPostSendState();

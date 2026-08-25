@@ -109,6 +109,7 @@ export async function runDescendantWake(params: {
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
           {
+            operatorRoleActor: { kind: "system" },
             timeoutMs: announceTimeoutMs,
           },
         );

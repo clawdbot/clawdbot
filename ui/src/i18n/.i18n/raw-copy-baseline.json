@@ -101,17 +101,17 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/command-palette-catalog-search.ts",
+      "text": "/verbose"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/command-palette.ts",
       "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "/verbose"
     },
     {
       "count": 1,
@@ -350,6 +350,13 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
+      "text": "Session title"
     },
     {
       "count": 1,

@@ -129,12 +129,13 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(initialDistance).toBeLessThanOrEqual(8);
-      const storedScrollTop = await thread.evaluate((element) => {
+      await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
         transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
-        return transcript.scrollTop;
       });
+      await waitForChatScrollIdle(page);
+      const storedScrollTop = await thread.evaluate((element) => element.scrollTop);
       expect(storedScrollTop).toBeGreaterThan(0);
 
       const sessionLink = (sessionKey: string) =>

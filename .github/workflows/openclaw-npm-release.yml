@@ -29,6 +29,22 @@ on:
         description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
+      release_evidence_mode:
+        description: Publication evidence contract
+        required: true
+        default: full-release-validation
+        type: choice
+        options:
+          - full-release-validation
+          - authorized-beta-focused-v1
+      focused_release_evidence_run_id:
+        description: Successful Authorized Beta Focused Validation run id
+        required: false
+        type: string
+      focused_release_evidence_run_attempt:
+        description: Exact Authorized Beta Focused Validation run attempt
+        required: false
+        type: string
       release_publish_run_id:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
@@ -73,7 +89,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -120,7 +136,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -147,6 +163,27 @@ jobs:
             echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
             exit 1
           fi
+
+      - name: Checkout trusted package source preflight
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-harness
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Validate npm package source metadata
+        env:
+          RELEASE_REF: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
       - name: Setup Node environment
         id: setup-node-env
@@ -219,7 +256,7 @@ jobs:
 
       - name: Restore preflight build outputs
         id: dist_build_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/
@@ -285,7 +322,7 @@ jobs:
       - name: Save preflight build outputs
         if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/
@@ -344,7 +381,7 @@ jobs:
       # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
       # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
       - name: Checkout trusted Plugin SDK API tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .artifacts/plugin-sdk-release-tooling
@@ -794,7 +831,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release_candidate_branch != '' && format('refs/tags/{0}', inputs.tag) || github.sha }}
           fetch-depth: 0
@@ -874,28 +911,56 @@ jobs:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
         run: |
           set -euo pipefail
+          RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID="${FOCUSED_RELEASE_EVIDENCE_RUN_ID:-}"
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT:-}"
           if [[ -z "${PREFLIGHT_RUN_ID}" ]]; then
             echo "Real publish requires preflight_run_id from a successful npm preflight run." >&2
             exit 1
           fi
-          if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
-            if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" ]]; then
-              echo "full_release_validation_run_attempt requires full_release_validation_run_id." >&2
+          if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
+            if [[ "${RELEASE_TAG}" != "v2026.8.1-beta.3" || "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+              echo "authorized-beta-focused-v1 is restricted to v2026.8.1-beta.3 on the beta dist-tag." >&2
               exit 1
             fi
-            if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
-              echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
-            else
-              echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
+            if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID}" || -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" ]]; then
+              echo "authorized-beta-focused-v1 must not include full release validation inputs." >&2
               exit 1
             fi
-          elif [[ ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Real publish with full release validation requires a positive full_release_validation_run_attempt." >&2
+            if [[ -z "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" || ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "authorized-beta-focused-v1 requires the exact focused evidence run id and attempt." >&2
+              exit 1
+            fi
+          elif [[ "${RELEASE_EVIDENCE_MODE}" == "full-release-validation" ]]; then
+            if [[ -n "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" || -n "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
+              echo "Full release validation evidence mode must not include focused evidence inputs." >&2
+              exit 1
+            fi
+            if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+              if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" ]]; then
+                echo "full_release_validation_run_attempt requires full_release_validation_run_id." >&2
+                exit 1
+              fi
+              if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
+                echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
+              else
+                echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
+                exit 1
+              fi
+            elif [[ ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Real publish with full release validation requires a positive full_release_validation_run_attempt." >&2
+              exit 1
+            fi
+          else
+            echo "Unsupported release_evidence_mode: ${RELEASE_EVIDENCE_MODE}" >&2
             exit 1
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && -z "${PLUGIN_NPM_RUN_ID// }" ]]; then
@@ -946,6 +1011,7 @@ jobs:
     environment: npm-release
     permissions:
       actions: read
+      attestations: read
       contents: read
       id-token: write
     steps:
@@ -969,12 +1035,12 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
           # Frozen preflight evidence already binds the exact release SHA and
           # tarball, so real publishes do not need the repository's full history.
-          fetch-depth: ${{ inputs.preflight_run_id != '' && 1 || 0 }}
+          fetch-depth: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}
 
       - name: Validate Tideclaw alpha publish target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -1018,7 +1084,7 @@ jobs:
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
       - name: Checkout trusted validation verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: trusted-workflow
@@ -1096,7 +1162,7 @@ jobs:
           echo "run_attempt=${preflight_run_attempt}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
@@ -1106,7 +1172,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Verify full release validation evidence
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1147,6 +1213,42 @@ jobs:
             --json \
             --verifier-source-sha "$WORKFLOW_SHA" \
             --verifier-source-file "$STRICT_VALIDATOR_FILE" >/dev/null
+
+      - name: Download focused release evidence
+        if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ inputs.focused_release_evidence_run_attempt }}
+          path: authorized-beta-focused-evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.focused_release_evidence_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify focused release evidence
+        if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          evidence="authorized-beta-focused-evidence/evidence.json"
+          gh attestation verify "${evidence}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
+            --signer-digest "${WORKFLOW_SHA}" \
+            --source-digest "${WORKFLOW_SHA}" \
+            --source-ref "${WORKFLOW_FULL_REF}" \
+            --deny-self-hosted-runners
+          node trusted-workflow/scripts/validate-authorized-beta-focused-evidence.mts verify \
+            --candidate-root . \
+            --artifact "${evidence}" \
+            --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${WORKFLOW_SHA}"
 
       - name: Verify plugin npm release run metadata
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
@@ -1382,7 +1484,7 @@ jobs:
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Verify full release validation target
-        if: ${{ inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}

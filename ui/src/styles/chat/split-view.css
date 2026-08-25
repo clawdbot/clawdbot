@@ -840,24 +840,40 @@ openclaw-chat-pane {
   white-space: normal;
 }
 
-/* Plain web shell chrome overlays the first pane header. Expanded navigation
-   shows toggle + search; collapsed navigation adds new-thread between them. */
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 88px;
+/* Shell layout owns the dynamic physical-left safe edge. Native hosts replace
+   the web-control calculation with their actual window chrome. */
+.shell {
+  --shell-attention-width: 0px;
+  --shell-titlebar-inset: calc(var(--shell-chrome-safe-area-left) + var(--shell-attention-width));
 }
 
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 124px;
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 12px;
+}
+
+html.openclaw-native-macos .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 90px;
+}
+
+html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 204px;
+}
+
+html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-titlebar-inset: 246px;
+}
+
+/* Apply the safe edge to whichever header occupies the first content row;
+   mobile has a separate topbar row. */
+.shell:not(.shell--mobile-nav)
+  :is(
+    .chat-split-view__column:first-child
+      > .chat-split-view__cell:first-child
+      :is(.chat-main__conversation-column, .chat-pane-primary-column)
+      > .chat-pane__header,
+    .sidebar-region--expanded .side-panel__header
+  ) {
+  padding-left: var(--shell-titlebar-inset);
 }
 
 /* Native macOS desktop shells: the pane header is the window's top surface,
@@ -867,7 +883,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
    center the session title/actions 2px above the traffic-light/hosted-button
    centerline. Drawer layouts instead fold titlebar clearance into their 58px
    topbar row (layout.mobile.css). */
-html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
+html.openclaw-native-macos
+  .shell:not(.shell--mobile-nav)
+  :is(.chat-pane__header, .sidebar-region--expanded .side-panel__header) {
   min-height: var(--openclaw-native-titlebar-height, 50px);
 }
 
@@ -887,43 +905,16 @@ html.openclaw-native-macos
   min-width: 398px;
 }
 
-html.openclaw-native-macos
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 90px;
-}
-
 html.openclaw-native-nav
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child {
   min-width: 512px;
 }
 
-html.openclaw-native-nav
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 204px;
-}
-
 /* 246px = 78px traffic lights + (5 * 28px buttons + 4 * 4px gaps) + 12px.
-     The 554px minimum adds the 234px inset delta to the 320px base column. */
+   The base minimum adds the 234px inset delta to the 320px column floor. */
 html.openclaw-native-web-chrome
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child {
   min-width: 554px;
-}
-
-html.openclaw-native-web-chrome
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 246px;
 }

@@ -1496,7 +1496,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (hasMedia) {
         await collectMediaDelivery(
           payload,
-          hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
+          !ttsTextAlreadyVisible && hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
         );
       }
       const deliveredContent = hasVoiceMedia ? (deliveredResults.at(-1)?.content ?? text) : text;

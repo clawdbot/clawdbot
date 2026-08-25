@@ -25,6 +25,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -70,7 +71,7 @@ import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
-import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -374,6 +375,17 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   ];
   if (status.lastError) {
     lines.push(`Last error: ${status.lastError}`);
+  }
+  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
+  for (const [workspace, review] of Object.entries(status.collectionReview)) {
+    lines.push(
+      `Collection review ${workspace.slice(0, 8)}: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+    );
+  }
+  for (const [workspace, review] of Object.entries(status.experienceReview)) {
+    lines.push(
+      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
+    );
   }
   const keyCounts = new Map<string, number>();
   for (const skill of status.skills) {
@@ -972,18 +984,14 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false);
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
-    try {
+    await runCommandWithRuntime(defaultRuntime, async () => {
       const status = await loadSkillCuratorStatus();
       if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;
       }
       defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
-    } catch (err) {
-      rethrowExpectedCliError(err);
-      defaultRuntime.error(formatErrorMessage(err));
-      defaultRuntime.exit(1);
-    }
+    });
   };
 
   curator
@@ -997,7 +1005,7 @@ export function registerSkillsCli(program: Command) {
       .description(`${action} a curated skill`)
       .argument("<skill>", "Skill name or key")
       .action(async (skill: string, opts: { json?: boolean }, command: Command) => {
-        try {
+        await runCommandWithRuntime(defaultRuntime, async () => {
           const result = await runSkillCuratorMutation(action, skill);
           if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
             defaultRuntime.writeJson(result);
@@ -1006,11 +1014,7 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.writeStdout(
             `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
           );
-        } catch (err) {
-          rethrowExpectedCliError(err);
-          defaultRuntime.error(formatErrorMessage(err));
-          defaultRuntime.exit(1);
-        }
+        });
       });
   }
   for (const command of curator.commands) {
@@ -1033,18 +1037,14 @@ export function registerSkillsCli(program: Command) {
     action: (resolved: ResolvedSkillsWorkspace) => Promise<T>,
     format: (result: T) => string,
   ): Promise<void> => {
-    try {
+    await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await action(resolveSkillsWorkspaceForCommand(command, opts));
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
         return;
       }
       defaultRuntime.writeStdout(format(result));
-    } catch (err) {
-      rethrowExpectedCliError(err);
-      defaultRuntime.error(formatErrorMessage(err));
-      defaultRuntime.exit(1);
-    }
+    });
   };
 
   const runWorkshopDraftAction = (
@@ -1095,26 +1095,19 @@ export function registerSkillsCli(program: Command) {
     .description("Inspect a skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
-        try {
-          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command, opts);
+    .action((proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) =>
+      runWorkshopAction(
+        opts,
+        command,
+        async ({ agentId, workspaceDir }) => {
           const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
           if (!proposal) {
-            defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
-            defaultRuntime.exit(1);
-            return;
+            throw new Error(`Skill proposal not found: ${proposalId}`);
           }
-          if (hasJsonOutput(opts)) {
-            defaultRuntime.writeJson(proposal);
-            return;
-          }
-          defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
-        } catch (err) {
-          defaultRuntime.error(formatErrorMessage(err));
-          defaultRuntime.exit(1);
-        }
-      },
+          return proposal;
+        },
+        formatSkillProposalInspect,
+      ),
     );
 
   workshop

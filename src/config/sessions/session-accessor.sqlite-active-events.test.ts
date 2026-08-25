@@ -14,12 +14,13 @@ import {
   readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
-  readSessionTranscriptMessageAnchorPage,
-  readSessionTranscriptMessageEventById,
-  readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
+import {
+  readSessionTranscriptHistoryAnchorPage as readSessionTranscriptMessageAnchorPage,
+  readSessionTranscriptHistoryEventById as readSessionTranscriptMessageEventById,
+} from "./session-accessor.sqlite-history-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -45,6 +46,10 @@ vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readSessionTranscriptMessageEventCount = (
+  scope: Parameters<typeof readSessionTranscriptMessageEventPage>[0],
+): number =>
+  readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
 
 describe("SQLite active transcript event projection", () => {
   let stateDir: string;

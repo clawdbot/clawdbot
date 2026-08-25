@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-readonly image="node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+readonly image="node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"
 readonly worktree_root_file="/etc/openclaw-mantis-sut-worktrees"
 readonly revisions_file="/etc/openclaw-mantis-sut-revisions"
 readonly runtime_root_file="/etc/openclaw-mantis-sut-runtime-root"
@@ -468,7 +468,6 @@ require_locked_worktree() {
   local worktree_root
   worktree_root="$(realpath -e "$(<"$worktree_root_file")")"
   [[ "$(stat -c %u "$worktree_root")" == "0" ]] || die "worktree root is not root-owned"
-  [[ "$(stat -c %a "$worktree_root")" == "700" ]] || die "worktree root mode mismatch"
   [[ "$lane" == "baseline" || "$lane" == "candidate" ]] || die "invalid proof lane"
   [[ "$repo_root" == "$worktree_root/$lane" ]] || die "repo root does not match the proof lane"
   [[ "$(stat -c %u "$repo_root")" == "0" ]] || die "prepared worktree is not root-owned"

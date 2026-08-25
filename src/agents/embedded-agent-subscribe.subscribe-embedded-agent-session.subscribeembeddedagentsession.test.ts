@@ -323,6 +323,46 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "generated-malformed-metadata",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["music_generate"]),
+    });
+    const mediaPath = "/tmp/generated-song.mp3";
+
+    emitToolRun({
+      emit,
+      toolName: "music_generate",
+      toolCallId: "music-tool",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated media." }],
+        details: {
+          media: {
+            mediaUrls: [mediaPath],
+            attachments: [
+              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
+            ],
+          },
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Here is your generated song.",
+      mediaUrls: [mediaPath],
+      attachments: [{ type: "audio", path: mediaPath }],
+    });
+  });
+
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
@@ -538,6 +578,73 @@ describe("subscribeEmbeddedAgentSession", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
   });
+
+  it.each([
+    {
+      toolName: "image_generate",
+      type: "image",
+      mimeType: "image/png",
+      metadata: { width: 640, height: 480 },
+    },
+    {
+      toolName: "music_generate",
+      type: "audio",
+      mimeType: "audio/mpeg",
+      metadata: { durationMs: 2_000 },
+    },
+    {
+      toolName: "video_generate",
+      type: "video",
+      mimeType: "video/mp4",
+      metadata: { durationMs: 5_000, width: 1280, height: 720 },
+    },
+  ] as const)(
+    "delivers generated $type attachment metadata with the assistant reply",
+    async ({ toolName, type, mimeType, metadata }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: `generated-${type}`,
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        builtinToolNames: new Set([toolName]),
+      });
+      const attachment = {
+        type,
+        path: `/tmp/generated-${type}`,
+        name: `friendly-${type}`,
+        mimeType,
+        sizeBytes: 137,
+        ...metadata,
+      };
+
+      emitToolRun({
+        emit,
+        toolName,
+        toolCallId: `${type}-tool`,
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Generated media." }],
+          details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(subscription.getPendingToolMediaReply()).toMatchObject({
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+
+      emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+        text: "Here is your generated file.",
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+    },
+  );
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
     const onToolResult = vi.fn();
@@ -1004,6 +1111,74 @@ describe("subscribeEmbeddedAgentSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "successful", stopReason: "stop", phase: undefined },
+    { label: "failed", stopReason: "error", phase: undefined },
+    { label: "aborted", stopReason: "aborted", phase: undefined },
+    { label: "commentary", stopReason: "stop", phase: "commentary" },
+  ] as const)(
+    "closes a reasoning preview before the $label message ends without thinking_end",
+    ({ stopReason, phase }) => {
+      const visibleEvents: string[] = [];
+      const onReasoningEnd = vi.fn(async () => {
+        visibleEvents.push("reasoning-end");
+      });
+      const { emit } = createSubscribedHarness({
+        runId: "run-reasoning-terminal",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+        onReasoningEnd,
+        onAgentEvent: (event) => {
+          if (event.stream === "assistant") {
+            visibleEvents.push("assistant");
+          }
+        },
+      });
+      const thinkingMessage = {
+        role: "assistant" as const,
+        content: [{ type: "thinking" as const, thinking: "Checking files" }],
+      };
+
+      emit({ type: "message_start", message: thinkingMessage });
+      emit({
+        type: "message_update",
+        message: thinkingMessage,
+        assistantMessageEvent: { type: "thinking_delta", delta: "Checking files" },
+      });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason,
+          ...(phase ? { phase } : {}),
+          content: [
+            { type: "thinking", thinking: "Checking files" },
+            { type: "text", text: "Final answer" },
+          ],
+        },
+      });
+
+      expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+      expect(visibleEvents[0]).toBe("reasoning-end");
+    },
+  );
+
+  it("does not close a reasoning preview that was never opened", () => {
+    const onReasoningEnd = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run-without-reasoning",
+      reasoningMode: "stream",
+      onReasoningEnd,
+    });
+
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    });
+
+    expect(onReasoningEnd).not.toHaveBeenCalled();
   });
 
   type ReasoningWindowGateCase = {
@@ -1590,15 +1765,14 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves deterministic side-effect liveness across compaction retries", () => {
+  it("preserves successful cron evidence and liveness across compaction retries", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run-cron-side-effect-compaction",
       onAgentEvent,
-      sessionKey: "test-session",
     });
 
     emitToolRun({
@@ -1609,7 +1783,12 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { details: { status: "ok" } },
     });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
     emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);

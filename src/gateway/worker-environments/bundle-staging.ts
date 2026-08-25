@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../../shared/worker-bundle-hash.js";
@@ -64,11 +65,11 @@ async function stageWorkerDeployArtifact(params: {
     await handle.close();
   }
   const stagedPath = path.join(params.stagingRoot, params.artifactPath);
-  await fs.writeFile(stagedPath, contents, { mode: 0o700 });
-  await fs.chmod(stagedPath, 0o700);
+  await fs.writeFile(stagedPath, contents, { mode: WORKER_BUNDLE_ARTIFACT_MODE });
+  await fs.chmod(stagedPath, WORKER_BUNDLE_ARTIFACT_MODE);
   return {
     path: params.artifactPath,
-    mode: 0o700,
+    mode: WORKER_BUNDLE_ARTIFACT_MODE,
     size: contents.byteLength,
     sha256: createHash("sha256").update(contents).digest("hex"),
   };

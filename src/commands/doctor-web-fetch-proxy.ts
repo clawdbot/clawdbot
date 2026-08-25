@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
+import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 
 const DIRECT_PROBE_HOST = "docs.openclaw.ai";
@@ -52,6 +53,9 @@ async function resolveProxyEnvSources(params: {
   const sources: ProxyEnvSource[] = [];
   if (hasEnvHttpProxyConfigured("https", params.env)) {
     sources.push({ env: params.env, label: "doctor process" });
+  }
+  if (!isGatewayHostServiceEnvironment(params.env)) {
+    return sources;
   }
   const command = await params.service.readCommand(params.env).catch(() => null);
   const serviceEnv = command?.environment;

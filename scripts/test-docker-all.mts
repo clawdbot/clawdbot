@@ -822,7 +822,7 @@ export function resolveDockerPreflightPlatform(arch: NodeJS.Architecture = proce
 
 export function dockerPreflightSmokeCommand(arch: NodeJS.Architecture = process.arch) {
   const platform = resolveDockerPreflightPlatform(arch);
-  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
+  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.24 true`;
 }
 
 export function runShellCommand({

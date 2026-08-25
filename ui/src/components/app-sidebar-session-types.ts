@@ -100,6 +100,7 @@ export type SidebarRecentSession = {
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
   worktreeId?: string;
+  execNode?: string;
   placementState?: SessionPlacementState;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
@@ -254,23 +255,6 @@ const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
 const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
 export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
   "openclaw:sidebar-hidden-catalogs-changed";
-
-export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  // Active and pinned sessions remain reachable without changing their
-  // relative order, even when their sort position falls outside the page.
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
 
 export function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(

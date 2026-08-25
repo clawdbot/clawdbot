@@ -11,6 +11,7 @@ import {
   projectWorkerPlacementAgentRuntime,
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementExecutionMode,
+  resolveWorkerPlacementSessionRuntime,
 } from "./placement-session-runtime.js";
 
 const originalPluginRegistry = getActivePluginRegistry();
@@ -26,6 +27,57 @@ describe("worker placement runtime capabilities", () => {
       return;
     }
     resetPluginRuntimeStateForTest();
+  });
+
+  it.each([
+    {
+      name: "ignores an unlocked historical runtime after selecting a different provider",
+      entry: { agentHarnessId: "codex" },
+      expected: "openclaw",
+    },
+    {
+      name: "ignores an unlocked historical runtime behind the default override",
+      entry: { agentHarnessId: "codex", agentRuntimeOverride: "default" },
+      expected: "openclaw",
+    },
+    {
+      name: "preserves locked transcript ownership",
+      entry: { agentHarnessId: "codex", modelSelectionLocked: true },
+      expected: "codex",
+    },
+    {
+      name: "does not let a historical embedded runtime override a Codex model",
+      entry: {
+        agentHarnessId: "openclaw",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      },
+      expected: "codex",
+    },
+    {
+      name: "honors an explicit compatible runtime override",
+      entry: {
+        agentRuntimeOverride: "codex",
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
+      },
+      expected: "codex",
+    },
+  ])("$name", ({ entry, expected }) => {
+    expect(
+      resolveWorkerPlacementSessionRuntime({
+        cfg: {},
+        entry: {
+          sessionId: "placement-runtime-session",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "claude-test",
+          ...entry,
+        },
+        agentId: "main",
+        sessionKey: "agent:main:placement-runtime",
+      }),
+    ).toBe(expected);
   });
 
   it.each([

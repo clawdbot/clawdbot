@@ -237,17 +237,6 @@
       ]
     },
     {
-      "id": "native.android.df03ebb12a9184ac",
-      "source": "$emoji $name",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.c8d4706f1ebe8e51",
       "source": "$held held",
       "surface": "android",
@@ -9034,17 +9023,6 @@
       ]
     },
     {
-      "id": "native.android.895a25d9e1e76ae9",
-      "source": "More Agents",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.e238a849f3745e16",
       "source": "More phases not shown",
       "surface": "android",
@@ -15298,6 +15276,28 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.a6c4338983260fec",
+      "source": "Show less",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.a7fa3b928b568c87",
+      "source": "Show more",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
         }
       ]
     },

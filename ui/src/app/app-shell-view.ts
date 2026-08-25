@@ -16,10 +16,13 @@ import {
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -31,33 +34,33 @@ import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
-import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
+import {
+  floatingSidebarAttentionVisible,
+  navigationSurfaceIsHidden,
+  renderFloatingUpdateCard,
+} from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
   loadSettings,
   normalizeCatalogOpenTarget,
+  normalizeChatSendShortcut,
 } from "./settings.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
-  ? "⌘K"
-  : "Ctrl K";
-const SCOPE_UPGRADE_SURFACE_ELEMENT = {
-  tagName: "openclaw-device-scope-upgrade-banner",
-  label: t("connection.scopeUpgrade.status"),
-  loadModule: () =>
-    import("./device-scope-upgrade.runtime.ts").catch(
-      () => import("./device-scope-upgrade-retry.runtime.ts"),
-    ),
+const SIDEBAR_ATTENTION_ELEMENT = {
+  tagName: "openclaw-sidebar-attention",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/sidebar-attention.ts"),
 } satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
@@ -259,15 +262,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // must not reserve its fixed sidebar column (the grid would stay off-center).
   const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
-  const settingsSearchBlocks = findSettingsSearchBlocks({
-    query: host.settingsSearchQuery,
-    schema: runtimeConfig.configSchema,
-    value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-    uiHints: runtimeConfig.configUiHints,
-    identityAvailable: Boolean(gatewaySnapshot.selfUser),
-    basePath: context.basePath,
-    canAdmin: operatorAccess.canAdmin,
-  });
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   host.lazyCustomElements.requestWhileActive(
@@ -282,27 +276,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
-  const showScopeUpgradeStatus =
-    gatewayConnected &&
-    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
-    !operatorAccess.canAdmin;
-  if (showScopeUpgradeStatus) {
-    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
-  }
-  const scopeUpgradeSurface = showScopeUpgradeStatus
-    ? html`<openclaw-device-scope-upgrade-banner
-        .props=${{
-          snapshot: gatewaySnapshot,
-          mobile: mobileNavLayout,
-          // Device-less clients may not reach a session pane, so the shell
-          // retains the manual-repair entry until the header can own it.
-          showTrigger:
-            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
-        }}
-      ></openclaw-device-scope-upgrade-banner>`
-    : null;
-  // Drawer navigation always opens expanded; the desktop collapse preference
-  // stays persisted for when the viewport returns to the desktop layout.
+  // Drawer navigation always opens expanded; the tab's desktop collapse state
+  // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
   const navCollapsed =
     navigationSnapshot.navCollapsed &&
@@ -315,6 +290,17 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
+  if (
+    floatingSidebarAttentionVisible({
+      navigationSurfaceHidden,
+      mobileNavLayout,
+      onboarding,
+      settingsTakeover,
+      compact: mergedChatChrome,
+    })
+  ) {
+    host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+  }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
@@ -413,7 +399,15 @@ export function renderApplicationShell(host: ShellViewHost) {
         onHoldUpdate: () => context.overlays.holdUpdate(),
         onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
-        searchBlockMatches: settingsSearchBlocks,
+        searchParams: {
+          query: host.settingsSearchQuery,
+          schema: runtimeConfig.configSchema,
+          value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
+          uiHints: runtimeConfig.configUiHints,
+          identityAvailable: Boolean(gatewaySnapshot.selfUser),
+          basePath: context.basePath,
+          canAdmin: operatorAccess.canAdmin,
+        },
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
@@ -455,6 +449,11 @@ export function renderApplicationShell(host: ShellViewHost) {
     ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
       ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
+    ${isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
+      ? html`<openclaw-keyboard-shortcuts-dialog
+          .sendShortcut=${normalizeChatSendShortcut(uiSettings.chatSendShortcut)}
+        ></openclaw-keyboard-shortcuts-dialog>`
+      : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
@@ -487,9 +486,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .resourceBasePath=${context.resourceBasePath}
         .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
-        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
-          ? scopeUpgradeSurface
-          : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -497,7 +493,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? html`
             <div class="shell-chrome-controls">
               <openclaw-tooltip
-                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
+                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
               >
                 <button
                   type="button"
@@ -529,7 +525,9 @@ export function renderApplicationShell(host: ShellViewHost) {
                     </button>
                   </openclaw-tooltip>`
                 : nothing}
-              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+              <openclaw-tooltip
+                .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+              >
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"
@@ -555,7 +553,6 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>
           `
         : nothing}
-      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
       <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
         ${mobileNavLayout
           ? html`<openclaw-modal-dialog
@@ -596,6 +593,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
+          settingsTakeover,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,

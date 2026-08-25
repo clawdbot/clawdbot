@@ -81,6 +81,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"
+  | "supportsProviderExecutionMode"
 >;
 
 export type WorkerActivationBarrier = (params: {
@@ -147,13 +148,16 @@ export function createPlacementFailureActions(deps: {
   const cleanupEnvironment = async (params: {
     environmentId: string;
     ownerEpoch: number | null;
+    authorize?: WorkerPlacementAuthorization;
   }): Promise<string[]> => {
     const teardownErrors: string[] = [];
+    params.authorize?.();
     try {
       await environments.stopTunnel(params.environmentId, params.ownerEpoch ?? undefined);
     } catch (error) {
       teardownErrors.push(`tunnel stop: ${boundedError(error)}`);
     }
+    params.authorize?.();
     try {
       await environments.destroy(params.environmentId);
     } catch (error) {
@@ -182,7 +186,10 @@ export function createPlacementFailureActions(deps: {
     );
   };
 
-  const retryFailedTeardown = async (placement: WorkerFailedDispatchPlacement): Promise<void> => {
+  const retryFailedTeardown = async (
+    placement: WorkerFailedDispatchPlacement,
+    authorize?: WorkerPlacementAuthorization,
+  ): Promise<void> => {
     if (!placement.environmentId) {
       return;
     }
@@ -198,6 +205,7 @@ export function createPlacementFailureActions(deps: {
     const teardownErrors = await cleanupEnvironment({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      ...(authorize ? { authorize } : {}),
     });
     if (teardownErrors.length > 0) {
       const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");

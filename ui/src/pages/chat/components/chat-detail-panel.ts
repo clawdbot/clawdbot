@@ -1,4 +1,8 @@
 import { property, state } from "lit/decorators.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -15,7 +19,6 @@ import {
   renderSidebarPanel,
 } from "./chat-sidebar-content.ts";
 import {
-  absoluteFilePath,
   computeFileMatches,
   emptyCopyFeedback,
   readFileDraft,
@@ -29,6 +32,7 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
+  @property({ attribute: false }) execNode: string | null = null;
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -71,6 +75,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     FileCopyAction,
     ReturnType<typeof globalThis.setTimeout>
   >();
+
+  constructor() {
+    super();
+    observeNativeGateway(this);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -318,7 +327,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content?.kind !== "file") {
       return;
     }
-    const absPath = absoluteFilePath(content);
+    const absPath = localEditorFilePath(content, this.execNode);
     if (!absPath) {
       return;
     }
@@ -593,6 +602,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         copyFeedback: this.fileCopyFeedback,
         currentMatchIndex,
         dirty: this.fileDirty,
+        execNode: this.execNode,
         editorMenuOpen: this.fileEditorMenuOpen,
         editing: this.fileEditing,
         loadingEditor: this.fileEditorLoading,

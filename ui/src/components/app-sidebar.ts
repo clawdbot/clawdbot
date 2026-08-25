@@ -11,7 +11,6 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -19,6 +18,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -43,6 +43,7 @@ import type {
 } from "./app-sidebar-session-narration.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import {
   renderSessionTree,
   type SessionListHost,
@@ -52,6 +53,7 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  SIDEBAR_SESSION_PAGE_SIZE,
   setStoredSessionCatalogHidden,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
@@ -75,8 +77,8 @@ const sidebarChromeImport = createIdleImport(() =>
 );
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
-  @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
-  @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
+  @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -137,8 +139,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narrationLoad: Promise<void> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
+  private projectedSessionSections: SidebarVisibleSections = {
+    sections: [],
+    expandedRows: [],
+    visibleRows: [],
+  };
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
-  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -222,8 +229,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    const currentResult = this.sessionData.sessionsResult;
+    this.sessionProjection.observeRows([
+      ...(currentResult ? [currentResult] : []),
+      ...Object.values(this.sessionData.sessionResultsByAgent),
+    ]);
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
+    this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
     const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -250,6 +263,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     return this.projectedSessionRows ?? super.selectedAgentSessionRows(navigationState);
   }
 
+  protected override zonedVisibleSections(_rows: SidebarRecentSession[]): SidebarVisibleSections {
+    return this.projectedSessionSections;
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (!this.narration) {
@@ -270,7 +287,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       if (this.isSessionChildrenExpanded(session)) {
         visibleSessionChildren({
           session,
-          fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
+          fullyShown: this.isSessionChildrenFullyShown(session.key),
         }).forEach(append);
       }
     };
@@ -373,6 +390,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSection(sectionId: string): void {
+    if (!this.collapsedSessionSections.has(sectionId)) {
+      this.sessionProjection.resetMembership(sectionId);
+    }
     this.sessionOrganizer.toggleSection(sectionId);
   }
 
@@ -393,6 +413,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
+    const previousLimit =
+      this.sessionData.visibleSessionLimits.get(sectionId) ?? SIDEBAR_SESSION_PAGE_SIZE;
+    if (limit < previousLimit) {
+      this.sessionProjection.resetMembership(sectionId);
+    }
     this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
@@ -454,6 +479,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     trigger?: HTMLElement,
   ): void {
     this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
+  }
+
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    this.sidebarMenus.catalogMenu.retargetTrigger(key, element);
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

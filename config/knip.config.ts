@@ -74,7 +74,8 @@ const repositoryScriptEntries = [
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
-  "scripts/memory-index-manager.sync-repro.ts!",
+  // Mantis invokes the trusted proof collector through its workflow shell step.
+  "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
@@ -93,7 +94,6 @@ const repositoryScriptEntries = [
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
-  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
   "scripts/update-clawtributors.ts!",
@@ -303,6 +303,8 @@ const rootToolingAndWorkspaceDependencies = [
   "marked",
   "oxlint",
   "oxlint-tsgolint",
+  // The scripts typecheck compiles UI Vite config against the root Vite dependency.
+  "postcss",
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
@@ -463,8 +465,8 @@ const config = {
         ...rootToolingAndWorkspaceDependencies,
         ...rootBundledPluginRuntimeDependencies,
       ],
-      // Platform tools and shell builtins used by package scripts and process-boundary tests.
-      ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
+      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "xcrun"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [

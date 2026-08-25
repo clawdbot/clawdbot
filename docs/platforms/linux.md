@@ -22,11 +22,17 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
+- opens Model Setup after its first-run install, automatically tests available
+  AI credentials, and verifies an existing model before opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
 
 ### Host sleep
 

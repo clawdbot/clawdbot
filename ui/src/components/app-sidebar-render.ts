@@ -5,7 +5,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
+import { activityPersonLocation, isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -315,14 +315,13 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
         ? nothing
         : html`<div class="sidebar-online__list">
             ${users.map((user) => {
-              const pathname = pathForRoute("activity", host.basePath);
-              const search = `?${new URLSearchParams({ person: user.id }).toString()}`;
+              const { pathname, search, href } = activityPersonLocation(user.id, host.basePath);
               return html`<a
                 class="sidebar-online__person ${isPresenceViewerIdle(user)
                   ? "sidebar-online__person--away"
                   : ""}"
                 data-online-user-id=${user.id}
-                href=${`${pathname}${search}`}
+                href=${href}
                 @click=${(event: MouseEvent) => {
                   if (!shouldHandleNavigationClick(event)) {
                     return;

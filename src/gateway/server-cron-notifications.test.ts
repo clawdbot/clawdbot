@@ -431,7 +431,24 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     ).rejects.toThrow("channel unavailable");
   });
 
-  it("delivers a failed cron webhook even when the run produced no summary", async () => {
+  it.each([
+    {
+      name: "execution failure",
+      event: { status: "error", error: "provider unavailable" },
+    },
+    {
+      name: "required delivery failure",
+      event: {
+        status: "ok",
+        deliveryStatus: "not-delivered",
+        deliveryError: "channel unavailable",
+      },
+    },
+    {
+      name: "skipped run",
+      event: { status: "skipped", error: "trigger condition not met" },
+    },
+  ] as const)("delivers a failed $name completion webhook without a summary", async ({ event }) => {
     const logger = { warn: vi.fn() };
     const job = createCompletionWebhookJob();
 
@@ -439,8 +456,8 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       evt: {
         jobId: job.id,
         action: "finished",
-        status: "error",
-        error: "provider unavailable",
+        completionStatus: "failed",
+        ...event,
       },
       job,
       deps: {} as CliDeps,
@@ -454,11 +471,33 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(webhookRequestBody()).toMatchObject({
       jobId: job.id,
       action: "finished",
-      status: "error",
-      error: "provider unavailable",
+      completionStatus: "failed",
+      ...event,
     });
     expect(logger.warn).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "succeeded", "unknown"] as const)(
+    "keeps a successful completion without a summary silent (%s)",
+    (completionStatus) => {
+      const job = createCompletionWebhookJob();
+
+      dispatchGatewayCronFinishedNotifications({
+        evt: {
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          ...(completionStatus ? { completionStatus } : {}),
+        },
+        job,
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      });
+
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
 
   it("applies the webhook timeout to guarded network preflight", async () => {
     const job = createCompletionWebhookJob();
@@ -476,39 +515,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         expect.objectContaining({ timeoutMs: 10_000 }),
       ),
     );
-  });
-
-  it("delivers a failed completion-destination webhook without a summary", async () => {
-    const logger = { warn: vi.fn() };
-    const job = createWebhookJob({
-      mode: "announce",
-      completionDestination: {
-        mode: "webhook",
-        to: "https://example.invalid/completion",
-      },
-    });
-
-    dispatchGatewayCronFinishedNotifications({
-      evt: {
-        jobId: job.id,
-        action: "finished",
-        status: "error",
-        error: "provider unavailable",
-      },
-      job,
-      deps: {} as CliDeps,
-      logger,
-      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
-    });
-
-    await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
-    expect(webhookRequestBody()).toMatchObject({
-      jobId: job.id,
-      action: "finished",
-      status: "error",
-      error: "provider unavailable",
-    });
-    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("independently admits scheduler-authorized failure alerts", async () => {

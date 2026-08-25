@@ -7,6 +7,10 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../../session-cards/progress-card-store.js";
+import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
@@ -2355,6 +2359,17 @@ describe("session accessor seam", () => {
       { sessionKey: previousKey, storePath },
       { sessionId: "rekeyed", updatedAt: 20 },
     );
+    for (const [sessionKey, count] of [
+      [canonicalKey, 2],
+      [previousKey, 3],
+    ] as const) {
+      for (let promptedAt = 0; promptedAt < count; promptedAt += 1) {
+        recordSessionParticipant(
+          { sessionKey, storePath },
+          { actor: { type: "human", id: "profile-shared" }, promptedAt, source: "profile" },
+        );
+      }
+    }
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -2399,6 +2414,11 @@ describe("session accessor seam", () => {
         .prepare("SELECT session_key, identity_id FROM session_members WHERE identity_id = ?")
         .get("member-1"),
     ).toEqual({ session_key: canonicalKey, identity_id: "member-1" });
+    expect(
+      database.db
+        .prepare("SELECT contribution_count FROM session_participants WHERE actor_id = ?")
+        .get("profile-shared"),
+    ).toEqual({ contribution_count: 5 });
     expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
   });
 
@@ -2852,6 +2872,33 @@ describe("session accessor seam", () => {
       });
     },
   );
+
+  it("clears progress cards when lifecycle deletion retains transcript windows", async () => {
+    const sessionKey = "agent:main:progress-delete";
+    const scope = { agentId: "main", sessionId: "progress-delete", sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: scope.agentId }).path,
+      "progress delete database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath });
+    writeSessionProgressCard(database.db, sessionKey, { markdown: "Working" });
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey),
+    ).toEqual({ entry_valid: -1 });
+    expect(readSessionProgressCard(database.db, sessionKey)).toBeNull();
+  });
 
   it("trims a manual compact transcript and clears stale token metadata", async () => {
     const sessionId = "11111111-1111-4111-8111-111111111111";
@@ -3326,6 +3373,7 @@ describe("session accessor seam", () => {
             content: "second committed message",
             idempotencyKey: "ordered-turn-second",
             timestamp: 3,
+            __openclaw: { runId: "run-ordered-turn" },
           },
           messageId: result.messages[1]?.messageId,
           messageSeq: 3,

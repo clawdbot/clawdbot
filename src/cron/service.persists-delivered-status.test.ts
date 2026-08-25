@@ -313,11 +313,27 @@ describe("CronService persists delivered status", () => {
   });
 
   it.each([
-    { name: "successful endpoint", responseStatus: 204, expectedStatus: "delivered" },
-    { name: "failing endpoint", responseStatus: 503, expectedStatus: "not-delivered" },
+    {
+      name: "successful endpoint",
+      responseStatus: 204,
+      expectedStatus: "delivered",
+      clockJumpMs: 0,
+    },
+    {
+      name: "failing endpoint",
+      responseStatus: 503,
+      expectedStatus: "not-delivered",
+      clockJumpMs: 0,
+    },
+    {
+      name: "forward wall-clock jump",
+      responseStatus: 204,
+      expectedStatus: "delivered",
+      clockJumpMs: 86_400_000,
+    },
   ])(
     "records command webhook delivery through a real HTTP server: $name",
-    async ({ responseStatus, expectedStatus }) => {
+    async ({ responseStatus, expectedStatus, clockJumpMs }) => {
       const requests: string[] = [];
       const server = createServer((request, response) => {
         let body = "";
@@ -338,6 +354,8 @@ describe("CronService persists delivered status", () => {
       const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
       const store = await makeStorePath();
       const finished = createFinishedBarrier();
+      const started = createDeferred();
+      const finish = createDeferred();
       let finishedEvent: CronEvent | undefined;
       const cron = new CronService({
         storePath: store.storePath,
@@ -346,9 +364,16 @@ describe("CronService persists delivered status", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        runCommandJob: async ({ job, abortSignal }) =>
-          await runCronCommandJob({ job, abortSignal, nowMs: Date.now }),
+        runCommandJob: async ({ job, abortSignal }) => {
+          if (clockJumpMs > 0) {
+            started.resolve();
+            await finish.promise;
+            return { status: "ok", summary: "HOOKSCHED_PAYLOAD" };
+          }
+          return await runCronCommandJob({ job, abortSignal, nowMs: Date.now });
+        },
         sendCronWebhook: async ({ event, abortSignal }) => {
+          expect(abortSignal.aborted).toBe(false);
           const response = await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -378,11 +403,18 @@ describe("CronService persists delivered status", () => {
           payload: {
             kind: "command",
             argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
+            ...(clockJumpMs > 0 ? { timeoutSeconds: 1 } : {}),
           },
           delivery: { mode: "webhook", to: webhookUrl },
         });
         const finishedPromise = finished.waitForOk(job.id);
-        await cron.run(job.id, "force");
+        const run = cron.run(job.id, "force");
+        if (clockJumpMs > 0) {
+          await started.promise;
+          vi.setSystemTime(Date.now() + clockJumpMs);
+          finish.resolve();
+        }
+        await run;
         await finishedPromise;
 
         expect(requests).toHaveLength(1);

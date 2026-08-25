@@ -17,6 +17,7 @@ import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
 import {
@@ -36,7 +37,7 @@ import {
   type DiscordAllowedMentions,
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
-import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
+import { fetchChannelPermissionsDiscord } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -209,7 +210,7 @@ async function buildDiscordSendError(
     probedChannelType = permissions.channelType;
     const current = new Set(permissions.permissions);
     const required = ["ViewChannel", "SendMessages"];
-    if (isThreadChannelType(probedChannelType)) {
+    if (isDiscordThreadChannelType(probedChannelType)) {
       required.push("SendMessagesInThreads");
     }
     if (ctx.hasMedia) {
@@ -225,7 +226,7 @@ async function buildDiscordSendError(
     .filter(Boolean)
     .join(" ");
   const probedPermissions = ["ViewChannel", "SendMessages"];
-  if (isThreadChannelType(probedChannelType)) {
+  if (isDiscordThreadChannelType(probedChannelType)) {
     probedPermissions.push("SendMessagesInThreads");
   }
   if (ctx.hasMedia) {
@@ -374,9 +375,11 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       flags,
       replyTo: chunkReplyTo,
     });
-    await onPlatformSendDispatch?.();
     const result = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "text",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -479,9 +482,11 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
   });
   let res: { id: string; channel_id: string };
   try {
-    await onPlatformSendDispatch?.();
     res = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "media",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -527,6 +532,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
     for (const id of followup.platformMessageIds) {
       if (id) {

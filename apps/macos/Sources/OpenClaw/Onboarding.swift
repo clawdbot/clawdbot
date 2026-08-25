@@ -605,8 +605,15 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func close() {
         self.busyReason = nil
+        // AppKit ignores close while its modal sheet is still attached.
+        self.dismissAttachedSheet()
         self.window?.close()
         self.window = nil
+    }
+
+    func dismissAttachedSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
     }
 
     func setWindowCloseEnabled(_ enabled: Bool) {
@@ -739,7 +746,7 @@ struct OnboardingView: View {
 
     var pageOrder: [Int] {
         Self.pageOrder(
-            for: self.state.connectionMode,
+            for: self.selectedConnectionMode,
             requiresCLIInstall: !self.cliInstalled)
     }
 

@@ -254,13 +254,11 @@ export function handleMessageUpdate(
       ctx.state.deltaBuffer += chunk;
       ctx.state.deltaBufferIsCommentary = true;
     }
-    const commentaryText =
-      !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
-        ? coerceChatContentText(extractAssistantCommentaryText(streamAssistant))
-        : undefined;
-    const commentaryData = chunk
-      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: deliveryItemId })
-      : commentaryText
+    const commentaryText = isResponsesCommentary
+      ? ctx.state.deltaBuffer
+      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
+    const commentaryData =
+      commentaryText && (chunk || !hadResponsesCommentaryText)
         ? buildAssistantStreamData({
             text: commentaryText,
             replace: true,

@@ -104,7 +104,6 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
-  "127.0.0.1",
   "0.0.0.0",
   "::1",
   "::",
@@ -161,6 +160,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    isIpv4Loopback(host) ||
     host.endsWith(".local") ||
     isIpv4PrivateRange(host) ||
     isIpv6LocalRange(host) ||

@@ -146,33 +146,6 @@ describe("noteAuthProfileHealth", () => {
     expect(fs.existsSync(sharedPath)).toBe(true);
   });
 
-  it("does not warn while Claude CLI owns refresh of an expiring access token", async () => {
-    const now = 1_700_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const mainDir = path.join(tempDir, "main-agent");
-    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
-    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "access",
-          refresh: "refresh",
-          expires: now + 3 * 60 * 60_000,
-        },
-      },
-    });
-
-    const findings = await collectAuthProfileHealthFindings({
-      cfg: {
-        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
-      } as OpenClawConfig,
-    });
-
-    expect(findings).toEqual([]);
-  });
-
   it("keeps expiring warnings for static and custom Claude CLI profiles", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -181,7 +154,7 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
+        "anthropic:static-cli": {
           type: "token",
           provider: "claude-cli",
           token: "token",
@@ -204,12 +177,12 @@ describe("noteAuthProfileHealth", () => {
     });
 
     expect(findings.map((finding) => finding.target)).toEqual([
-      "anthropic:claude-cli",
       "anthropic:custom-cli",
+      "anthropic:static-cli",
     ]);
   });
 
-  it("still warns once a Claude CLI access token is expired", async () => {
+  it("still warns once a custom Claude CLI access token is expired", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const mainDir = path.join(tempDir, "main-agent");
@@ -217,7 +190,7 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
+        "anthropic:custom-cli": {
           type: "oauth",
           provider: "claude-cli",
           access: "access",
@@ -235,8 +208,8 @@ describe("noteAuthProfileHealth", () => {
 
     expect(findings).toEqual([
       expect.objectContaining({
-        message: "Auth profile anthropic:claude-cli is expired (0m).",
-        target: "anthropic:claude-cli",
+        message: "Auth profile anthropic:custom-cli is expired (0m).",
+        target: "anthropic:custom-cli",
       }),
     ]);
   });
@@ -314,46 +287,6 @@ describe("noteAuthProfileHealth", () => {
       expect(findings).toEqual([expect.objectContaining({ fixHint: expectedHint })]);
     },
   );
-
-  it("reports a session-expired Claude CLI profile with its exact re-login action", async () => {
-    const now = 1_700_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const mainDir = path.join(tempDir, "main-agent");
-    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
-    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
-    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "secret",
-          refresh: "secret",
-          expires: now + 60_000,
-        },
-      },
-      usageStats: {
-        "anthropic:claude-cli": {
-          cooldownUntil: now + 5 * 60_000,
-          cooldownReason: "session_expired",
-        },
-      },
-    } satisfies AuthProfileStore);
-
-    const findings = await collectAuthProfileHealthFindings({
-      cfg: {
-        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
-      } as OpenClawConfig,
-    });
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: "Auth profile anthropic:claude-cli is cooldown:session_expired (5m).",
-        fixHint:
-          "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
-      }),
-    ]);
-  });
 
   it("shows exact WHAM classification while retaining canonical recovery policy", async () => {
     const now = 1_700_000_000_000;

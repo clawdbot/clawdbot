@@ -23,6 +23,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
@@ -133,7 +134,7 @@ export type OpenClawConfig = {
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
-    /** Check for updates on gateway start (npm installs only). */
+    /** Check for updates on gateway start; disabling also prevents anonymous update pings. */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
     auto?: {
@@ -141,17 +142,13 @@ export type OpenClawConfig = {
       enabled?: boolean;
     };
   };
+  /** Explicit operator consent for anonymous feature statistics in the daily update check. */
+  telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
-    assistant?: {
-      /** Assistant display name for UI surfaces. */
-      name?: string;
-      /** Assistant avatar (emoji, short text, or image URL/data URI). */
-      avatar?: string;
-    };
     /**
      * Operator display preferences. Canonical config home so agents can
      * change them through the approval gate and clients stay in sync; the
@@ -162,6 +159,8 @@ export type OpenClawConfig = {
       theme?: "claw" | "knot" | "dash" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
+      /** User-selected Control UI accent color (#RRGGBB). */
+      accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */

@@ -482,12 +482,22 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
+    const pendingSyncSources: MemorySource[] = [];
+    if (this.syncing) {
+      if (this.dirty) {
+        pendingSyncSources.push("memory");
+      }
+      if (this.sessionsDirty) {
+        pendingSyncSources.push("sessions");
+      }
+    }
 
     return {
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
+      pendingSyncSources: pendingSyncSources.length > 0 ? pendingSyncSources : undefined,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,

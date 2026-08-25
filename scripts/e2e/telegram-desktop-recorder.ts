@@ -1203,6 +1203,9 @@ export async function stopRecorder(
         "telegram-desktop-recorder-session-motion-telegram-window.gif",
       );
       await attempt("cropped motion preview", async () => {
+        const sinceSeconds = opts.since
+          ? Math.max(0, (Date.parse(opts.since) - Date.parse(session.startedAt)) / 1_000 - 1)
+          : undefined;
         await operations.createCroppedMotionPreview({
           crabboxBin,
           crop: proofViewport(session.window),
@@ -1211,6 +1214,7 @@ export async function stopRecorder(
           cwd,
           fps: DEFAULT_PREVIEW_FPS,
           run: operations.runCommand,
+          startSeconds: sinceSeconds,
           videoPath,
         });
         artifacts.previewGifCropped = croppedGifPath;

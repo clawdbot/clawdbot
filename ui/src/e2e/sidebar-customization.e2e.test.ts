@@ -593,15 +593,17 @@ suite.define(() => {
       const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
+      // Sidebar visibility is tab-local and intentionally not persisted; width is.
       await expect
         .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
         .toBe(true);
-      await captureUiProof(page, "04-persisted-collapsed.png");
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expect.poll(() => roundedWidth(shellNav)).toBe(400);
+      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("400 pixels");
+      await captureUiProof(page, "04-visibility-not-persisted.png");
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -848,7 +850,7 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(0);
+        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);

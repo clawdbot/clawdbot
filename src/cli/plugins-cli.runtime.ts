@@ -20,6 +20,7 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
+import { ExpectedCliError } from "./failure-output.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
@@ -396,7 +397,8 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     ...collectConfiguredRuntimePluginWarnings({ cfg: sourceCfg, plugins: report.plugins }),
   ]);
   const hasInstallTreeIssues =
-    errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
+    [errors, diags, shadowed].some(({ length }) => length > 0) ||
+    compatibility.some(({ severity }) => severity === "warn");
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -446,11 +448,11 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     return;
   }
 
-  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0) {
-    defaultRuntime.log(
-      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
-        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
-    );
+  const healthyMessage =
+    "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+    'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0 && compatibility.length === 0) {
+    defaultRuntime.log(healthyMessage);
     return;
   }
 
@@ -511,14 +513,13 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     if (lines.length > 0) {
       lines.push("");
     }
-    lines.push(theme.warn("Plugin configuration:"));
-    lines.push(...pluginConfigWarnings);
+    lines.push(theme.warn("Plugin configuration:"), ...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && pluginConfigWarnings.size > 0) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push("No plugin install-tree issues detected; configuration warnings remain.");
+  if (!hasInstallTreeIssues) {
+    const summary = pluginConfigWarnings.size
+      ? "No plugin install-tree issues detected; configuration warnings remain."
+      : healthyMessage;
+    lines.push("", summary);
   }
   const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
   lines.push("");
@@ -965,18 +966,17 @@ export async function runPluginMarketplaceListCommand(
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
-    defaultRuntime.error(result.error);
-    return defaultRuntime.exit(1);
+    const message = result.error;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   if (opts.json) {
-    defaultRuntime.writeJson({
+    return defaultRuntime.writeJson({
       source: result.sourceLabel,
       name: result.manifest.name,
       version: result.manifest.version,
       plugins: result.manifest.plugins,
     });
-    return;
   }
 
   if (result.manifest.plugins.length === 0) {

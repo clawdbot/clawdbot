@@ -43,7 +43,10 @@ import type {
 } from "./state.js";
 import { emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import {
+  createCronOwnerExecutionIdentityAdmission,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
 import { recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
   resolveCronRunScheduleOwnership,
@@ -161,6 +164,12 @@ async function finishPreparedManualRun(
         streamScheduleKey: prepared.streamScheduleKey,
         streamSourceIdentity: prepared.streamSourceIdentity,
         runReceipt: prepared.runReceipt,
+        executionIdentity: createCronOwnerExecutionIdentityAdmission({
+          state,
+          runReceipt: prepared.runReceipt,
+          taskId: prepared.taskId,
+          flowId: prepared.flowId,
+        }),
       });
     } catch (err) {
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {

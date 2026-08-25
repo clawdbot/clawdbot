@@ -185,7 +185,7 @@ describe("package scripts", () => {
   it("cleans package builds before validating release contents", () => {
     const scripts = readPackageJson().scripts;
 
-    expect(scripts["build:package"]).toBe("pnpm clean:dist && pnpm build");
+    expect(scripts["build:package"]).toBe("node --import tsx scripts/build-all.mts package");
     expect(scripts["release:check"]).toBe(
       "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
     );

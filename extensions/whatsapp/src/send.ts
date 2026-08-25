@@ -212,7 +212,7 @@ async function sendMessageWhatsAppInActivityScope(
     tableMode,
     resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
   );
-  text = textChunks.shift() ?? "";
+  text = textChunks.shift() ?? text;
   if (!text && !hasMedia) {
     return { messageId: "", toJid: jid };
   }

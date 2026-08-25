@@ -19,6 +19,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 const ACTIONS = ["open", "read", "input", "resize", "close", "list"] as const;
@@ -166,8 +167,32 @@ function launchBlockMessage(
   return `terminal unavailable: agent sandboxed (${block.mode})`;
 }
 
+function resolveTerminalOpenTarget(params: {
+  agentId: string;
+  context: TerminalToolGatewayContext | undefined;
+  cwd?: string;
+}) {
+  const manager = params.context?.terminalSessions;
+  if (!params.context || !manager) {
+    throw new ToolInputError("terminal unavailable");
+  }
+  if (!params.context.isTerminalEnabled()) {
+    throw new ToolInputError("terminal disabled");
+  }
+  const launch = params.context.resolveTerminalLaunchPolicy(params.agentId);
+  if (!launch.ok) {
+    throw new ToolInputError(launchBlockMessage(launch.block));
+  }
+  return {
+    manager,
+    spawnPlan: resolveTerminalSpawnPlan({
+      ...launch.plan,
+      ...(params.cwd ? { cwdOverride: params.cwd } : {}),
+    }),
+  };
+}
+
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
-  const getContext = opts.getGatewayContext ?? getInProcessGatewayToolContext;
   const findOwnerTask = opts.lookupTaskByRunIdForChildSession ?? lookupTaskByRunIdForChildSession;
   return {
     label: "Terminal",
@@ -189,6 +214,11 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       }
       const agentId = opts.agentId?.trim() || resolveAgentIdFromSessionKey(agentSessionKey);
       const owner = { kind: "agent", agentSessionKey, agentSessionId, agentId } as const;
+      const admittedResolver = opts.getGatewayContext
+        ? undefined
+        : getGatewayToolCallerIdentity()?.gatewayContextResolver;
+      const getContext =
+        opts.getGatewayContext ?? admittedResolver ?? getInProcessGatewayToolContext;
       const context = getContext();
       const manager = context?.terminalSessions;
       if (!context || !manager) {
@@ -204,23 +234,18 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         const cwd = readOptionalStringParam(params, "cwd");
         const cols = readDimension(params, "cols", DEFAULT_COLS);
         const rows = readDimension(params, "rows", DEFAULT_ROWS);
-        if (!context.isTerminalEnabled()) {
-          throw new ToolInputError("terminal disabled");
-        }
-        const launch = context.resolveTerminalLaunchPolicy(agentId);
-        if (!launch.ok) {
-          throw new ToolInputError(launchBlockMessage(launch.block));
-        }
-        const spawnPlan = resolveTerminalSpawnPlan({
-          ...launch.plan,
-          ...(cwd ? { cwdOverride: cwd } : {}),
-        });
+        const initialTarget = resolveTerminalOpenTarget({ agentId, context, cwd });
         const runId = opts.runId?.trim();
         const taskLookupId = runId ? (getAgentRunTaskRunId(runId) ?? runId) : undefined;
         const task = taskLookupId ? await findOwnerTask(taskLookupId, agentSessionKey) : undefined;
         if (task && isTerminalTaskStatus(task.status)) {
           throw new ToolInputError("terminal task already ended");
         }
+        // Refresh after task lookup so a retired admitted Gateway cannot allocate a new PTY.
+        const { manager: openManager, spawnPlan } =
+          taskLookupId && admittedResolver
+            ? resolveTerminalOpenTarget({ agentId, context: admittedResolver(), cwd })
+            : initialTarget;
         const taskId = task?.taskId;
         const terminalOwner = { ...owner, ...(taskId ? { taskId } : {}) };
         const deadline = createTerminalOpenDeadline();
@@ -234,11 +259,11 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         } else {
           signal?.addEventListener("abort", cancelOpen, { once: true });
         }
-        let openingTerminal: ReturnType<typeof manager.open> | undefined;
-        let outcome: Awaited<ReturnType<typeof manager.open>>;
+        let openingTerminal: ReturnType<typeof openManager.open> | undefined;
+        let outcome: Awaited<ReturnType<typeof openManager.open>>;
         try {
           outcome = await waitForTerminalOpenDeadline(() => {
-            openingTerminal = manager.open({
+            openingTerminal = openManager.open({
               owner: terminalOwner,
               agentId: spawnPlan.agentId,
               cwd: spawnPlan.cwd,
@@ -256,7 +281,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
             void openingTerminal.then(
               (lateOutcome) => {
                 if (lateOutcome.ok) {
-                  manager.closeAgent(owner, lateOutcome.sessionId);
+                  openManager.closeAgent(owner, lateOutcome.sessionId);
                 }
               },
               () => undefined,
@@ -272,10 +297,25 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         if (!outcome.ok) {
           throw new ToolInputError(outcome.message);
         }
+        if (admittedResolver) {
+          try {
+            const liveManager = resolveTerminalOpenTarget({
+              agentId,
+              context: admittedResolver(),
+              cwd,
+            }).manager;
+            if (liveManager !== openManager) {
+              throw new ToolInputError("terminal unavailable");
+            }
+          } catch (error) {
+            openManager.closeAgent(owner, outcome.sessionId);
+            throw error;
+          }
+        }
         if (command !== undefined) {
-          const commandOutcome = manager.writeAgent(owner, outcome.sessionId, `${command}\r`);
+          const commandOutcome = openManager.writeAgent(owner, outcome.sessionId, `${command}\r`);
           if (!commandOutcome.ok) {
-            manager.closeAgent(owner, outcome.sessionId);
+            openManager.closeAgent(owner, outcome.sessionId);
             terminalActionResult("initial command", commandOutcome);
           }
         }

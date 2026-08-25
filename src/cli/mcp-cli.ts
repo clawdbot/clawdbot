@@ -331,7 +331,7 @@ async function collectMcpDoctorIssues(params: {
           }
         }
         const headers = asRecord(server.headers);
-        if (headers && "Authorization" in headers) {
+        if (headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
           issues.push(
             issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
           );
@@ -1249,6 +1249,7 @@ export function registerMcpCli(program: Command) {
           const exclude = parseCsvList(opts.exclude);
           if (include || exclude) {
             next.toolFilter = {
+              ...asRecord(next.toolFilter),
               ...(include ? { include } : {}),
               ...(exclude ? { exclude } : {}),
             };
@@ -1305,7 +1306,7 @@ export function registerMcpCli(program: Command) {
           clientMetadataUrl: opts.oauthClientMetadataUrl,
         });
         if (oauth) {
-          next.oauth = oauth;
+          next.oauth = { ...asRecord(next.oauth), ...oauth };
         }
         if (opts.clearTls) {
           delete next.sslVerify;

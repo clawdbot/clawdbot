@@ -15,11 +15,6 @@ import {
 } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
-  groupSidebarSessionRows,
-  type SidebarSessionSection,
-  type SidebarSessionsGrouping,
-} from "../lib/sessions/grouping.ts";
-import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   isSystemCreatedSessionRow,
@@ -43,9 +38,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import {
-  limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
-  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -247,6 +240,7 @@ export function buildSidebarSessionNavigationState(input: {
         context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
+      execNode: row.execNode,
       placementState: row.placement?.state,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
@@ -293,79 +287,6 @@ export function buildSidebarSessionNavigationState(input: {
     visibleSessionRows: navigation.visibleSessions,
     toSidebarSession,
   };
-}
-
-export type SidebarVisibleSections = {
-  sections: (SidebarSessionSection<SidebarRecentSession> & {
-    totalRowCount: number;
-    visibleRowCount: number;
-    visibleLimit: number;
-    collapsedVisibleRowCount: number;
-    renderHeader: boolean;
-  })[];
-  expandedRows: SidebarRecentSession[];
-  visibleRows: SidebarRecentSession[];
-};
-
-export function partitionSidebarVisibleSections(input: {
-  rows: SidebarRecentSession[];
-  grouping: SidebarSessionsGrouping;
-  knownGroups: string[] | undefined;
-  selfOwnerId?: string | null;
-  catalogIds?: readonly string[];
-  sectionOrder?: readonly string[];
-  collapsedSections: ReadonlySet<string>;
-  hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
-  visibleSessionLimits: ReadonlyMap<string, number>;
-}): SidebarVisibleSections {
-  const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
-  const sectionOptions = { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds };
-  const sections = groupSidebarSessionRows(input.rows, sectionOptions).filter(
-    (section) =>
-      section.id !== "pinned" &&
-      !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
-  );
-  // A lone catch-all sits directly under the global Sessions toolbar. Empty
-  // Coding does not render, while empty custom/Groups sections remain targets.
-  const ungroupedHasPeerHeader = sections.some(
-    (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
-  );
-  // Accepted tradeoff: headerless means no collapse control, so a stored
-  // ungrouped-collapsed preference is deliberately inert here — honoring it
-  // would blank the whole list with no affordance to undo. It re-applies
-  // unchanged once a peer section returns.
-  const expandedRows: SidebarRecentSession[] = [];
-  const visibleRows: SidebarRecentSession[] = [];
-  // totalRowCount is the pre-pagination size: headers and empty-zone
-  // checks must not mistake a page-filtered section for an empty one.
-  const limitedSections: SidebarVisibleSections["sections"] = [];
-  for (const section of sections) {
-    const totalRowCount = section.rows.length;
-    const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
-    const collapsed = renderHeader && input.collapsedSections.has(section.id);
-    const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
-    const collapsedVisibleRowCount = limitSidebarSessionRows(
-      section.rows,
-      SIDEBAR_SESSION_PAGE_SIZE,
-    ).length;
-    let visibleRowCount = 0;
-    if (!collapsed) {
-      expandedRows.push(...section.rows);
-      section.rows = limitSidebarSessionRows(section.rows, visibleLimit);
-      visibleRows.push(...section.rows);
-      visibleRowCount = section.rows.length;
-    }
-    limitedSections.push(
-      Object.assign(section, {
-        totalRowCount,
-        visibleRowCount,
-        visibleLimit,
-        collapsedVisibleRowCount,
-        renderHeader,
-      }),
-    );
-  }
-  return { sections: limitedSections, expandedRows, visibleRows };
 }
 
 export function buildReconciledSidebarZone(input: {
@@ -654,23 +575,6 @@ export function findProjectedSidebarSession(input: {
     }
   }
   return undefined;
-}
-
-export function promoteSidebarSessionCreatedOrder(
-  createdOrder: Map<string, number>,
-  sessionKey: string,
-): boolean {
-  const currentOrder = createdOrder.get(sessionKey);
-  if (currentOrder === 0) {
-    return false;
-  }
-  for (const [key, order] of createdOrder) {
-    if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
-      createdOrder.set(key, order + 1);
-    }
-  }
-  createdOrder.set(sessionKey, 0);
-  return true;
 }
 
 export function applySidebarSessionOwnerFilter(input: {

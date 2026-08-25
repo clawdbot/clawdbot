@@ -507,6 +507,27 @@ enum SkillMutationError: LocalizedError {
     }
 }
 
+enum CostUsageRequest {
+    static func monthParamsJSON(timeZone: TimeZone = .current, date: Date = Date()) -> String {
+        let offsetMinutes = timeZone.secondsFromGMT(for: date) / 60
+        let absoluteMinutes = abs(offsetMinutes)
+        let minuteSuffix = absoluteMinutes.isMultiple(of: 60)
+            ? ""
+            : String(format: ":%02d", absoluteMinutes % 60)
+        let utcOffset = "UTC\(offsetMinutes < 0 ? "-" : "+")\(absoluteMinutes / 60)\(minuteSuffix)"
+        let params: [String: Any] = [
+            "days": 31,
+            "mode": "specific",
+            "timeZone": timeZone.identifier,
+            "utcOffset": utcOffset,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: params, options: [.sortedKeys]) else {
+            return #"{"days":31,"mode":"gateway"}"#
+        }
+        return String(bytes: data, encoding: .utf8) ?? #"{"days":31,"mode":"gateway"}"#
+    }
+}
+
 struct CostUsageSummaryLite: Decodable {
     let updatedAt: Int?
     let days: Int?

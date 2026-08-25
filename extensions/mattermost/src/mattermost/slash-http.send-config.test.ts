@@ -127,11 +127,6 @@ vi.mock("./monitor-auth.js", () => ({
 }));
 
 vi.mock("./reply-delivery.js", () => ({
-  createMattermostReplyDeliveryBarrier: vi.fn(() => ({
-    markDeliverySettled: vi.fn(),
-    resolveTimeoutPolicy: vi.fn(),
-    trackDmChannelResolution: vi.fn(),
-  })),
   deliverMattermostReplyPayload: vi.fn(),
 }));
 

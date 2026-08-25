@@ -104,6 +104,19 @@ export async function activateCodexAttemptTurn(
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      asyncUserMessageAllowed:
+        params.disableTools !== true &&
+        (params.toolsAllow === undefined ||
+          toolBridge.availableTools.some((tool) => tool.name === "message")),
+      onAsyncDelivery: async (delivery) => {
+        return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
+          params: dynamicToolParams,
+          cwd: effectiveCwd,
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          ...delivery,
+        });
+      },
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
@@ -181,6 +194,20 @@ export async function activateCodexAttemptTurn(
   for (const failure of pendingNativePreToolUseFailures.splice(0)) {
     activeProjector.recordNativeToolPreToolUseFailure(failure);
   }
+  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  // Buffered async items can persist immediately when the route opens. Commit
+  // their owning user admission first so durable history stays chronological.
+  const promptMirrorPromise = mirrorPromptAtTurnStartBestEffort({
+    params,
+    agentId: sessionAgentId,
+    notifyUserMessagePersisted,
+    sessionKey: sandboxSessionKey,
+    cwd: effectiveCwd,
+    threadId: resourceState.thread.threadId,
+    turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
+  });
+  await promptMirrorPromise;
   // The route buffers early events. Publish full turn context, then release in wire order.
   if (resourceState.turnRoute) {
     try {
@@ -212,17 +239,6 @@ export async function activateCodexAttemptTurn(
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },
     );
   }
-  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  const promptMirrorPromise = mirrorPromptAtTurnStartBestEffort({
-    params,
-    agentId: sessionAgentId,
-    notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
-    cwd: effectiveCwd,
-    threadId: resourceState.thread.threadId,
-    turnId: activeTurnId,
-    upstreamUserText: turnState.codexTurnPromptText,
-  });
   const activeSteeringQueue = createCodexSteeringQueue({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,

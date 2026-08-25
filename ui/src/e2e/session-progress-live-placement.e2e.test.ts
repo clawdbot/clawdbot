@@ -98,6 +98,34 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        // Wide enough for the composer gutter to hold the card: it docks beside
+        // the composer instead of stacking inside it.
+        await page.setViewportSize({ height: 900, width: 1600 });
+        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
+        await expect.poll(() => dock.count()).toBe(1);
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(0);
+        await expect
+          .poll(async () => {
+            const dockBounds = await dock.boundingBox();
+            const composerBounds = await visiblePane
+              .locator(".agent-chat__composer-shell")
+              .boundingBox();
+            if (!dockBounds || !composerBounds) {
+              return false;
+            }
+            return (
+              dockBounds.x >= composerBounds.x + composerBounds.width &&
+              Math.abs(
+                dockBounds.y + dockBounds.height - (composerBounds.y + composerBounds.height),
+              ) <= 1
+            );
+          })
+          .toBe(true);
+        await captureProof(page, "dock-beside-composer.png");
+
+        await page.setViewportSize({ height: 900, width: 1280 });
         await openChatSidePanelType(page, "Side chat");
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
@@ -138,7 +166,7 @@ suite.define(() => {
     );
   });
 
-  it("dismisses a completed card across rerender and reload", async () => {
+  it("centers the completed marker and dismisses the card across disclosure and reload", async () => {
     const sessionKey = "agent:main:progress-complete";
     const plan = [
       { step: "Inspected owner", status: "completed" },
@@ -188,7 +216,25 @@ suite.define(() => {
           await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
           const card = page.locator('[data-progress-card-placement="composer"]');
           await expect.poll(() => card.isVisible()).toBe(true);
+          const expectMarkerCentered = async () => {
+            await expect
+              .poll(async () => {
+                const summaryBounds = await card.locator("summary").boundingBox();
+                const markerBounds = await card
+                  .locator('.session-progress-card__current-marker[data-status="completed"]')
+                  .boundingBox();
+                if (!summaryBounds || !markerBounds) {
+                  return Number.POSITIVE_INFINITY;
+                }
+                const summaryCenterY = summaryBounds.y + summaryBounds.height / 2;
+                const markerCenterY = markerBounds.y + markerBounds.height / 2;
+                return Math.abs(summaryCenterY - markerCenterY);
+              })
+              .toBeLessThanOrEqual(0.5);
+          };
+          await expectMarkerCentered();
           await card.locator("summary").click();
+          await expectMarkerCentered();
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
           await card.getByRole("button", { name: "Dismiss progress card" }).click();

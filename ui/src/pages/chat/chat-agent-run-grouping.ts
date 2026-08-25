@@ -231,8 +231,8 @@ export function coalesceAgentRunFrames(
     if (!isAgentRunFramePart(item)) {
       flush();
       result.push(item);
-      boundaryId = undefined;
-      segmentId = item.key;
+      boundaryId = item.kind === "notice" && item.startsTurn ? item.boundaryId : undefined;
+      segmentId = boundaryId ? undefined : item.key;
       continue;
     }
     const candidate = item;

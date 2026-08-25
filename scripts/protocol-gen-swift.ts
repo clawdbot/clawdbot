@@ -9,6 +9,7 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
+import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 
 type JsonSchema = {
   type?: string | string[];
@@ -37,21 +38,6 @@ const outPaths = [
     "GatewayModels.swift",
   ),
 ];
-const { writeGeneratedOutput } = (await import(
-  new URL("./lib/generated-output-utils.mjs", import.meta.url).href
-)) as {
-  writeGeneratedOutput: (params: {
-    repoRoot: string;
-    outputPath: string;
-    next: string;
-    check?: boolean;
-  }) => {
-    changed: boolean;
-    wrote: boolean;
-    outputPath: string;
-  };
-};
-
 const STRICT_LITERAL_STRUCTS = new Set([
   "PluginsSessionActionSuccessResult",
   "PluginsSessionActionFailureResult",
@@ -383,17 +369,20 @@ function emitStruct(name: string, schema: JsonSchema): string {
   }
   lines.push(`public struct ${name}: Codable, Sendable {`);
   const codingKeys: string[] = [];
+  let needsCodingKeys = false;
   for (const [key, propSchema] of Object.entries(props)) {
     const propName = swiftStoredPropertyName(name, key);
     const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
     lines.push(...swiftCompatibilityPropertyLines(name, key));
     if (propName !== key) {
+      needsCodingKeys = true;
       codingKeys.push(`        case ${propName} = "${key}"`);
     } else {
       codingKeys.push(`        case ${propName}`);
     }
   }
+  const customCodable = emitStructCustomCodable(name, props, required);
   lines.push(
     "\n    public init(\n" +
       Object.entries(props)
@@ -422,11 +411,12 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .join("\n") +
       "\n    }" +
       emitStructCompatibilityInitializer(name, props, required) +
-      "\n\n" +
-      "    private enum CodingKeys: String, CodingKey {\n" +
-      codingKeys.join("\n") +
-      "\n    }" +
-      emitStructCustomCodable(name, props, required) +
+      (needsCodingKeys || customCodable.length > 0
+        ? "\n\n    private enum CodingKeys: String, CodingKey {\n" +
+          codingKeys.join("\n") +
+          "\n    }"
+        : "") +
+      customCodable +
       "\n}",
   );
   lines.push("");

@@ -281,6 +281,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
           updatedAt: 10,
           archivedAt: 20,
           displayName: "Release monitor",
+          boardFace: "dashboard",
         },
       },
     });
@@ -290,7 +291,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "ABCDEF12", agentId: "main" },
       }),
-    ).resolves.toEqual({ ok: true, key, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key,
+      agentId: "main",
+      displayName: "Release monitor",
+      boardFace: "dashboard",
+    });
   });
 
   it("uses a display-name slug only to narrow a short-id tie", async () => {
@@ -300,7 +307,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: {
         [releaseKey]: { updatedAt: 2, displayName: "Release monitor" },
-        [deployKey]: { updatedAt: 1, displayName: "Deploy monitor" },
+        [deployKey]: { updatedAt: 1, displayName: "Deploy monitor", boardFace: "chat" },
       },
     });
 
@@ -309,7 +316,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deploy-monitor" },
       }),
-    ).resolves.toEqual({ ok: true, key: deployKey, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key: deployKey,
+      agentId: "main",
+      displayName: "Deploy monitor",
+      boardFace: "chat",
+    });
   });
 
   it("ignores a deleted-agent short-id collision before resolving a unique match", async () => {
@@ -328,7 +341,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deleted-session" },
       }),
-    ).resolves.toEqual({ ok: true, key: survivingKey, agentId: "main" });
+    ).resolves.toEqual({
+      ok: true,
+      key: survivingKey,
+      agentId: "main",
+      displayName: "Surviving session",
+    });
   });
 
   it("reports a deleted-agent-only short-id match as missing", async () => {
@@ -358,7 +376,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
         const suffix = index.toString(16).padStart(4, "0");
         return [
           `agent:main:thread:12345678-${suffix}-4000-8000-000000000000`,
-          { updatedAt: 100 - index, displayName: `Candidate ${index}` },
+          {
+            updatedAt: 100 - index,
+            displayName: `Candidate ${index}`,
+            ...(index % 2 === 0 ? { boardFace: "dashboard" as const } : {}),
+          },
         ];
       }),
     );
@@ -373,11 +395,18 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       ambiguous: true,
-      candidates: expectedKeys.map((key, index) => ({
-        key,
-        agentId: "main",
-        displayName: `Candidate ${index}`,
-      })),
+      candidates: expectedKeys.map((key, index) => {
+        const candidate: {
+          key: string;
+          agentId: string;
+          displayName: string;
+          boardFace?: "dashboard";
+        } = { key, agentId: "main", displayName: `Candidate ${index}` };
+        if (index % 2 === 0) {
+          candidate.boardFace = "dashboard";
+        }
+        return candidate;
+      }),
     });
   });
 

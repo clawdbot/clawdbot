@@ -28,7 +28,5 @@ export function registerMessagePollCommand(message: Command, helpers: MessageCli
       false,
     )
     .option("--thread-id <id>", "Thread id (Telegram forum topic / Slack thread ts)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("poll", opts);
-    });
+    .action((opts) => helpers.runMessageAction("poll", opts));
 }

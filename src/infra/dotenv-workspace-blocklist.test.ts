@@ -194,6 +194,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "APPDATA",
           "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",

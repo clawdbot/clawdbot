@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Begin Testbox
-        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043 # v2
         with:
           testbox_id: ${{ inputs.testbox_id }}
       - name: Verify ARM runner
@@ -52,7 +52,7 @@ jobs:
               ;;
           esac
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
@@ -125,7 +125,7 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
         if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

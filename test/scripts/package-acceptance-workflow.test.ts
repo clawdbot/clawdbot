@@ -54,7 +54,7 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
-const ACTIONS_CACHE_V5 = "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const ACTIONS_CACHE_V6 = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const FULL_RELEASE_CHILD_DISPATCHES = [
@@ -119,9 +119,11 @@ const RELEASE_FILTER_VALIDATOR = "scripts/github/validate-release-suite-filters.
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
-const SETUP_NODE_V6 = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+const SETUP_NODE_V6 = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const RUN_TESTBOX_WITH_FAILURE_REPORTING =
+  "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
@@ -2659,6 +2661,7 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.advisory).toBe(
       "${{ inputs.advisory || inputs.telegram_advisory || false }}",
     );
+    expect(packageTelegram.with).not.toHaveProperty("allow_older_binary_destructive_actions");
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
@@ -2831,7 +2834,7 @@ describe("package acceptance workflow", () => {
     );
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
       "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
@@ -3001,7 +3004,7 @@ describe("package acceptance workflow", () => {
     expect(planStep.run).not.toContain("EVIDENCE_MANIFEST");
     expect(planStep.run).toContain('--arg evidenceRunId "$EVIDENCE_RUN_ID"');
     expect(planStep.run).toContain('--argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON"');
-    expect(planCache.uses).toBe(ACTIONS_CACHE_V5);
+    expect(planCache.uses).toBe(ACTIONS_CACHE_V6);
     expect(planCache.with).toMatchObject({
       "fail-on-cache-miss": "${{ github.run_attempt != 1 }}",
       key: "full-release-execution-plan-v1-${{ github.run_id }}",
@@ -3198,7 +3201,9 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
-    expect(workflow).toContain("inputs.package_artifact_id != ''");
+    expect(workflow).toContain(
+      "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
+    );
     expect(workflow).toContain(
       'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
     );
@@ -3316,7 +3321,7 @@ describe("package artifact reuse", () => {
       prepareDockerImageStepNames.indexOf(planStepName),
     );
     expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
-      if: "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
+      if: "(steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
       uses: "./.github/actions/setup-node-env",
     });
     expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
@@ -4148,10 +4153,9 @@ describe("package artifact reuse", () => {
       workflowJob(CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW, "build-artifacts"),
       "Run Testbox",
     );
-    const runWindowsTestboxStep = workflowStep(
-      workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows"),
-      "Run Testbox",
-    );
+    const windowsTestboxJob = workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows");
+    const runWindowsTestboxStep = workflowStep(windowsTestboxJob, "Run Testbox");
+    const windowsTestboxActionMarker = workflowStep(windowsTestboxJob, "Testbox action marker");
 
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
@@ -4162,7 +4166,14 @@ describe("package artifact reuse", () => {
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
-    expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
+    for (const step of [
+      runTestboxStep,
+      runArmTestboxStep,
+      runBuildArtifactsTestboxStep,
+      windowsTestboxActionMarker,
+    ]) {
+      expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
+    }
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(
@@ -4194,6 +4205,49 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
     expect(workflow).toContain("run_package_telegram_e2e:");
+  });
+
+  it("forwards optional RTT scenario selection from manual and reusable Telegram inputs", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: "",
+      description: "Optional Telegram QA scenario id for repeated RTT sampling",
+      required: false,
+      type: "string",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(workflow.on?.workflow_call?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS,
+    ).toBe("${{ inputs.rtt_scenario }}");
+  });
+
+  it("requires explicit approval for historical package destructive actions", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: false,
+      description:
+        "Allow destructive actions for intentional historical downgrade or recovery proof",
+      required: false,
+      type: "boolean",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(workflow.on?.workflow_call?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS,
+    ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
   });
 
   it.each(["stable", "full"])(
@@ -4442,7 +4496,7 @@ describe("package artifact reuse", () => {
       artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
       package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
       package_sha256:
-        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       suite_profile: "custom",
@@ -4475,7 +4529,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
-      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
     );
     expect(workflow).toContain(
       "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
@@ -4485,7 +4539,7 @@ describe("package artifact reuse", () => {
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(String(packageAcceptanceJob.with?.docker_lanes ?? "").split(/\s+/u)).toEqual([
@@ -4934,7 +4988,7 @@ describe("package artifact reuse", () => {
 
     expect(trustedCheckout).toMatchObject({
       if: eligibilityCondition,
-      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
@@ -5144,8 +5198,8 @@ describe("package artifact reuse", () => {
       },
       {
         workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
-        jobName: "run_telegram_desktop_proof",
-        stepName: "Upload Mantis Telegram desktop artifacts",
+        jobName: "run_telegram_visible_proof",
+        stepName: "Upload Mantis Telegram artifacts",
       },
       {
         workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
@@ -5553,6 +5607,7 @@ describe("package artifact reuse", () => {
       'args+=(-f scenario="$SCENARIO")',
     ]);
     expect(dispatchStep.run).not.toContain("package_artifact");
+    expect(dispatchStep.run).not.toContain("allow_older_binary_destructive_actions");
     expectTextToIncludeAll(workflow, [
       '-f rerun_group="$RERUN_GROUP"',
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
@@ -6471,7 +6526,9 @@ describe("package artifact reuse", () => {
     expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
-    expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
+    // actionlint passes embedded scripts to ShellCheck through a 64 KiB pipe.
+    expect(Buffer.byteLength(publishOrchestration.run ?? "", "utf8")).toBeLessThan(64 * 1024);
+    expect(publishOrchestration.run).toContain('"${target_sha}" != "${TARGET_SHA}"');
     expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
@@ -6483,7 +6540,7 @@ describe("package artifact reuse", () => {
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(
-      "${{ inputs.preflight_run_id != '' && 1 || 0 }}",
+      "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}",
     );
 
     const publishSteps = publishJob.steps ?? [];
@@ -6670,7 +6727,7 @@ describe("package artifact reuse", () => {
     expect(androidWorkflow).toContain('--artifact", "third-party');
     expect(androidWorkflow).toContain("OpenClaw-Android.apk");
     expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
-    expect(androidWorkflow).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
+    expect(androidWorkflow).toContain("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6");
     expect(androidWorkflow).toContain("--signer-workflow");
     expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("--deny-self-hosted-runners");
@@ -6897,7 +6954,7 @@ describe("package artifact reuse", () => {
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@87ca030c30f3cfb78ab15c8e66b5ff1469c8f9c8",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -7141,7 +7198,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
     for (const workflowPath of releaseWorkflowPaths) {
       const workflow = readWorkflow(workflowPath);
-      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.16.0");
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.19.0");
       expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 

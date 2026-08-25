@@ -25,6 +25,11 @@ import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
+type ChatContextWindowTarget = Pick<
+  SessionsListResult["defaults"],
+  "contextWindow" | "contextWindows" | "contextWindowDefault"
+>;
+
 type ChatModelControlsProps = {
   activeRunId: string | null;
   agentDefaultModel?: string;
@@ -46,6 +51,7 @@ type ChatModelControlsProps = {
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  contextWindowTarget?: ChatContextWindowTarget;
   thinkingDefaults?: SessionsListResult["defaults"];
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
@@ -370,7 +376,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   // One owner supplies the whole tuple: mixing an override session's fields with
   // the defaults row can render the default model's options for a session whose
   // model declares none, then patch an invalid option id.
-  const contextWindowOwner = activeSession ?? props.sessionsResult?.defaults;
+  const contextWindowOwner =
+    props.contextWindowTarget ?? activeSession ?? props.sessionsResult?.defaults;
   const contextWindows = contextWindowOwner?.contextWindows ?? [];
   const selectedContextWindow =
     contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
@@ -394,7 +401,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
                 },
               }
             : undefined,
-        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,

@@ -5,29 +5,28 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { danger } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  addGatewayClientOptions,
-  callGatewayFromCli,
-  type GatewayRpcOpts,
-} from "../gateway-rpc.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
+import { registerCronMutationOptions } from "./register.cron-options.js";
 import {
   applyExistingCronSchedulePatch,
   applyExistingStreamSchedulePatch,
   resolveCronEditScheduleRequest,
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
-import { getCronChannelOptions, warnIfCronSchedulerDisabled } from "./shared.js";
+import {
+  getCronChannelOptions,
+  handleCronCliError,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
 import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
@@ -57,98 +56,36 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
-    createCronOutputCommand(cron, "edit")
-      .description("Edit an automation (patch fields)")
-      .argument("<id>", "Job id")
-      .option("--name <name>", "Set name")
-      .option("--display-name <name>", "Set human-readable display name")
+    registerCronMutationOptions(
+      createCronOutputCommand(cron, "edit")
+        .description("Edit an automation (patch fields)")
+        .argument("<id>", "Job id"),
+      "edit",
+    )
       .option("--clear-display-name", "Restore the stable name in list and detail views", false)
-      .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
-      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
-      .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
-      .option("--session <target>", "Session target (main|isolated)")
-      .option("--agent <id>", "Set agent id")
       .option("--clear-agent", "Unset agent and use default", false)
-      .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
-      .option("--every <duration>", "Set interval duration like 10m")
-      .option("--pacing-min <duration>", "Set minimum delay for a dynamic next check")
-      .option("--pacing-max <duration>", "Set maximum delay for a dynamic next check")
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
-      .option("--cron <expr>", "Set cron expression")
-      .option("--stream-command <json>", "Set stream source argv as a JSON array of strings")
-      .option("--stream-cwd <path>", "Set stream source working directory")
-      .option("--stream-mode <mode>", "Set stream selection mode (line|match)")
-      .option("--stream-match <regex>", "Set stream match regex source")
-      .option("--stream-batch-ms <n>", "Set stream quiet-window delay in milliseconds")
-      .option("--stream-max-batch-bytes <n>", "Set maximum UTF-8 bytes per stream batch")
-      .option(
-        "--tz <iana>",
-        "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
-      )
-      .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
-      .option("--exact", "Disable cron staggering (set stagger to 0)")
-      .option("--trigger-script <path|->", "Set condition script from file, or - for stdin")
-      .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
-      .option("--system-event <text>", "Set systemEvent payload")
-      .option("--message <text>", "Set agentTurn payload message")
-      .option("--script <file|->", "Set headless script payload from file, or - for stdin")
-      .option("--script-timeout-seconds <n>", "Set script wall-clock timeout seconds")
-      .option("--script-tool-budget <n>", "Set maximum script tool calls")
-      .option("--command <shell>", "Set command payload run as sh -lc <shell> on the Gateway")
-      .option("--command-argv <json>", "Set command payload argv as JSON array of strings")
-      .option("--command-cwd <path>", "Set command payload working directory")
-      .option(
-        "--command-env <KEY=VALUE>",
-        "Set command payload environment overrides (repeatable)",
-        (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
-      )
-      .option("--command-input <text>", "Set command payload stdin")
-      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",
         false,
       )
-      .option("--model <model>", "Model override for agent jobs")
-      .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
       .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
         false,
       )
-      .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
-      .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
-      .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
-      .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
-      .option("--announce", "Fallback-deliver final text to a chat")
-      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
-      .option("--no-deliver", "Disable runner fallback delivery")
-      .option("--webhook <url>", "POST the finished payload to a webhook URL")
-      .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
-      .option(
-        "--to <dest>",
-        "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
-      )
-      .option("--thread-id <id>", "Telegram forum topic thread id")
-      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--clear-channel", "Unset the delivery channel", false)
       .option("--clear-to", "Unset the delivery destination", false)
       .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)
       .option("--clear-account", "Unset the per-job delivery account override", false)
-      .option(
-        "--best-effort-deliver",
-        "Do not fail job if delivery fails (also implies --announce when used alone)",
-      )
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
       .option("--no-failure-alert", "Disable failure alerts for this job")
@@ -369,20 +306,7 @@ export function registerCronEditCommand(cron: Command) {
             patch.trigger = { ...existing.trigger, once: true };
           }
 
-          const scheduleRequest = resolveCronEditScheduleRequest({
-            at: opts.at,
-            cron: opts.cron,
-            every: opts.every,
-            streamCommand: opts.streamCommand,
-            streamCwd: opts.streamCwd,
-            streamMode: opts.streamMode,
-            streamMatch: opts.streamMatch,
-            streamBatchMs: opts.streamBatchMs,
-            streamMaxBatchBytes: opts.streamMaxBatchBytes,
-            exact: opts.exact,
-            stagger: opts.stagger,
-            tz: opts.tz,
-          });
+          const scheduleRequest = resolveCronEditScheduleRequest(opts);
           if (scheduleRequest.kind === "direct") {
             if (scheduleRequest.schedule.kind === "stream") {
               const existing = await readExistingCronJob();
@@ -514,8 +438,7 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(formatErrorMessage(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err);
         }
       }),
   );

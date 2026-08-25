@@ -161,9 +161,10 @@ fun ShellScreen(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
-  ClawDesignTheme(dark = shellDark) {
+  ClawDesignTheme(dark = shellDark, accentArgb = gatewayAccentArgb) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }

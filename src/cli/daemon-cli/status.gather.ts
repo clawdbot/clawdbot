@@ -24,7 +24,10 @@ import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../..
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceLoadState,
+} from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
@@ -298,12 +301,7 @@ export type DaemonStatus = {
     loadedText: string;
     notLoadedText: string;
     targetRole?: "target" | "diagnostic-only";
-    command?: {
-      programArguments: string[];
-      workingDirectory?: string;
-      environment?: Record<string, string>;
-      sourcePath?: string;
-    } | null;
+    command?: GatewayServiceCommandConfig | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
     gatewayHeap?: GatewayHeapLimitReport;
@@ -618,6 +616,7 @@ export async function gatherDaemonStatus(
         auditGatewayServiceConfig({
           env: process.env,
           command,
+          timeoutMs,
         }),
       )
     : { ok: true, issues: [] satisfies ServiceConfigAudit["issues"] };

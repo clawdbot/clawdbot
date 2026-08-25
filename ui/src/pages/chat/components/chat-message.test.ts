@@ -1945,6 +1945,42 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
   });
 
+  it("links a peer sender's name to their activity feed and leaves your own plain", () => {
+    const navigate = vi.fn();
+    const renderSender = (senderId: string) => {
+      const container = document.createElement("div");
+      const message = { role: "user", content: "hello", timestamp: 1000 };
+      render(
+        renderTestMessageGroup(
+          createMessageGroup(message, "user", {
+            key: `sender-link-${senderId}`,
+            senderLabel: "Alice Example",
+            sender: { id: senderId, name: "Alice Example" },
+            messages: [createMessageEntry(`sender-link-${senderId}-message`, message)],
+          }),
+          {
+            userId: "me",
+            userName: "Local User",
+            personActivity: { basePath: "", navigate },
+          },
+        ),
+        container,
+      );
+      return container;
+    };
+
+    const peer = renderSender("profile-alice");
+    const link = peer.querySelector<HTMLAnchorElement>("a.chat-sender-name");
+    expect(link?.textContent).toBe("Alice Example");
+    expect(link?.getAttribute("href")).toBe("/activity?person=profile-alice");
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(navigate).toHaveBeenCalledWith("profile-alice");
+
+    const own = renderSender("me");
+    expect(own.querySelector("a.chat-sender-name")).toBeNull();
+    expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
+  });
+
   it("tints attributed user groups with the sender's stable identity hue", () => {
     const renderGroupFor = (sender?: { id: string; name: string }) => {
       const container = document.createElement("div");
@@ -2100,6 +2136,12 @@ describe("grouped chat rendering", () => {
         message: "Guardian stopped after too many rejected actions.",
       }),
     );
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 4, "codex_app_server.guardian", {
+        phase: "strict_review_required",
+      }),
+    );
     const items = buildCachedChatItems({
       paneId: "guardian-render-test",
       sessionKey: "main",
@@ -2118,7 +2160,7 @@ describe("grouped chat rendering", () => {
     render(html`${items.map((item) => renderChatNotice(item))}`, container);
 
     const notices = [...container.querySelectorAll<HTMLElement>(".chat-notice")];
-    expect(notices).toHaveLength(3);
+    expect(notices).toHaveLength(4);
     expect(notices[0]?.textContent).toContain("Guardian approved git status --short.");
     expect(notices[0]?.classList.contains("danger")).toBe(false);
     expect(notices[1]?.classList.contains("callout")).toBe(true);
@@ -2129,6 +2171,129 @@ describe("grouped chat rendering", () => {
     expect(notices[1]?.textContent).toContain("Command reaches the network.");
     expect(notices[2]?.textContent).toContain("Guardian warning");
     expect(notices[2]?.textContent).toContain("Guardian stopped after too many rejected actions.");
+    expect(notices[3]?.classList.contains("callout")).toBe(true);
+    expect(notices[3]?.classList.contains("danger")).toBe(true);
+    expect(notices[3]?.getAttribute("role")).toBe("alert");
+    expect(notices[3]?.textContent).toContain("Guardian review required");
+    expect(notices[3]?.textContent).toContain(
+      "Guardian is reviewing this action before it can continue.",
+    );
+  });
+
+  it("correlates strict review replay and terminal decisions by thread and turn", () => {
+    const host = createHost();
+    const strictReview = (seq: number, turnId: string) =>
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", seq, "codex_app_server.guardian", {
+          phase: "strict_review_required",
+          threadId: "thread-guardian",
+          turnId,
+          reviewId: "review-shared",
+          startedAtMs: 1_787_273_600_000,
+        }),
+      );
+
+    strictReview(1, "turn-1");
+    strictReview(2, "turn-1");
+    strictReview(3, "turn-2");
+    expect(host.guardianNotices).toHaveLength(2);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 4, "codex_app_server.guardian", {
+        phase: "completed",
+        threadId: "thread-guardian",
+        turnId: "turn-1",
+        reviewId: "review-shared",
+        status: "approved",
+      }),
+    );
+    expect(host.guardianNotices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "approved" }),
+        expect.objectContaining({ kind: "strict-review-required" }),
+      ]),
+    );
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 5, "codex_app_server.guardian", {
+        phase: "completed",
+        threadId: "thread-guardian",
+        turnId: "turn-2",
+        reviewId: "review-shared",
+        status: "aborted",
+      }),
+    );
+    expect(host.guardianNotices).toEqual([
+      expect.objectContaining({ kind: "approved" }),
+      expect.objectContaining({ kind: "denied" }),
+    ]);
+  });
+
+  it.each(["aborted", "timedOut"])(
+    "replaces strict review with a visible denial on %s terminal status",
+    (status) => {
+      const host = createHost();
+      const correlation = {
+        threadId: "thread-guardian",
+        turnId: `turn-${status}`,
+        reviewId: `review-${status}`,
+      };
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", 1, "codex_app_server.guardian", {
+          phase: "strict_review_required",
+          ...correlation,
+          startedAtMs: 1_787_273_600_000,
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", 2, "codex_app_server.guardian", {
+          phase: "completed",
+          ...correlation,
+          status,
+        }),
+      );
+
+      expect(host.guardianNotices).toEqual([expect.objectContaining({ kind: "denied" })]);
+    },
+  );
+
+  it("renders configuration warnings as system notices rather than Guardian failures", () => {
+    const container = document.createElement("div");
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-warning", 1, "notice", {
+        phase: "warning",
+        message: "Custom execution rules were not applied.",
+      }),
+    );
+    const items = buildCachedChatItems({
+      paneId: "configuration-warning-render-test",
+      sessionKey: "main",
+      runId: "run-warning",
+      messages: [],
+      toolMessages: [],
+      guardianNotices: host.guardianNotices,
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const notice = items[0];
+    if (notice?.kind !== "notice") {
+      throw new Error("Expected configuration warning notice");
+    }
+
+    render(renderChatNotice(notice), container);
+
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("System");
+    expect(container.textContent).toContain("Custom execution rules were not applied.");
+    expect(container.textContent).not.toContain("Guardian warning");
   });
 
   it("uses the current profile display name for the signed-in user's historical messages", () => {
@@ -5902,6 +6067,86 @@ describe("grouped chat rendering", () => {
     );
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+  });
+
+  it("projects oversized history rows through regular and grouped tool bubbles", () => {
+    const rawMarker = "[chat.history omitted: message too large]";
+    const notice = "This message is too large to display here.";
+    const regularContainer = document.createElement("div");
+    renderGroupedMessage(
+      regularContainer,
+      {
+        role: "user",
+        content: [{ type: "text", text: rawMarker }],
+        __openclaw: { id: "oversized-user", truncated: true, reason: "oversized" },
+      },
+      "user",
+    );
+
+    const regularBubble = expectElement(regularContainer, ".chat-bubble", HTMLElement);
+    expect(regularBubble.textContent).toContain(notice);
+    expect(regularBubble.textContent).not.toContain(rawMarker);
+    expect(regularBubble.dataset.messageText).toBe(notice);
+
+    const groupedContainer = document.createElement("div");
+    const group = createToolGroup("oversized-tool-group", [
+      createMessageEntry(
+        "oversized-tool-1",
+        createToolResultMessage("call-1", "read_file", rawMarker, {
+          __openclaw: { id: "oversized-tool-1", truncated: true, reason: "oversized" },
+        }),
+      ),
+      createMessageEntry(
+        "oversized-tool-2",
+        createToolResultMessage("call-2", "run_command", rawMarker, {
+          __openclaw: { id: "oversized-tool-2", truncated: true, reason: "oversized" },
+        }),
+      ),
+    ]);
+    renderMessageGroups(groupedContainer, [group], {
+      isToolMessageExpanded: (id) => id === "activity:oversized-tool-group",
+    });
+
+    const groupedBubbles = [
+      ...groupedContainer.querySelectorAll<HTMLElement>(
+        ".chat-activity-group__body > .chat-bubble",
+      ),
+    ];
+    expect(groupedBubbles).toHaveLength(2);
+    expect(groupedBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([notice, notice]);
+    expect(groupedContainer.textContent).not.toContain(rawMarker);
+  });
+
+  it("keeps the oversized notice visible when assistant recovery exhausts", () => {
+    const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: {
+          id: "oversized-assistant-error",
+          truncated: true,
+          reason: "oversized",
+        },
+      },
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({ status: "error", revision: 6 }),
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    expect(container.querySelector(".chat-text")?.textContent).toContain(
+      "This message is too large to display here.",
+    );
+    expect(container.textContent).not.toContain("[chat.history omitted");
+    expect(container.querySelector(".chat-message-load-error")?.textContent).toContain(
+      "Could not load the full message.",
+    );
+    expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

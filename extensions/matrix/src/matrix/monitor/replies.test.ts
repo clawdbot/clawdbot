@@ -339,6 +339,65 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(2).replyToId).toBe("reply-text");
   });
 
+  it("uses singular media when plural media entries are blank", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "caption",
+          mediaUrl: "https://example.com/fallback.jpg",
+          mediaUrls: ["   "],
+        },
+      ],
+      roomId: "room:2",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(sendOptions(0).mediaUrl).toBe("https://example.com/fallback.jpg");
+  });
+
+  it("reports blank-only media as missing instead of silently suppressing it", async () => {
+    const result = await deliverMatrixReplies({
+      cfg,
+      replies: [{ mediaUrls: ["   "] }],
+      roomId: "room:2",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(runtimeEnv.error).toHaveBeenCalledWith("matrix reply missing text/media");
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+  });
+
+  it("reports blank text with blank-only media as missing", async () => {
+    const result = await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "   ", mediaUrls: ["   "] }],
+      roomId: "room:2",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(runtimeEnv.error).toHaveBeenCalledWith("matrix reply missing text/media");
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+  });
+
   it("keeps replyToId when threadId is set so Matrix can send fallback metadata", async () => {
     chunkMatrixTextMock.mockImplementation((text: string) => ({
       trimmedText: text.trim(),

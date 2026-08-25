@@ -523,6 +523,185 @@ describe("cron service timer seam coverage", () => {
     });
   });
 
+  it.each([
+    {
+      name: "main notification and immediate wake use the session owner and thread",
+      sessionTarget: "main",
+      sessionKey: "agent:ops:telegram:group:42:topic:77",
+      defaultAgentId: "main",
+      notify: "queue changed",
+      wake: "now",
+      expectedAgentId: "ops",
+      expectedIntent: "immediate",
+      expectDeliveryContext: true,
+    },
+    {
+      name: "main notification and deferred wake use the current configured owner",
+      sessionTarget: "main",
+      defaultAgentId: "stale-main",
+      currentDefaultAgentId: "ops",
+      notify: "queue changed",
+      wake: "next-heartbeat",
+      expectedAgentId: "ops",
+      expectedIntent: "event",
+    },
+    {
+      name: "isolated script wake uses the session owner without main delivery context",
+      sessionTarget: "isolated",
+      sessionKey: "agent:ops:telegram:group:42:topic:77",
+      defaultAgentId: "main",
+      notify: "queue changed",
+      wake: "now",
+      expectedAgentId: "ops",
+      expectedIntent: "immediate",
+    },
+    {
+      name: "explicit script owner wins over the current configured default",
+      sessionTarget: "main",
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:group:42:topic:77",
+      defaultAgentId: "main",
+      currentDefaultAgentId: "other",
+      notify: "queue changed",
+      wake: "next-heartbeat",
+      expectedAgentId: "ops",
+      expectedIntent: "event",
+      expectDeliveryContext: true,
+    },
+    {
+      name: "main wake-only completion keeps its session owner and thread",
+      sessionTarget: "main",
+      sessionKey: "agent:ops:telegram:group:42:topic:77",
+      defaultAgentId: "main",
+      wake: "now",
+      expectedAgentId: "ops",
+      expectedIntent: "immediate",
+      expectDeliveryContext: true,
+    },
+    {
+      name: "main notification without a wake keeps its session owner and thread",
+      sessionTarget: "main",
+      sessionKey: "agent:ops:telegram:group:42:topic:77",
+      defaultAgentId: "main",
+      notify: "queue changed",
+      expectedAgentId: "ops",
+      expectDeliveryContext: true,
+    },
+  ] as const)("routes script side effects: $name", async (testCase) => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-08-24T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const sessionKey = "sessionKey" in testCase ? testCase.sessionKey : undefined;
+    const explicitAgentId = "agentId" in testCase ? testCase.agentId : undefined;
+    const currentDefaultAgentId =
+      "currentDefaultAgentId" in testCase ? testCase.currentDefaultAgentId : undefined;
+    const notify = "notify" in testCase ? testCase.notify : undefined;
+    const wake = "wake" in testCase ? testCase.wake : undefined;
+    const job = {
+      ...createDueScriptJob({ now, sessionTarget: testCase.sessionTarget }),
+      agentId: explicitAgentId,
+      ...(sessionKey ? { sessionKey } : {}),
+    };
+    const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
+    const deliveryContext = {
+      channel: "telegram",
+      to: "telegram:42",
+      accountId: "ops-bot",
+      threadId: 77,
+    };
+    if (sessionKey) {
+      await upsertSessionEntryCore(
+        { storePath: sessionStorePath, sessionKey },
+        {
+          sessionId: "ops-telegram-session",
+          updatedAt: now,
+          delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
+        },
+      );
+    }
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      defaultAgentId: testCase.defaultAgentId,
+      ...(currentDefaultAgentId ? { resolveDefaultAgentId: () => currentDefaultAgentId } : {}),
+      resolveSessionStorePath: () => sessionStorePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        ...(notify ? { notify } : {}),
+        ...(wake ? { wake } : {}),
+      })),
+    });
+
+    await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    const [eventText, eventOptions] = enqueueSystemEvent.mock.calls[0] as [
+      string,
+      {
+        agentId?: string;
+        contextKey?: string;
+        deliveryContext?: typeof deliveryContext;
+      },
+    ];
+    expect(eventText).toBe(notify ?? "script job script job completed");
+    expect(eventOptions.agentId).toBe(testCase.expectedAgentId);
+    if ("expectDeliveryContext" in testCase && testCase.expectDeliveryContext) {
+      expect(eventOptions.deliveryContext).toEqual(deliveryContext);
+    } else {
+      expect(eventOptions).not.toHaveProperty("deliveryContext");
+    }
+    if ("expectedIntent" in testCase) {
+      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+        source: "cron",
+        intent: testCase.expectedIntent,
+        reason: "cron:script-job:script",
+        agentId: testCase.expectedAgentId,
+      });
+    } else {
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["main", "isolated"] as const)(
+    "does not resolve an owner for a quiet %s script without side effects",
+    async (sessionTarget) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-08-24T12:00:00.000Z");
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const resolveDefaultAgentId = vi.fn(() => undefined);
+      const job = {
+        ...createDueScriptJob({ now, sessionTarget }),
+        agentId: undefined,
+      };
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        defaultAgentId: undefined,
+        resolveDefaultAgentId,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        runScriptJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+      expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    },
+  );
+
   it("delivers nothing and enqueues nothing when notify and wake are absent", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-18T12:00:00.000Z");

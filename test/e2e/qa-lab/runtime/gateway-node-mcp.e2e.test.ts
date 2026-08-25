@@ -36,6 +36,7 @@ import {
 } from "./gateway-node-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const QA_AGENT_ID = "qa";
 
 describe("Gateway and node-host MCP live process parity", () => {
   it(
@@ -129,7 +130,19 @@ describe("Gateway and node-host MCP live process parity", () => {
             return {
               ...withoutPlugins,
               mcp: { servers: sessionMcpServers },
-              tools: { ...cfg.tools, profile: "full" },
+              agents: {
+                ...cfg.agents,
+                entries: {
+                  ...cfg.agents?.entries,
+                  [QA_AGENT_ID]: {
+                    ...cfg.agents?.entries?.[QA_AGENT_ID],
+                    tools: {
+                      ...cfg.agents?.entries?.[QA_AGENT_ID]?.tools,
+                      profile: "full",
+                    },
+                  },
+                },
+              },
               gateway: {
                 ...cfg.gateway,
                 nodes: {
@@ -189,7 +202,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         phase = "loading session MCP catalog";
         sessionRuntime = createSessionMcpRuntime({
           sessionId: `qa-mcp-parity-${randomUUID()}`,
-          sessionKey: `agent:main:qa-mcp-parity-${randomUUID()}`,
+          sessionKey: `agent:${QA_AGENT_ID}:qa-mcp-parity-${randomUUID()}`,
           workspaceDir: sessionWorkspace,
           cfg: { plugins: { enabled: false }, mcp: { servers: sessionMcpServers } },
         });
@@ -366,7 +379,7 @@ describe("Gateway and node-host MCP live process parity", () => {
 
         phase = "reading effective MCP inventory";
         const created = (await gateway.call("sessions.create", {
-          agentId: "main",
+          agentId: QA_AGENT_ID,
           label: "QA MCP parity inventory",
         })) as { key?: string };
         if (!created.key) {

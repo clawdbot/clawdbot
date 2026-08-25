@@ -16,12 +16,16 @@ import {
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
+  KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -29,6 +33,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "./context
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
@@ -54,6 +59,11 @@ type AppSidebarElement = HTMLElement & {
 };
 
 type DebugOverlayElement = HTMLElement & {
+  toggle: () => void;
+};
+
+type KeyboardShortcutsDialogElement = HTMLElement & {
+  isOpen: boolean;
   toggle: () => void;
 };
 
@@ -129,6 +139,7 @@ export class ShellChromeOwner {
     window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen);
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
+    window.addEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener("dragover", this.handleUnhandledFileDrag);
@@ -153,6 +164,10 @@ export class ShellChromeOwner {
     window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen);
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     window.removeEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
+    window.removeEventListener(
+      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
+      this.handleKeyboardShortcutsRequest,
+    );
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
     window.removeEventListener("dragover", this.handleUnhandledFileDrag);
@@ -337,7 +352,7 @@ export class ShellChromeOwner {
       host.desktopNavigationExpanded = false;
     } else if (host.navDrawerOpen) {
       host.closeNavDrawer({ restoreFocus: false });
-      // Preserve the stored preference while keeping the responsive handoff expanded.
+      // Preserve the tab-local state while keeping the responsive handoff expanded.
       host.desktopNavigationExpanded = host.context?.navigation.snapshot.navCollapsed ?? false;
     }
     host.requestUpdate();
@@ -397,8 +412,12 @@ export class ShellChromeOwner {
     if (event.defaultPrevented) {
       return;
     }
-    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
-    if (settingsModifier && event.shiftKey && resolveAsciiShortcutKey(event) === "d") {
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
+      event.preventDefault();
+      window.dispatchEvent(new CustomEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT));
+      return;
+    }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, event)) {
       const target = event.target;
       if (
         target instanceof Element &&
@@ -410,8 +429,7 @@ export class ShellChromeOwner {
       window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
       return;
     }
-    const plainKey = !event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey;
-    if (plainKey && event.key === "Escape" && this.isSettingsTakeover()) {
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) && this.isSettingsTakeover()) {
       if (host.navDrawerOpen) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
@@ -424,13 +442,12 @@ export class ShellChromeOwner {
       host.exitSettings();
       return;
     }
-    if (settingsModifier && event.shiftKey && event.code === "Comma") {
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {
       event.preventDefault();
       host.navigate("appearance");
       return;
     }
-    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (commandKey && !event.shiftKey && resolveAsciiShortcutKey(event) === "b") {
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
       event.preventDefault();
       this.toggleNavigationSurface();
     }
@@ -447,12 +464,26 @@ export class ShellChromeOwner {
     this.requestLazyElement(DEBUG_OVERLAY_ELEMENT, descriptor);
   };
 
+  private readonly handleKeyboardShortcutsRequest = (event: Event): void => {
+    const descriptor = lazyShellEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT, event);
+    if (isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)) {
+      this.host
+        .querySelector<KeyboardShortcutsDialogElement>(KEYBOARD_SHORTCUTS_ELEMENT.tagName)
+        ?.toggle();
+      this.clearPendingLazyAction(descriptor);
+      return;
+    }
+    this.requestLazyElement(KEYBOARD_SHORTCUTS_ELEMENT, descriptor);
+  };
+
   /** Open overlays and editable controls own Escape before settings can exit. */
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
       host.commandPalette?.isOpen ||
+      host.querySelector<KeyboardShortcutsDialogElement>(KEYBOARD_SHORTCUTS_ELEMENT.tagName)
+        ?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
       host.approvalOverlay?.dialogOpen === true ||
       document.querySelector("dialog[open]")
@@ -598,14 +629,36 @@ export class ShellChromeOwner {
     }
   };
 
+  private lazyElementForShellEvent(eventType: LazyShellEvent["eventType"]): OptionalCustomElement {
+    const host = this.host;
+    const elements: Record<LazyShellEvent["eventType"], OptionalCustomElement> = {
+      [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement,
+      [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT,
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT,
+      [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
+      [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
+      [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
+      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.custodianPanelElement,
+      [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement,
+    };
+    return elements[eventType];
+  }
+
   restorePendingLazyAction(): void {
     const event = this.pendingLazyAction;
-    if (
-      event &&
-      !this.host.lazyCustomElements.visibleState &&
-      this.dispatchLazyShellEvent(event) &&
-      !this.host.lazyCustomElements.visibleState
-    ) {
+    if (!event || this.host.lazyCustomElements.visibleState) {
+      return;
+    }
+    const element = this.lazyElementForShellEvent(event.eventType);
+    if (isOptionalElementDefined(element) && !this.host.querySelector(element.tagName)) {
+      // Loaded but render-gated (e.g. the shell is still booting): nothing can
+      // consume the dispatch yet, and re-dispatching re-arms a request/update
+      // cycle whose microtasks starve the boot (Gateway socket included).
+      // The host retries after every completed update, so the replay fires on
+      // the update that first renders the element.
+      return;
+    }
+    if (this.dispatchLazyShellEvent(event) && !this.host.lazyCustomElements.visibleState) {
       this.clearPendingLazyAction(event);
     }
   }

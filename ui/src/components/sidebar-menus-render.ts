@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -28,6 +29,12 @@ import {
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
+import {
+  isUpdateAttentionDismissed,
+  isUpdateAttentionForced,
+  loadDismissals,
+  resolveUpdateAttentionDismissal,
+} from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
@@ -117,11 +124,36 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
+  const context = host.sessionDataContext;
+  const overlaySnapshot = context?.overlays.snapshot;
+  const updateAttentionDismissal = resolveUpdateAttentionDismissal({
+    gatewayBootId: context?.gateway.snapshot.hello?.server?.bootId,
+    updateAvailable: overlaySnapshot?.updateAvailable,
+    updateSchedule: overlaySnapshot?.updateSchedule,
+  });
+  const updateAttentionDismissed = Boolean(
+    context &&
+    updateAttentionDismissal &&
+    isUpdateActionable(
+      overlaySnapshot?.updateAvailable,
+      overlaySnapshot?.updateSchedule,
+      Boolean(overlaySnapshot?.updateRunning || overlaySnapshot?.updateReconciliationPending),
+    ) &&
+    !overlaySnapshot?.updateRunning &&
+    !overlaySnapshot?.updateReconciliationPending &&
+    overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
+    !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
+    isUpdateAttentionDismissed(
+      loadDismissals(context.gateway.connection.gatewayUrl),
+      updateAttentionDismissal,
+    ),
+  );
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
+    updateAttentionDismissed,
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     offline: host.offline,
     themeMode: host.themeMode,

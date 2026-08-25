@@ -503,17 +503,21 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       if (!current || current.state === "local") {
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
+      let identity = resolvePlacementIdentity(claim, current);
       let routablePlacement = current;
       if (routablePlacement.state === "reclaimed") {
         emitAgentRunStatusEvent({
           runId: claim.runId,
           phase: "provisioning_environment",
-          ...(claim.sessionKey ? { sessionKey: claim.sessionKey } : {}),
-          ...(claim.agentId ? { agentId: claim.agentId } : {}),
+          sessionKey: identity.sessionKey,
+          agentId: identity.agentId,
         });
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
+        identity = resolvePlacementIdentity(
+          { ...claim, agentId: identity.agentId, sessionKey: identity.sessionKey },
+          routablePlacement,
+        );
       }
-      const identity = resolvePlacementIdentity(claim, routablePlacement);
       if (
         routablePlacement.state === "draining" &&
         options.placements

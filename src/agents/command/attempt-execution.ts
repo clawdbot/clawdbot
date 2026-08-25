@@ -22,6 +22,7 @@ import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-deliv
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
+  loadSessionEntry,
   persistSessionTranscriptTurn,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -67,7 +68,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasClaudeSession } from "../cli-runner/claude-live-registry.js";
+import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
@@ -846,7 +847,7 @@ export function runAgentAttempt(params: {
       const hasManagedClaudeLiveSession = Boolean(
         isClaudeCliProvider(cliExecutionProvider) &&
         cliSessionBinding?.sessionId &&
-        hasClaudeSession({
+        hasCliLiveSession({
           backendId: cliExecutionProvider,
           agentAccountId: params.runContext.accountId,
           agentId: params.sessionAgentId,
@@ -1062,7 +1063,18 @@ export function runAgentAttempt(params: {
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
                     if (
-                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                      hasNewGeneratedMediaTaskForSessionKey(
+                        params.sessionKey,
+                        mediaTaskIdsBefore,
+                      ) ||
+                      getCliSessionBinding(
+                        loadSessionEntry({
+                          sessionKey: mutableCliSessionStore.sessionKey,
+                          storePath: mutableCliSessionStore.storePath,
+                          readConsistency: "latest",
+                        }),
+                        cliExecutionProvider,
+                      )?.sessionId !== retry.sessionId
                     ) {
                       return false;
                     }

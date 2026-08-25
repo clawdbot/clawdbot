@@ -304,6 +304,16 @@ CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
   ON execution_decision_facts (run_id, occurred_at, receipt_id);
 
+-- Exact admission identity stays separate from owner-native lifecycle rows so
+-- older readers retain byte-compatible cron/task/flow table definitions.
+CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  context_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  PRIMARY KEY (owner_kind, owner_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   dedupe_key TEXT UNIQUE,
@@ -1011,6 +1021,11 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
 CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,

@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  type SessionsResolveCandidate,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -19,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -31,10 +33,8 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
-type SessionsResolveCandidate = { key: string; agentId: string; displayName?: string };
-
 export type SessionsResolveResult =
-  | { ok: true; key: string; agentId: string }
+  | ({ ok: true } & SessionsResolveCandidate)
   | { ok: true; missing: true }
   | { ok: true; ambiguous: true; candidates: SessionsResolveCandidate[] }
   | { ok: false; error: ErrorShape };
@@ -160,6 +160,7 @@ function findVisibleShortIdMatches(params: {
           "short-id session agent",
         ),
         ...(row.displayName ? { displayName: row.displayName } : {}),
+        ...(row.boardFace ? { boardFace: row.boardFace } : {}),
       },
     ];
   });
@@ -171,7 +172,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
   const { cfg, client, p } = params;
-  const entryFilter = createSessionListEntryFilter({ client });
+  const entryFilter = createSessionListEntryFilter({ client, cfg });
 
   const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
@@ -221,8 +222,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     const store = target.store;
-    if (store[target.canonicalKey]) {
+    const entry = store[target.canonicalKey];
+    if (entry) {
       if (
+        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.canonicalKey, entry) === false) ||
         !isResolvedSessionKeyVisible({
           cfg,
           p,
@@ -232,12 +235,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ) {
         return noSessionFoundResult({ p, message: `No session found: ${key}` });
       }
-      const agentCheck = validateSessionAgentExists(
-        cfg,
-        target.canonicalKey,
-        store[target.canonicalKey],
-        { acpMetadataSessionKey: target.canonicalKey },
-      );
+      const agentCheck = validateSessionAgentExists(cfg, target.canonicalKey, entry, {
+        acpMetadataSessionKey: target.canonicalKey,
+      });
       if (agentCheck) {
         return agentCheck;
       }
@@ -383,7 +383,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       return { ok: true, ambiguous: true, candidates: narrowed.slice(0, 10) };
     }
     const selected = expectDefined(narrowed[0], "short session match at 0");
-    return { ok: true, key: selected.key, agentId: selected.agentId };
+    return { ok: true, ...selected };
   }
 
   const parsedLabel = parseSessionLabel(p.label);

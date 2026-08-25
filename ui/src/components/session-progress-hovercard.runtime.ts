@@ -16,6 +16,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { renderSessionHovercard } from "./session-hovercard.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
@@ -453,6 +454,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         row: sidebarRow,
         selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
         avatarAuth: channelAvatarAuth,
+        personActivity: this.personActivity(),
         pullRequests,
         progressCard: this.lastProgressCard,
       }),
@@ -543,7 +545,16 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private cardFocusables(): HTMLElement[] {
-    return [...(this.hovercard.card?.querySelectorAll<HTMLElement>("a[href]") ?? [])];
+    // Decorative link twins (avatars beside their labelled link) opt out with tabindex="-1".
+    return [
+      ...(this.hovercard.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? []),
+    ];
+  }
+
+  private personActivity(): PersonActivityRouting | undefined {
+    const context = this.applicationContext;
+    // The card outlives its trigger row after navigation, so close it on the way out.
+    return context ? personActivityRouting(context, () => this.close()) : undefined;
   }
 
   private close(animateExit = false): void {

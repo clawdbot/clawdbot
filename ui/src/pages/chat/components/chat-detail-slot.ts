@@ -1,5 +1,6 @@
 import { html, type TemplateResult } from "lit";
 import type { ChatPageHost } from "../chat-state-host.ts";
+import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
 import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -55,6 +56,7 @@ export function renderChatDetailSlot(params: {
     html`<openclaw-chat-detail-panel
       class="chat-sidebar"
       .content=${content}
+      .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .basePath=${params.chat.basePath ?? ""}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}

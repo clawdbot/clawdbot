@@ -450,6 +450,13 @@ export const zh_TW = {
       title: "安全免責聲明",
       toolAccess: "如果啟用了工具，這個 bot 可以讀取檔案並執行操作。",
     },
+    telemetry: {
+      accept: "是，分享功能使用統計",
+      decline: "不用，謝謝",
+      description:
+        "在每日更新檢查中分享你使用的功能（頻道、提供者、插件數量）。絕不包含訊息或識別碼。查看實際傳送的內容：`openclaw telemetry show`。隨時變更：`openclaw telemetry on|off`。",
+      title: "幫助 OpenClaw 變得更好？",
+    },
     skills: {
       configure: "現在設定技能？（建議）",
       containerBrewHidden:

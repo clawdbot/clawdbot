@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -8,18 +8,37 @@ import type {
 import { i18n, t } from "../i18n/index.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { sessionOwnerInitials } from "./session-owner-chip.ts";
+import {
+  personActivityLink,
+  renderPersonAvatarLink,
+  renderPersonName,
+  type PersonActivityRouting,
+} from "./person-activity-link.ts";
+import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import "./viewer-facepile.ts";
 
 const MAX_VISIBLE_PULL_REQUESTS = 4;
 const MAX_VISIBLE_PARTICIPANTS = 3;
 
+function participantLabel(participant: SessionCreatedActor): string {
+  return participant.label?.trim() || participant.id?.trim() || "";
+}
+
 type SessionAgeUnit = RelativeTimeUnit | "week" | "month" | "year";
 
 type SessionHovercardAvatarAuth = {
   authTokens: readonly string[];
   authReady: boolean;
+};
+
+type SessionHovercardInput = {
+  row?: SidebarSessionHovercardRow;
+  selfUserId?: string;
+  avatarAuth?: SessionHovercardAvatarAuth;
+  personActivity?: PersonActivityRouting;
+  pullRequests?: ControlUiSessionPullRequestSnapshot;
+  progressCard?: ProgressCard | null;
 };
 
 let channelAvatarElementLoad: Promise<unknown> | undefined;
@@ -158,11 +177,48 @@ function renderHeader(row: SidebarSessionHovercardRow) {
   </header>`;
 }
 
-function renderSessionContext(
-  row: SidebarSessionHovercardRow | undefined,
-  selfUserId?: string,
-  avatarAuth?: SessionHovercardAvatarAuth,
+/**
+ * Keeps the locale's own "with {name}" phrasing and list separators while making each
+ * name its own link. A translation that lost its placeholder falls back to plain text
+ * rather than dropping the names.
+ */
+function renderParticipantNames(
+  participants: readonly SessionCreatedActor[],
+  formattedNames: string,
+  personActivity: PersonActivityRouting | undefined,
 ) {
+  const [prefix, suffix] = t("sessionsView.withParticipant").split("{name}");
+  if (suffix === undefined) {
+    return t("sessionsView.withParticipant", { name: formattedNames });
+  }
+  const links = participants.map((participant) =>
+    participant.id ? personActivityLink(participant.id, personActivity) : null,
+  );
+  const parts = new Intl.ListFormat(i18n.getLocale(), {
+    style: "long",
+    type: "unit",
+  }).formatToParts(participants.map(participantLabel));
+  const names: (TemplateResult | string)[] = [];
+  let index = 0;
+  for (const part of parts) {
+    if (part.type === "literal") {
+      names.push(part.value);
+      continue;
+    }
+    names.push(
+      renderPersonName(part.value, links[index] ?? null, "session-hovercard__participant-name"),
+    );
+    index += 1;
+  }
+  return html`${prefix}${names}${suffix}`;
+}
+
+function renderSessionContext({
+  row,
+  selfUserId,
+  avatarAuth,
+  personActivity,
+}: SessionHovercardInput) {
   const creator = row?.createdActor;
   const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
   const creatorInitials = creator ? sessionOwnerInitials(creator) : "";
@@ -187,9 +243,7 @@ function renderSessionContext(
     return true;
   });
   const visibleParticipants = participants.slice(0, MAX_VISIBLE_PARTICIPANTS);
-  const participantNames = visibleParticipants.map(
-    (participant) => participant.label || participant.id || "",
-  );
+  const participantNames = visibleParticipants.map(participantLabel);
   const formattedParticipantNames = new Intl.ListFormat(i18n.getLocale(), {
     style: "long",
     type: "unit",
@@ -213,40 +267,43 @@ function renderSessionContext(
   if (row?.channelAvatarUrl) {
     ensureChannelAvatarElement();
   }
+  const creatorId = creator?.id;
+  const creatorActivity = creatorId ? personActivityLink(creatorId, personActivity) : null;
+  const creatorAvatar = row?.channelAvatarUrl
+    ? html`<openclaw-channel-avatar
+        class="session-hovercard__creator-avatar"
+        .routeUrl=${row.channelAvatarUrl}
+        .authTokens=${avatarAuth?.authTokens ?? []}
+        .authReady=${avatarAuth?.authReady ?? false}
+        .fallback=${avatarFallback}
+        aria-hidden="true"
+      ></openclaw-channel-avatar>`
+    : creatorId
+      ? html`<openclaw-viewer-avatar
+          class="session-hovercard__creator-avatar"
+          .user=${{
+            id: creatorId,
+            name: creator?.label,
+            avatarUrl: creator?.avatarUrl,
+            watchedSessions: [],
+          }}
+          .markAsViewer=${false}
+          variant="session"
+          aria-hidden="true"
+        ></openclaw-viewer-avatar>`
+      : html`<span class="session-hovercard__context-icon" aria-hidden="true"
+          >${icons.users}</span
+        >`;
   return html`<div class="session-hovercard__context">
     ${creatorLabel || visibleParticipants.length > 0
       ? html`<div
           class="session-hovercard__context-row session-hovercard__identity-row"
           aria-label=${[creatorLabel, participantSummary].filter(Boolean).join(", ")}
         >
-          ${row?.channelAvatarUrl
-            ? html`<openclaw-channel-avatar
-                class="session-hovercard__creator-avatar"
-                .routeUrl=${row.channelAvatarUrl}
-                .authTokens=${avatarAuth?.authTokens ?? []}
-                .authReady=${avatarAuth?.authReady ?? false}
-                .fallback=${avatarFallback}
-                aria-hidden="true"
-              ></openclaw-channel-avatar>`
-            : creator?.id
-              ? html`<openclaw-viewer-avatar
-                  class="session-hovercard__creator-avatar"
-                  .user=${{
-                    id: creator.id,
-                    name: creator.label,
-                    avatarUrl: creator.avatarUrl,
-                    watchedSessions: [],
-                  }}
-                  .markAsViewer=${false}
-                  variant="session"
-                  aria-hidden="true"
-                ></openclaw-viewer-avatar>`
-              : html`<span class="session-hovercard__context-icon" aria-hidden="true"
-                  >${icons.users}</span
-                >`}
+          ${renderPersonAvatarLink(creatorAvatar, creatorActivity)}
           <span class="session-hovercard__identity-copy">
             ${creatorLabel
-              ? html`<span class="session-hovercard__identity-name">${creatorLabel}</span>`
+              ? renderPersonName(creatorLabel, creatorActivity, "session-hovercard__identity-name")
               : nothing}
             ${creatorLabel && visibleParticipants.length > 0
               ? html`<span class="session-hovercard__identity-separator" aria-hidden="true"
@@ -256,9 +313,11 @@ function renderSessionContext(
             ${visibleParticipants.length > 0
               ? html`<span class="session-hovercard__participants">
                   <span class="session-hovercard__participant"
-                    >${t("sessionsView.withParticipant", {
-                      name: formattedParticipantNames,
-                    })}</span
+                    >${renderParticipantNames(
+                      visibleParticipants,
+                      formattedParticipantNames,
+                      personActivity,
+                    )}</span
                   >
                   ${hiddenParticipantCount > 0
                     ? html`<span class="session-hovercard__participants-more"
@@ -386,13 +445,7 @@ function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot 
   `;
 }
 
-export function renderSessionHovercard(input: {
-  row?: SidebarSessionHovercardRow;
-  selfUserId?: string;
-  avatarAuth?: SessionHovercardAvatarAuth;
-  pullRequests?: ControlUiSessionPullRequestSnapshot;
-  progressCard?: ProgressCard | null;
-}) {
+export function renderSessionHovercard(input: SessionHovercardInput) {
   const hasPullRequestDetails = Boolean(
     input.pullRequests && (input.pullRequests.pullRequests.length > 0 || input.pullRequests.branch),
   );
@@ -421,7 +474,7 @@ export function renderSessionHovercard(input: {
       : nothing}
     ${hasContext
       ? html`<section class="session-hovercard__section session-hovercard__section--metadata">
-          ${renderSessionContext(input.row, input.selfUserId, input.avatarAuth)}
+          ${renderSessionContext(input)}
         </section>`
       : nothing}
     ${hasPullRequestDetails
