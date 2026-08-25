@@ -85,6 +85,38 @@ function splitCardPair(part: string): [string, string | undefined] {
 }
 
 /**
+ * Split action string by comma, but protect commas inside URLs.
+ * Falls back to split-on-comma for strings with no pipes (bare actions).
+ */
+function splitActions(actionsStr: string): string[] {
+  if (!actionsStr.includes("|")) {
+    return actionsStr.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+
+  // Temporarily protect commas that appear inside http(s) URLs so they are
+  // not treated as action separators.  The placeholder is a private-use
+  // character that cannot occur in normal user input.
+  const PLACEHOLDER = "\uE000";
+  let protectedStr = actionsStr;
+  const urlMatches = Array.from(
+    actionsStr.matchAll(/https?:\/\/[^\s|,]+/g),
+  );
+  for (let i = urlMatches.length - 1; i >= 0; i--) {
+    const m = urlMatches[i];
+    const start = m.index ?? 0;
+    const url = m[0];
+    protectedStr =
+      protectedStr.slice(0, start) +
+      url.replace(/,/g, PLACEHOLDER) +
+      protectedStr.slice(start + url.length);
+  }
+
+  return splitCardValue(protectedStr, ",")
+    .map((s) => s.trim().replace(new RegExp(PLACEHOLDER, "g"), ","))
+    .filter(Boolean);
+}
+
+/**
  * Parse action string format: "Label|data,Label2|data2"
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
@@ -95,7 +127,7 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
   const results: CardAction[] = [];
 
-  for (const part of splitCardValue(actionsStr, ",")) {
+  for (const part of splitActions(actionsStr)) {
     const [label, data] = splitCardPair(part);
     if (!label) {
       continue;
