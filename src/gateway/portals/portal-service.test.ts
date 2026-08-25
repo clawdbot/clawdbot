@@ -1,4 +1,4 @@
-import { request } from "node:http";
+import { request, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../../test-utils/ports.js";
 import * as httpListen from "../server/http-listen.js";
@@ -82,6 +82,7 @@ describe("gateway portal service", () => {
     ]);
     expect(httpServers).toHaveLength(2);
     expect(httpServers.every((server) => server.listening)).toBe(true);
+    expect(await getStatus("127.0.0.1", portal.listenPort, `/?${portal.tokenQuery}`)).toBe(502);
 
     const ownedServers = [...httpServers];
     await service.closeAll();
@@ -89,6 +90,30 @@ describe("gateway portal service", () => {
     expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
       true,
     );
+  });
+
+  it("cleans up when every allocation collides with the target port", async () => {
+    const targetPort = await getFreePort();
+    const actualListen = httpListen.listenGatewayHttpServer;
+    const attemptedServers = new Set<Server>();
+    const listen = vi
+      .spyOn(httpListen, "listenGatewayHttpServer")
+      .mockImplementation(async (params) => {
+        attemptedServers.add(params.httpServer);
+        await actualListen({ ...params, port: targetPort });
+      });
+    const { service, httpServers } = makeService(["127.0.0.1"]);
+
+    await expect(service.open({ targetPort })).rejects.toThrow(
+      `Portal listener repeatedly allocated target port ${targetPort}`,
+    );
+
+    expect(listen).toHaveBeenCalledTimes(10);
+    expect(attemptedServers.size).toBe(1);
+    expect(httpServers).toEqual([]);
+    const [primaryServer] = attemptedServers;
+    expect(primaryServer?.listening).toBe(false);
+    expect(primaryServer?.address()).toBeNull();
   });
 
   it("updates an existing target without replacing its listener or token", async () => {
