@@ -23,6 +23,24 @@ function remainingExtractTimeMs(deadlineMs: number): number {
   return remainingMs;
 }
 
+async function waitForExtractDeadline<T>(promise: Promise<T>, deadlineMs: number): Promise<T> {
+  const timeoutMs = remainingExtractTimeMs(deadlineMs);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("llama-server archive extraction timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function assertSiblingLinkTarget(entryPath: string, target: string): void {
   // A target without a separator can only ever resolve inside the entry's own
   // directory, so restoring it cannot move bytes outside the extract root.
@@ -118,21 +136,43 @@ async function restoreArchiveSymlinks(
   symlinks: ArchiveSymlink[],
   deadlineMs: number,
 ): Promise<void> {
-  remainingExtractTimeMs(deadlineMs);
-  const destRealDir = await fsp.realpath(destDir);
-  remainingExtractTimeMs(deadlineMs);
+  const destRealDir = await waitForExtractDeadline(fsp.realpath(destDir), deadlineMs);
   for (const symlink of symlinks) {
     const linkPath = path.resolve(destRealDir, symlink.entryPath);
     // Resolve the parent through realpath instead of comparing spellings: the
     // reported bypass came from lexical entry-path checks that Windows separators
     // and drive prefixes walk straight through.
-    const parentRealDir = await fsp.realpath(path.dirname(linkPath));
-    remainingExtractTimeMs(deadlineMs);
+    const parentRealDir = await waitForExtractDeadline(
+      fsp.realpath(path.dirname(linkPath)),
+      deadlineMs,
+    );
     if (parentRealDir !== destRealDir && !parentRealDir.startsWith(destRealDir + path.sep)) {
       throw new Error(`unsafe link path in llama-server archive: ${symlink.entryPath}`);
     }
-    await fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath)));
-    remainingExtractTimeMs(deadlineMs);
+    await waitForExtractDeadline(
+      fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath))),
+      deadlineMs,
+    );
+  }
+}
+
+async function withStagedArchiveDestination(
+  destDir: string,
+  run: (stagingDir: string) => Promise<void>,
+): Promise<void> {
+  const stagingDir = await fsp.mkdtemp(`${destDir}.staging-`);
+  let published = false;
+  try {
+    await run(stagingDir);
+    await fsp.rmdir(destDir);
+    await fsp.rename(stagingDir, destDir);
+    published = true;
+  } finally {
+    if (!published) {
+      // Restoration happens only in this unpublished tree. Cleanup removes the
+      // stage before rejection, so a late filesystem promise cannot reach destDir.
+      await fsp.rm(stagingDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -146,27 +186,29 @@ export async function extractLlamaServerArchive(params: {
   // prefix, so extension sniffing would decide policy from an attacker-influenced
   // name. Windows assets are flat DLL/EXE bundles, so fs-safe's default link
   // rejection stays in force for them.
-  if (params.archive === "zip") {
+  await withStagedArchiveDestination(params.destDir, async (stagingDir) => {
+    if (params.archive === "zip") {
+      await extractArchive({
+        archivePath: params.archivePath,
+        destDir: stagingDir,
+        kind: "zip",
+        timeoutMs: EXTRACT_TIMEOUT_MS,
+      });
+      return;
+    }
+    // TAR alias discovery and restoration are part of extraction, so all three
+    // phases share one deadline instead of granting each pass a fresh budget.
+    const deadlineMs = Date.now() + EXTRACT_TIMEOUT_MS;
+    const symlinks = await readTarSymlinks(params.archivePath, deadlineMs);
     await extractArchive({
       archivePath: params.archivePath,
-      destDir: params.destDir,
-      kind: "zip",
-      timeoutMs: EXTRACT_TIMEOUT_MS,
+      destDir: stagingDir,
+      kind: "tar",
+      tarGzip: true,
+      timeoutMs: remainingExtractTimeMs(deadlineMs),
+      entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
+      onFiltered: "skip-entry",
     });
-    return;
-  }
-  // TAR alias discovery and restoration are part of extraction, so all three
-  // phases share one deadline instead of granting each pass a fresh budget.
-  const deadlineMs = Date.now() + EXTRACT_TIMEOUT_MS;
-  const symlinks = await readTarSymlinks(params.archivePath, deadlineMs);
-  await extractArchive({
-    archivePath: params.archivePath,
-    destDir: params.destDir,
-    kind: "tar",
-    tarGzip: true,
-    timeoutMs: remainingExtractTimeMs(deadlineMs),
-    entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
-    onFiltered: "skip-entry",
+    await restoreArchiveSymlinks(stagingDir, symlinks, deadlineMs);
   });
-  await restoreArchiveSymlinks(params.destDir, symlinks, deadlineMs);
 }

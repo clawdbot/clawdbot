@@ -10,6 +10,7 @@ import { extractLlamaServerArchive } from "./llama-server-extract.js";
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -148,6 +149,36 @@ describe("extractLlamaServerArchive", () => {
       extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
     ).rejects.toThrow(/extraction timed out/u);
     await expect(fs.lstat(path.join(destDir, "llama-build", "libllama.so"))).rejects.toThrow();
+  });
+
+  it("does not publish an alias that finishes after the shared deadline", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
+      await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
+    });
+    const enteredSymlink = Promise.withResolvers<void>();
+    const realSymlink = fs.symlink.bind(fs);
+    vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
+      const buildDir = path.join(params.destDir, "llama-build");
+      await fs.mkdir(buildDir, { recursive: true });
+      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
+    });
+    vi.useFakeTimers({ now: 1_000 });
+    vi.spyOn(fs, "symlink").mockImplementationOnce(async (target, linkPath) => {
+      enteredSymlink.resolve();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10 * 60_000 + 1_000);
+      });
+      await realSymlink(target, linkPath);
+    });
+
+    const extraction = extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
+    await enteredSymlink.promise;
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+
+    await expect(extraction).rejects.toThrow(/extraction timed out/u);
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
   it("rejects a zip entry that escapes through Windows separators", async () => {
