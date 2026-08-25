@@ -35,13 +35,15 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
 } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
 } from "../agents/live-test-provider-drift.test-support.js";
-import { getApiKeyForModelCore, resolveEnvApiKey } from "../agents/model-auth.js";
+import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -101,7 +103,6 @@ import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
 const GATEWAY_LIVE_OPENAI_API_DEFAULT = isTruthyEnvValue(
@@ -2770,53 +2771,128 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthProfileStore {
-  if (REQUIRE_PROFILE_KEYS) {
-    return store;
-  }
+type PreparedGatewayLiveModelCandidate = {
+  model: Model;
+  auth: ResolvedProviderAuth;
+};
 
-  const envBackedProviders = new Set<string>();
-  for (const profile of Object.values(store.profiles)) {
-    if (resolveEnvApiKey(profile.provider)?.apiKey) {
-      envBackedProviders.add(normalizeProviderId(profile.provider));
+function buildLiveGatewayAuthProfileStore(params: {
+  store: AuthProfileStore;
+  candidates: readonly PreparedGatewayLiveModelCandidate[];
+}): AuthProfileStore {
+  const directCredentialProviders = new Set<string>();
+  const selectedProfileIds = new Map<string, string[]>();
+  const materializedProfiles: AuthProfileStore["profiles"] = {};
+
+  for (const { model, auth } of params.candidates) {
+    const provider = normalizeProviderId(model.provider);
+    const modelRef = `${model.provider}/${model.id}`;
+    if (auth.source.startsWith("profile:") && !auth.profileId) {
+      throw new Error(`Prepared live auth for ${modelRef} is missing its selected profile id.`);
     }
-  }
-  if (envBackedProviders.size === 0) {
-    return store;
+
+    let selectedProfileId = auth.profileId;
+    if (selectedProfileId) {
+      const selectedProfile = params.store.profiles[selectedProfileId];
+      if (!selectedProfile) {
+        if (auth.mode === "aws-sdk") {
+          continue;
+        }
+        throw new Error(
+          `Prepared live auth profile "${selectedProfileId}" for ${modelRef} is missing from its source store.`,
+        );
+      }
+      if (normalizeProviderId(selectedProfile.provider) !== provider) {
+        throw new Error(
+          `Prepared live auth profile "${selectedProfileId}" does not belong to ${modelRef}.`,
+        );
+      }
+    } else if (!requiresLiveProfileCredential(provider, REQUIRE_PROFILE_KEYS)) {
+      if (auth.mode !== "aws-sdk") {
+        if (!auth.apiKey) {
+          throw new Error(`Prepared live auth for ${modelRef} is missing its direct credential.`);
+        }
+        if (selectedProfileIds.has(provider)) {
+          throw new Error(
+            `Prepared live auth for ${modelRef} mixes direct and profile credentials.`,
+          );
+        }
+        directCredentialProviders.add(provider);
+      }
+      continue;
+    } else {
+      if (auth.mode !== "api-key" || !auth.apiKey) {
+        throw new Error(
+          `Prepared live auth for ${modelRef} requires an API key or source profile.`,
+        );
+      }
+      selectedProfileId = `${provider}:live`;
+      const existingProfile = materializedProfiles[selectedProfileId];
+      if (
+        existingProfile &&
+        (existingProfile.type !== "api_key" || existingProfile.key !== auth.apiKey)
+      ) {
+        throw new Error(
+          `Prepared live auth for ${modelRef} conflicts with its provider credential.`,
+        );
+      }
+      materializedProfiles[selectedProfileId] = {
+        type: "api_key",
+        provider,
+        key: auth.apiKey,
+      };
+    }
+
+    if (directCredentialProviders.has(provider)) {
+      throw new Error(`Prepared live auth for ${modelRef} mixes direct and profile credentials.`);
+    }
+    const providerProfileIds = selectedProfileIds.get(provider) ?? [];
+    if (!providerProfileIds.includes(selectedProfileId)) {
+      providerProfileIds.push(selectedProfileId);
+    }
+    selectedProfileIds.set(provider, providerProfileIds);
   }
 
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).filter(([, profile]) => {
-      return !envBackedProviders.has(normalizeProviderId(profile.provider));
-    }),
-  );
+  const profiles = {
+    ...Object.fromEntries(
+      Object.entries(params.store.profiles).filter(([, profile]) => {
+        return !directCredentialProviders.has(normalizeProviderId(profile.provider));
+      }),
+    ),
+    ...materializedProfiles,
+  };
   const keepProfileIds = new Set(Object.keys(profiles));
 
-  const order = store.order
-    ? Object.fromEntries(
-        Object.entries(store.order)
-          .filter(([provider]) => !envBackedProviders.has(normalizeProviderId(provider)))
-          .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
-          .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
-      )
-    : undefined;
+  const order: NonNullable<AuthProfileStore["order"]> = Object.fromEntries(
+    Object.entries(params.store.order ?? {})
+      .filter(([provider]) => !directCredentialProviders.has(normalizeProviderId(provider)))
+      .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
+      .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
+  );
+  for (const [provider, ids] of selectedProfileIds) {
+    order[provider] = [...ids, ...(order[provider] ?? []).filter((id) => !ids.includes(id))];
+  }
 
-  const lastGood = store.lastGood
+  const lastGood = params.store.lastGood
     ? Object.fromEntries(
-        Object.entries(store.lastGood).filter(([provider, id]) => {
-          return !envBackedProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id);
+        Object.entries(params.store.lastGood).filter(([provider, id]) => {
+          return (
+            !directCredentialProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id)
+          );
         }),
       )
     : undefined;
 
-  const usageStats = store.usageStats
-    ? Object.fromEntries(Object.entries(store.usageStats).filter(([id]) => keepProfileIds.has(id)))
+  const usageStats = params.store.usageStats
+    ? Object.fromEntries(
+        Object.entries(params.store.usageStats).filter(([id]) => keepProfileIds.has(id)),
+      )
     : undefined;
 
   return {
-    ...store,
+    version: params.store.version,
     profiles,
-    order: order && Object.keys(order).length > 0 ? order : undefined,
+    order: Object.keys(order).length > 0 ? order : undefined,
     lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
     usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
@@ -2959,52 +3035,126 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   );
 }
 
-describe("sanitizeAuthProfileStoreForLiveGateway", () => {
-  it("drops env-backed provider profiles when live auth should prefer env", () => {
+describe("buildLiveGatewayAuthProfileStore", () => {
+  it("materializes the exact prepared OpenAI API key as the first isolated profile", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const auth: ResolvedProviderAuth = {
+      apiKey: "prepared-openai-test-key",
+      mode: "api-key",
+      source: "env: OPENAI_API_KEY",
+    };
+
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [{ model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"), auth }],
+    });
+
+    expect(isolated.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: auth.apiKey,
+    });
+    expect(isolated.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("keeps an env-first provider on its prepared direct credential", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        openaiProfile: {
+        anthropicProfile: {
           type: "api_key",
-          provider: "openai",
-          key: "sk-openai-test",
-        },
-        codexProfile: {
-          type: "oauth",
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: 1,
+          provider: "anthropic",
+          key: "stored-anthropic-test-key",
         },
       },
       order: {
-        openai: ["codexProfile", "openaiProfile"],
+        anthropic: ["anthropicProfile"],
       },
       lastGood: {
-        openai: "codexProfile",
+        anthropic: "anthropicProfile",
       },
       usageStats: {
-        openaiProfile: { lastUsed: 1 },
-        codexProfile: { lastUsed: 2 },
+        anthropicProfile: { lastUsed: 1 },
       },
     };
 
-    const previousOpenAiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-live-openai";
-    try {
-      const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
-      expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeUndefined();
-      expect(sanitized.order).toBeUndefined();
-      expect(sanitized.lastGood).toBeUndefined();
-      expect(sanitized.usageStats).toBeUndefined();
-    } finally {
-      if (previousOpenAiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAiKey;
-      }
-    }
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [
+        {
+          model: createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6"),
+          auth: {
+            apiKey: "prepared-anthropic-test-key",
+            mode: "api-key",
+            source: "env: ANTHROPIC_API_KEY",
+          },
+        },
+      ],
+    });
+
+    expect(isolated.profiles.anthropicProfile).toBeUndefined();
+    expect(isolated.order).toBeUndefined();
+    expect(isolated.lastGood).toBeUndefined();
+    expect(isolated.usageStats).toBeUndefined();
+  });
+
+  it("preserves the exact selected source profile and prioritizes it in isolated order", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:other": {
+          type: "api_key",
+          provider: "openai",
+          key: "other-openai-test-key",
+        },
+        "openai:selected": {
+          type: "api_key",
+          provider: "openai",
+          key: "selected-openai-test-key",
+        },
+      },
+      order: { openai: ["openai:other", "openai:selected"] },
+      usageStats: { "openai:selected": { lastUsed: 3 } },
+    };
+
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [
+        {
+          model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
+          auth: {
+            apiKey: "selected-openai-test-key",
+            profileId: "openai:selected",
+            mode: "api-key",
+            source: "profile:openai:selected",
+          },
+        },
+      ],
+    });
+
+    expect(isolated.profiles["openai:selected"]).toEqual(store.profiles["openai:selected"]);
+    expect(isolated.order?.openai).toEqual(["openai:selected", "openai:other"]);
+    expect(isolated.usageStats?.["openai:selected"]).toEqual({ lastUsed: 3 });
+  });
+
+  it("rejects selected profiles absent from the authoritative source store", () => {
+    expect(() =>
+      buildLiveGatewayAuthProfileStore({
+        store: { version: 1, profiles: {} },
+        candidates: [
+          {
+            model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
+            auth: {
+              apiKey: "missing-openai-test-key",
+              profileId: "openai:missing",
+              mode: "api-key",
+              source: "profile:openai:missing",
+            },
+          },
+        ],
+      }),
+    ).toThrow(/openai:missing.*missing from its source store/);
   });
 });
 function extractTranscriptMessageText(message: unknown): string {
@@ -3704,7 +3854,8 @@ async function requestGatewayAgentText(params: {
 type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
-  candidates: Array<Model>;
+  candidates: PreparedGatewayLiveModelCandidate[];
+  authProfileStore: AuthProfileStore;
   allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
@@ -4619,23 +4770,20 @@ function buildLiveGatewayConfig(params: {
   };
 }
 
-async function sanitizeAuthConfig(params: {
+function sanitizeAuthConfig(params: {
   cfg: OpenClawConfig;
-  agentDir: string;
-}): Promise<OpenClawConfig["auth"] | undefined> {
+  store: AuthProfileStore;
+}): OpenClawConfig["auth"] | undefined {
   const auth = params.cfg.auth;
   if (!auth) {
     return auth;
   }
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
 
   let profiles: NonNullable<OpenClawConfig["auth"]>["profiles"] | undefined;
   if (auth.profiles) {
     profiles = {};
     for (const [profileId, profile] of Object.entries(auth.profiles)) {
-      if (!store.profiles[profileId]) {
+      if (!params.store.profiles[profileId]) {
         continue;
       }
       profiles[profileId] = profile;
@@ -4649,7 +4797,7 @@ async function sanitizeAuthConfig(params: {
   if (auth.order) {
     order = {};
     for (const [provider, ids] of Object.entries(auth.order)) {
-      const filtered = ids.filter((id) => Boolean(store.profiles[id]));
+      const filtered = ids.filter((id) => Boolean(params.store.profiles[id]));
       if (filtered.length === 0) {
         continue;
       }
@@ -4695,8 +4843,8 @@ async function prepareLiveGatewayWorkspace(workspaceDir: string): Promise<void> 
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  const ultraCandidates = params.candidates.filter((model) =>
-    isOpenAIGpt56UltraTarget(model, params.thinkingLevel),
+  const ultraCandidates = params.candidates.flatMap(({ model }) =>
+    isOpenAIGpt56UltraTarget(model, params.thinkingLevel) ? [model] : [],
   );
   if (ultraCandidates.length > 0 && ultraCandidates.length !== params.candidates.length) {
     throw new Error(
@@ -4736,18 +4884,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
     const agentId = GATEWAY_LIVE_AGENT_ID;
 
-    const hostAgentDir = resolveDefaultAgentDir(await readLiveTestConfig());
-    const hostStore = ensureAuthProfileStore(hostAgentDir, {
-      allowKeychainPrompt: false,
-    });
-    const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
-      version: hostStore.version,
-      profiles: { ...hostStore.profiles },
-      // Keep selection state so the gateway picks the same known-good profiles
-      // as the host (important when some profiles are rate-limited/disabled).
-      order: hostStore.order ? { ...hostStore.order } : undefined,
-      lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
-      usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+    const isolatedStore = buildLiveGatewayAuthProfileStore({
+      store: params.authProfileStore,
+      candidates: params.candidates,
     });
     const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
     cleanupTempStateDir = tempStateDir;
@@ -4759,10 +4898,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       "agent",
     );
     cleanupTempAgentDir = tempAgentDir;
-    saveAuthProfileStore(sanitizedStore, tempAgentDir);
+    saveAuthProfileStore(isolatedStore, tempAgentDir);
     const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
     if (tempSessionAgentDir !== tempAgentDir) {
-      saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
+      saveAuthProfileStore(isolatedStore, tempSessionAgentDir);
     }
     setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
@@ -4776,10 +4915,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     cleanupToolProbePath = toolProbePath;
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    const agentDir = resolveDefaultAgentDir(params.cfg);
     const sanitizedCfg: OpenClawConfig = {
       ...params.cfg,
-      auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+      auth: sanitizeAuthConfig({ cfg: params.cfg, store: isolatedStore }),
     };
     let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
@@ -4806,7 +4944,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
-      candidates: params.candidates,
+      candidates: params.candidates.map(({ model }) => model),
       liveAgentDir: tempSessionAgentDir,
       liveAgentWorkspaceDir: workspaceDir,
       providerOverrides,
@@ -4881,7 +5019,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     let timeoutSkippedCount = 0;
     const total = params.candidates.length;
 
-    for (const [index, model] of params.candidates.entries()) {
+    for (const [index, { model }] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
       const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
@@ -5653,7 +5791,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           modelFilter: filter,
           providerFilter: PROVIDERS,
         });
-        let authProfileStore: AuthProfileStore | undefined;
+        let authProfileStore: AuthProfileStore;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model>;
         if (providerScopedModelProviders) {
@@ -5664,6 +5802,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           );
           if (all.length > 0) {
             modelRegistry = createStaticLiveModelRegistry(all);
+            authProfileStore = ensureAuthProfileStore(agentDir, {
+              allowKeychainPrompt: false,
+              config: cfg,
+              externalCliProviderIds: providerScopedModelProviders,
+            });
           } else {
             logProgress("[all-models] provider-scoped model refs empty; loading auth profiles");
             const authBacked = await loadAuthBackedLiveModelRegistry({
@@ -5751,7 +5894,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           wantedCount: wanted.length,
         });
 
-        const candidates: Array<Model> = [];
+        const candidates: PreparedGatewayLiveModelCandidate[] = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
           if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
@@ -5762,26 +5905,29 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
           const modelRef = `${model.provider}/${model.id}`;
           try {
-            const apiKeyInfo = await withGatewayLiveSetupTimeout(
+            const auth = await withGatewayLiveSetupTimeout(
               getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
                 agentDir,
                 workspaceDir,
-                credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+                credentialPrecedence: resolveLiveCredentialPrecedence(
+                  model.provider,
+                  REQUIRE_PROFILE_KEYS,
+                ),
               }),
               `[all-models] auth ${modelRef}`,
               GATEWAY_LIVE_PROBE_TIMEOUT_MS,
             );
-            if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+            if (REQUIRE_PROFILE_KEYS && !auth.source.startsWith("profile:")) {
               skipped.push({
                 model: modelRef,
-                error: `non-profile credential source: ${apiKeyInfo.source}`,
+                error: `non-profile credential source: ${auth.source}`,
               });
               continue;
             }
-            candidates.push(model);
+            candidates.push({ model, auth });
           } catch (error) {
             skipped.push({ model: modelRef, error: String(error) });
           }
@@ -5804,8 +5950,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const selectedCandidates = selectCandidates(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
-          (model) => ({ provider: model.provider, id: model.id }),
-          (model) => model.provider,
+          ({ model }) => ({ provider: model.provider, id: model.id }),
+          ({ model }) => model.provider,
         );
         logProgress(
           `[all-models] selection=${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"}`,
@@ -5816,7 +5962,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           );
         }
         expect(selectedCandidates.length).toBeGreaterThan(0);
-        const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
+        const imageCandidates = selectedCandidates.filter(({ model }) =>
+          model.input?.includes("image"),
+        );
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");
         }
@@ -5824,15 +5972,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           label: "all-models",
           cfg,
           candidates: selectedCandidates,
+          authProfileStore,
           allowNotFoundSkip: useModern || useSmall,
           extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
           extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
           thinkingLevel: THINKING_LEVEL,
         });
 
-        const minimaxCandidates = selectedCandidates.filter(
-          (model) => model.provider === "minimax",
-        );
+        const minimaxCandidates = selectedCandidates.filter(({ model }) => {
+          return model.provider === "minimax";
+        });
         if (minimaxCandidates.length === 0) {
           logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
           return;
@@ -5848,6 +5997,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             label: "minimax-anthropic",
             cfg,
             candidates: minimaxCandidates,
+            authProfileStore,
             allowNotFoundSkip: useModern,
             extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
             extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
@@ -5899,16 +6049,25 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       if (!anthropic || !zai) {
         return;
       }
+      let anthropicAuth: ResolvedProviderAuth;
+      let zaiAuth: ResolvedProviderAuth;
       try {
-        await getApiKeyForModelCore({
+        anthropicAuth = await getApiKeyForModelCore({
           model: anthropic,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          store: hostStore,
+          agentDir,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            anthropic.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
-        await getApiKeyForModelCore({
+        zaiAuth = await getApiKeyForModelCore({
           model: zai,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          store: hostStore,
+          agentDir,
+          credentialPrecedence: resolveLiveCredentialPrecedence(zai.provider, REQUIRE_PROFILE_KEYS),
         });
       } catch {
         return;
@@ -5925,20 +6084,20 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       toolProbePath = path.join(workspaceDir, ".openclaw-live-zai-fallback.txt");
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-      const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
-        version: hostStore.version,
-        profiles: { ...hostStore.profiles },
-        order: hostStore.order ? { ...hostStore.order } : undefined,
-        lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
-        usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+      const isolatedStore = buildLiveGatewayAuthProfileStore({
+        store: hostStore,
+        candidates: [
+          { model: anthropic, auth: anthropicAuth },
+          { model: zai, auth: zaiAuth },
+        ],
       });
       const tempAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
-      saveAuthProfileStore(sanitizedStore, tempAgentDir);
+      saveAuthProfileStore(isolatedStore, tempAgentDir);
       setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
       const sanitizedCfg: OpenClawConfig = {
         ...cfg,
-        auth: await sanitizeAuthConfig({ cfg, agentDir }),
+        auth: sanitizeAuthConfig({ cfg, store: isolatedStore }),
       };
       const nextCfg = buildLiveGatewayConfig({
         cfg: sanitizedCfg,
