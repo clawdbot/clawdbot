@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalString,
-  normalizeOptionalStringifiedId,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,13 +8,11 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
-  deliveryContextFromSession,
   sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -45,6 +40,7 @@ import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./q
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -148,35 +144,15 @@ export function resolveReplyRunDeliveryContext(params: {
   ) {
     return undefined;
   }
-  const replyRoute = normalizeDeliveryContext(
-    resolveEffectiveReplyRoute({
+  return normalizeDeliveryContext({
+    ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
-  );
-  const persistedDelivery = normalizeDeliveryContext(
-    deliveryContextFromSession(params.sessionEntry),
-  );
-  // Session thread ids can be provider-scoped identities while delivery uses a native id.
-  // Reuse persisted transport metadata only when the complete route owner still matches.
-  const persistedThreadId =
-    replyRoute &&
-    persistedDelivery &&
-    replyRoute.channel === persistedDelivery.channel &&
-    replyRoute.to === persistedDelivery.to &&
-    replyRoute.accountId === persistedDelivery.accountId
-      ? persistedDelivery.threadId
-      : undefined;
-  const threadId =
-    normalizeOptionalStringifiedId(params.sessionCtx.MessageThreadId) ??
-    normalizeOptionalStringifiedId(params.sessionCtx.TransportThreadId) ??
-    normalizeOptionalStringifiedId(persistedThreadId) ??
-    normalizeOptionalStringifiedId(
-      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
-    );
-  return normalizeDeliveryContext({
-    ...replyRoute,
-    threadId,
+    threadId: resolveRoutedDeliveryThreadId({
+      ctx: params.sessionCtx,
+      sessionKey: params.sessionCtx.SessionKey ?? params.sessionKey,
+    }),
   });
 }
 

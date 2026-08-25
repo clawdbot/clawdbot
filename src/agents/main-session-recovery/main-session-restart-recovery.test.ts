@@ -1436,12 +1436,14 @@ describe("main-session-restart-recovery", () => {
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:12345",
         AccountId: "work",
+        MessageThreadId: 99,
+        TransportThreadId: 99,
         SessionKey: sessionKey,
       },
       sessionEntry: interruptedEntry,
       sessionKey,
     });
-    expect(recoveryContext).toEqual(deliveryContext);
+    expect(recoveryContext).toEqual({ ...deliveryContext, threadId: 99 });
     await writeMainSession({
       sessionsDir,
       sessionKey,
@@ -1485,7 +1487,7 @@ describe("main-session-restart-recovery", () => {
           runId,
         }),
       ).toMatchObject({
-        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoveryDeliveryContext: recoveryContext,
         restartRecoveryDeliveryRunId: runId,
       });
       const result = {
