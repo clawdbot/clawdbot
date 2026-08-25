@@ -227,6 +227,18 @@ describe("mantis before/after runtime", () => {
     });
   });
 
+  it("rejects the repo root as an output container before preparing worktrees", async () => {
+    const runner = vi.fn();
+    await expect(
+      runMantisBeforeAfter({
+        commandRunner: runner,
+        outputDir: ".",
+        repoRoot,
+      }),
+    ).rejects.toThrow("--output-dir must stay within the repo root.");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("supports the Discord thread filePath attachment Mantis scenario", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {

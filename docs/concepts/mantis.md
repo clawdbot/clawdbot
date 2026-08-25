@@ -91,8 +91,10 @@ labels (`extensions/qa-lab/src/mantis/run.runtime.ts`):
 (default `convex`), `--credential-role` (default `ci`), `--provider-mode`
 (default `live-frontier`), `--fast` (default on), `--skip-install`, `--skip-build`.
 
-The runner treats `--output-dir` as a stable container and creates detached
-`git worktree` checkouts under `<output-dir>.worktrees/`. Each checkout has a
+The runner treats `--output-dir` as a stable container. It must name a relative
+child directory inside the repository; the repository root (`.`), absolute
+paths, and paths that escape the repository are rejected. Detached `git
+worktree` checkouts live under `<output-dir>.worktrees/`. Each checkout has a
 unique `<lane>-<run-id>` name, so an interrupted run cannot collide with a
 later baseline or candidate. The runner runs `pnpm install`/`pnpm build` in
 each checkout (unless skipped), then runs
