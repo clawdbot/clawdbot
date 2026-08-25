@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import { getTaskFlowById } from "./task-flow-registry.js";
+import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import {
   assertParentFlowLinkAllowed,
   ensureLinkedTaskFlowRegistryReady,

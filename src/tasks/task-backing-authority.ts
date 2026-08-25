@@ -1,4 +1,4 @@
-import { getTaskFlowById } from "./task-flow-registry.js";
+import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import { getTasksByRunId } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
