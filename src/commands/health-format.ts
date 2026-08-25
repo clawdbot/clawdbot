@@ -140,7 +140,7 @@ const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {
   return ok === false;
 };
 
-/** Formats one terse health line per channel, optionally including every account. */
+/** Formats terse channel and activated-plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -256,6 +256,17 @@ export const formatHealthChannelLines = (
             ? "configured"
             : "unknown";
     lines.push(`${label}: ${passiveState}`);
+  }
+  const failedPlugins = (summary.plugins?.errors ?? []).filter((plugin) => plugin.activated);
+  for (const plugin of failedPlugins.slice(0, 20)) {
+    const id = sanitizeTerminalText(plugin.id).slice(0, 120);
+    const error = sanitizeTerminalText(plugin.error).slice(0, 500);
+    lines.push(`Plugin ${id}: failed - ${error}; run openclaw doctor`);
+  }
+  if (failedPlugins.length > 20) {
+    lines.push(
+      `Plugins: failed - ${failedPlugins.length - 20} additional activated failures; run openclaw doctor`,
+    );
   }
   return lines;
 };

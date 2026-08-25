@@ -197,6 +197,54 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
+  it("surfaces activated plugin failures without promoting inactive load errors", () => {
+    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+    summary.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          failurePhase: "load",
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    ]);
+  });
+
+  it("bounds activated plugin failure details and summarizes omitted failures", () => {
+    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+    summary.plugins = {
+      loaded: [],
+      errors: Array.from({ length: 22 }, (_, index) => ({
+        id: `plugin-${index}`,
+        origin: "workspace",
+        activated: true,
+        error: "x".repeat(600),
+      })),
+    };
+
+    const lines = formatHealthChannelLines(summary);
+
+    expect(lines).toHaveLength(21);
+    expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
+    expect(lines.at(-1)).toBe(
+      "Plugins: failed - 2 additional activated failures; run openclaw doctor",
+    );
+  });
+
   it("formats iMessage probe failures as failed health lines", () => {
     const summary = createHealthSummary({
       channels: {

@@ -166,7 +166,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("renders the gateway session path identically in JSON and text", async () => {
+  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -190,6 +190,24 @@ describe("healthCommand", () => {
       },
       sessions: agentSessions,
     });
+    snapshot.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
@@ -200,6 +218,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+    expect(parsed.plugins).toEqual(snapshot.plugins);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -207,6 +226,10 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
+    expect(output).toContain(
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    );
+    expect(output).not.toContain("inactive plugin load failed");
   });
 
   it("prints the gateway probe duration in text output", async () => {
