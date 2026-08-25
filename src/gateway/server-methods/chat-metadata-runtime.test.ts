@@ -5,7 +5,7 @@ import {
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -80,11 +80,18 @@ function createHarness(
     async ({
       facts,
     }: {
-      facts: { authStore: AuthProfileStore; owner: PreparedModelRuntimeSnapshot };
-    }) => ({
-      modelCatalog: facts.owner.modelCatalog.entries,
-      models: facts.owner.modelCatalog.entries,
-    }),
+      facts: {
+        authStore: AuthProfileStore;
+        modelCatalog: ModelCatalogSnapshot;
+        owner: PreparedModelRuntimeSnapshot;
+      };
+    }) => {
+      const modelCatalog = facts.modelCatalog;
+      return {
+        modelCatalog: modelCatalog.entries,
+        models: modelCatalog.entries,
+      };
+    },
   );
   const context = {
     getRuntimeConfig: () => config,
@@ -479,6 +486,43 @@ describe("gateway chat metadata runtime", () => {
       models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
     });
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("adopts a completed full catalog from the same prepared generation", async () => {
+    const harness = createHarness();
+    const owner = harness.getPreparedOwner()!;
+    const dynamicModel = { id: "dynamic", name: "dynamic", provider: "dynamic" };
+    const fullCatalog = {
+      ...owner.modelCatalog,
+      entries: [...owner.modelCatalog.entries, dynamicModel],
+      routeVariants: [...owner.modelCatalog.routeVariants, dynamicModel],
+    };
+    let completedCatalog: ModelCatalogSnapshot | undefined;
+    const generationOwner = {
+      ...owner,
+      readFullModelCatalog: () => completedCatalog,
+      loadFullModelCatalog: vi.fn(async () => {
+        completedCatalog = fullCatalog;
+        return fullCatalog;
+      }),
+    };
+    harness.setOwner(generationOwner);
+
+    await harness.runtime.refresh();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "first" })],
+    });
+
+    await generationOwner.loadFullModelCatalog();
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [
+        expect.objectContaining({ id: "first" }),
+        expect.objectContaining({ id: "dynamic" }),
+      ],
+    });
+    expect(generationOwner.loadFullModelCatalog).toHaveBeenCalledOnce();
   });
 
   test("retains a generation while auth store revisions are unchanged", async () => {
