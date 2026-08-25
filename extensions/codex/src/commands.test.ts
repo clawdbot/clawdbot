@@ -5849,7 +5849,11 @@ describe("codex command", () => {
             senderIsOwner: true,
           },
           { channelId: "test", pluginBinding: publicBinding },
-          { bindingStore: testCodexAppServerBindingStore, timeoutMs: 500 },
+          {
+            bindingStore: testCodexAppServerBindingStore,
+            timeoutMs: 500,
+            resolveSourceRunProgressState: async () => undefined,
+          },
         ),
       ).resolves.toEqual({
         handled: true,

@@ -566,6 +566,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ],
       })),
       runEmbeddedAgent: runEmbeddedAgentMock,
+      resolveRunProgressState: vi.fn<PluginRuntime["agent"]["resolveRunProgressState"]>(
+        async () => undefined,
+      ),
       resolveAgentTimeoutMs: vi.fn<PluginRuntime["agent"]["resolveAgentTimeoutMs"]>(() => 30_000),
       ensureAgentWorkspace: vi
         .fn<PluginRuntime["agent"]["ensureAgentWorkspace"]>()

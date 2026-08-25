@@ -10,6 +10,10 @@ export {
 export type { CliMockOutputRuntime, CliRuntimeCapture } from "../cli/test-runtime-capture.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 export {
+  beginReplyOperationLifecycleFixture,
+  resolveAgentRunProgressStateForTest,
+} from "./test-helpers/agent-run-lifecycle-fixture.js";
+export {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,

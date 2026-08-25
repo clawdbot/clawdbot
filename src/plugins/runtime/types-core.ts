@@ -351,6 +351,8 @@ export type PluginRuntimeCore = {
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
+    /** Resolve whether a session's admitted agent turn is queued or executing. */
+    resolveRunProgressState: (sessionId: string) => Promise<"queued" | "running" | undefined>;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,

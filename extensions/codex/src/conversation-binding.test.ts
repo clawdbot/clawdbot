@@ -10,6 +10,10 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  beginReplyOperationLifecycleFixture,
+  resolveAgentRunProgressStateForTest,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -300,11 +304,15 @@ async function createSameThreadClientMigrationFixture(
 function handleCodexConversationInboundClaim(
   event: Parameters<typeof handleCodexConversationInboundClaimImpl>[0],
   ctx: Parameters<typeof handleCodexConversationInboundClaimImpl>[1],
-  options: Omit<Parameters<typeof handleCodexConversationInboundClaimImpl>[2], "bindingStore"> = {},
+  options: Omit<
+    Parameters<typeof handleCodexConversationInboundClaimImpl>[2],
+    "bindingStore" | "resolveSourceRunProgressState"
+  > = {},
 ) {
   return handleCodexConversationInboundClaimImpl({ senderIsOwner: true, ...event }, ctx, {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
+    resolveSourceRunProgressState: resolveAgentRunProgressStateForTest,
   });
 }
 
@@ -664,6 +672,7 @@ describe("codex conversation binding", () => {
         ctx,
         {
           bindingStore,
+          resolveSourceRunProgressState: resolveAgentRunProgressStateForTest,
         },
       );
       await ownerCaptured;
@@ -2706,51 +2715,62 @@ describe("codex conversation binding", () => {
       source,
       start: { id: "start-source-transfer" },
     };
-
-    await expect(
-      handleCodexConversationInboundClaim(event, ctx, {
-        config: { session: { store: storePath } },
-        timeoutMs: 500,
-      }),
-    ).resolves.toEqual({ handled: true, reply: { text: "Bound reply" } });
-
-    expect(requests.map(({ method }) => method)).toEqual([
-      "thread/start",
-      "thread/inject_items",
-      "turn/start",
-    ]);
-    expect(requests[0]?.params).toMatchObject({
-      cwd: tempDir,
-      runtimeWorkspaceRoots: [tempDir],
-      sandbox: "workspace-write",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
-      developerInstructions: expect.stringContaining("bound to an OpenClaw conversation"),
-      config: { apps: { _default: { enabled: false } }, "features.apps": false },
+    const queuedReplyOperation = beginReplyOperationLifecycleFixture({
+      sessionKey: source.sessionKey,
+      sessionId: source.sessionId,
     });
-    expect(requests[2]?.params).toMatchObject({
-      cwd: tempDir,
-      runtimeWorkspaceRoots: [tempDir],
-      sandboxPolicy: { type: "workspaceWrite" },
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
-    });
-    expect(requests[0]?.params).not.toHaveProperty("dynamicTools");
-    expect(requests[1]?.params.items).toMatchObject([
-      { role: "user", content: [{ text: "Earlier question" }] },
-      { role: "assistant", content: [{ text: "Earlier answer" }] },
-    ]);
-    expect(releaseSource).toHaveBeenCalledExactlyOnceWith("thread-source");
-    await expect(testCodexAppServerBindingStore.read(sourceIdentity)).resolves.toBeUndefined();
-    await expect(consumeCodexAppServerLiveThread(client, "thread-bound")).resolves.toEqual(
-      expect.objectContaining({ release: expect.any(Function) }),
-    );
+    expect(resolveAgentRunProgressStateForTest(source.sessionId)).toBe("queued");
+
+    try {
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+          timeoutMs: 500,
+        }),
+      ).resolves.toEqual({ handled: true, reply: { text: "Bound reply" } });
+
+      expect(requests.map(({ method }) => method)).toEqual([
+        "thread/start",
+        "thread/inject_items",
+        "turn/start",
+      ]);
+      expect(requests[0]?.params).toMatchObject({
+        cwd: tempDir,
+        runtimeWorkspaceRoots: [tempDir],
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        developerInstructions: expect.stringContaining("bound to an OpenClaw conversation"),
+        config: { apps: { _default: { enabled: false } }, "features.apps": false },
+      });
+      expect(requests[2]?.params).toMatchObject({
+        cwd: tempDir,
+        runtimeWorkspaceRoots: [tempDir],
+        sandboxPolicy: { type: "workspaceWrite" },
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+      });
+      expect(requests[0]?.params).not.toHaveProperty("dynamicTools");
+      expect(requests[1]?.params.items).toMatchObject([
+        { role: "user", content: [{ text: "Earlier question" }] },
+        { role: "assistant", content: [{ text: "Earlier answer" }] },
+      ]);
+      expect(releaseSource).toHaveBeenCalledExactlyOnceWith("thread-source");
+      await expect(testCodexAppServerBindingStore.read(sourceIdentity)).resolves.toBeUndefined();
+      await expect(consumeCodexAppServerLiveThread(client, "thread-bound")).resolves.toEqual(
+        expect.objectContaining({ release: expect.any(Function) }),
+      );
+    } finally {
+      queuedReplyOperation.complete();
+    }
   });
 
   it.each([
-    { label: "a registered source run after its client was retired", exposeClient: false },
-    { label: "a live client whose source subscription is claimed", exposeClient: true },
-  ])("does not transfer $label into a bound conversation", async ({ exposeClient }) => {
+    { label: "a registered source run after its client was retired", kind: "embedded" },
+    { label: "a live client whose source subscription is claimed", kind: "live-client" },
+    { label: "a reply operation whose execution started", kind: "started-reply" },
+  ])("does not transfer $label into a bound conversation", async ({ kind }) => {
+    const exposeClient = kind === "live-client";
     const source = {
       agentId: "main",
       sessionId: "active-source-session",
@@ -2797,13 +2817,24 @@ describe("codex conversation binding", () => {
         release: vi.fn(),
       });
     }
+    const startedReplyOperation =
+      kind === "started-reply"
+        ? beginReplyOperationLifecycleFixture({
+            sessionKey: source.sessionKey,
+            sessionId: source.sessionId,
+          })
+        : undefined;
+    startedReplyOperation?.markExecutionStarted();
+    if (startedReplyOperation) {
+      expect(resolveAgentRunProgressStateForTest(source.sessionId)).toBe("running");
+    }
     const activeRun = {
       queueMessage: async () => undefined,
       isStreaming: () => true,
       isCompacting: () => false,
       abort: vi.fn(),
     };
-    if (!exposeClient) {
+    if (kind === "embedded") {
       setActiveEmbeddedRun(source.sessionId, activeRun, source.sessionKey);
     }
     const { event, ctx } = boundConversationClaim(path.join(tempDir, "active-source.jsonl"));
@@ -2834,7 +2865,8 @@ describe("codex conversation binding", () => {
         }),
       ).resolves.not.toHaveProperty("conversationSourceTransferComplete", true);
     } finally {
-      if (!exposeClient) {
+      startedReplyOperation?.complete();
+      if (kind === "embedded") {
         clearActiveEmbeddedRun(source.sessionId, activeRun, source.sessionKey);
       }
     }
