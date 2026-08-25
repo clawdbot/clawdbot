@@ -1,6 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -8,6 +7,7 @@ import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
@@ -196,21 +196,28 @@ export async function launchFallbackTaskScript(
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
-    const [executable, ...args] = command.programArguments;
-    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
-      cwd: command.workingDirectory || undefined,
-      detached: true,
-      env: { ...process.env, ...command.environment },
-      stdio: "ignore",
-      windowsHide: true,
+    const { child } = await spawnWithFallback({
+      argv: command.programArguments,
+      options: {
+        cwd: command.workingDirectory || undefined,
+        detached: true,
+        env: { ...process.env, ...command.environment },
+        stdio: "ignore",
+        windowsHide: true,
+      },
     });
     child.unref();
     return;
   }
-  const child = spawn(getWindowsCmdExePath(), ["/d", "/c", scriptPath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+  // Starting cmd.exe successfully does not establish that its batch script exists.
+  await fs.access(scriptPath);
+  const { child } = await spawnWithFallback({
+    argv: [getWindowsCmdExePath(), "/d", "/c", scriptPath],
+    options: {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    },
   });
   child.unref();
 }
