@@ -269,14 +269,18 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
 
           await controlUiProof.page.locator(".agent-chat__composer-combobox textarea").fill(PROMPT);
           await controlUiProof.page.getByRole("button", { name: "Send message" }).click();
+          const activeOperator = operator;
           await vi.waitFor(
             async () => {
               expect(launchId).toBeTruthy();
               expect(browserRunId).toBeTruthy();
-              const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
-                sessionKey: SESSION_KEY,
-                limit: 20,
-              });
+              const history = await activeOperator.request<{ messages?: unknown[] }>(
+                "chat.history",
+                {
+                  sessionKey: SESSION_KEY,
+                  limit: 20,
+                },
+              );
               expect(
                 history.messages?.some(
                   (message) =>
