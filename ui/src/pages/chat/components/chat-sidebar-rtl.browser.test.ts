@@ -72,9 +72,14 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       // The gap belongs between the box and its label. In RTL the label sits to
       // the left of the box, so a physical margin-right would push it out to
       // the far side of the row instead.
+      //
+      // Asserted as "the sheet's 0.4em landed on this physical side", not as
+      // "the other side is 0": the UA sheet gives a checkbox its own
+      // `margin: 3px 3px 3px 4px`, and the rule here overrides only the
+      // inline-end side, so the opposite side keeps that default.
       const checkbox = getComputedStyle(reader!.querySelector(".task-list-item-checkbox")!);
-      expect(Number.parseFloat(checkbox.marginLeft)).toBeGreaterThan(0);
-      expect(Number.parseFloat(checkbox.marginRight)).toBe(0);
+      const gap = Number.parseFloat(checkbox.fontSize) * 0.4;
+      expect(Number.parseFloat(checkbox.marginLeft)).toBeCloseTo(gap, 0);
     } finally {
       release();
     }
@@ -97,8 +102,8 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       expect(Number.parseFloat(list.paddingRight)).toBe(0);
 
       const checkbox = getComputedStyle(reader!.querySelector(".task-list-item-checkbox")!);
-      expect(Number.parseFloat(checkbox.marginRight)).toBeGreaterThan(0);
-      expect(Number.parseFloat(checkbox.marginLeft)).toBe(0);
+      const gap = Number.parseFloat(checkbox.fontSize) * 0.4;
+      expect(Number.parseFloat(checkbox.marginRight)).toBeCloseTo(gap, 0);
     } finally {
       release();
     }
