@@ -1,17 +1,16 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type {
   ConfigFileSnapshot,
   ConfigValidationIssue,
   OpenClawConfig,
 } from "../config/types.openclaw.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { createCompatibilityNotice, createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  buildPluginCompatibilityNoticesMock,
   buildPluginDiagnosticsReportMock,
-  buildPluginInspectReportMock,
   buildPluginRegistrySnapshotReportMock,
-  buildPluginSnapshotReportMock,
   inspectPluginRegistryMock,
   pluginCliConfigMock,
   loadPluginManifestRegistryMock,
@@ -21,12 +20,7 @@ import {
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
-  setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
-
-const workshopMocks = vi.hoisted(() => ({
-  detectToolPolicyDiagnostic: vi.fn(),
-}));
 
 const cleanDoctorMessage =
   "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
@@ -63,17 +57,13 @@ async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssu
   });
 }
 
-vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
-  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
-}));
-
 describe("plugins cli list", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
-    workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
-  it("shows plugin load errors and healthy descriptions in the default list", async () => {
+  it("distinguishes plugin load errors from disabled reasons across list formats", async () => {
+    const disabledReason = "workspace plugin (disabled by default)";
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       registrySource: "persisted",
@@ -91,7 +81,8 @@ describe("plugins cli list", () => {
           description: "Disabled plugin description",
           enabled: false,
           status: "disabled",
-          error: "workspace plugin (disabled by default)",
+          error: disabledReason,
+          activationReason: disabledReason,
         }),
       ],
       diagnostics: [],
@@ -103,6 +94,13 @@ describe("plugins cli list", () => {
     expect(output).toContain("missing plugin module");
     expect(output).toContain("Healthy plugin");
     expect(output).toContain("Disabled plugin description");
+
+    await runPluginsCommand(["plugins", "list", "--verbose"]);
+
+    const verboseOutput = pluginsCliRuntimeLogs.at(-1) ?? "";
+    expect(verboseOutput).toContain(`activation reason: ${disabledReason}`);
+    expect(verboseOutput).not.toContain(`error: ${disabledReason}`);
+    expect(verboseOutput).toContain("error: missing plugin module");
   });
 
   it.each([
@@ -232,6 +230,50 @@ describe("plugins cli list", () => {
     });
     expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
   });
+
+  it.each([
+    { severity: "info", code: "hook-only", healthy: true, args: [] },
+    { severity: "info", code: "hook-only", healthy: true, args: ["--json"] },
+    { severity: "warn", code: "removed-session-transcript-file-api", healthy: false, args: [] },
+    {
+      severity: "warn",
+      code: "removed-session-transcript-file-api",
+      healthy: false,
+      args: ["--json"],
+    },
+  ] as const)(
+    "keeps $severity compatibility notices visible while reporting healthy=$healthy ($args)",
+    async ({ code, healthy, args }) => {
+      const notice = createCompatibilityNotice({ pluginId: "compatible-plugin", code });
+      buildPluginDiagnosticsReportMock.mockReturnValue({
+        plugins: [createPluginRecord({ id: "compatible-plugin" })],
+        diagnostics: [],
+      });
+      buildPluginCompatibilityNoticesMock.mockReturnValue([notice]);
+
+      await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      if (args.length > 0) {
+        expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
+          ok: healthy,
+          compatibility: [notice],
+          pluginErrors: [],
+          diagnostics: [],
+          configurationWarnings: [],
+        });
+        return;
+      }
+
+      const output = pluginsCliRuntimeLogs.join("\n");
+      expect(output).toContain(notice.message);
+      expect(output).toContain(`[${notice.severity}]`);
+      if (healthy) {
+        expect(output).toContain(cleanDoctorMessage);
+      } else {
+        expect(output).not.toContain(cleanDoctorMessage);
+      }
+    },
+  );
 
   it.each([
     { format: "human", args: [] },
@@ -874,173 +916,5 @@ describe("plugins cli list", () => {
     });
     expect(inspectPluginRegistryMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
-  });
-
-  it("keeps inspect on the static snapshot by default", async () => {
-    setInstalledPluginIndexInstallRecords({
-      "openclaw-mem0": {
-        source: "clawhub",
-        spec: "clawhub:openclaw-mem0",
-        installPath: "/plugins/openclaw-mem0",
-        version: "2026.5.1",
-        clawhubPackage: "openclaw-mem0",
-        clawhubChannel: "official",
-        artifactKind: "npm-pack",
-        artifactFormat: "tgz",
-        npmIntegrity: "sha512-clawpack",
-        npmShasum: "1".repeat(40),
-        npmTarballName: "openclaw-mem0-2026.5.1.tgz",
-        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        clawpackSize: 4096,
-      },
-    });
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
-      diagnostics: [],
-    });
-    buildPluginInspectReportMock.mockReturnValue({
-      workspaceDir: "/workspace",
-      plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
-      shape: "hook-only",
-      capabilityMode: "plain",
-      capabilityCount: 1,
-      capabilities: [],
-      typedHooks: [{ name: "agent_end" }],
-      customHooks: [],
-      tools: [],
-      commands: [],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServices: [],
-      mcpServers: [
-        { name: "local", hasStdioTransport: true },
-        { name: "remote", hasStdioTransport: false },
-        { name: "broken", hasStdioTransport: false, unsupported: true },
-      ],
-      lspServers: [],
-      httpRouteCount: 0,
-      bundleCapabilities: [],
-      diagnostics: [],
-      policy: {
-        allowConversationAccess: true,
-        allowedModels: [],
-        hasAllowedModelsConfig: false,
-      },
-      usesLegacyBeforeAgentStart: false,
-      compatibility: [],
-    });
-
-    await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
-
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-      "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    );
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack spec: 1");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("remote");
-    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
-  });
-
-  it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [
-        createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }),
-        createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
-      ],
-      diagnostics: [],
-    });
-    buildPluginInspectReportMock.mockReturnValue({
-      workspaceDir: "/workspace",
-      plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
-      shape: "hook-only",
-      capabilityMode: "plain",
-      capabilityCount: 1,
-      capabilities: [],
-      typedHooks: [],
-      customHooks: [],
-      tools: [],
-      commands: [],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServices: [],
-      mcpServers: [],
-      lspServers: [],
-      httpRouteCount: 0,
-      bundleCapabilities: [],
-      diagnostics: [],
-      policy: {
-        allowedModels: [],
-        hasAllowedModelsConfig: false,
-      },
-      usesLegacyBeforeAgentStart: false,
-      compatibility: [],
-    });
-
-    for (const selector of ["openclaw-mem0", "Mem0"]) {
-      await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);
-      expect(buildPluginDiagnosticsReportMock).toHaveBeenLastCalledWith({
-        config: {},
-        onlyPluginIds: ["openclaw-mem0"],
-      });
-    }
-  });
-
-  it("does not runtime-load plugins when inspect target is missing", async () => {
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-
-    await expect(runPluginsCommand(["plugins", "inspect", "missing-plugin"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(buildPluginSnapshotReportMock).toHaveBeenCalledWith({ config: {} });
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
-  });
-
-  it("explains a policy-hidden built-in Skill Workshop at the legacy inspect surface", async () => {
-    const config: OpenClawConfig = {
-      tools: { profile: "messaging" },
-    };
-    pluginCliConfigMock.mockReturnValue(config);
-    workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
-      agentId: "main",
-      source: "tools.profile",
-      detail: 'tools.profile: "messaging" does not include "skill_workshop".',
-      fix: 'Add tools.alsoAllow: ["skill_workshop"].',
-      message:
-        'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
-    });
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-
-    await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors.at(-1)).toContain(
-      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
-    );
-    expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
-      config,
-      workshopEnabled: true,
-    });
-    expect(runtimeErrors.at(-1)).toContain(
-      'tools.profile: "messaging" does not include "skill_workshop".',
-    );
-    expect(runtimeErrors.at(-1)).toContain('Add tools.alsoAllow: ["skill_workshop"].');
   });
 });

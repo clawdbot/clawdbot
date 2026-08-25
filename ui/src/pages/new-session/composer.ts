@@ -196,13 +196,18 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-export function renderDraftError(message: string) {
+export function renderDraftError(message: string, action?: { label: string; onClick: () => void }) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
       <span class="callout__content new-session-page__alert-message"
         >${formatUiError(message)}</span
       >
+      ${action
+        ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
+            ${action.label}
+          </button>`
+        : nothing}
     </div>
   `;
 }

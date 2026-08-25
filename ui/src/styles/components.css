@@ -24,18 +24,21 @@
 
 openclaw-session-owner-chip {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .session-owner-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
   border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: hsl(var(--owner-hue) 58% 26%);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
   color: white;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   transition:
@@ -46,18 +49,6 @@ openclaw-session-owner-chip {
 .session-owner-chip--away {
   filter: grayscale(0.8);
   opacity: 0.45;
-}
-
-.session-owner-chip--row {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-}
-
-.session-owner-chip--header {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
 }
 
 .session-owner-chip .viewer-avatar {
@@ -78,7 +69,6 @@ openclaw-session-owner-chip {
 
 .session-owner-stack__back {
   position: absolute;
-  z-index: 0;
   left: 0;
   display: inline-flex;
 }

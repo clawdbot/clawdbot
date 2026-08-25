@@ -545,8 +545,6 @@ export async function runReplyAgent(
       activeSessionEntry,
       activeSessionStore,
       storePath,
-      messageThreadId:
-        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
       followupRun,
       onActiveSessionEntry: (nextEntry) => {
         activeSessionEntry = nextEntry;

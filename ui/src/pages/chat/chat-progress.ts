@@ -159,14 +159,26 @@ export function buildResetDividerItem(
   };
 }
 
+function queuedSendStarted(item: ChatQueueItem): boolean {
+  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+}
+
+export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
+  return (
+    queuedSendStarted(item) &&
+    !item.localCommandName &&
+    (item.sendState === "failed" || (item.sendState === "waiting-idle" && Boolean(item.sendError)))
+  );
+}
+
 export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
-  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
   return (
-    sendStarted &&
+    queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect")
+      item.sendState === "waiting-reconnect" ||
+      isQueuedSendInlineState(item))
   );
 }
 

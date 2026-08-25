@@ -4,6 +4,7 @@ import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scop
  * model refs and cache-retention params based on configured auth mode.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -32,6 +33,9 @@ function resolveAnthropicDefaultAuthMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): "api_key" | "oauth" | null {
+  if (usesRetiredClaudeCliProviderEntry(config)) {
+    return "oauth";
+  }
   const profiles = config.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
     ([, profile]) =>
@@ -83,6 +87,13 @@ function resolveAnthropicDefaultAuthMode(
     return "api_key";
   }
   return null;
+}
+
+function usesRetiredClaudeCliProviderEntry(config: OpenClawConfig): boolean {
+  return Object.entries(config.models?.providers ?? {}).some(
+    ([provider, entry]) =>
+      normalizeProviderId(provider) === "anthropic" && entry.apiKey === CLAUDE_CLI_PROFILE_ID,
+  );
 }
 
 function resolveModelPrimaryValue(
@@ -159,6 +170,9 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
 }
 
 function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
+  if (usesRetiredClaudeCliProviderEntry(config)) {
+    return true;
+  }
   const profiles = config.auth?.profiles ?? {};
   const orderedProfileIds = [
     ...(config.auth?.order?.anthropic ?? []),

@@ -6,9 +6,14 @@ import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 
-function runBuiltCli(tempHome: string, args: string[], envOverrides: NodeJS.ProcessEnv = {}) {
+function runBuiltCli(
+  tempHome: string,
+  args: string[],
+  envOverrides: NodeJS.ProcessEnv = {},
+  options: { inheritEnvironment?: boolean } = {},
+) {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...(options.inheritEnvironment === false ? { PATH: process.env.PATH } : process.env),
     HOME: tempHome,
     USERPROFILE: tempHome,
     OPENCLAW_TEST_FAST: "1",
@@ -97,7 +102,29 @@ describe("cli json stdout contract", () => {
       commander: true,
     },
     {
-      name: "dual-TTY JSON",
+      name: "dual-TTY implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY implicit JSON command sibling",
+      args: ["cron", "runs", "--id", "job-1", "--limit", "invalid"],
+      message: "Invalid --limit (must be a positive integer).",
+      tty: true,
+    },
+    {
+      name: "dual-TTY raw-output command sibling",
+      args: ["cron", "scratch", "job-1", "--set", "updated", "--unset"],
+      message: "choose only one of --set, --file, or --unset",
+      tty: true,
+    },
+    {
+      name: "dual-TTY explicit JSON",
       args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
       tty: true,
     },
@@ -106,6 +133,13 @@ describe("cli json stdout contract", () => {
       args: ["cron", "list", "--agent", ""],
       message: "--agent must not be blank",
       human: true,
+    },
+    {
+      name: "dual-TTY human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+      tty: true,
     },
   ])("renders cron edit failures through the shared owner for $name", async (testCase) => {
     await withTempHome(
@@ -139,10 +173,14 @@ describe("cli json stdout contract", () => {
             : (testCase.message ?? "Choose --enable or --disable, not both");
 
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
         if ("human" in testCase) {
-          expect(result.stdout).toBe("");
+          if ("tty" in testCase) {
+            expect(result.stdout).toContain("OpenClaw");
+          } else {
+            expect(result.stdout).toBe("");
+          }
         } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
             error: { type: "cli_error", message },
@@ -155,7 +193,7 @@ describe("cli json stdout contract", () => {
           expect(result.stderr).not.toContain(gatewayError);
           await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        if ("tty" in testCase) {
+        if ("tty" in testCase && !("human" in testCase)) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
         await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -212,6 +250,33 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
     {
+      name: "routed Gateway health config failure in JSON mode",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+    },
+    {
+      name: "Gateway health config failure in human mode",
+      args: ["gateway", "health", "--port", "29793"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      human: true,
+    },
+    {
+      name: "Gateway health config failure through forced Commander",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      commander: true,
+    },
+    {
+      name: "routed Gateway health config failure with dual TTYs",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      tty: true,
+    },
+    {
       name: "specialized explicit Gateway authentication failure",
       args: ["gateway", "call", "system-presence", "--url", "ws://127.0.0.1:29793", "--json"],
       specializedAuth: true,
@@ -226,6 +291,18 @@ describe("cli json stdout contract", () => {
           [
             'import net from "node:net";',
             `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("configReadFailure" in testCase
+              ? [
+                  'import fs from "node:fs";',
+                  "const originalExistsSync = fs.existsSync;",
+                  "fs.existsSync = function (target, ...args) {",
+                  '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
+                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  "  }",
+                  "  return originalExistsSync.call(this, target, ...args);",
+                  "};",
+                ]
+              : []),
             ...("tty" in testCase
               ? [
                   'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
@@ -269,7 +346,11 @@ describe("cli json stdout contract", () => {
             ok: false,
             error: { type: "cli_error", message: testCase.message },
           });
-          expect(result.stderr).not.toContain(testCase.message);
+          if ("configReadFailure" in testCase && !("commander" in testCase)) {
+            expect(result.stderr).toContain(testCase.message);
+          } else {
+            expect(result.stderr).not.toContain(testCase.message);
+          }
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
@@ -2216,6 +2297,98 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).toContain("\u001B[?25h");
       },
       { prefix: "openclaw-plugins-json-tty-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "a missing local marketplace", source: "local" },
+    {
+      name: "a missing local marketplace through forced Commander",
+      source: "local",
+      commander: true,
+    },
+    { name: "a missing local marketplace with dual TTYs", source: "local", tty: true },
+    { name: "an unavailable Git marketplace", source: "git" },
+    { name: "an unavailable Git marketplace with dual TTYs", source: "git", tty: true },
+    { name: "a missing local marketplace in human mode", source: "local", human: true },
+    { name: "an unavailable Git marketplace in human mode", source: "git", human: true },
+  ])("keeps $name failures on the canonical marketplace output boundary", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const source =
+          testCase.source === "git"
+            ? "ssh://marketplace.invalid/openclaw/unavailable.git"
+            : path.join(tempHome, "missing-marketplace");
+        const ttyPreload = Buffer.from(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        ).toString("base64");
+
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+        const result = runBuiltCli(
+          tempHome,
+          ["plugins", "marketplace", "list", source, ...("human" in testCase ? [] : ["--json"])],
+          {
+            GIT_SSH_COMMAND: `${JSON.stringify(process.execPath)} -e "process.exit(1)"`,
+            GIT_TERMINAL_PROMPT: "0",
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase
+              ? { NODE_OPTIONS: `--import=data:text/javascript;base64,${ttyPreload}` }
+              : {}),
+          },
+          { inheritEnvironment: false },
+        );
+        const expectedMessage =
+          testCase.source === "git"
+            ? `failed to clone marketplace source ${source}:`
+            : `unsupported marketplace source: ${source}`;
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(expectedMessage);
+
+        if ("human" in testCase) {
+          if (testCase.source === "git") {
+            expect(result.stdout).toContain(`Cloning marketplace source ${source}...`);
+          }
+        } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(result.stdout).not.toContain("Cloning marketplace source");
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message:
+                testCase.source === "git"
+                  ? expect.stringContaining(expectedMessage)
+                  : expectedMessage,
+            },
+          });
+          if ("tty" in testCase) {
+            expect(result.stderr).toContain("\u001B[?25h");
+          }
+        }
+
+        if (testCase.source === "git") {
+          expect(result.stderr).toContain("fatal: Could not read from remote repository.");
+          const clonePath = /Cloning into '([^']+)'\.\.\./u.exec(result.stderr)?.[1];
+          expect(clonePath).toBeDefined();
+          await expect(fs.stat(path.dirname(clonePath as string))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+
+        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(path.join(tempHome, ".claude"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      { prefix: "openclaw-marketplace-json-failure-e2e-" },
     );
   });
 

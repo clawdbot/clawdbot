@@ -406,6 +406,8 @@ describe("sessions.dispatch", () => {
       targetWithEntry({
         sessionId,
         agentRuntimeOverride: "codex",
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );
@@ -455,6 +457,8 @@ describe("sessions.dispatch", () => {
       targetWithEntry({
         sessionId,
         agentRuntimeOverride: "codex",
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );

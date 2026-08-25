@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -22,6 +21,7 @@ import {
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import {
   normalizeWorkerMachineOptions,
+  requireInheritedWorkerProfileAuthorization,
   requireProviderProvisionTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
@@ -648,11 +648,23 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       let provider: WorkerProvider;
       let providerId: string;
       let profileSnapshot: WorkerProfile;
+      const profiles = options.getConfig().cloudWorkers?.profiles;
+      const configuredProfile =
+        profiles && Object.hasOwn(profiles, normalizedProfileId)
+          ? profiles[normalizedProfileId]
+          : undefined;
       if (inherited) {
         providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
         if (providerId !== inherited.providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
         }
+        requireInheritedWorkerProfileAuthorization(
+          normalizedProfileId,
+          providerId,
+          inherited.profileSnapshot.settings,
+          configuredProfile?.provider,
+          serviceError,
+        );
         provider = providerFor(providerId);
         const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
         if (resolvedProviderId !== providerId) {
@@ -663,19 +675,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           ...provisionSnapshot,
         });
       } else {
-        const profiles = options.getConfig().cloudWorkers?.profiles;
-        if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
+        if (!configuredProfile) {
           throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
         }
-        const profile = expectDefined(
-          profiles[normalizedProfileId],
-          "profiles entry at normalized profile id",
-        );
-        provider = providerFor(profile.provider);
+        provider = providerFor(configuredProfile.provider);
         providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
-        const settings = requireWorkerProfile(profile.settings ?? {});
+        const settings = requireWorkerProfile(configuredProfile.settings ?? {});
         profileSnapshot = requireWorkerProfile({
-          install: profile.install ?? "bundle",
+          install: configuredProfile.install ?? "bundle",
           settings,
           ...provisionSnapshot,
         });

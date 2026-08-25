@@ -45,6 +45,7 @@ describe("memory-wiki cli metadata entry", () => {
       name: "Memory Wiki",
       registerCli,
     });
+    api.runtime = {} as typeof api.runtime;
     const program = new Command();
     const appConfig = {
       plugins: {

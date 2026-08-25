@@ -12,14 +12,7 @@ export const EXTERNAL_SERVICE_REPAIR_NOTE =
 export function resolveServiceRepairPolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): ServiceRepairPolicy {
-  const value = env[SERVICE_REPAIR_POLICY_ENV]?.trim().toLowerCase();
-  switch (value) {
-    case "auto":
-    case "external":
-      return value;
-    default:
-      return "auto";
-  }
+  return env[SERVICE_REPAIR_POLICY_ENV]?.trim().toLowerCase() === "external" ? "external" : "auto";
 }
 
 /** Returns true when service repairs should only emit external-supervisor guidance. */
@@ -35,9 +28,5 @@ export async function confirmDoctorServiceRepair(
   params: Parameters<DoctorPrompter["confirmRuntimeRepair"]>[0],
   policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
 ): Promise<boolean> {
-  if (isServiceRepairExternallyManaged(policy)) {
-    return false;
-  }
-
-  return await prompter.confirmRuntimeRepair(params);
+  return !isServiceRepairExternallyManaged(policy) && (await prompter.confirmRuntimeRepair(params));
 }

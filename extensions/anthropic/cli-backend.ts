@@ -1,16 +1,12 @@
 /**
  * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, credential transport, and watchdog defaults.
+ * MCP bundling, session handling, and credential transport.
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
-} from "openclaw/plugin-sdk/cli-backend";
-import {
-  CLI_FRESH_WATCHDOG_DEFAULTS,
-  CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
 import { parseClaudeCliJsonlEvent } from "./cli-output.js";
@@ -97,10 +93,9 @@ function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
 ): ClaudeCliPreparedExecution | undefined {
   // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
-  // OpenClaw-owned). Imported native `claude` logins are never forwarded —
-  // core runs those as identity-verified passthrough — so an expired token
-  // reaching this point is a real fault worth failing loudly, not refreshable
-  // state this plugin could repair.
+  // OpenClaw-owned). Native `claude` logins are never forwarded; the current
+  // Claude process reads its own config directory. An expired token here is
+  // therefore OpenClaw-managed state that must fail loudly.
   if (credential?.type === "oauth" && "access" in credential) {
     const expires = "expires" in credential ? credential.expires : undefined;
     if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
@@ -229,12 +224,6 @@ export function buildAnthropicCliBackend(
       systemPromptMode: "append",
       systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
-      reliability: {
-        watchdog: {
-          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-        },
-      },
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,

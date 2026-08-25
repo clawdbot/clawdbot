@@ -3889,6 +3889,37 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.gatewayStatusText != "Background idle")
     }
 
+    @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
+        let firstURL = try #require(URL(string: "ws://127.0.0.1:1"))
+        let secondURL = try #require(URL(string: "ws://127.0.0.1:2"))
+        let (config, _) = try makeGatewayPair(firstURL: firstURL, secondURL: secondURL)
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer {
+            appModel.disconnectGateway()
+            appModel.setScenePhase(.active)
+        }
+        appModel.activeGatewayConnectConfig = config
+        appModel.gatewayConnected = true
+        appModel.gatewayStatusText = "Connected"
+        appModel.setOperatorConnected(true)
+
+        appModel.setScenePhase(.background)
+        try await Task.sleep(for: .milliseconds(3100))
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<80 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(appModel.gatewayConnected)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayStatusText == "Connected")
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+        #expect(!appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()

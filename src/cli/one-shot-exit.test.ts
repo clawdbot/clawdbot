@@ -1,10 +1,26 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { defaultRuntime } from "../runtime.js";
 import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./one-shot-exit.js";
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
+
+function spyOnExit(onExit?: (code: number) => void) {
+  const exited = createDeferred();
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+    onExit?.(code);
+    exited.resolve();
+  });
+  return {
+    exit,
+    waitForExit: async (code: number) => {
+      await withTestTimeout(exited.promise, 1_000, "one-shot CLI did not exit");
+      expect(exit).toHaveBeenCalledWith(code);
+    },
+  };
+}
 
 describe("one-shot CLI exit", () => {
   afterEach(() => {
@@ -21,7 +37,7 @@ describe("one-shot CLI exit", () => {
     "exits after macOS system CA command completion from %s",
     async (_label, env, execArgv) => {
       const previousExitCode = process.exitCode;
-      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      const { waitForExit } = spyOnExit();
       try {
         process.exitCode = 3;
         await runCliWithExitFinalization({
@@ -32,7 +48,7 @@ describe("one-shot CLI exit", () => {
           platform: "darwin",
           markers: {},
         });
-        await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(3));
+        await waitForExit(3);
       } finally {
         process.exitCode = previousExitCode;
       }
@@ -61,7 +77,7 @@ describe("one-shot CLI exit", () => {
   });
 
   it("does not finalize a long-lived command until its run promise settles", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
     let finishRun: (() => void) | undefined;
     const runPromise = runCliWithExitFinalization({
       run: async () =>
@@ -82,13 +98,13 @@ describe("one-shot CLI exit", () => {
 
     finishRun?.();
     await runPromise;
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    await waitForExit(0);
   });
 
   it("reports failures and replaces a pending successful exit before draining", async () => {
     const previousExitCode = process.exitCode;
     const order: string[] = [];
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+    const { waitForExit } = spyOnExit((code) => {
       order.push(`exit:${String(code)}`);
     });
 
@@ -112,7 +128,7 @@ describe("one-shot CLI exit", () => {
         markers: {},
       });
 
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(6));
+      await waitForExit(6);
       expect(order).toEqual(["reported", "exit:6"]);
     } finally {
       process.exitCode = previousExitCode;
@@ -127,7 +143,7 @@ describe("one-shot CLI exit", () => {
     "preserves the final process outcome for $name",
     async ({ processExitCode, expectedExitCode }) => {
       const previousExitCode = process.exitCode;
-      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      const { waitForExit } = spyOnExit();
 
       try {
         process.exitCode = undefined;
@@ -143,7 +159,7 @@ describe("one-shot CLI exit", () => {
           markers: {},
         });
 
-        await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(expectedExitCode));
+        await waitForExit(expectedExitCode);
       } finally {
         process.exitCode = previousExitCode;
       }
@@ -152,7 +168,7 @@ describe("one-shot CLI exit", () => {
 
   it.each([0, 7])("preserves an explicit exit override of %i", async (requestedExitCode) => {
     const previousExitCode = process.exitCode;
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { waitForExit } = spyOnExit();
 
     try {
       process.exitCode = 9;
@@ -166,7 +182,7 @@ describe("one-shot CLI exit", () => {
         markers: {},
       });
 
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(requestedExitCode));
+      await waitForExit(requestedExitCode);
     } finally {
       process.exitCode = previousExitCode;
     }
@@ -174,7 +190,7 @@ describe("one-shot CLI exit", () => {
 
   it("normalizes a Node integer-string process exit code", async () => {
     const previousExitCode = process.exitCode;
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { waitForExit } = spyOnExit();
 
     try {
       process.exitCode = "9";
@@ -186,14 +202,14 @@ describe("one-shot CLI exit", () => {
         platform: "darwin",
         markers: {},
       });
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(9));
+      await waitForExit(9);
     } finally {
       process.exitCode = previousExitCode;
     }
   });
 
   it("preserves a command-specific exit code when system CA completion also requests exit", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { waitForExit } = spyOnExit();
 
     requestExitAfterOneShotOutput(defaultRuntime, 7);
     await runCliWithExitFinalization({
@@ -205,11 +221,11 @@ describe("one-shot CLI exit", () => {
       markers: {},
     });
 
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(7));
+    await waitForExit(7);
   });
 
   it("defers a requested exit until the outer finalizer", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
 
     expect(requestExitAfterOneShotOutput(defaultRuntime, 2)).toBe(true);
     await new Promise<void>((resolve) => {
@@ -225,7 +241,7 @@ describe("one-shot CLI exit", () => {
       platform: "linux",
       markers: {},
     });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(2));
+    await waitForExit(2);
   });
 
   it("does not request exits for embedded custom runtimes", async () => {
@@ -249,7 +265,7 @@ describe("one-shot CLI exit", () => {
   });
 
   it("suppresses exits inside Vitest workers but not spawned CLI children", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
     const inheritedTestEnv = { VITEST: "1", VITEST_WORKER_ID: "1" } as NodeJS.ProcessEnv;
 
     requestExitAfterOneShotOutput(defaultRuntime);
@@ -272,7 +288,7 @@ describe("one-shot CLI exit", () => {
       platform: "linux",
       markers: {},
     });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    await waitForExit(0);
   });
 
   it("waits for stream callbacks even when writableLength is zero", async () => {

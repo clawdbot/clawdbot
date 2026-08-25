@@ -2508,6 +2508,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   text-align: left;
 }
 
+.row.session-menu__label {
+  gap: 8px;
+}
+
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
    slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
    that margin as the icon column instead of stacking into a ~17px gutter. */

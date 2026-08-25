@@ -1,6 +1,20 @@
+import type { ClawDiagnostic } from "../claws/types.js";
 import type { ClawUpdatePlan } from "../claws/update-plan.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+export function formatClawDiagnostics(diagnostics: readonly ClawDiagnostic[]): string {
+  return diagnostics
+    .map(
+      (diagnostic) =>
+        `${diagnostic.level.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
+    )
+    .join("\n");
+}
+
+export function logClawExperimentalWarning(runtime: RuntimeEnv): void {
+  runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
+}
 
 export function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agentId}`);
@@ -32,13 +46,6 @@ export function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeE
     }
   }
   if (plan.blockers.length > 0) {
-    runtime.error(
-      plan.blockers
-        .map(
-          (diagnostic) =>
-            `${diagnostic.level.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
-        )
-        .join("\n"),
-    );
+    runtime.error(formatClawDiagnostics(plan.blockers));
   }
 }

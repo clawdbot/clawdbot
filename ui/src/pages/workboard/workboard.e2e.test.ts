@@ -128,6 +128,22 @@ async function chooseWorkboardSelectFieldOption(
   await waitForWorkboardSelectValue(control, optionValue ?? "");
 }
 
+async function expectWorkboardSelectTextFits(control: Locator): Promise<void> {
+  await control.click();
+  await expect.poll(() => control.getAttribute("open")).not.toBeNull();
+  const overflow = await control.evaluate((select) => {
+    const trigger = select.shadowRoot?.querySelector<HTMLElement>('[part="display-input"]');
+    const labels = [...select.querySelectorAll<HTMLElement>(".picker-select__label")];
+    return {
+      options: labels.map((label) => label.scrollWidth - label.clientWidth),
+      trigger: trigger ? trigger.scrollWidth - trigger.clientWidth : Number.POSITIVE_INFINITY,
+    };
+  });
+  expect(overflow.trigger).toBeLessThanOrEqual(1);
+  expect(overflow.options.every((value) => value <= 1)).toBe(true);
+  await control.press("Escape");
+}
+
 async function setWorkboardDraftField(
   scope: Page | Locator,
   label: string,
@@ -271,21 +287,18 @@ function cardsListResponse(
 }
 
 function statusColumn(page: Page, status: string) {
-  return page
-    .locator(".workboard-column")
-    .filter({
-      has: page.locator(".workboard-column__header h2", {
-        hasText: new RegExp(`^${status}$`, "u"),
-      }),
-    })
-    .first();
+  const statusClass = status.trim().toLowerCase().replaceAll(/\s+/gu, "-");
+  return page.locator(`.workboard-column--${statusClass}`).first();
 }
 
 function cardInColumn(page: Page, status: string, title: string) {
   return statusColumn(page, status).locator(".workboard-card", { hasText: title }).first();
 }
 
-async function newRecordedPage(label: string): Promise<RecordedPage> {
+async function newRecordedPage(
+  label: string,
+  options: { hasTouch?: boolean } = {},
+): Promise<RecordedPage> {
   await mkdir(artifactDir, { recursive: true });
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   await rm(rawVideoDir, { force: true, recursive: true });
@@ -294,6 +307,7 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   let page: Page | undefined;
   try {
     context = await suite.browser.newContext({
+      hasTouch: options.hasTouch,
       locale: "en-US",
       recordVideo: {
         dir: rawVideoDir,
@@ -566,9 +580,7 @@ suite.define(() => {
         .not.toContain("workboard-card--dragging");
 
       const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
-      await dragSource.dragTo(
-        statusColumn(writable.page, "Running").locator(".workboard-column__cards"),
-      );
+      await dragSource.dragTo(statusColumn(writable.page, "Running"));
       const moveRequest = await waitForNextRequest(
         writableGateway,
         "workboard.cards.move",
@@ -789,6 +801,179 @@ suite.define(() => {
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-overflow");
     }
+  });
+
+  it("collapses empty stages into rails without squeezing active columns", async () => {
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const reviewCard = card({
+      id: "review-card",
+      status: "review",
+      title: "Review the completed implementation",
+    });
+    const doneCard = card({
+      id: "done-card",
+      status: "done",
+      title: "Previously completed work",
+    });
+    const recorded = await newRecordedPage("workboard-collapsed-columns");
+    try {
+      const gateway = await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([reviewCard, doneCard]),
+          "workboard.cards.move": { card: { ...reviewCard, status: "ready" } },
+        },
+      });
+      await recorded.page.setViewportSize({ height: 760, width: 1200 });
+      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      await recorded.page.locator(".workboard-column--review .workboard-card").waitFor();
+
+      const collapsedColumns = recorded.page.locator(".workboard-column--collapsed");
+      await expect.poll(() => collapsedColumns.count()).toBe(0);
+      const emptyColumns = recorded.page.locator(".workboard-select--empty-columns");
+      await expectWorkboardSelectTextFits(emptyColumns);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Hide empty", emptyColumns);
+      await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(2);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Show all", emptyColumns);
+      await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(9);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Collapse empty", emptyColumns);
+      await expect.poll(() => collapsedColumns.count()).toBe(7);
+      const collapsedWidth = await recorded.page
+        .locator(".workboard-column--ready")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      const reviewWidth = await recorded.page
+        .locator(".workboard-column--review")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      expect(collapsedWidth).toBeGreaterThanOrEqual(44);
+      expect(collapsedWidth).toBeLessThanOrEqual(52);
+      expect(reviewWidth).toBeGreaterThanOrEqual(262);
+
+      const readyRail = recorded.page.locator(".workboard-column--ready .workboard-column__rail");
+      const collapsedRailStyle = await readyRail.evaluate((rail) => ({
+        boxShadow: getComputedStyle(rail).boxShadow,
+        hasExpandIcons: rail.querySelectorAll('[class*="direction-icon--expand-"]').length === 2,
+      }));
+      expect(collapsedRailStyle.boxShadow).not.toBe("none");
+      expect(collapsedRailStyle.hasExpandIcons).toBe(true);
+
+      const reviewHeader = recorded.page.locator(
+        ".workboard-column--review .workboard-column__header",
+      );
+      const collapseButton = reviewHeader.getByRole("button", { name: "Collapse Review column" });
+      expect(await collapseButton.evaluate((button) => getComputedStyle(button).opacity)).toBe("0");
+      expect(await collapseButton.locator('[class*="direction-icon--collapse-"]').count()).toBe(2);
+      await collapseButton.focus();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+      await collapseButton.blur();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("0");
+      await reviewHeader.hover();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+
+      await recorded.page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedMotionTransitions = await recorded.page.evaluate(() => ({
+        collapse: getComputedStyle(
+          document.querySelector(".workboard-column__collapse") as HTMLElement,
+        ).transitionDuration,
+        rail: getComputedStyle(
+          document.querySelector(".workboard-column__rail-icon") as HTMLElement,
+        ).transitionDuration,
+      }));
+      expect(reducedMotionTransitions).toEqual({ collapse: "0s", rail: "0s" });
+      await recorded.page.emulateMedia({ reducedMotion: "no-preference" });
+
+      await captureScreenshot(recorded.page, artifacts, "10-collapsed-columns-desktop");
+
+      await recorded.page.getByRole("button", { name: "Expand Ready column" }).click();
+      await expect
+        .poll(() => recorded.page.locator(".workboard-column--ready").getAttribute("class"))
+        .not.toContain("workboard-column--collapsed");
+      const expandedWidth = await recorded.page
+        .locator(".workboard-column--ready")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      expect(expandedWidth).toBeGreaterThanOrEqual(262);
+      await recorded.page.getByRole("button", { name: "Collapse Ready column" }).click();
+
+      const viewPreset = recorded.page.locator(".workboard-select--toolbar").first();
+      await chooseWorkboardSelectFieldOption(viewPreset, "Review", viewPreset);
+      const singleColumnBoard = recorded.page.locator(
+        ".workboard-board--page.workboard-board--single-column",
+      );
+      const singleColumnGeometry = await singleColumnBoard.evaluate((board) => {
+        const column = board.querySelector(".workboard-column") as HTMLElement;
+        return {
+          boardWidth: board.getBoundingClientRect().width,
+          columnWidth: column.getBoundingClientRect().width,
+        };
+      });
+      expect(singleColumnGeometry.columnWidth).toBeGreaterThanOrEqual(
+        singleColumnGeometry.boardWidth * 0.45,
+      );
+      expect(singleColumnGeometry.columnWidth).toBeLessThanOrEqual(680);
+      await chooseWorkboardSelectFieldOption(viewPreset, "All cards", viewPreset);
+
+      const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
+      await recorded.page
+        .locator(".workboard-column--review .workboard-card")
+        .dragTo(recorded.page.locator(".workboard-column--ready .workboard-column__rail"));
+      const moveRequest = await waitForNextRequest(gateway, "workboard.cards.move", moveCount);
+      expect(requestParams(moveRequest)).toMatchObject({ id: reviewCard.id, status: "ready" });
+
+      await recorded.page.setViewportSize({ height: 760, width: 700 });
+      await expectWorkboardSelectTextFits(emptyColumns);
+      const backlogRail = recorded.page.locator(".workboard-column--backlog");
+      const mobileLayout = await backlogRail.evaluate((column) => ({
+        railWritingMode: getComputedStyle(
+          column.querySelector(".workboard-column__rail") as HTMLElement,
+        ).writingMode,
+        width: column.getBoundingClientRect().width,
+      }));
+      expect(mobileLayout.railWritingMode).toBe("horizontal-tb");
+      expect(mobileLayout.width).toBeGreaterThan(250);
+      await captureScreenshot(recorded.page, artifacts, "11-collapsed-columns-mobile");
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-collapsed-columns");
+    }
+  });
+
+  it("keeps touch collapse controls visible and at least 44px", async () => {
+    await suite.withPage({ hasTouch: true }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([
+            card({ id: "touch-review-card", status: "review", title: "Review on touch" }),
+          ]),
+        },
+      });
+      await page.setViewportSize({ height: 844, width: 390 });
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+
+      const collapseButton = page.getByRole("button", { name: "Collapse Review column" });
+      await collapseButton.waitFor({ state: "visible" });
+      const touchGeometry = await collapseButton.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        return {
+          height: bounds.height,
+          opacity: getComputedStyle(button).opacity,
+          width: bounds.width,
+        };
+      });
+      expect(touchGeometry.opacity).toBe("1");
+      expect(touchGeometry.width).toBeGreaterThanOrEqual(44);
+      expect(touchGeometry.height).toBeGreaterThanOrEqual(44);
+    });
   });
 
   it("filters persisted boards and keeps the selection in the URL", async () => {

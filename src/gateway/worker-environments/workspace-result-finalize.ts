@@ -34,7 +34,9 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
 type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel">;
 
-export class WorkerWorkspaceReconciliationError extends Error {}
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
 
 type WorkspaceConflictReport = {
   paths: string[];

@@ -14,6 +14,10 @@ openclaw-chat-page {
   --chat-thread-max-width: 48rem;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
+  /* Composer box insets. The docked progress card derives its own edge from
+     both, so the two never overlap and their bottoms stay on one line. */
+  --chat-composer-side-inset: 36px;
+  --chat-composer-bottom-gap: 14px;
   --chat-thread-side-inset: clamp(6px, 1vw, 12px);
 
   position: relative;
@@ -1686,9 +1690,11 @@ button.chat-reply-preview--message:disabled {
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  width: calc(100% - 36px);
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
   max-width: var(--chat-thread-max-width, 48rem);
-  margin: 8px auto 14px;
+  margin: 8px auto var(--chat-composer-bottom-gap, 14px);
 }
 
 /* Floating tray pinned to the conversation's top-right (the positioned

@@ -144,8 +144,12 @@ impl NavigationState {
         let mut url =
             Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
         if self.onboarding_pending {
-            // Dashboard auth lives in the fragment, so the marker must be added through URL pairs.
-            url.query_pairs_mut().append_pair("onboarding", "1");
+            // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
+            url.path_segments_mut()
+                .map_err(|_| "Dashboard returned an invalid URL.".to_string())?
+                .pop_if_empty()
+                .extend(["settings", "model-setup"]);
+            url.query_pairs_mut().append_pair("firstRun", "1");
             self.onboarding_pending = false;
         }
         Ok(url)
@@ -648,20 +652,21 @@ mod navigation_tests {
     }
 
     #[test]
-    fn onboarding_url_preserves_existing_query_and_fragment() {
+    fn first_run_url_preserves_gateway_base_path_query_and_auth_fragment() {
         let mut navigation = NavigationState::default();
         navigation.mark_onboarding_pending();
 
         let url = navigation
-            .prepare_dashboard_url("http://127.0.0.1:18789/?foo=bar#token=secret")
+            .prepare_dashboard_url("http://127.0.0.1:18789/openclaw/?foo=bar#token=secret")
             .expect("dashboard URL");
 
-        assert_eq!(url.query(), Some("foo=bar&onboarding=1"));
+        assert_eq!(url.path(), "/openclaw/settings/model-setup");
+        assert_eq!(url.query(), Some("foo=bar&firstRun=1"));
         assert_eq!(url.fragment(), Some("token=secret"));
     }
 
     #[test]
-    fn onboarding_flag_is_consumed_once() {
+    fn first_run_model_setup_is_opened_only_once() {
         let mut navigation = NavigationState::default();
         navigation.mark_onboarding_pending();
 
@@ -672,7 +677,9 @@ mod navigation_tests {
             .prepare_dashboard_url("http://127.0.0.1:18789/#token=secret")
             .expect("second dashboard URL");
 
-        assert_eq!(first.query(), Some("onboarding=1"));
+        assert_eq!(first.path(), "/settings/model-setup");
+        assert_eq!(first.query(), Some("firstRun=1"));
+        assert_eq!(second.path(), "/");
         assert_eq!(second.query(), None);
     }
 

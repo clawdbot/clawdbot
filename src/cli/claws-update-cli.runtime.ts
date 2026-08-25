@@ -12,24 +12,13 @@ import { buildClawUpdatePlan, CLAW_UPDATE_PLAN_SCHEMA_VERSION } from "../claws/u
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
-import { logClawUpdatePlanSummary } from "./claws-cli-update-output.js";
+import {
+  formatClawDiagnostics,
+  logClawExperimentalWarning,
+  logClawUpdatePlanSummary,
+} from "./claws-cli-output.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-
-type DiagnosticLike = { level: string; code: string; path: string; message: string };
-
-function formatDiagnostics(diagnostics: DiagnosticLike[]): string {
-  return diagnostics
-    .map(
-      (diagnostic) =>
-        `${diagnostic.level.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
-    )
-    .join("\n");
-}
-
-function logExperimentalWarning(runtime: RuntimeEnv): void {
-  runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
-}
 
 export async function runClawsUpdateCommand(
   target: string,
@@ -162,7 +151,7 @@ export async function runClawsUpdateCommand(
         diagnostics,
       });
     } else {
-      runtime.error(formatDiagnostics(diagnostics));
+      runtime.error(formatClawDiagnostics(diagnostics));
     }
     runtime.exit(1);
     return;
@@ -183,7 +172,7 @@ export async function runClawsUpdateCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
-      logExperimentalWarning(runtime);
+      logClawExperimentalWarning(runtime);
       runtime.log(
         `Claw update plan: ${plan.currentClaw?.name ?? target} ${plan.currentClaw?.version ?? "unknown"} -> ${plan.targetClaw?.version ?? "unknown"}`,
       );
@@ -222,7 +211,7 @@ export async function runClawsUpdateCommand(
       writeRuntimeJson(runtime, result);
       return;
     }
-    logExperimentalWarning(runtime);
+    logClawExperimentalWarning(runtime);
     runtime.log(`Updated agent: ${result.agentId}`);
     runtime.log(`Claw version: ${result.previousClaw.version} -> ${result.targetClaw.version}`);
   } catch (error) {

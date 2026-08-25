@@ -1,3 +1,4 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -181,7 +182,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
     const onDismissProgressCard = canDismissProgressCard
-      ? (card: NonNullable<ChatProps["progressCard"]>) => {
+      ? (card: ProgressCard) => {
           void this.progressCard
             .dismiss(card)
             .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }));
@@ -225,16 +226,22 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const { backgroundTasks, closePanelSlot, openPanelSlot, progressCardInRail, sessionWorkspace } =
-      createChatPaneRails({
-        state,
-        sidebarLayout,
-        paneWidth: this.paneWidth,
-        presentationId: this.presentationId,
-        presented: this.presented,
-        gatewaySnapshot,
-        setObserverVisibility: this.setSessionObserverVisibility,
-      });
+    const {
+      backgroundTasks,
+      closePanelSlot,
+      openPanelSlot,
+      progressCardPlacement,
+      sessionWorkspace,
+    } = createChatPaneRails({
+      state,
+      sidebarLayout,
+      paneWidth: this.paneWidth,
+      composerGutter: this.composerGutter.width,
+      presentationId: this.presentationId,
+      presented: this.presented,
+      gatewaySnapshot,
+      setObserverVisibility: this.setSessionObserverVisibility,
+    });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -315,7 +322,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
-      progressCard: progressCardInRail ? null : this.progressCard.card,
+      progressCard:
+        progressCardPlacement === "rail" || !this.progressCard.card
+          ? null
+          : { card: this.progressCard.card, placement: progressCardPlacement },
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -639,7 +649,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardInRail,
+      progressCardPlacement,
       onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,

@@ -5,12 +5,16 @@ import {
   formatSharedAuthStoreOwnerDeleteError,
   isSharedAuthStoreOwner,
 } from "../agents/agent-delete-safety.js";
-import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
+import {
+  isPathOwnedByAnotherRegisteredAgent,
+  normalizeAgentDirRegistryPath,
+} from "../agents/agent-dir-registry.js";
 import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
 import {
+  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveSoleAgentId,
@@ -358,6 +362,11 @@ export async function agentsDeleteCommand(
     }
   }
   if (deleteFiles) {
+    // Directory ownership is process-local; prepare every survivor before filtering journal paths,
+    // or a deleted agent's database nested beneath a survivor's agentDir could be trashed.
+    for (const survivingAgentId of listAgentIds(result.config)) {
+      resolveAgentDir(result.config, survivingAgentId);
+    }
     const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
     const survivingDatabasePaths = new Set(
       listOpenClawRegisteredAgentDatabases()
@@ -370,6 +379,7 @@ export async function agentsDeleteCommand(
       return (
         !isPathInside(canonicalAgentDir, canonicalPath) &&
         !survivingDatabasePaths.has(canonicalPath) &&
+        !isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) &&
         findOverlappingWorkspaceAgentIds(result.config, agentId, canonicalPath).length === 0
       );
     });

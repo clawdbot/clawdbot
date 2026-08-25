@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
@@ -11,7 +12,31 @@ import {
   type WorkerMachineOption,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireInheritedWorkerProfileAuthorization(
+  profileId: string,
+  providerId: string,
+  settings: unknown,
+  configuredProviderId: string | undefined,
+  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
+): void {
+  if (
+    providerId === DEVICE_WORKER_PROVIDER_ID &&
+    isRecord(settings) &&
+    typeof settings.device === "string" &&
+    profileId === `device:${settings.device}`
+  ) {
+    return;
+  }
+  if (!configuredProviderId) {
+    throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
+  }
+  if (normalizeCapabilityProviderId(configuredProviderId) !== providerId) {
+    throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+  }
+}
 
 export function requireProviderProvisionTimeoutMs(
   timeoutMs: number | undefined,

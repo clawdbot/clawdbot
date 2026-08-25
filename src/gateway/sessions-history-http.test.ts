@@ -34,20 +34,10 @@ import {
   writeSessionStore,
 } from "./test-helpers.server.js";
 
-installGatewayTestHooks();
-
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 const requireRecord = createRequireRecord("object", "expected-label");
-
-afterEach(async () => {
-  testState.sessionConfig = undefined;
-  testState.agentsConfig = undefined;
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
 
 const AGENT_ID = "main";
 type SessionHistoryTestDatabase = Pick<
@@ -235,16 +225,11 @@ async function appendVisibleAssistantMessage(params: {
   text: string;
   storePath: string;
 }) {
-  const appended = await appendExactAssistantMessageToSessionTranscript({
+  return await appendTranscriptMessage({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     message: makeTranscriptAssistantMessage({ text: params.text }),
   });
-  expect(appended.ok).toBe(true);
-  if (!appended.ok) {
-    throw new Error(`append failed: ${appended.reason}`);
-  }
-  return appended.messageId;
 }
 
 async function fetchSessionHistory(
@@ -624,6 +609,16 @@ describe("session history Accept parsing", () => {
 });
 
 describe("session history HTTP endpoints", () => {
+  installGatewayTestHooks();
+
+  afterEach(async () => {
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+    await Promise.all(
+      cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {
     const expectedText = "accept negotiation sentinel";
     await seedSession({ text: expectedText });

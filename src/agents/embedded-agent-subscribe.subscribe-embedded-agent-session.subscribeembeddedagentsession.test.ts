@@ -323,6 +323,46 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "generated-malformed-metadata",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["music_generate"]),
+    });
+    const mediaPath = "/tmp/generated-song.mp3";
+
+    emitToolRun({
+      emit,
+      toolName: "music_generate",
+      toolCallId: "music-tool",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated media." }],
+        details: {
+          media: {
+            mediaUrls: [mediaPath],
+            attachments: [
+              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
+            ],
+          },
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Here is your generated song.",
+      mediaUrls: [mediaPath],
+      attachments: [{ type: "audio", path: mediaPath }],
+    });
+  });
+
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
@@ -538,6 +578,73 @@ describe("subscribeEmbeddedAgentSession", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
   });
+
+  it.each([
+    {
+      toolName: "image_generate",
+      type: "image",
+      mimeType: "image/png",
+      metadata: { width: 640, height: 480 },
+    },
+    {
+      toolName: "music_generate",
+      type: "audio",
+      mimeType: "audio/mpeg",
+      metadata: { durationMs: 2_000 },
+    },
+    {
+      toolName: "video_generate",
+      type: "video",
+      mimeType: "video/mp4",
+      metadata: { durationMs: 5_000, width: 1280, height: 720 },
+    },
+  ] as const)(
+    "delivers generated $type attachment metadata with the assistant reply",
+    async ({ toolName, type, mimeType, metadata }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: `generated-${type}`,
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        builtinToolNames: new Set([toolName]),
+      });
+      const attachment = {
+        type,
+        path: `/tmp/generated-${type}`,
+        name: `friendly-${type}`,
+        mimeType,
+        sizeBytes: 137,
+        ...metadata,
+      };
+
+      emitToolRun({
+        emit,
+        toolName,
+        toolCallId: `${type}-tool`,
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Generated media." }],
+          details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(subscription.getPendingToolMediaReply()).toMatchObject({
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+
+      emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+        text: "Here is your generated file.",
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+    },
+  );
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
     const onToolResult = vi.fn();

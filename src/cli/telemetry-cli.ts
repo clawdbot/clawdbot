@@ -10,6 +10,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 
 const TELEMETRY_REASON_LABELS = {
   enabled: "enabled in configuration",
+  "automated-environment": "disabled in an automated environment (CI is set)",
   "do-not-track": "disabled by DO_NOT_TRACK",
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",

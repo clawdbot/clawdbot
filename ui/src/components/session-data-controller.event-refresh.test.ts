@@ -190,10 +190,6 @@ describe("filtered sidebar session event refresh", () => {
     };
     controller.sessionsResult = controller.sessionResultsByAgent.research ?? null;
     controller.sessionsAgentId = "research";
-    controller.sessionCreatedOrder = new Map([
-      ["agent:main:kept", 0],
-      ["agent:research:removed", 1],
-    ]);
 
     publishAgentRoster(null);
     expect(Object.keys(controller.sessionResultsByAgent)).toEqual(["main", "research"]);
@@ -202,7 +198,6 @@ describe("filtered sidebar session event refresh", () => {
     expect(Object.keys(controller.sessionResultsByAgent)).toEqual(["main"]);
     expect(controller.sessionsResult).toBeNull();
     expect(controller.sessionsAgentId).toBeNull();
-    expect([...controller.sessionCreatedOrder.keys()]).toEqual(["agent:main:kept"]);
     controller.hostDisconnected();
   });
 
@@ -212,11 +207,13 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostConnected();
     controller.sessionsResult = resultForKeys(["agent:main:current"]);
     controller.sessionsAgentId = "main";
-    controller.sessionCreatedOrder = new Map([["agent:main:current", 0]]);
 
     publishAgentRoster(["main"]);
 
-    expect([...controller.sessionCreatedOrder.keys()]).toEqual(["agent:main:current"]);
+    expect(controller.sessionsAgentId).toBe("main");
+    expect(controller.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+      "agent:main:current",
+    ]);
     controller.hostDisconnected();
   });
 

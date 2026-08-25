@@ -202,11 +202,11 @@ function createLazyGoogleRealtimeVoiceBridge(
 ): RealtimeVoiceBridge {
   let bridge: RealtimeVoiceBridge | undefined;
   let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
+  let bridgePromiseGeneration = 0;
   let bridgeReady = false;
-  let closed = false;
   // Provider close is terminal for input admission. Only an explicit connect()
   // call may reopen it; late callbacks and microphone frames stay ignored.
-  let providerTerminated = false;
+  let terminated = false;
   let generation = 0;
   let latestMediaTimestamp: number | undefined;
   let pendingGreeting: string | undefined;
@@ -223,7 +223,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     latestMediaTimestamp = undefined;
   };
   const isCurrentNonterminalGeneration = (candidate: number) =>
-    candidate === generation && !providerTerminated;
+    candidate === generation && !terminated;
   // Loading and connecting finish on separate async boundaries. Keep close ownership
   // here so either late completion closes the provider bridge exactly once.
   const closeBridge = (loadedBridge = bridge) => {
@@ -238,7 +238,7 @@ function createLazyGoogleRealtimeVoiceBridge(
       return;
     }
     bridgeReady = false;
-    providerTerminated = true;
+    terminated = true;
     clearPendingInput();
     req.onClose?.(reason);
   };
@@ -271,15 +271,16 @@ function createLazyGoogleRealtimeVoiceBridge(
   const loadBridge = async () => {
     if (!bridgePromise) {
       const loadGeneration = generation;
+      bridgePromiseGeneration = loadGeneration;
       bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
         provider.createBridge({
           ...req,
           onReady: () => {
-            if (loadGeneration !== generation || closed || providerTerminated) {
+            if (loadGeneration !== generation || terminated) {
               return;
             }
             req.onReady?.();
-            if (loadGeneration !== generation || closed || providerTerminated || !bridge) {
+            if (loadGeneration !== generation || terminated || !bridge) {
               return;
             }
             bridgeReady = true;
@@ -293,11 +294,17 @@ function createLazyGoogleRealtimeVoiceBridge(
         }),
       );
     }
-    bridge = await bridgePromise;
-    if (closed) {
-      closeBridge(bridge);
+    const loading = bridgePromise;
+    const loadGeneration = bridgePromiseGeneration;
+    const loadedBridge = await loading;
+    // Explicit reconnect can replace the lazy load before it settles. Only the
+    // matching generation may publish a bridge; stale instances must close.
+    if (loading !== bridgePromise || loadGeneration !== generation || terminated) {
+      closeBridge(loadedBridge);
+      return loadedBridge;
     }
-    return bridge;
+    bridge = loadedBridge;
+    return loadedBridge;
   };
   const requireBridge = () => {
     if (!bridge) {
@@ -306,7 +313,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     return bridge;
   };
   const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
-    if (closed || providerTerminated) {
+    if (terminated) {
       return;
     }
     if (typeof latestMediaTimestamp === "number") {
@@ -332,16 +339,16 @@ function createLazyGoogleRealtimeVoiceBridge(
     },
     supportsToolResultSuppression: false,
     connect: async () => {
-      if (providerTerminated) {
+      if (terminated) {
         generation += 1;
         bridge = undefined;
         bridgePromise = undefined;
         bridgeReady = false;
-        providerTerminated = false;
+        terminated = false;
       }
       const connectGeneration = generation;
       const loadedBridge = await loadBridge();
-      if (connectGeneration !== generation || closed) {
+      if (connectGeneration !== generation || terminated) {
         closeBridge(loadedBridge);
         return;
       }
@@ -350,12 +357,12 @@ function createLazyGoogleRealtimeVoiceBridge(
       } catch (error) {
         throwTerminalBridgeError(connectGeneration, loadedBridge, error);
       }
-      if (connectGeneration !== generation || closed) {
+      if (connectGeneration !== generation || terminated) {
         closeBridge(loadedBridge);
       }
     },
     sendAudio: (audio) => {
-      if (closed || providerTerminated) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -365,14 +372,14 @@ function createLazyGoogleRealtimeVoiceBridge(
       pendingAudio.enqueue(audio);
     },
     setMediaTimestamp: (ts) => {
-      if (closed || providerTerminated) {
+      if (terminated) {
         return;
       }
       latestMediaTimestamp = ts;
       bridge?.setMediaTimestamp(ts);
     },
     sendUserMessage: (text) => {
-      if (closed || providerTerminated) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -393,7 +400,7 @@ function createLazyGoogleRealtimeVoiceBridge(
       pendingUserMessageBytes += messageBytes;
     },
     triggerGreeting: (instructions) => {
-      if (closed || providerTerminated) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -407,19 +414,18 @@ function createLazyGoogleRealtimeVoiceBridge(
       requireBridge().submitToolResult(callId, result, options),
     acknowledgeMark: () => requireBridge().acknowledgeMark(),
     close: () => {
-      if (closed) {
+      if (terminated) {
         return;
       }
-      const closeGeneration = generation;
-      closed = true;
+      terminated = true;
       bridgeReady = false;
       clearPendingInput();
       closeBridge();
       // A bridge closed before its first connect has no provider-owned
       // connection to report the terminal outcome.
-      emitTerminal(closeGeneration, "completed");
+      req.onClose?.("completed");
     },
-    isConnected: () => bridge?.isConnected() ?? false,
+    isConnected: () => !terminated && (bridge?.isConnected() ?? false),
   };
 }
 

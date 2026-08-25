@@ -1031,21 +1031,30 @@ function recordChatHistoryTiming(
   );
 }
 
-function replaceCachedChatMessages(
+export function commitCurrentChatHistorySnapshot(
   state: ChatState,
-  sessionKey: string,
-  agentId: string | undefined,
-  deltaCursor?: string,
-) {
+  deltaCursor?: string | null,
+): void {
   if (!state.chatMessagesBySession) {
     return;
   }
+  const sessionKey = state.sessionKey;
+  const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const cachedDeltaCursor =
+    deltaCursor === undefined
+      ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
+          sessionKey,
+          agentId,
+        })?.deltaCursor
+      : (deltaCursor ?? undefined);
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
     { sessionKey, agentId },
     {
-      ...(deltaCursor !== undefined ? { deltaCursor } : {}),
+      ...(cachedDeltaCursor !== undefined ? { deltaCursor: cachedDeltaCursor } : {}),
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
@@ -1603,7 +1612,7 @@ async function loadChatHistoryUncached(
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      replaceCachedChatMessages(state, sessionKey, requestAgentId, response.deltaCursor);
+      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
       recordChatHistoryTiming(state, "applied", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -1694,7 +1703,7 @@ async function loadChatHistoryUncached(
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
-    replaceCachedChatMessages(state, sessionKey, requestAgentId, res.deltaCursor);
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId

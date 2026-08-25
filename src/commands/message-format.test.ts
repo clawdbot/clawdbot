@@ -215,6 +215,58 @@ describe("renderPaginationHint", () => {
   });
 });
 
+describe("formatMessageCliText send results", () => {
+  it.each([
+    {
+      status: "suppressed" as const,
+      suppressionReason: "cancelled_by_message_sending_hook" as const,
+      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
+    },
+    {
+      status: "failed" as const,
+      error: "provider rejected the message",
+      expected: "provider rejected the message",
+    },
+    {
+      status: "partial_failed" as const,
+      error: "second attachment rejected",
+      messageId: "first-part-1",
+      expected: "second attachment rejected",
+    },
+  ])(
+    "reports a $status delivery without claiming success",
+    ({ status, suppressionReason, error, messageId, expected }) => {
+      const result = {
+        kind: "send",
+        action: "send",
+        channel: "directchat",
+        to: "room-1",
+        handledBy: "core",
+        payload: {},
+        dryRun: false,
+        sendResult: {
+          channel: "directchat",
+          to: "room-1",
+          via: "direct",
+          mediaUrl: null,
+          deliveryStatus: status,
+          ...(suppressionReason ? { suppressionReason } : {}),
+          ...(error ? { error } : {}),
+          ...(messageId ? { result: { channel: "directchat", messageId } } : {}),
+        },
+      } satisfies MessageActionResult;
+
+      const output = textJoined(formatMessageCliText(result));
+
+      expect(output).toContain(expected);
+      expect(output).not.toContain("✅ Sent");
+      if (messageId) {
+        expect(output).toContain(`Message ID: ${messageId}`);
+      }
+    },
+  );
+});
+
 describe("formatMessageCliText poll results", () => {
   it("formats direct core poll results as direct deliveries", () => {
     const result = {

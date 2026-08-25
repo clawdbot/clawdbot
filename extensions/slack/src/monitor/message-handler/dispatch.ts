@@ -390,6 +390,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       accountId: route.accountId,
       route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload: prepared.ctxPayload,
+      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       dispatcherOptions: {
         ...replyPipeline,
         // A channel transform marks intentional silence before core can synthesize an empty-reply error.

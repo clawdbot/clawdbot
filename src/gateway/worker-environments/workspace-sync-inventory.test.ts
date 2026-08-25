@@ -9,10 +9,10 @@ import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
 } from "./workspace-inventory-limits.js";
 import {
-  createGitTransferList,
+  createWorkspaceGitTransferList,
   filterExistingGitTransferList,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+  runWorkspaceInventoryCommandToFile,
+} from "./workspace-sync-inventory.js";
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -99,14 +99,14 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
-describe("runLocalCommandToFile", () => {
+describe("runWorkspaceInventoryCommandToFile", () => {
   it("fully persists bounded stdout after a positive short write", async () => {
     const root = tempDirs.make("openclaw-workspace-command-short-write-");
     const outputPath = path.join(root, "output");
     const expected = Buffer.from("bounded workspace inventory output\n");
     const shortWriteObserved = injectPositiveShortWrite(outputPath);
 
-    await runLocalCommandToFile({
+    await runWorkspaceInventoryCommandToFile({
       argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", expected.toString()],
       outputPath,
       signal: new AbortController().signal,
@@ -130,7 +130,7 @@ describe("runLocalCommandToFile", () => {
     await git(root, "init", "--quiet");
     const shortWriteObserved = injectPositiveShortWrite(outputPath);
 
-    await createGitTransferList({
+    await createWorkspaceGitTransferList({
       gitRoot: root,
       temporaryDirectory,
       signal: new AbortController().signal,
@@ -168,7 +168,7 @@ describe("runLocalCommandToFile", () => {
     const outputPath = path.join(root, "output");
     const readyPath = path.join(root, "ready");
     const controller = new AbortController();
-    const operation = runLocalCommandToFile({
+    const operation = runWorkspaceInventoryCommandToFile({
       argv: [
         process.execPath,
         "-e",
@@ -203,7 +203,7 @@ describe("runLocalCommandToFile", () => {
     const outputPath = path.join(root, "pack");
 
     await expect(
-      runLocalCommandToFile({
+      runWorkspaceInventoryCommandToFile({
         argv: [process.execPath, "-e", 'process.stdout.write("x".repeat(1024))'],
         outputPath,
         signal: new AbortController().signal,
@@ -238,14 +238,14 @@ describe("runLocalCommandToFile", () => {
           await fs.writeFile(path.join(root, file), file);
         }),
       );
-      await runLocalCommandToFile({
+      await runWorkspaceInventoryCommandToFile({
         argv: ["git", "-C", root, "init", "--quiet"],
         outputPath: initOutputPath,
         signal: new AbortController().signal,
         timeoutMs: 10_000,
       });
 
-      const outputPath = await createGitTransferList({
+      const outputPath = await createWorkspaceGitTransferList({
         gitRoot: root,
         temporaryDirectory,
         signal: new AbortController().signal,
@@ -292,7 +292,7 @@ process.stdout.write("eligible.txt\\0".repeat(count));
       vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
       await writeMockGit(MAX_WORKSPACE_INVENTORY_ENTRIES + 1);
 
-      const acceptedPath = await createGitTransferList({
+      const acceptedPath = await createWorkspaceGitTransferList({
         gitRoot: root,
         temporaryDirectory: firstTransfer,
         signal: new AbortController().signal,
@@ -304,7 +304,7 @@ process.stdout.write("eligible.txt\\0".repeat(count));
 
       await writeMockGit(MAX_WORKSPACE_GIT_CANDIDATES + 1);
       await expect(
-        createGitTransferList({
+        createWorkspaceGitTransferList({
           gitRoot: root,
           temporaryDirectory: secondTransfer,
           signal: new AbortController().signal,
@@ -362,7 +362,7 @@ describe("preflightWorkerWorkspace", () => {
       await fs.writeFile(path.join(root, "nested", "private.txt"), "nested\n");
 
       await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 });
-      const transferPath = await createGitTransferList({
+      const transferPath = await createWorkspaceGitTransferList({
         gitRoot: root,
         temporaryDirectory: transferDirectory,
         signal: new AbortController().signal,

@@ -7,6 +7,7 @@ import {
   type WorkerProfile,
 } from "../../plugins/types.js";
 import { hashWorkerCredential } from "./credential.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -337,6 +338,7 @@ describe("worker environment service", () => {
     );
     const parent = await workerService.create("development", "parent-profile-snapshot");
     support.getDevelopmentProfile().settings = { region: "mutated" };
+    support.getDevelopmentProfile().provider = "FaKe";
 
     const child = await workerService.createFromProfileSnapshot(
       {
@@ -353,6 +355,125 @@ describe("worker environment service", () => {
       providerId: parent.providerId,
       profileSnapshot: parent.profileSnapshot,
     });
+  });
+
+  it.each([
+    {
+      name: "removed",
+      mutate: () => {
+        support.testState.config.cloudWorkers = { profiles: {} };
+      },
+      code: "profile_not_found",
+    },
+    {
+      name: "assigned to a different provider",
+      mutate: () => {
+        support.getDevelopmentProfile().provider = "replacement";
+      },
+      code: "invalid_profile",
+    },
+  ])("rejects a fresh inherited environment when its profile was $name", async (testCase) => {
+    let lease = 0;
+    let credential = 0;
+    const provision = vi.fn(async () => ({
+      leaseId: `inherited-lease-${(lease += 1)}`,
+      ssh: support.SSH_ENDPOINT,
+    }));
+    const workerService = support.createService(support.createProvider({ provision }), {
+      generateWorkerCredential: () => `inherited-worker-credential-${(credential += 1)}`,
+    });
+    const parent = await workerService.create("development", "parent-inherited-profile");
+    const inherited = {
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    };
+    testCase.mutate();
+
+    await expect(
+      workerService.createFromProfileSnapshot(inherited, "fresh-inherited-profile"),
+    ).rejects.toMatchObject({ code: testCase.code });
+    expect(provision).toHaveBeenCalledOnce();
+    expect(support.testState.store.list()).toHaveLength(1);
+
+    await expect(
+      workerService.createFromProfileSnapshot(inherited, "parent-inherited-profile"),
+    ).resolves.toMatchObject({ environmentId: parent.environmentId });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
+  it("allows paired-device placement without configured cloud profiles", async () => {
+    support.testState.config.cloudWorkers = { profiles: {} };
+    const provision = vi.fn(async () => ({
+      leaseId: "device-lease",
+      node: { deviceId: "device-1" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        id: DEVICE_WORKER_PROVIDER_ID,
+        supportedExecutionModes: ["worker-turn"],
+        provision,
+      }),
+      { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+    );
+
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: "device:device-1",
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+        },
+        "paired-profileless",
+        undefined,
+        "worker-turn",
+      ),
+    ).resolves.toMatchObject({ state: "ready", nodeDeviceId: "device-1" });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
+  it("revokes removed configured device profiles without disabling synthetic paired devices", async () => {
+    let lease = 0;
+    let credential = 0;
+    const profile = support.getDevelopmentProfile();
+    profile.provider = DEVICE_WORKER_PROVIDER_ID;
+    profile.settings = { device: "device-1" };
+    const provision = vi.fn(async () => ({
+      leaseId: `named-device-lease-${(lease += 1)}`,
+      node: { deviceId: "device-1" },
+    }));
+    const workerService = support.createService(
+      support.createProvider({
+        id: DEVICE_WORKER_PROVIDER_ID,
+        supportedExecutionModes: ["worker-turn"],
+        provision,
+      }),
+      {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+        generateWorkerCredential: () => `named-device-credential-${(credential += 1)}`,
+      },
+    );
+    const parent = await workerService.create(
+      "development",
+      "named-device-parent",
+      undefined,
+      "worker-turn",
+    );
+    support.testState.config.cloudWorkers = { profiles: {} };
+
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: parent.profileId,
+          providerId: parent.providerId,
+          profileSnapshot: parent.profileSnapshot,
+        },
+        "named-device-child",
+        undefined,
+        "worker-turn",
+      ),
+    ).rejects.toMatchObject({ code: "profile_not_found" });
+    expect(provision).toHaveBeenCalledOnce();
   });
 
   it("rejects plaintext secret fields before persisting intent", async () => {

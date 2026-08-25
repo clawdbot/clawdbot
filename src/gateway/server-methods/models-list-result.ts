@@ -51,7 +51,10 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import {
+  createModelsListAuthResolver,
+  createPreparedSyntheticCliRuntimeResolver,
+} from "./models-list-auth-resolver.js";
 import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
@@ -83,24 +86,27 @@ function resolveLegacyEntryAvailability(params: {
   cfg: OpenClawConfig;
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
+  resolvePreparedSyntheticCliRuntime: (entry: ModelCatalogEntry) => string | undefined;
 }): ModelAuthAvailability {
   if (params.primaryAvailability === true) {
     return true;
   }
   let available = params.primaryAvailability;
-  const runtimeProvider = resolveCliRuntimeExecutionProvider({
-    provider: params.entry.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelId: params.entry.id,
-    metadataSnapshot: params.metadataSnapshot,
-  });
+  const preparedSyntheticRuntime = params.resolvePreparedSyntheticCliRuntime(params.entry);
+  const runtimeProvider =
+    resolveCliRuntimeExecutionProvider({
+      provider: params.entry.provider,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelId: params.entry.id,
+      metadataSnapshot: params.metadataSnapshot,
+    }) ?? preparedSyntheticRuntime;
   if (
     runtimeProvider &&
     normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
   ) {
     const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true) {
+    if (runtimeAvailable === true || preparedSyntheticRuntime === runtimeProvider) {
       return true;
     }
     if (available === false && runtimeAvailable === undefined) {
@@ -122,6 +128,11 @@ function createModelsListEntryEvaluator(params: {
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
 ) => Promise<ModelAuthAvailabilityEvaluation> {
+  const resolvePreparedSyntheticCliRuntime = createPreparedSyntheticCliRuntimeResolver({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    metadataSnapshot: params.metadataSnapshot,
+  });
   const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   return (entry, routeVariants = [entry]) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
@@ -151,6 +162,7 @@ function createModelsListEntryEvaluator(params: {
                 cfg: params.cfg,
                 agentId: params.agentId,
                 metadataSnapshot: params.metadataSnapshot,
+                resolvePreparedSyntheticCliRuntime,
               }),
             }
           : evaluation;
