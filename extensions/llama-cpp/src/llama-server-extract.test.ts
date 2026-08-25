@@ -131,6 +131,30 @@ describe("extractLlamaServerArchive", () => {
     );
   });
 
+  it("bounds an in-flight archive stat with the shared deadline", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
+    });
+    const enteredStat = Promise.withResolvers<void>();
+    let rejection: unknown;
+    vi.useFakeTimers({ now: 1_000 });
+    vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
+      enteredStat.resolve();
+      return await new Promise<never>(() => {});
+    });
+    vi.spyOn(fs, "rm").mockResolvedValueOnce();
+
+    void extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }).catch((error) => {
+      rejection = error;
+    });
+    await enteredStat.promise;
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+
+    expect(rejection).toEqual(new Error("llama-server archive extraction timed out"));
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
+  });
+
   it("does not restore tar aliases after the shared deadline expires", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {

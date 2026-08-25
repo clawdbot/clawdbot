@@ -57,7 +57,7 @@ function assertSiblingLinkTarget(entryPath: string, target: string): void {
  */
 async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise<ArchiveSymlink[]> {
   const symlinks: ArchiveSymlink[] = [];
-  const archiveStat = await fsp.stat(archivePath);
+  const archiveStat = await waitForExtractDeadline(fsp.stat(archivePath), deadlineMs);
   if (archiveStat.size > MAX_TAR_PREFLIGHT_ARCHIVE_BYTES) {
     throw new Error("llama-server archive exceeds the preflight size limit");
   }
