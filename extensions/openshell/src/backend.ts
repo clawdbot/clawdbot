@@ -59,7 +59,7 @@ function buildOpenShellDirectoryUploadArgs(params: {
     "--no-git-ignore",
     params.sandboxName,
     params.localPath,
-    normalizeRemotePath(params.remotePath),
+    `${normalizeRemotePath(params.remotePath)}/`,
   ];
 }
 
@@ -230,24 +230,27 @@ export function createOpenShellSandboxBackendManager(params: {
       };
       const result = await runOpenShellCli({
         context: execContext,
-        args: ["sandbox", "get", entry.containerName],
+        args: ["sandbox", "get", entry.containerName, "--output", "json"],
       });
       const configuredSource = execContext.config.from;
       return {
-        running: result.code === 0,
+        running: result.code === 0 && parseOpenShellSandboxPhase(result.stdout) === "Ready",
         actualConfigLabel: entry.image,
         configLabelMatch: entry.image === configuredSource,
       };
     },
-    async removeRuntime({ entry }) {
+    async removeRuntime({ entry, config }) {
       const execContext: OpenShellExecContext = {
-        config: params.pluginConfig,
+        config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
         sandboxName: entry.containerName,
       };
-      await runOpenShellCli({
+      const result = await runOpenShellCli({
         context: execContext,
         args: ["sandbox", "delete", entry.containerName],
       });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || "openshell sandbox delete failed");
+      }
     },
   };
 }
@@ -620,7 +623,7 @@ class OpenShellSandboxBackendImpl {
         "--no-git-ignore",
         this.params.execContext.sandboxName,
         localPath,
-        path.posix.dirname(remotePath),
+        remotePath,
       ],
       cwd: this.params.createParams.workspaceDir,
     });
@@ -690,6 +693,9 @@ class OpenShellSandboxBackendImpl {
     }
     if (this.params.legacyRuntimeAdopted) {
       throw this.buildLegacyRuntimeUnavailableError(getResult.stderr.trim());
+    }
+    if (!/\bsandbox not found\b/iu.test(getResult.stderr)) {
+      throw new Error(getResult.stderr.trim() || "openshell sandbox get failed");
     }
     const createArgs = [
       "sandbox",
@@ -875,6 +881,7 @@ class OpenShellSandboxBackendImpl {
         await stageDirectoryContents({
           sourceDir: localPath,
           targetDir: stagedRoot,
+          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
         });
         const stagedEntries = (await fs.readdir(stagedRoot)).toSorted();
         for (const entry of stagedEntries) {
@@ -985,6 +992,18 @@ function parseOpenShellSandboxPhasePage(
       }
     }
     return { count: parsed.length };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseOpenShellSandboxPhase(stdout: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed !== "object" || parsed === null || !("phase" in parsed)) {
+      return undefined;
+    }
+    return typeof parsed.phase === "string" ? parsed.phase : undefined;
   } catch {
     return undefined;
   }

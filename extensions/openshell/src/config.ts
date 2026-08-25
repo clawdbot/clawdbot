@@ -68,6 +68,18 @@ function normalizeProviders(value: string[] | undefined): string[] {
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
 
+const openShellManagedRemotePath = (fieldName: string) =>
+  nonEmptyTrimmedString(`${fieldName} must be a non-empty string`)
+    .regex(/^\/(?:sandbox|agent)(?:\/|$)/, {
+      error: (issue) =>
+        String(issue.input).startsWith("/")
+          ? `OpenShell ${fieldName} must stay under /sandbox or /agent`
+          : `OpenShell ${fieldName} must be absolute`,
+    })
+    .refine((value) => isManagedOpenShellRemotePath(path.posix.normalize(value)), {
+      error: `OpenShell ${fieldName} must stay under /sandbox or /agent`,
+    });
+
 const openShellWorkspaceName = z
   .string({ error: "workspace must be a valid OpenShell workspace name" })
   .trim()
@@ -78,42 +90,58 @@ const openShellWorkspaceName = z
       "workspace must contain lowercase alphanumeric characters or single hyphens and must not start or end with a hyphen",
   });
 
-const OpenShellPluginConfigSchema = z.strictObject({
-  mode: z.enum(["mirror", "remote"], { error: "mode must be one of mirror, remote" }).optional(),
-  command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
-  gateway: nonEmptyTrimmedString("gateway must be a non-empty string").optional(),
-  gatewayEndpoint: nonEmptyTrimmedString("gatewayEndpoint must be a non-empty string").optional(),
-  workspace: openShellWorkspaceName.optional(),
-  from: nonEmptyTrimmedString("from must be a non-empty string").optional(),
-  policy: nonEmptyTrimmedString("policy must be a non-empty string").optional(),
-  providers: z
-    .array(
-      z.string({ error: "providers must be an array of strings" }).trim().min(1, {
-        error: "providers must be an array of strings",
-      }),
-      {
-        error: "providers must be an array of strings",
-      },
-    )
-    .optional(),
-  gpu: z.boolean({ error: "gpu must be a boolean" }).optional(),
-  autoProviders: z.boolean({ error: "autoProviders must be a boolean" }).optional(),
-  remoteWorkspaceDir: nonEmptyTrimmedString(
-    "remoteWorkspaceDir must be a non-empty string",
-  ).optional(),
-  remoteAgentWorkspaceDir: nonEmptyTrimmedString(
-    "remoteAgentWorkspaceDir must be a non-empty string",
-  ).optional(),
-  timeoutSeconds: z
-    .number({
-      error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
-    })
-    .min(1, { error: "timeoutSeconds must be a number >= 1" })
-    .max(MAX_TIMER_TIMEOUT_SECONDS, {
-      error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
-    })
-    .optional(),
-});
+const OpenShellPluginConfigSchema = z
+  .strictObject({
+    mode: z.enum(["mirror", "remote"], { error: "mode must be one of mirror, remote" }).optional(),
+    command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
+    gateway: nonEmptyTrimmedString("gateway must be a non-empty string").optional(),
+    gatewayEndpoint: nonEmptyTrimmedString("gatewayEndpoint must be a non-empty string").optional(),
+    workspace: openShellWorkspaceName.optional(),
+    from: nonEmptyTrimmedString("from must be a non-empty string").optional(),
+    policy: nonEmptyTrimmedString("policy must be a non-empty string").optional(),
+    providers: z
+      .array(
+        z.string({ error: "providers must be an array of strings" }).trim().min(1, {
+          error: "providers must be an array of strings",
+        }),
+        {
+          error: "providers must be an array of strings",
+        },
+      )
+      .optional(),
+    gpu: z.boolean({ error: "gpu must be a boolean" }).optional(),
+    autoProviders: z.boolean({ error: "autoProviders must be a boolean" }).optional(),
+    remoteWorkspaceDir: openShellManagedRemotePath("remoteWorkspaceDir").optional(),
+    remoteAgentWorkspaceDir: openShellManagedRemotePath("remoteAgentWorkspaceDir").optional(),
+    timeoutSeconds: z
+      .number({
+        error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
+      })
+      .min(1, { error: "timeoutSeconds must be a number >= 1" })
+      .max(MAX_TIMER_TIMEOUT_SECONDS, {
+        error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+      })
+      .optional(),
+  })
+  .superRefine((config, ctx) => {
+    const workspaceRoot = path.posix.normalize(
+      config.remoteWorkspaceDir ?? DEFAULT_REMOTE_WORKSPACE_DIR,
+    );
+    const agentRoot = path.posix.normalize(
+      config.remoteAgentWorkspaceDir ?? DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
+    );
+    if (
+      workspaceRoot === agentRoot ||
+      workspaceRoot.startsWith(`${agentRoot}/`) ||
+      agentRoot.startsWith(`${workspaceRoot}/`)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["remoteAgentWorkspaceDir"],
+        message: "OpenShell remote workspace roots must not overlap",
+      });
+    }
+  });
 
 function isManagedOpenShellRemotePath(value: string): boolean {
   return OPEN_SHELL_MANAGED_REMOTE_ROOTS.some(
