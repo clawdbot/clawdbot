@@ -185,6 +185,7 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   durableEnvironment: Record<string, string | undefined>;
+  authProfileEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
   existingEnvironmentValueSources?: Record<
     string,
@@ -207,6 +208,7 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   const ownedKeys = new Set(
     [
       ...Object.keys(params.durableEnvironment),
+      ...Object.keys(params.authProfileEnvironment),
       ...Object.keys(params.existingEnvironment ?? {}).filter(
         (key) => !Object.hasOwn(existingManagedFileEnvironment, key),
       ),
@@ -235,11 +237,11 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
     await loadDaemonInstallProviderManifestRuntime();
   const config = params.config ?? {};
-  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env as NodeJS.ProcessEnv });
+  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
   return Object.fromEntries(
     snapshot.plugins.flatMap((plugin) => {
       if (
-        plugin.origin === "workspace" ||
+        (plugin.origin !== "bundled" && plugin.trustedOfficialInstall !== true) ||
         !isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })
       ) {
         return [];
@@ -698,14 +700,6 @@ async function buildGatewayInstallEnvironment(params: {
       env: params.env,
       config: params.config,
     });
-  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
-    env: params.env,
-    config: params.config,
-    durableEnvironment,
-    existingEnvironment: params.existingEnvironment,
-    existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-    platform: params.platform,
-  });
   // Full target discovery materializes plugin metadata; configs without refs do not need it.
   const containsConfigSecretRef = configContainsSecretRef(params.config);
   const { keys: configSecretRefKeys, environment: configSecretRefEnvironment } =
@@ -729,6 +723,15 @@ async function buildGatewayInstallEnvironment(params: {
     env: params.env,
     authStore,
     warn: params.warn,
+  });
+  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    authProfileEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+    platform: params.platform,
   });
   const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(
     stateDirDotEnvEnvironment,
