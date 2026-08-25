@@ -1,18 +1,83 @@
 // Recent-session preservation tests cover the operator-configured retention shield.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import {
   capEntryCount,
   pruneStaleEntries,
   resolveMaintenanceConfigFromInput,
+  shouldPreserveMaintenanceEntry,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("recent session maintenance preservation", () => {
+  it.each(["classification", "pruning", "capping"] as const)(
+    "preserves external conversations during %s without invoking channel plugins",
+    (boundary) => {
+      const resolveSessionConversation = vi.fn(() => {
+        throw new Error("channel resolver must not run during session maintenance");
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "broken",
+            source: "test",
+            plugin: {
+              id: "broken",
+              meta: { label: "Broken" },
+              messaging: { resolveSessionConversation },
+            },
+          },
+        ]),
+      );
+
+      const updatedAt = Date.now() - 31 * DAY_MS;
+      const protectedKeys = [
+        "agent:main:broken:group:room:thread:reply",
+        "agent:main:broken:channel:room:with:colon",
+        "agent:main:telegram:dm:user:topic:77",
+        "agent:main:opaque:thread:reply",
+      ];
+      const removableKeys = [
+        "agent:main:old",
+        "agent:main:subagent:worker",
+        "agent:main:opaque:topic:unrelated",
+      ];
+      const store: Record<string, SessionEntry> = Object.fromEntries(
+        [...protectedKeys, ...removableKeys].map((key) => [key, { sessionId: key, updatedAt }]),
+      );
+
+      try {
+        if (boundary === "classification") {
+          for (const key of protectedKeys) {
+            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(true);
+          }
+          for (const key of removableKeys) {
+            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(false);
+          }
+        } else if (boundary === "pruning") {
+          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(removableKeys.length);
+        } else {
+          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(
+            removableKeys.length,
+          );
+        }
+
+        for (const key of protectedKeys) {
+          expect(store).toHaveProperty(key);
+        }
+        expect(resolveSessionConversation).not.toHaveBeenCalled();
+      } finally {
+        resetPluginRuntimeStateForTest();
+      }
+    },
+  );
+
   it("is opt-in and keeps recent interactive sessions through prune and cap pressure", () => {
     const now = Date.now();
     const recentKey = "agent:main:dashboard:recent";

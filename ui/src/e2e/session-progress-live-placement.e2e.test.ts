@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -35,6 +36,7 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it("keeps one live card placement and a compact transcript receipt", async () => {
     const sessionKey = "agent:main:progress-placement";
+    const updatedAt = Date.now() - 5 * 60_000;
     const plan = [
       { step: "Inspect", status: "completed" },
       { step: "Implement", status: "in_progress" },
@@ -79,7 +81,7 @@ suite.define(() => {
                 revision: 2,
                 sessionKey,
                 steps: plan,
-                updatedAt: 2,
+                updatedAt,
               },
             },
             "sessions.list": chatSessionListResponse([
@@ -87,7 +89,7 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
-                updatedAt: 2,
+                updatedAt,
               },
             ]),
           },
@@ -98,6 +100,28 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        const expectVisibleLastActivity = async (placement: "composer" | "dock" | "rail") => {
+          const card = visiblePane.locator(`[data-progress-card-placement="${placement}"]`);
+          const timestamp = card.locator("time");
+          await expect
+            .poll(() => timestamp.getAttribute("datetime"))
+            .toBe(new Date(updatedAt).toISOString());
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Last activity: /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+          await expect.poll(() => timestamp.isVisible()).toBe(true);
+          const accessibleCard = placement === "composer" ? card.locator("summary") : card;
+          await expect
+            .poll(() => accessibleCard.getAttribute("aria-label"))
+            .toContain("Last activity:");
+          const timestampBounds = await timestamp.boundingBox();
+          const cardBounds = await card.boundingBox();
+          if (!timestampBounds || !cardBounds) {
+            throw new Error("The progress card and last activity time must both remain visible");
+          }
+          expect(timestampBounds.x + timestampBounds.width).toBeLessThanOrEqual(
+            cardBounds.x + cardBounds.width,
+          );
+        };
         // Wide enough for the composer gutter to hold the card: it docks beside
         // the composer instead of stacking inside it.
         await page.setViewportSize({ height: 900, width: 1600 });
@@ -123,6 +147,7 @@ suite.define(() => {
             );
           })
           .toBe(true);
+        await expectVisibleLastActivity("dock");
         await captureProof(page, "dock-beside-composer.png");
 
         await page.setViewportSize({ height: 900, width: 1280 });
@@ -143,6 +168,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator(".chat-thread").textContent())
           .not.toContain("Implementation is moving.");
+        await expectVisibleLastActivity("rail");
         await captureProof(page, "rail-visible.png");
 
         await page.setViewportSize({ height: 900, width: 560 });
@@ -161,6 +187,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())
           .toBe(true);
+        await expectVisibleLastActivity("composer");
         await captureProof(page, "composer-adjacent.png");
       },
     );
@@ -237,8 +264,25 @@ suite.define(() => {
           await expectMarkerCentered();
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
+          await gateway.setMethodResponse("progressCard.put", {
+            card: {
+              revision: 4,
+              sessionKey,
+              steps: plan,
+              updatedAt: MAX_DATE_TIMESTAMP_MS + 1,
+            },
+          });
           await card.getByRole("button", { name: "Dismiss progress card" }).click();
-          const dismissRequest = await gateway.waitForRequest("progressCard.put");
+          await expect.poll(() => gateway.getRequests("progressCard.put")).toHaveLength(1);
+          await page.getByText("Could not dismiss the progress card. Try again.").waitFor();
+          await expect.poll(() => card.isVisible()).toBe(true);
+          await expect
+            .poll(() => card.locator("time").getAttribute("datetime"))
+            .toBe(new Date(3).toISOString());
+
+          await gateway.setMethodResponse("progressCard.put", { card: null });
+          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          const dismissRequest = await gateway.waitForRequest("progressCard.put", { after: 1 });
           expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
           await expect.poll(() => card.count()).toBe(0);
 

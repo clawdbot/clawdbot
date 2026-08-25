@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../i18n/index.ts";
+import { formatTimeMs } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -124,6 +125,19 @@ export function renderSessionProgressCard(
         total: String(counts.total),
       })
     : t("sessionProgressCard.noteLabel");
+  const activityTime = formatTimeMs(card.updatedAt, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const activityLabel = t("sessionProgressCard.lastActivity", { time: activityTime });
+  const accessibleLabel = `${countLabel}. ${activityLabel}`;
+  const lastActivity = html`<time
+    datetime=${new Date(card.updatedAt).toISOString()}
+    aria-label=${activityLabel}
+    title=${activityLabel}
+    >${activityTime}</time
+  >`;
   const dismissible = Boolean(
     onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
   );
@@ -171,7 +185,7 @@ export function renderSessionProgressCard(
       data-complete=${String(complete)}
       ${ref((element) => initializeComposerDisclosure(element, card.sessionKey, !complete))}
     >
-      <summary class="session-progress-card__summary" aria-label=${composerCountLabel}>
+      <summary class="session-progress-card__summary" aria-label=${accessibleLabel}>
         <span
           class="session-progress-card__summary-indicator session-progress-card__current-marker${complete
             ? " session-progress-card__summary-indicator--complete"
@@ -193,7 +207,9 @@ export function renderSessionProgressCard(
           <span class="session-progress-card__summary-title"
             >${t("sessionProgressCard.composerTitle")}</span
           >
-          <span class="session-progress-card__heading-actions">${shortCount}${dismiss}</span>
+          <span class="session-progress-card__heading-actions"
+            >${lastActivity} ${shortCount}${dismiss}</span
+          >
         </span>
         <span
           class="session-progress-card__summary-chevron session-progress-card__chevron"
@@ -209,17 +225,15 @@ export function renderSessionProgressCard(
   return html`<section
     class="session-progress-card session-progress-card--${placement}"
     data-progress-card-placement=${placement}
-    aria-label=${countLabel}
+    aria-label=${accessibleLabel}
   >
-    ${counts
-      ? html`<div class="session-progress-card__heading">
-          <span>${t("sessionProgressCard.title")}</span>
-          <span class="session-progress-card__heading-actions">
-            <span>${counts.completed}/${counts.total}</span>
-            ${dismiss}
-          </span>
-        </div>`
-      : nothing}
+    <div class="session-progress-card__heading">
+      <span>${t("sessionProgressCard.title")}</span>
+      <span class="session-progress-card__heading-actions">
+        ${lastActivity} ${counts ? html`<span>${counts.completed}/${counts.total}</span>` : nothing}
+        ${dismiss}
+      </span>
+    </div>
     ${renderBody(card)}
   </section>`;
 }

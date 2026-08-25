@@ -1012,7 +1012,6 @@ extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
 extensions/qa-lab/src/evidence-gallery.ts	2
-extensions/qa-lab/src/evidence-summary.ts	1
 extensions/qa-lab/src/execution-identity-storage-inspection.ts	1
 extensions/qa-lab/src/fixture-utils.ts	10
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
@@ -1095,7 +1094,6 @@ extensions/qa-lab/src/runtime-tool-fixture.ts	2
 extensions/qa-lab/src/runtime-tool-metadata.ts	5
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
-extensions/qa-lab/src/scorecard-evidence.ts	1
 extensions/qa-lab/src/self-check-scenario.ts	2
 extensions/qa-lab/src/suite-launch.runtime.ts	2
 extensions/qa-lab/src/suite-planning.ts	2
