@@ -1437,7 +1437,7 @@ extensions/workboard/src/sqlite-store.ts	44
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	5
-extensions/workboard/src/store-normalizers.ts	33
+extensions/workboard/src/store-normalizers.ts	11
 extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	5
 extensions/workboard/src/tools.ts	11
