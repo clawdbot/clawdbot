@@ -1285,138 +1285,157 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
-  it("delivers resumed marked sessions through reply payload hooks", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const deliveredText = vi.fn();
-    const hookHandler = vi.fn(
-      async (event: { payload: { text?: string } }, context: Record<string, unknown>) => ({
-        payload: {
-          ...event.payload,
-          text: `hooked: ${event.payload.text ?? ""}`,
-        },
-        metadata: context,
-      }),
-    );
-    const discordOutbound: ChannelOutboundAdapter = {
-      deliveryMode: "direct",
-      sendText: async ({ to, text }) => {
-        deliveredText({ to, text });
-        return { channel: "discord", messageId: "delivered-1" };
-      },
-    };
-    const registry = createTestRegistry([
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound }),
-      },
-    ]);
-    addTestHook({
-      registry,
-      pluginId: "recovery-hook-test",
-      hookName: "reply_payload_sending",
-      handler: hookHandler,
-    });
-    resetGlobalHookRunner();
-    initializeGlobalHookRunner(registry);
-    setActivePluginRegistry(registry);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-
-    await writeMainSession({
-      sessionsDir,
-      sessionKey: "agent:main:discord:direct:123",
-      deliveryContext: {
+  it.each([
+    {
+      label: "the interrupted run's exact route",
+      sessionContext: {
         channel: "discord",
         to: "discord:dm:stale",
         accountId: "old",
       },
-      restartRecoveryDeliveryContext: {
+      recoveryContext: {
         channel: "discord",
         to: "discord:dm:123",
         accountId: "main",
         threadId: 123,
       },
-    });
-    await writeCompletedToolTranscript(sessionsDir);
-    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
-      const request = params as Record<string, unknown>;
-      const runId = String(request.idempotencyKey);
-      const sessionKey = String(request.sessionKey);
-      const result = {
-        payloads: [{ text: "final answer" }],
-        meta: { durationMs: 1 },
-      };
-      await deliverAgentCommandResult({
-        cfg: {} as OpenClawConfig,
-        deps: {} as CliDeps,
-        runtime: { log: vi.fn(), error: vi.fn() } as never,
-        opts: {
-          message: String(request.message),
-          deliver: request.deliver === true,
-          bestEffortDeliver: request.bestEffortDeliver === true,
-          channel: String(request.channel),
-          to: String(request.to),
-          accountId: String(request.accountId),
-          threadId: String(request.threadId),
-          sessionKey,
-          runId,
-        },
-        outboundSession: { key: sessionKey, agentId: "main" },
-        sessionEntry: loadSessionEntry({ sessionKey, storePath }),
-        payloads: result.payloads,
-        result,
-      } as Parameters<typeof deliverAgentCommandResult>[0]);
-      return { runId, status: "ok" };
-    });
-
-    try {
-      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-      const resumeParams = gatewayParams() as Record<string, unknown>;
-      expect(resumeParams).toMatchObject({
-        sessionKey: "agent:main:discord:direct:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        lane: "main",
+    },
+    {
+      label: "an unclaimed session's persisted route",
+      sessionContext: {
         channel: "discord",
         to: "discord:dm:123",
         accountId: "main",
-        threadId: "123",
-      });
-      const recoveryRunId = String(resumeParams.idempotencyKey);
-      expect(hookHandler).toHaveBeenCalledWith(
-        {
-          payload: expect.objectContaining({ text: "final answer" }),
-          kind: "final",
-          channel: "discord",
-          sessionKey: "agent:main:discord:direct:123",
-          runId: recoveryRunId,
-          usageState: undefined,
-        },
-        {
-          channelId: "discord",
-          accountId: "main",
-          conversationId: "discord:dm:123",
-          sessionKey: "agent:main:discord:direct:123",
-          runId: recoveryRunId,
-        },
+        threadId: 123,
+      },
+      recoveryContext: undefined,
+    },
+  ])(
+    "delivers resumed marked sessions through reply payload hooks using $label",
+    async ({ sessionContext, recoveryContext }) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const deliveredText = vi.fn();
+      const hookHandler = vi.fn(
+        async (event: { payload: { text?: string } }, context: Record<string, unknown>) => ({
+          payload: {
+            ...event.payload,
+            text: `hooked: ${event.payload.text ?? ""}`,
+          },
+          metadata: context,
+        }),
       );
-      expect(deliveredText).toHaveBeenCalledWith({
-        to: "discord:dm:123",
-        text: "hooked: final answer",
+      const discordOutbound: ChannelOutboundAdapter = {
+        deliveryMode: "direct",
+        sendText: async ({ to, text }) => {
+          deliveredText({ to, text });
+          return { channel: "discord", messageId: "delivered-1" };
+        },
+      };
+      const registry = createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound }),
+        },
+      ]);
+      addTestHook({
+        registry,
+        pluginId: "recovery-hook-test",
+        hookName: "reply_payload_sending",
+        handler: hookHandler,
       });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
       resetGlobalHookRunner();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      initializeGlobalHookRunner(registry);
+      setActivePluginRegistry(registry);
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+      await writeMainSession({
+        sessionsDir,
+        sessionKey: "agent:main:discord:direct:123",
+        deliveryContext: sessionContext,
+        restartRecoveryDeliveryContext: recoveryContext,
+      });
+      await writeCompletedToolTranscript(sessionsDir);
+      vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+        const request = params as Record<string, unknown>;
+        const runId = String(request.idempotencyKey);
+        const sessionKey = String(request.sessionKey);
+        const result = {
+          payloads: [{ text: "final answer" }],
+          meta: { durationMs: 1 },
+        };
+        await deliverAgentCommandResult({
+          cfg: {} as OpenClawConfig,
+          deps: {} as CliDeps,
+          runtime: { log: vi.fn(), error: vi.fn() } as never,
+          opts: {
+            message: String(request.message),
+            deliver: request.deliver === true,
+            bestEffortDeliver: request.bestEffortDeliver === true,
+            channel: String(request.channel),
+            to: String(request.to),
+            accountId: String(request.accountId),
+            threadId: String(request.threadId),
+            sessionKey,
+            runId,
+          },
+          outboundSession: { key: sessionKey, agentId: "main" },
+          sessionEntry: loadSessionEntry({ sessionKey, storePath }),
+          payloads: result.payloads,
+          result,
+        } as Parameters<typeof deliverAgentCommandResult>[0]);
+        return { runId, status: "ok" };
+      });
+
+      try {
+        await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+        const resumeParams = gatewayParams() as Record<string, unknown>;
+        expect(resumeParams).toMatchObject({
+          sessionKey: "agent:main:discord:direct:123",
+          deliver: true,
+          bestEffortDeliver: true,
+          lane: "main",
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+          threadId: "123",
+        });
+        const recoveryRunId = String(resumeParams.idempotencyKey);
+        expect(hookHandler).toHaveBeenCalledWith(
+          {
+            payload: expect.objectContaining({ text: "final answer" }),
+            kind: "final",
+            channel: "discord",
+            sessionKey: "agent:main:discord:direct:123",
+            runId: recoveryRunId,
+            usageState: undefined,
+          },
+          {
+            channelId: "discord",
+            accountId: "main",
+            conversationId: "discord:dm:123",
+            sessionKey: "agent:main:discord:direct:123",
+            runId: recoveryRunId,
+          },
+        );
+        expect(deliveredText).toHaveBeenCalledExactlyOnceWith({
+          to: "discord:dm:123",
+          text: "hooked: final answer",
+        });
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        resetGlobalHookRunner();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
       }
-    }
-  });
+    },
+  );
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -2214,25 +2233,28 @@ describe("main-session-restart-recovery", () => {
     ).toBeUndefined();
   });
 
-  it("does not deliver restart recovery when session send policy denies sends", async () => {
-    const { sessionsDir } = await makeMainSessionFixture({
-      sessionKey: "agent:main:discord:direct:123",
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-      },
-    });
-    await writeCompletedToolTranscript(sessionsDir);
+  it.each(["interrupted run", "unclaimed session"])(
+    "does not deliver restart recovery through the %s route when session send policy denies sends",
+    async (routeOwner) => {
+      const { sessionsDir } = await makeMainSessionFixture({
+        sessionKey: "agent:main:discord:direct:123",
+        [routeOwner === "interrupted run" ? "restartRecoveryDeliveryContext" : "deliveryContext"]: {
+          channel: "discord",
+          to: "discord:dm:123",
+          accountId: "main",
+        },
+      });
+      await writeCompletedToolTranscript(sessionsDir);
 
-    const result = await recoverRestartAbortedMainSessions({
-      cfg: { session: { sendPolicy: { default: "deny" } } },
-      stateDir: tmpDir,
-    });
+      const result = await recoverRestartAbortedMainSessions({
+        cfg: { session: { sendPolicy: { default: "deny" } } },
+        stateDir: tmpDir,
+      });
 
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams().deliver).toBe(false);
-  });
+      expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+      expect(gatewayParams().deliver).toBe(false);
+    },
+  );
 
   it("resumes stale approval-pending exec tool results with restart-safe tools", async () => {
     const sessionsDir = await writeMainSessionTranscript([

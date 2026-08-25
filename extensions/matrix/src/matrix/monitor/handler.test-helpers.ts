@@ -106,6 +106,7 @@ type MatrixHandlerTestHarnessOptions = {
   };
   resolveHumanDelayConfig?: () => undefined;
   dispatchInboundMessage?: MatrixDispatchInboundMessage;
+  runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
@@ -218,7 +219,7 @@ export function createMatrixHandlerTestHarness(
         dispatchResult,
       };
     });
-  const run = vi.fn(
+  const defaultRun = vi.fn(
     async (
       params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
     ) => {
@@ -266,6 +267,7 @@ export function createMatrixHandlerTestHarness(
       });
     },
   );
+  const run = options.runChannelInboundEvent ?? defaultRun;
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
   const cfgForHandler =

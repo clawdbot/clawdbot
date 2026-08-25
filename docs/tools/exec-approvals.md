@@ -421,6 +421,32 @@ Each allowlist entry supports:
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
 
+## Cron standing grants
+
+Approvals raised by gateway-host cron runs are delivered only to connected
+approval surfaces (Control UI, TUI, macOS app) — never to chat channels, which
+would repeat a card on every occurrence. While a reviewer surface is
+connected, the scheduled run waits for the decision like an interactive run;
+cron jobs are single-flight, so at most one card per job is pending at a
+time. With no approval surface connected, the request is denied immediately
+and the run's error explains the policy fix, exactly as before. Node-host
+cron execs keep the fully headless policy (no cards) until node execution
+gains its own standing-grant path.
+
+When an approval originates from a cron job's isolated run, resolving it with
+**allow always** does not write a JSON allowlist entry. Instead the Gateway
+mints a scoped standing grant bound to that exact agent, cron job, job
+configuration, and operation (command text, working directory, and requested
+environment). Later occurrences of the same job execute that exact operation
+without prompting while the grant is valid.
+
+A grant expires 30 days after the approval and fails closed back to a normal
+prompt whenever anything changed: the job was edited or deleted, the command,
+working directory, or environment differs, the grant expired or was revoked,
+or the original approval record is gone. Mutable file operands and commands
+that require explicit review (heredocs, strict inline eval, audit
+suppression) keep prompting per occurrence. Non-cron approvals are unchanged.
+
 ## Auto-allow skill CLIs
 
 When **Auto-allow skill CLIs** (`autoAllowSkills`) is enabled, executables

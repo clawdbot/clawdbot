@@ -2370,6 +2370,20 @@ describe("prepareCliRunContext", () => {
     },
   );
 
+  it.each([undefined, "user", "cron", "heartbeat"] as const)(
+    "keeps heartbeat scheduler instructions out of CLI system prompts: %s",
+    async (trigger) => {
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { heartbeat: { every: "30m" } } } },
+        sessionKey: "agent:main:main",
+        trigger,
+      });
+
+      expect(context.systemPrompt).not.toContain("## Heartbeats");
+      expect(context.systemPrompt).not.toContain("Heartbeat poll;");
+    },
+  );
+
   it.each([
     {
       name: "prefers current-turn metadata",

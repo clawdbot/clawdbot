@@ -56,6 +56,7 @@ async function createContext(viewport = { height: 900, width: 1280 }): Promise<B
   const context = await browser.newContext({
     colorScheme: "dark",
     locale: "en-US",
+    recordVideo: proofDir ? { dir: path.join(proofDir, "videos"), size: viewport } : undefined,
     serviceWorkers: "block",
     viewport,
   });
@@ -105,6 +106,7 @@ async function waitForPendingUpgradeItem(item: Locator) {
     .waitFor();
   await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
   await item.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+  expect(await item.getByRole("button", { name: "Dismiss Limited access" }).count()).toBe(0);
 }
 
 describeControlUiE2e("Control UI live device scope upgrade", () => {
@@ -129,7 +131,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     openContexts.clear();
   });
 
-  it("moves limited access from page headers into the existing Inbox", async () => {
+  it("moves limited access into the Inbox and persists its dismissal", async () => {
     const desktopContext = await createContext();
     const desktop = await desktopContext.newPage();
     await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
@@ -140,9 +142,22 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("1 inbox item");
     const desktopPanel = await openInbox(desktop);
     const desktopItem = await openLimitedAccessItem(desktopPanel);
-    expect(await desktopItem.locator(".sidebar-issues-panel__dismiss").count()).toBe(0);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access.png");
+    await desktopItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    await expect.poll(() => desktopItem.count()).toBe(0);
+    await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
+    await desktopPanel.getByRole("tab", { name: "System", exact: true }).waitFor();
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png");
+
+    await desktop.reload();
+    await desktop.locator("openclaw-app-shell").waitFor();
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    const reloadedPanel = await openInbox(desktop);
+    await reloadedPanel.getByRole("tab", { name: /System/u }).click();
+    expect(await reloadedPanel.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
+    await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png");
 
     const mobileContext = await createContext({ width: 390, height: 844 });
     const mobile = await mobileContext.newPage();
@@ -163,6 +178,32 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await waitForAnimations(mobilePanel);
     await openLimitedAccessItem(mobilePanel);
     await captureProof(mobile, "mobile-inbox-limited-access.png");
+  });
+
+  it("resurfaces when manual guidance becomes an actionable upgrade", async () => {
+    const context = await createContext();
+    const guidancePage = await context.newPage();
+    await installMockGateway(guidancePage, {
+      featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
+      operatorScopes: LIMITED_SCOPES,
+    });
+    await guidancePage.goto(`${server.baseUrl}activity`);
+
+    const guidanceInbox = guidancePage.locator(".sidebar-issues-button");
+    const guidanceItem = await openLimitedAccessItem(await openInbox(guidancePage));
+    await guidanceItem.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
+    await guidanceItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await expect.poll(() => guidanceInbox.getAttribute("aria-label")).toBe("0 inbox items");
+    await guidancePage.close();
+
+    const availablePage = await context.newPage();
+    await installMockGateway(availablePage, { operatorScopes: LIMITED_SCOPES });
+    await availablePage.goto(`${server.baseUrl}activity`);
+
+    const availableInbox = availablePage.locator(".sidebar-issues-button");
+    await expect.poll(() => availableInbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const availableItem = await openLimitedAccessItem(await openInbox(availablePage));
+    await availableItem.getByRole("button", { name: "Request admin" }).waitFor();
   });
 
   it("keeps a pending admin request across Inbox presenters and Settings", async () => {

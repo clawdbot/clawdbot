@@ -297,7 +297,7 @@ class SessionPrefetcher {
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
       ),
     );
-    const rows = [...(snapshot.rows ?? [])].toSorted(
+    const rows = (snapshot.rows ?? []).toSorted(
       (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
     );
     const candidates: SessionPrefetchCandidate[] = [];

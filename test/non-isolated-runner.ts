@@ -4,6 +4,8 @@ import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import { clearCurrentPluginMetadataSnapshot } from "../src/plugins/current-plugin-metadata-state.js";
+import { registerPluginMetadataSnapshotReaders } from "../src/plugins/plugin-metadata-snapshot.runtime.js";
 import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
@@ -332,6 +334,31 @@ function resetOpenClawSessionSuspensionState(): void {
   api?.resetSessionSuspensionStateForTest?.();
 }
 
+function resetOpenClawPluginMetadataState(modules: EvaluatedModules): void {
+  let clearLifecycle: (() => void) | undefined;
+  for (const [modulePath, module] of modules.idToModuleMap) {
+    if (
+      modulePath.startsWith("mock:") ||
+      !/\/src\/plugins\/plugin-metadata-lifecycle\.(?:ts|js)(?:\?.*)?$/u.test(modulePath) ||
+      !module.exports ||
+      typeof module.exports !== "object"
+    ) {
+      continue;
+    }
+    const clear = Reflect.get(module.exports, "clearPluginMetadataLifecycleCaches");
+    if (typeof clear === "function") {
+      clearLifecycle = clear;
+    }
+  }
+  (clearLifecycle ?? clearCurrentPluginMetadataSnapshot)();
+
+  // Existing lightweight bridges retain the slot, so reset reader closures in place.
+  registerPluginMetadataSnapshotReaders({
+    getCurrentPluginMetadataSnapshot: undefined,
+    resolvePluginMetadataSnapshot: undefined,
+  });
+}
+
 const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 
 type SerializedResolveMocksState = {
@@ -473,10 +500,12 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();
+    const evaluatedModules = internals.workerState.evaluatedModules as EvaluatedModules;
+    resetOpenClawPluginMetadataState(evaluatedModules);
     dropTrackedRepoOwnedCustomElements();
     resetSharedDocumentBody();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
+    resetEvaluatedModules(evaluatedModules, true);
   }
 }

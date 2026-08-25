@@ -246,7 +246,6 @@ vi.mock("../heartbeat.js", async () => {
   const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
   return {
     DEFAULT_HEARTBEAT_EVERY: actual.DEFAULT_HEARTBEAT_EVERY,
-    HEARTBEAT_CRON_TASK_GUIDANCE: actual.HEARTBEAT_CRON_TASK_GUIDANCE,
     resolveHeartbeatPromptCore: actual.resolveHeartbeatPromptCore,
     stripHeartbeatToken: (text: string) => ({
       text,

@@ -123,14 +123,18 @@ async function httpCall(params: {
   });
 }
 
-function storeResponseCookies(jar: Map<string, string>, result: HttpResult): void {
-  for (const cookie of result.headers["set-cookie"] ?? []) {
+function storeCookies(jar: Map<string, string>, cookies: readonly string[] | undefined): void {
+  for (const cookie of cookies ?? []) {
     const pair = cookie.split(";", 1)[0];
     const separator = pair?.indexOf("=") ?? -1;
     if (pair && separator > 0) {
       jar.set(pair.slice(0, separator), pair.slice(separator + 1));
     }
   }
+}
+
+function storeResponseCookies(jar: Map<string, string>, result: HttpResult): void {
+  storeCookies(jar, result.headers["set-cookie"]);
 }
 
 function cookieJarHeader(jar: ReadonlyMap<string, string>): string {
@@ -149,6 +153,29 @@ function webSocketMessageText(data: RawData): string {
       ? Buffer.from(data)
       : data;
   return bytes.toString("utf8");
+}
+
+async function openWebSocket(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<{ socket: WebSocket; setCookies: string[] | undefined }> {
+  let setCookies: string[] | undefined;
+  const socket = new WebSocket(url, headers ? { headers } : undefined);
+  socket.once("upgrade", (response) => {
+    setCookies = response.headers["set-cookie"];
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  return { socket, setCookies };
+}
+
+async function closeWebSocket(socket: WebSocket): Promise<void> {
+  await new Promise<void>((resolve) => {
+    socket.once("close", resolve);
+    socket.close();
+  });
 }
 
 async function browserCall(
@@ -323,11 +350,16 @@ describe("portal HTTP proxy", () => {
       port: portalB.listenPort,
       path: `/set?${portalB.tokenQuery}`,
     });
-    expect(initialA.headers["set-cookie"]).toContain(
-      `oc_portal_${targetPort}_session=a; Path=/; HttpOnly`,
+    const targetCookieA = initialA.headers["set-cookie"]?.find((cookie) =>
+      cookie.startsWith("oc_portal_"),
     );
-    expect(initialB.headers["set-cookie"]).toContain(
-      `oc_portal_${targetPortB}_session=b; Path=/; HttpOnly`,
+    const targetCookieB = initialB.headers["set-cookie"]?.find((cookie) =>
+      cookie.startsWith("oc_portal_"),
+    );
+    expect(targetCookieA).toMatch(/^oc_portal_[a-f0-9]{32}_session=a; Path=\/; HttpOnly$/u);
+    expect(targetCookieB).toMatch(/^oc_portal_[a-f0-9]{32}_session=b; Path=\/; HttpOnly$/u);
+    expect(targetCookieA?.split("_session=", 1)[0]).not.toBe(
+      targetCookieB?.split("_session=", 1)[0],
     );
     expect(
       [...(initialA.headers["set-cookie"] ?? []), ...(initialB.headers["set-cookie"] ?? [])].join(
@@ -349,6 +381,41 @@ describe("portal HTTP proxy", () => {
     });
     expect(receivedCookiesA).toEqual([undefined, "session=a"]);
     expect(receivedCookiesB).toEqual([undefined, "session=b"]);
+  });
+
+  it("does not forward cookies from a closed portal when its target port is reused", async () => {
+    targetHandler = (_req, res) => {
+      res.setHeader("Set-Cookie", "session=portal-a-secret; Path=/; HttpOnly");
+      res.end("target-a");
+    };
+    const service = portalService();
+    const portalA = await service.open({ targetPort });
+    const jar = new Map<string, string>();
+    await browserCall(jar, {
+      port: portalA.listenPort,
+      path: `/?${portalA.tokenQuery}`,
+    });
+    await service.close(portalA.id);
+
+    const receivedCookiesB: Array<string | undefined> = [];
+    targetHandler = (req, res) => {
+      receivedCookiesB.push(req.headers.cookie);
+      if (req.url === "/set") {
+        res.setHeader("Set-Cookie", "session=portal-b; Path=/; HttpOnly");
+      }
+      res.end("target-b");
+    };
+    const portalB = await service.open({ targetPort });
+    expect(portalB.tokenQuery).not.toBe(portalA.tokenQuery);
+
+    await browserCall(jar, {
+      port: portalB.listenPort,
+      path: `/?${portalB.tokenQuery}`,
+    });
+    await browserCall(jar, { port: portalB.listenPort, path: "/set" });
+    await browserCall(jar, { port: portalB.listenPort });
+
+    expect(receivedCookiesB).toEqual([undefined, undefined, "session=portal-b"]);
   });
 
   it("forces no-referrer and never forwards a token-bearing referrer", async () => {
@@ -472,7 +539,10 @@ describe("portal HTTP proxy", () => {
     expect(await echoed).toBe("hot reload");
     expect(targetWebSocketPath).toBe("/hmr?channel=dev");
     expect(targetWebSocketCookie).toBeUndefined();
-    expect(upgradeCookies).toEqual([`oc_portal_${targetPort}_socket=ready; Path=/; HttpOnly`]);
+    expect(upgradeCookies).toHaveLength(1);
+    expect(upgradeCookies?.[0]).toMatch(
+      /^oc_portal_[a-f0-9]{32}_socket=ready; Path=\/; HttpOnly$/u,
+    );
 
     const closed = new Promise<void>((resolve) => {
       ws.once("close", () => resolve());
@@ -521,5 +591,35 @@ describe("portal HTTP proxy", () => {
       ws.once("close", () => resolve());
       ws.close();
     });
+  });
+
+  it("does not forward WebSocket cookies from a closed portal when its target port is reused", async () => {
+    const service = portalService();
+    const portalA = await service.open({ targetPort });
+    targetWebSocketSetCookie = "socket=portal-a-secret; Path=/; HttpOnly";
+    const connectionA = await openWebSocket(
+      `ws://127.0.0.1:${portalA.listenPort}/hmr?${portalA.tokenQuery}`,
+    );
+    const jar = new Map<string, string>();
+    storeCookies(jar, connectionA.setCookies);
+    await closeWebSocket(connectionA.socket);
+    await service.close(portalA.id);
+
+    const portalB = await service.open({ targetPort });
+    targetWebSocketSetCookie = "socket=portal-b; Path=/; HttpOnly";
+    const connectionB = await openWebSocket(
+      `ws://127.0.0.1:${portalB.listenPort}/hmr?${portalB.tokenQuery}`,
+      { Cookie: cookieJarHeader(jar) },
+    );
+    expect(targetWebSocketCookie).toBeUndefined();
+    storeCookies(jar, connectionB.setCookies);
+    await closeWebSocket(connectionB.socket);
+
+    const connectionBAgain = await openWebSocket(
+      `ws://127.0.0.1:${portalB.listenPort}/hmr?${portalB.tokenQuery}`,
+      { Cookie: cookieJarHeader(jar) },
+    );
+    expect(targetWebSocketCookie).toBe("socket=portal-b");
+    await closeWebSocket(connectionBAgain.socket);
   });
 });

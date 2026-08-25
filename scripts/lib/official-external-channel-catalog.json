@@ -2557,7 +2557,8 @@
       "openclaw": {
         "contracts": {
           "tools": [
-            "whatsapp_call"
+            "whatsapp_call",
+            "whatsapp_login"
           ]
         },
         "channel": {
