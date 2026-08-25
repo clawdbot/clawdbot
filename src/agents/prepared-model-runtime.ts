@@ -453,6 +453,7 @@ export async function replacePreparedModelRuntimeSnapshotAfterCatalogGenerationM
       agentBuildCompletions,
       buildTimeoutMs: modelRuntimeBuildTimeoutMs,
     });
+    await drainPendingAuthMutations();
     replyDispatchPublication.rebuild(owners.values());
   });
   catalogGenerationRecoveries.set(owner, recovery);
