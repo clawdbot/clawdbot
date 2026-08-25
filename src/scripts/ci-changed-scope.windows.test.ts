@@ -22,6 +22,22 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes paired-worker workspace transfer owners and native regression coverage to Windows", () => {
+    for (const workspacePath of [
+      "src/node-host/node-worker-transfer-client.ts",
+      "src/node-host/node-worker-transfer-client.test.ts",
+      "src/gateway/worker-environments/node-worker-tunnel.ts",
+      "src/gateway/worker-environments/node-worker-tunnel.test.ts",
+      "src/gateway/worker-environments/workspace-sync-scripts.ts",
+      "src/gateway/worker-environments/workspace-sync-manifest.test.ts",
+    ]) {
+      expect(detectChangedScope([workspacePath]), workspacePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SQLite transcript archive changes to Windows", () => {
     for (const archivePath of [
       "src/config/sessions/session-accessor.sqlite-archive.ts",
