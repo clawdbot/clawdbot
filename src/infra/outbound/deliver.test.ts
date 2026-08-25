@@ -4549,9 +4549,10 @@ describe("deliverOutboundPayloads", () => {
       extractMarkdownImages: true,
     },
   ])("delivers explicit attachments and every extracted $name", async (testCase) => {
-    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(
-      async ({ mediaUrl }) => ({ channel: "matrix", messageId: mediaUrl }),
-    );
+    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(async () => ({
+      channel: "matrix",
+      messageId: "sent",
+    }));
     setTestOutbound({
       ...matrixOutboundForTest,
       sendMedia,
