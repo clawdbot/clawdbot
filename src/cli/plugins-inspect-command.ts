@@ -235,7 +235,9 @@ export async function runPluginsInspectCommand(
       }),
     { command: "inspect" },
   );
-  const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
+  const targetPlugin =
+    snapshotReport.plugins.find((entry) => entry.id === id) ??
+    snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =

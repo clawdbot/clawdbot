@@ -889,9 +889,12 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
   });
 
-  it("runtime-inspects without repairing deps", async () => {
+  it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
     buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [createPluginRecord({ id: "openclaw-mem0", name: "Mem0" })],
+      plugins: [
+        createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }),
+        createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
+      ],
       diagnostics: [],
     });
     buildPluginInspectReportMock.mockReturnValue({
@@ -921,12 +924,13 @@ describe("plugins cli list", () => {
       compatibility: [],
     });
 
-    await runPluginsCommand(["plugins", "inspect", "openclaw-mem0", "--runtime"]);
-
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalledWith({
-      config: {},
-      onlyPluginIds: ["openclaw-mem0"],
-    });
+    for (const selector of ["openclaw-mem0", "Mem0"]) {
+      await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);
+      expect(buildPluginDiagnosticsReportMock).toHaveBeenLastCalledWith({
+        config: {},
+        onlyPluginIds: ["openclaw-mem0"],
+      });
+    }
   });
 
   it("does not runtime-load plugins when inspect target is missing", async () => {
