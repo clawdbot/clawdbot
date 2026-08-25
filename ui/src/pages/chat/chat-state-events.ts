@@ -77,6 +77,8 @@ function chatEventOutboxScope(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
 ): StoredChatOutboxScope | undefined {
+  // Gateway chat events always carry session ownership. Missing ownership must
+  // not fall back to correlation-only run IDs, which can collide across sessions.
   if (!payload?.sessionKey) {
     return undefined;
   }
