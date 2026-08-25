@@ -182,6 +182,75 @@ describe("manifest-declared plugin secret owners", () => {
   );
 
   it.each(["capability", "provider"] as const)(
+    "does not reuse a stale %s credential when a declared owner field is missing",
+    async (ownerKind) => {
+      const pluginId = "partial-owner";
+      const primary = envRef("PRIMARY_OWNER_TOKEN");
+      const secondary = envRef("SECONDARY_OWNER_TOKEN");
+      const pluginConfig = {
+        primary: { endpoint: "https://trusted.example.invalid", token: primary },
+        secondary: { token: secondary },
+      };
+      const prepare = (env: NodeJS.ProcessEnv) =>
+        prepareSecretsRuntimeSnapshot({
+          config: asConfig({
+            agents: { list: [{ id: "main", default: true }] },
+            plugins: { entries: { [pluginId]: { enabled: true, config: pluginConfig } } },
+          }),
+          env,
+          includeAuthStoreRefs: false,
+          allowUnavailableSecretOwners: true,
+          loadablePluginOrigins: new Map([[pluginId, "config" as const]]),
+          manifestRegistry: {
+            plugins: [
+              {
+                id: pluginId,
+                origin: "config",
+                configContracts: {
+                  secretInputs: {
+                    paths: ["primary", "secondary"].map((name) => ({
+                      path: `${name}.token`,
+                      ownerKind,
+                      ownerId: LOCAL_OWNER_ID,
+                      ownerContractFields: ["endpoint", "token"],
+                    })),
+                  },
+                },
+              } as never,
+            ],
+          },
+        });
+
+      activateSnapshot(
+        await prepare({
+          PRIMARY_OWNER_TOKEN: "primary-last-known-good",
+          SECONDARY_OWNER_TOKEN: "secondary-last-known-good",
+        }),
+      );
+      const failed = await prepare({});
+      const ownerId = runtimePluginManifestSecretOwnerId(pluginId, LOCAL_OWNER_ID);
+
+      expect(failed.degradedOwners).toMatchObject([
+        {
+          ownerKind: runtimeOwnerKind(ownerKind),
+          ownerId,
+          degradationState: "cold",
+          paths: [
+            "plugins.entries.partial-owner.config.primary.token",
+            "plugins.entries.partial-owner.config.secondary.token",
+          ],
+        },
+      ]);
+      expect(failed.config.plugins?.entries?.[pluginId]?.config).toEqual(pluginConfig);
+
+      activateSnapshot(failed);
+      expect(() => assertSecretOwnerAvailable(runtimeOwnerKind(ownerKind), ownerId)).toThrow(
+        "configured but unavailable",
+      );
+    },
+  );
+
+  it.each(["capability", "provider"] as const)(
     "does not merge alternate delimiter splits across %s plugins",
     async (ownerKind) => {
       const coldRef = envRef("ALTERNATE_SPLIT_COLD");

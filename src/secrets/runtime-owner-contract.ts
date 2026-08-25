@@ -40,9 +40,15 @@ export function digestSecretOwnerContract(value: unknown): string {
 }
 
 /** Combines assignment fragments into one deterministic owner contract. */
-export function combineSecretOwnerContractDigests(digests: readonly string[]): string | undefined {
-  const unique = [...new Set(digests)].toSorted();
-  return unique.length > 0 ? digestSecretOwnerContract(unique) : undefined;
+export function combineSecretOwnerContractDigests(
+  digests: readonly (string | undefined)[],
+): string | undefined {
+  const complete = digests.filter((digest): digest is string => digest !== undefined);
+  if (complete.length === 0 || complete.length !== digests.length) {
+    return undefined;
+  }
+  const unique = [...new Set(complete)].toSorted((left, right) => left.localeCompare(right));
+  return digestSecretOwnerContract(unique);
 }
 
 /** Binds a web credential to both tool selection and its owning plugin config. */

@@ -146,9 +146,7 @@ export function listSecretAssignmentOwners(
             ownerId: owner.ownerId,
             refKeys: ownerAssignments.map((assignment) => secretRefKey(assignment.ref)).toSorted(),
             contractDigest: combineSecretOwnerContractDigests(
-              ownerAssignments.flatMap((assignment) =>
-                assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
-              ),
+              ownerAssignments.map((assignment) => assignment.ownerContractDigest),
             ),
             resolvedValues: ownerAssignments.flatMap((assignment) => {
               const refKey = secretRefKey(assignment.ref);
@@ -246,9 +244,7 @@ function associateAssignmentFailureOwners(params: {
           refs: assignments.map((assignment) => assignment.ref),
           config: params.config,
           contractDigest: combineSecretOwnerContractDigests(
-            assignments.flatMap((assignment) =>
-              assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
-            ),
+            assignments.map((assignment) => assignment.ownerContractDigest),
           ),
           forceColdRefKeys: params.forceColdRefKeys,
         }),
@@ -534,9 +530,7 @@ export async function resolveAndApplySecretAssignments(params: {
           refs: assignments.map((assignment) => assignment.ref),
           config: params.options.config,
           contractDigest: combineSecretOwnerContractDigests(
-            assignments.flatMap((assignment) =>
-              assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
-            ),
+            assignments.map((assignment) => assignment.ownerContractDigest),
           ),
           forceColdRefKeys: params.forceColdRefKeys,
         });

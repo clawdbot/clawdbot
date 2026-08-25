@@ -418,7 +418,7 @@ function addCoveragePluginLoadPath(config: OpenClawConfig, pluginId: string): vo
     return;
   }
   const nextIndex = Array.isArray(existing) ? existing.length : 0;
-  setPathCreateStrict(config, ["plugins", "load", "paths", String(nextIndex)], loadPath);
+  setPathCreateStrict(config, ["plugins", "load", "paths", nextIndex], loadPath);
 }
 
 function resolveCoverageLoadablePluginOrigins(
@@ -578,7 +578,7 @@ function applyConfigForOpenClawTarget(
     }
   }
   if (entry.id === "memory.search.remote.apiKey") {
-    setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "list", 0, "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");

@@ -1,5 +1,6 @@
 // Matches plugin config contracts against config paths and values.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 
@@ -21,16 +22,6 @@ type TraversalState = {
 
 function normalizePathPattern(pathPattern: string): string[] {
   return normalizeStringEntries(pathPattern.split("."));
-}
-
-function appendPathSegment(path: string, segment: string | number): string {
-  if (typeof segment === "number") {
-    return `${path}[${segment}]`;
-  }
-  if (!/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(segment)) {
-    return `${path}[${JSON.stringify(segment)}]`;
-  }
-  return path ? `${path}.${segment}` : segment;
 }
 
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
@@ -102,7 +93,7 @@ export function collectPluginConfigContractMatches(params: {
   }
 
   return states.map((state) => ({
-    path: state.segments.reduce(appendPathSegment, ""),
+    path: state.segments.reduce(appendConfigPathSegment, ""),
     value: state.value,
     parent: state.parent!,
     key: String(state.segments.at(-1)!),

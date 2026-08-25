@@ -8,6 +8,7 @@ import {
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -139,9 +140,7 @@ function collectConfiguredPluginSecretAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const pluginConfigPath = /^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(params.pluginId)
-    ? `plugins.entries.${params.pluginId}.config`
-    : `plugins.entries[${JSON.stringify(params.pluginId)}].config`;
+  const pluginConfigPath = toDotPath(["plugins", "entries", params.pluginId, "config"]);
   const seenPaths = new Set<string>();
   for (const secretPath of params.secretPaths) {
     for (const match of collectPluginConfigContractMatches({
@@ -182,14 +181,16 @@ function collectConfiguredPluginSecretAssignments(params: {
                 ),
                 requiredForGateway: false,
                 disposition: "isolate" as const,
-                contract:
-                  secretPath.ownerContractFields && isRecord(ownerConfig)
+                contract: secretPath.ownerContractFields
+                  ? isRecord(ownerConfig) &&
+                    secretPath.ownerContractFields.every((field) =>
+                      Object.hasOwn(ownerConfig, field),
+                    )
                     ? Object.fromEntries(
-                        secretPath.ownerContractFields.flatMap((field) =>
-                          Object.hasOwn(ownerConfig, field) ? [[field, ownerConfig[field]]] : [],
-                        ),
+                        secretPath.ownerContractFields.map((field) => [field, ownerConfig[field]]),
                       )
-                    : params.pluginConfig,
+                    : undefined
+                  : params.pluginConfig,
               },
             }
           : {}),

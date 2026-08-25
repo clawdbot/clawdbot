@@ -3772,6 +3772,11 @@ describe("config cli", () => {
         error: "Invalid path (empty segment): gateway.[port]",
       },
       {
+        name: "rejects registry array patterns as concrete config paths",
+        args: ["config", "get", "plugins.entries.example.config.accounts[].token"],
+        error: 'Invalid path (empty "[]"): plugins.entries.example.config.accounts[].token',
+      },
+      {
         name: "rejects a trailing escape for config get before reading another key",
         args: ["config", "get", "gateway.port\\"],
         error: "Invalid path (trailing escape): gateway.port\\",
@@ -3855,6 +3860,14 @@ describe("config cli", () => {
       ["agents.list[0].id", ["agents", "list", "0", "id"]],
       ["agents.list[0][1]", ["agents", "list", "0", "1"]],
       ["[0]", ["0"]],
+      [
+        'plugins.entries.example.config.accounts["0"].token',
+        ["plugins", "entries", "example", "config", "accounts", "0", "token"],
+      ],
+      [
+        'plugins.entries["foo.config.bar"].config.token',
+        ["plugins", "entries", "foo.config.bar", "config", "token"],
+      ],
       ["  gateway.port  ", ["gateway", "port"]],
       ["channels.discord.guilds.prod\\.guild", ["channels", "discord", "guilds", "prod.guild"]],
       [
