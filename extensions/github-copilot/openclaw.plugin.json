@@ -44,7 +44,11 @@
             "contextWindow": 1000000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
-            "compat": { "codeMode": "capable" }
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
+            }
           },
           {
             "id": "claude-sonnet-5",
