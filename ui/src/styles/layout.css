@@ -1690,9 +1690,9 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.8px;
 }
 
-/* Structural label, not content: at the session row's 13px/500 a group reads as
-   just another session. Type carries the whole split because the head color
-   stays near `--text` for readability; case stays as authored (project names). */
+/* Structural label, not content: keep project names smaller than session rows
+   and lighter than the parent catalog heading. Indentation and disclosure carry
+   the hierarchy while case stays as authored. */
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
   min-width: 0;
@@ -1700,8 +1700,8 @@ openclaw-settings-save-indicator:empty {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(12px * var(--control-ui-text-scale));
-  font-weight: 650;
-  letter-spacing: 0.03em;
+  font-weight: 500;
+  letter-spacing: normal;
 }
 
 .sidebar-session-catalog-project__count {

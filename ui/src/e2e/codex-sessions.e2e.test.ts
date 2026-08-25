@@ -566,6 +566,20 @@ suite.define(() => {
           };
         });
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
+      const catalogLabelWeight = await section
+        .locator(":scope > .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text")
+        .evaluate((label) => Number.parseInt(getComputedStyle(label).fontWeight, 10));
+      const projectLabelTypography = await openclawProject
+        .locator(".sidebar-session-catalog-project__label")
+        .evaluate((label) => {
+          const style = getComputedStyle(label);
+          return {
+            fontWeight: Number.parseInt(style.fontWeight, 10),
+            letterSpacing: style.letterSpacing,
+          };
+        });
+      expect(projectLabelTypography.fontWeight).toBeLessThan(catalogLabelWeight);
+      expect(projectLabelTypography.letterSpacing).toBe("normal");
       expect(
         await section
           .locator('[data-session-catalog-project="/Users/dev/other"]')
@@ -1038,3 +1052,4 @@ suite.define(() => {
     await page.close();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

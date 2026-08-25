@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -58,6 +59,7 @@ function renderSessionSection(params: {
 }) {
   const { host, section } = params;
   const totalRowCount = section.totalRowCount;
+  const canCollapse = totalRowCount > 0;
   const group = section.category;
   const personOwner = section.personOwner;
   // Pinned rows render in the nav zone; renderHeader records whether this list
@@ -143,14 +145,17 @@ function renderSessionSection(params: {
               <button
                 type="button"
                 class="sidebar-session-group-toggle"
-                aria-expanded=${String(!collapsed)}
+                aria-expanded=${ifDefined(canCollapse ? (collapsed ? "false" : "true") : undefined)}
                 aria-label=${label}
-                @click=${() => host.toggleSection(section.id)}
+                ?disabled=${!canCollapse}
+                @click=${canCollapse ? () => host.toggleSection(section.id) : nothing}
               >
                 <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-                  <span class="sidebar-session-group-toggle__icon"
-                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-                  >
+                  ${canCollapse
+                    ? html`<span class="sidebar-session-group-toggle__icon"
+                        >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                      >`
+                    : nothing}
                 </span>
                 ${personOwner
                   ? html`<openclaw-viewer-avatar
@@ -166,7 +171,7 @@ function renderSessionSection(params: {
                     ></openclaw-viewer-avatar>`
                   : nothing}
                 <span class="sidebar-recent-sessions__label-text">${label}</span>
-                ${collapsed && totalRowCount > 0
+                ${totalRowCount === 0 || collapsed
                   ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
                   : nothing}
                 ${collapsedRunningDot
