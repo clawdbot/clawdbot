@@ -4,8 +4,16 @@
  */
 /** Synthetic provider/backend id for Claude Code CLI-backed Anthropic models. */
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+/** Retired copied profile owned by the native Claude provider, never generic auth. */
+export const CLAUDE_CLI_RETIRED_PROFILE_ID = `anthropic:${CLAUDE_CLI_BACKEND_ID}`;
 /** Non-secret marker telling OpenClaw that the installed Claude CLI owns auth. */
 export const CLAUDE_CLI_NATIVE_AUTH_MARKER = ["openclaw", "claude-cli-native-auth"].join(":");
+
+/** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */
+export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
+  levels: [{ id: "off" }],
+  defaultLevel: "off",
+} as const;
 
 // Claude owns native login selection; inherited routing, credentials, plugins,
 // and telemetry must not redirect managed execution or authentication probes.
