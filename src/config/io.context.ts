@@ -40,7 +40,6 @@ import { formatConfigIssueSummary } from "./issue-format.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
-import { materializeRuntimeConfig } from "./materialize.js";
 import { copyConfigResolutionFacts } from "./resolution-facts.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
@@ -274,15 +273,4 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
 
 export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnapshot | undefined) {
   return snapshot ? collectManifestModelIdNormalizationPolicies(snapshot.plugins) : undefined;
-}
-
-export function materializeConfigForLoad(
-  _context: ConfigIoContext,
-  config: OpenClawConfig,
-  _effectiveConfigRaw: unknown,
-  manifestRegistry: PluginManifestRegistry | undefined,
-): OpenClawConfig {
-  return materializeRuntimeConfig(config, "load", {
-    manifestRegistry,
-  });
 }
