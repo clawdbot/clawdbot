@@ -30,6 +30,9 @@ export class ComposerMicrophonePicker {
   private catalogRequest = 0;
   private realtimeStatusValue: ComposerTalkCapabilityStatus = "unknown";
   private dictationStatusValue: ComposerTalkCapabilityStatus = "unknown";
+  private microphonePermissionBlockedValue = false;
+  private microphonePermissionStatus: PermissionStatus | null = null;
+  private permissionRequest = 0;
 
   constructor(private readonly requestUpdate: () => void) {}
 
@@ -57,6 +60,10 @@ export class ComposerMicrophonePicker {
     return this.dictationStatusValue;
   }
 
+  get microphonePermissionBlocked(): boolean {
+    return this.microphonePermissionBlockedValue;
+  }
+
   syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
     if (client === this.catalogClient && connected === this.catalogConnected) {
       return;
@@ -69,6 +76,7 @@ export class ComposerMicrophonePicker {
       this.dictationStatusValue = "unknown";
       return;
     }
+    this.loadMicrophonePermission();
     this.loadCatalog(false);
   }
 
@@ -102,6 +110,8 @@ export class ComposerMicrophonePicker {
     this.release();
     this.discoveryRequest++;
     this.catalogRequest++;
+    this.permissionRequest++;
+    this.releaseMicrophonePermissionStatus();
     this.catalogClient = null;
     this.catalogConnected = false;
     this.realtimeStatusValue = "unknown";
@@ -126,6 +136,9 @@ export class ComposerMicrophonePicker {
         }
         this.devicesValue = result.devices;
         this.issueValue = result.issue;
+        if (result.issue === "permission-blocked") {
+          this.microphonePermissionBlockedValue = true;
+        }
       })
       .catch(() => {
         if (request !== this.discoveryRequest) {
@@ -142,6 +155,47 @@ export class ComposerMicrophonePicker {
         this.requestUpdate();
       });
   };
+
+  private loadMicrophonePermission(): void {
+    const permissions = navigator.permissions;
+    if (!permissions?.query) {
+      return;
+    }
+    const request = ++this.permissionRequest;
+    void permissions
+      .query({ name: "microphone" as PermissionName })
+      .then((status) => {
+        if (request !== this.permissionRequest) {
+          return;
+        }
+        this.releaseMicrophonePermissionStatus();
+        this.microphonePermissionStatus = status;
+        const sync = () => {
+          const blocked = status.state === "denied";
+          if (this.microphonePermissionBlockedValue !== blocked) {
+            this.microphonePermissionBlockedValue = blocked;
+            this.requestUpdate();
+          }
+        };
+        status.addEventListener("change", sync);
+        this.microphonePermissionStatusListener = sync;
+        sync();
+      })
+      .catch(() => undefined);
+  }
+
+  private microphonePermissionStatusListener: (() => void) | null = null;
+
+  private releaseMicrophonePermissionStatus(): void {
+    if (this.microphonePermissionStatus && this.microphonePermissionStatusListener) {
+      this.microphonePermissionStatus.removeEventListener(
+        "change",
+        this.microphonePermissionStatusListener,
+      );
+    }
+    this.microphonePermissionStatus = null;
+    this.microphonePermissionStatusListener = null;
+  }
 
   private loadCatalog(notify = true): void {
     const client = this.catalogClient;

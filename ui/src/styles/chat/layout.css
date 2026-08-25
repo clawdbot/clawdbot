@@ -4684,6 +4684,11 @@ button.chat-pr__diff {
   box-shadow: none;
 }
 
+.chat-talk-control__microphone-icon {
+  position: relative;
+  display: inline-flex;
+}
+
 /* The microphone and its device picker are related but distinct actions. Keep
    separate hit areas so hover and focus always identify which action will fire. */
 .chat-talk-control {
@@ -6195,7 +6200,8 @@ button.chat-pr__diff {
   flex: 0 0 auto;
 }
 
-.chat-controls__model-capability-alert {
+.chat-controls__model-capability-alert,
+.chat-talk-control__capability-alert {
   position: absolute;
   top: -5px;
   right: -1px;
@@ -6209,9 +6215,15 @@ button.chat-pr__diff {
   color: color-mix(in srgb, var(--warn) 82%, var(--text));
 }
 
-.chat-controls__model-capability-alert svg {
+.chat-controls__model-capability-alert svg,
+.chat-talk-control__capability-alert svg {
   width: 10px;
   height: 10px;
+}
+
+.chat-talk-control__capability-alert {
+  top: -6px;
+  right: -5px;
 }
 
 .chat-controls__model-capability-alert:focus-visible {

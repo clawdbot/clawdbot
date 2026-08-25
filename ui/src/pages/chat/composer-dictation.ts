@@ -43,10 +43,15 @@ type DictationSessionResult = {
 };
 
 type ComposerDictationSessionCallbacks = {
-  onError: (message: string) => void;
+  onError: (message: string, preservesText: boolean) => void;
   onLevel: (level: number) => void;
   onPartial: (text: string) => void;
   onReady: () => void;
+};
+
+type ComposerDictationFailure = {
+  kind: "interrupted" | "start";
+  preservesText: boolean;
 };
 
 type ComposerDictationControllerOptions = {
@@ -56,7 +61,7 @@ type ComposerDictationControllerOptions = {
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string) => void;
-  onError: (message: string) => void;
+  onError: (message: string, failure: ComposerDictationFailure) => void;
   onStateChange: () => void;
   onTap: () => void;
   onDictationUnavailable?: () => void;
@@ -206,7 +211,7 @@ class ComposerDictationSession {
     }
     if (this.gatewayDisconnected || this.failed) {
       this.cleanupEvents();
-      return this.finalTranscripts.join(" ").trim();
+      return this.transcriptIncludingPartial();
     }
     // A provider can emit several final utterances after close is acknowledged.
     // Keep listening until the final stream has stayed quiet for a bounded span.
@@ -214,8 +219,11 @@ class ComposerDictationSession {
     if (this.currentPartial) {
       this.reportFailure(t("chat.composer.dictationFinalizationTimedOut"));
     }
+    const transcript = this.failed
+      ? this.transcriptIncludingPartial()
+      : this.finalTranscripts.join(" ").trim();
     this.cleanupEvents();
-    return this.finalTranscripts.join(" ").trim();
+    return transcript;
   }
 
   async cancel(): Promise<void> {
@@ -227,11 +235,12 @@ class ComposerDictationSession {
     this.cleanupEvents();
   }
 
-  markGatewayDisconnected(): void {
+  markGatewayDisconnected(): boolean {
     // The relay cannot emit another transcript after its transport is gone.
     // Resolving any drain avoids retaining the composer in finalization.
     this.gatewayDisconnected = true;
     this.resolveTrailingFinalDrain();
+    return this.hasTranscript();
   }
 
   private appendAudio(samples: Float32Array): void {
@@ -321,7 +330,15 @@ class ComposerDictationSession {
     }
     this.failed = true;
     this.resolveTrailingFinalDrain();
-    this.callbacks.onError(message);
+    this.callbacks.onError(message, this.hasTranscript());
+  }
+
+  private hasTranscript(): boolean {
+    return this.finalTranscripts.length > 0 || Boolean(this.currentPartial);
+  }
+
+  private transcriptIncludingPartial(): string {
+    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
   private async stopCapture(): Promise<void> {
@@ -459,12 +476,13 @@ export class ComposerDictationController {
     }
     if ((this.phase !== "idle" && !this.canHold()) || (this.active && !options.connected)) {
       const keepFinal = this.active && !options.connected;
-      if (keepFinal) {
-        this.session?.markGatewayDisconnected();
-      }
+      const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
       if (keepFinal) {
-        options.onError(t("chat.composer.dictationDisconnected"));
+        options.onError(t("chat.composer.dictationDisconnected"), {
+          kind: "interrupted",
+          preservesText,
+        });
       }
     }
   }
@@ -627,11 +645,11 @@ export class ComposerDictationController {
     this.clearPointerGesture();
     this.setPhase("connecting");
     const session = new ComposerDictationSession(client, {
-      onError: (message) => {
+      onError: (message, preservesText) => {
         if (this.session !== session) {
           return;
         }
-        this.options.onError(message);
+        this.options.onError(message, { kind: "interrupted", preservesText });
         void this.stop({ commit: true });
       },
       onLevel: (level) => this.inputLevel.set(level),
@@ -652,7 +670,7 @@ export class ComposerDictationController {
       if (this.session !== session || this.disposed || this.isStopping()) {
         return;
       }
-      this.options.onError(messageFromError(error));
+      this.options.onError(messageFromError(error), { kind: "start", preservesText: false });
       await this.stop({ commit: false });
     }
   }

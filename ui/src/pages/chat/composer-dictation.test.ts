@@ -205,6 +205,28 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("returns to idle and classifies microphone startup failures", async () => {
+    getUserMedia = vi.fn(async () => {
+      throw new DOMException("blocked", "NotAllowedError");
+    });
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: getUserMedia });
+    const { controller, onError, target } = createHarness();
+
+    target.dispatchEvent(pointer("pointerdown"));
+    await vi.advanceTimersByTimeAsync(800);
+    await waitForFast(() =>
+      expect(onError).toHaveBeenCalledWith(
+        "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+        { kind: "start", preservesText: false },
+      ),
+    );
+
+    expect(controller.active).toBe(false);
+    expect(controller.locksComposer).toBe(false);
+    expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+    controller.dispose();
+  });
+
   it("keeps a quick pointer gesture as the existing tap action", async () => {
     const { controller, onTap, target } = createHarness();
 
@@ -446,6 +468,23 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("inserts a pending partial when finalization fails", async () => {
+    const { controller, onCommit, onError, target } = createHarness();
+    await startHold(target);
+    emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "keep the partial" });
+
+    const committed = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(committed).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledWith("keep the partial");
+    expect(onError).toHaveBeenCalledWith(
+      "Dictation stopped before the last partial transcript could be finalized.",
+      { kind: "interrupted", preservesText: true },
+    );
+    controller.dispose();
+  });
+
   it("surfaces provider errors raised while final text is draining", async () => {
     const { controller, onCommit, onError, target } = createHarness();
     await startHold(target);
@@ -461,7 +500,10 @@ describe("ComposerDictationController", () => {
     });
     await vi.advanceTimersByTimeAsync(1500);
 
-    expect(onError).toHaveBeenCalledWith("provider drain failed");
+    expect(onError).toHaveBeenCalledWith("provider drain failed", {
+      kind: "interrupted",
+      preservesText: false,
+    });
     expect(onCommit).not.toHaveBeenCalled();
     controller.dispose();
   });
@@ -613,6 +655,7 @@ describe("ComposerDictationController", () => {
     );
     expect(onError).toHaveBeenCalledWith(
       "The Gateway returned an unsupported dictation audio format.",
+      { kind: "interrupted", preservesText: false },
     );
     controller.dispose();
   });
@@ -682,10 +725,11 @@ describe("ComposerDictationController", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
-    await waitForFast(() => expect(harness.onCommit).toHaveBeenCalledWith("keep this"));
+    await waitForFast(() => expect(harness.onCommit).toHaveBeenCalledWith("keep this unfinished"));
     expect(Date.now() - disconnectedAt).toBeLessThan(1000);
     expect(harness.onError).toHaveBeenCalledWith(
       "Dictation stopped because the Gateway disconnected.",
+      { kind: "interrupted", preservesText: true },
     );
     expect(harness.onError).toHaveBeenCalledTimes(1);
     expect(harness.controller.finalizing).toBe(false);

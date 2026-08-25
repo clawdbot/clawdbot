@@ -584,11 +584,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         dismissRealtimeTalkError(state as never);
         state.requestUpdate?.();
       },
-      onDictationError: (message) => {
-        state.lastError = message;
-        state.chatError = message;
-        state.requestUpdate?.();
-      },
       onAbort: sessionActionCallbacks.onAbort,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),

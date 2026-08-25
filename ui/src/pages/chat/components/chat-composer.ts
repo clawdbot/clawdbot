@@ -418,6 +418,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     startRealtimeTalk();
   };
   const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
+  const microphoneAlert = devicePicker.microphonePermissionBlocked
+    ? t("chat.composer.microphonePermissionBlocked")
+    : devicePicker.dictationStatus === "unavailable"
+      ? t("chat.composer.dictationProviderUnavailable")
+      : null;
   const microphonePicker = props.onToggleRealtimeTalk
     ? renderMicrophonePicker({
         devices: devicePicker.devices,
@@ -483,7 +488,17 @@ export function renderChatComposer(props: ChatComposerProps) {
         textarea.selectionEnd = insertion.caret;
       });
     },
-    onError: (message: string) => props.onDictationError?.(message),
+    onError: (
+      message: string,
+      failure: { kind: "interrupted" | "start"; preservesText: boolean },
+    ) => {
+      const recovery =
+        failure.kind === "interrupted" && failure.preservesText
+          ? t("chat.composer.dictationInterruptedRecovery")
+          : t("chat.composer.dictationStartRecovery");
+      state.dictationError = `${message} ${recovery}`;
+      requestUpdate();
+    },
     onStateChange: requestUpdate,
     onDictationUnavailable: devicePicker.handleOpen,
     // With an initial empty composer, this button retains the existing
@@ -501,6 +516,10 @@ export function renderChatComposer(props: ChatComposerProps) {
       ? state.dictation
       : undefined;
   const handleDictationPointerDown = (event: PointerEvent) => {
+    if (state.dictationError) {
+      state.dictationError = null;
+      requestUpdate();
+    }
     const target = state.composerTextarea;
     state.dictationSelection = {
       start: target?.selectionStart ?? visibleDraft.length,
@@ -533,6 +552,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
+    microphoneAlert,
     dictation,
     onDictationPointerDown: handleDictationPointerDown,
     onPrimaryActionPointerDown: (event) =>

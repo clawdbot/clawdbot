@@ -399,6 +399,11 @@ describe("renderChatComposer controls", () => {
         container.querySelectorAll('[data-chat-talk-capability][data-status="unavailable"]'),
       ).toHaveLength(2),
     );
+    const voiceTooltip = container.querySelector<HTMLElement & { content?: string }>(
+      ".chat-talk-control > openclaw-tooltip",
+    );
+    expect(container.querySelector(".chat-talk-control__capability-alert")).not.toBeNull();
+    expect(voiceTooltip?.content).toBe(t("chat.composer.dictationProviderUnavailable"));
     button(container, t("chat.composer.startVoiceInput")).click();
     const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
       "wa-dropdown.chat-talk-input-picker",
@@ -424,6 +429,44 @@ describe("renderChatComposer controls", () => {
     expect(onOpenDictationSettings).not.toHaveBeenCalled();
     settingsButtons[1]?.click();
     expect(onOpenDictationSettings).toHaveBeenCalledOnce();
+  });
+
+  it("alarms a denied microphone before the device picker is opened", async () => {
+    const permissionStatus = new EventTarget() as PermissionStatus;
+    Object.defineProperty(permissionStatus, "state", { value: "denied" });
+    vi.stubGlobal(
+      "navigator",
+      Object.assign(Object.create(navigator), {
+        permissions: { query: vi.fn(async () => permissionStatus) },
+      }),
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { realtime: { ready: true }, transcription: { ready: true } };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      gatewayClient: { request } as unknown as GatewayBrowserClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-talk-control__capability-alert")).not.toBeNull(),
+    );
+    const voiceTooltip = container.querySelector<HTMLElement & { content?: string }>(
+      ".chat-talk-control > openclaw-tooltip",
+    );
+    expect(voiceTooltip?.content).toBe(t("chat.composer.microphonePermissionBlocked"));
+    expect(container.querySelector<HTMLElement & { open: boolean }>("wa-dropdown")?.open).toBe(
+      false,
+    );
+    expect(discoverRealtimeTalkInputsMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -806,6 +849,45 @@ describe("renderChatComposer controls", () => {
     expect(rerenderedButton).toBe(capturedButton);
     expect(rerenderedButton?.classList.contains("chat-send-btn--dictating")).toBe(true);
     expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
+  });
+
+  it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
+    vi.useFakeTimers();
+    openRealtimeTalkInputMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { realtime: { ready: true }, transcription: { ready: true } };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      gatewayClient: { request } as unknown as GatewayBrowserClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+
+    const microphone = button(container, t("chat.composer.startVoiceInput"));
+    microphone.dispatchEvent(dictationPointerDown(12));
+    await vi.advanceTimersByTimeAsync(800);
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]'),
+      ).not.toBeNull(),
+    );
+
+    const underlap = container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]');
+    expect(underlap?.getAttribute("role")).toBeNull();
+    expect(underlap?.querySelector('[role="alert"]')?.textContent).toContain(
+      t("chat.composer.microphonePermissionBlocked"),
+    );
+    expect(underlap?.textContent).toContain(t("chat.composer.dictationStartRecovery"));
+    expect(container.querySelector(".chat-send-btn--dictating")).toBeNull();
+    expect(container.querySelector(".chat-send-btn--voice")).not.toBeNull();
   });
 });
 
