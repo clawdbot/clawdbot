@@ -103,6 +103,7 @@ async function seedRuntimeParityTranscript(params: {
 async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
   requests: Array<Record<string, unknown>>;
+  stallResponse?: boolean;
   scenarioResult?: Parameters<typeof captureRuntimeParityCell>[0]["scenarioResult"];
   trajectoryEvents?: Array<{
     data?: Record<string, unknown>;
@@ -128,6 +129,10 @@ async function captureRuntimeParityWithMockRequests(params: {
       return;
     }
     response.setHeader("Content-Type", "application/json");
+    if (params.stallResponse) {
+      response.write("[");
+      return;
+    }
     response.end(JSON.stringify(requests));
   });
   await new Promise<void>((resolve) => {
@@ -143,6 +148,7 @@ async function captureRuntimeParityWithMockRequests(params: {
       wallClockMs: 10,
     });
   } finally {
+    server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -169,6 +175,28 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  it("abandons stalled mock-provider responses and falls back to transcript evidence", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({ requests: [], stallResponse: true });
+
+    expect(cell.providerPlanToolCalls).toBeUndefined();
+    expect(cell.toolCalls).toEqual([]);
+  });
+
+  it("ignores oversized mock-provider responses and falls back to transcript evidence", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [
+        {
+          plannedToolName: "read_file",
+          plannedToolArgs: { path: "README.md" },
+          padding: "x".repeat(1024 * 1024),
+        },
+      ],
+    });
+
+    expect(cell.providerPlanToolCalls).toBeUndefined();
+    expect(cell.toolCalls).toEqual([]);
+  });
+
   it("cancels a failed mock-request response before falling back to transcript calls", async () => {
     const parentPrompt = "Delegate one bounded QA task to a subagent.";
     const tempRoot = await seedRuntimeParityTranscript({
