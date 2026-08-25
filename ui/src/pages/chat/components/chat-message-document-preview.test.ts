@@ -95,7 +95,18 @@ describe("parseDelimitedPreview", () => {
     ["preview.html", "text/html", ""],
     ["brief.pdf", "application/pdf", "allow-scripts"],
   ])("does not load %s until the preview is requested", async (label, mimeType, sandbox) => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    const previewObjectUrl = `blob:document-preview-${label}`;
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => previewObjectUrl);
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn(
+      async () => new Response(label, { status: 200, headers: { "Content-Type": mimeType } }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
     const rerender = () =>
@@ -121,18 +132,34 @@ describe("parseDelimitedPreview", () => {
 
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     const iframe = container.querySelector<HTMLIFrameElement>("iframe");
-    expect(iframe?.getAttribute("src")).toContain(label);
+    expect(iframe?.getAttribute("src")).toBe(
+      mimeType === "application/pdf"
+        ? `${previewObjectUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+        : previewObjectUrl,
+    );
     expect(iframe?.getAttribute("sandbox")).toBe(sandbox);
     expect(fetchMock).toHaveBeenCalledWith(
       `/__openclaw__/media/${label}`,
-      expect.objectContaining({ method: "HEAD" }),
+      expect.objectContaining({ method: "GET" }),
     );
   });
 
   it("resets an activated frame when its resolved source changes", async () => {
+    const NativeUrl = URL;
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi
+          .fn()
+          .mockReturnValueOnce("blob:ticket-A")
+          .mockReturnValueOnce("blob:ticket-B");
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch,
+      vi.fn(async () => new Response("preview", { status: 200 })) as unknown as typeof fetch,
     );
     const container = document.createElement("div");
     let source = "/__openclaw__/media/ticket-A/preview.html";
@@ -154,7 +181,7 @@ describe("parseDelimitedPreview", () => {
       ?.click();
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     const activatedFrame = container.querySelector<HTMLIFrameElement>("iframe");
-    expect(activatedFrame?.getAttribute("src")).toContain("ticket-A");
+    expect(activatedFrame?.getAttribute("src")).toBe("blob:ticket-A");
 
     source = "/__openclaw__/media/ticket-B/preview.html";
     rerender();
@@ -165,6 +192,9 @@ describe("parseDelimitedPreview", () => {
     );
     expect(renewedFrame).toBeNull();
     expect(renewedTrigger).not.toBeNull();
+    releaseChatMediaResourceSubscriber(rerender);
+    subscribers.delete(rerender);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:ticket-A");
   });
 
   it("persists a failed preview probe as a compact card", async () => {
@@ -197,24 +227,26 @@ describe("parseDelimitedPreview", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("falls back to a bounded GET probe when HEAD is unsupported", async () => {
-    let cancelled = false;
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 405 }))
-      .mockResolvedValueOnce(
-        new Response(
-          new ReadableStream({
-            pull(controller) {
-              controller.enqueue(new Uint8Array(1024));
-            },
-            cancel() {
-              cancelled = true;
-            },
-          }),
-          { status: 200 },
-        ),
-      );
+  it("frames a fetched object URL instead of the protected download response", async () => {
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:sandboxed-preview");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response("<h1>Preview</h1>", {
+        status: 200,
+        headers: {
+          "Content-Disposition": 'attachment; filename="preview.html"',
+          "Content-Security-Policy": "frame-ancestors 'none'",
+          "Content-Type": "text/html",
+          "X-Frame-Options": "DENY",
+        },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const container = document.createElement("div");
     const attachment = documentAttachment(
@@ -235,8 +267,8 @@ describe("parseDelimitedPreview", () => {
       ?.click();
 
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["HEAD", "GET"]);
-    expect(cancelled).toBe(true);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("blob:sandboxed-preview");
   });
 
   it.each([

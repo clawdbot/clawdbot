@@ -33,6 +33,7 @@ import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachmen
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
+import { loadDocumentFramePreview } from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
@@ -90,12 +91,24 @@ function renderSidebarAttachment(
     mimeType === "application/pdf" ||
     ["csv", "htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension);
   if (canFrame && isSameOriginAttachmentHref(src, window.location.href)) {
-    return html`<iframe
-      class="sidebar-attachment-preview__frame"
-      src=${src}
-      title=${content.title}
-      sandbox
-    ></iframe>`;
+    const frameState = loadDocumentFramePreview(
+      src,
+      content.sourceIdentity ?? content.src ?? src,
+      onRequestUpdate,
+    );
+    if (typeof frameState === "object") {
+      return html`<iframe
+        class="sidebar-attachment-preview__frame"
+        src=${frameState.src}
+        title=${content.title}
+        sandbox=${mimeType === "application/pdf" || extension === "pdf" ? "allow-scripts" : ""}
+      ></iframe>`;
+    }
+    if (frameState === "loading") {
+      return html`<div class="sidebar-attachment-preview__unavailable">
+        ${t("chat.mediaPlayer.preparing")}
+      </div>`;
+    }
   }
   return html`
     <div class="sidebar-attachment-preview__unavailable">

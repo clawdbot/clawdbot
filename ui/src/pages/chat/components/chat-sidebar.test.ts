@@ -8,6 +8,10 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("hasUniformLineEndings", () => {
   it("accepts uniform and no line endings", () => {
     expect(hasUniformLineEndings("no endings")).toBe(true);
@@ -421,6 +425,47 @@ describe("markdown sidebar", () => {
     expect(download?.href).toBe("https://files.example/external.html");
     expect(download?.target).toBe("_blank");
     expect(download?.rel).toBe("noreferrer");
+    panel.remove();
+  });
+
+  it("frames same-origin documents from an isolated fetched object URL", async () => {
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:sidebar-document-preview");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response("<h1>Preview</h1>", {
+        status: 200,
+        headers: { "Content-Type": "text/html", "X-Frame-Options": "DENY" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "preview.html",
+      src: "/__openclaw__/media/preview.html",
+      mimeType: "text/html",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/__openclaw__/media/preview.html",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+      "blob:sidebar-document-preview",
+    );
     panel.remove();
   });
 

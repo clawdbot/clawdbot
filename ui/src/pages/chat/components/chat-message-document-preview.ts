@@ -16,7 +16,7 @@ const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
 const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
-export type DocumentFramePreviewState = "failed" | "loading" | "ready" | undefined;
+export type DocumentFramePreviewState = "failed" | "loading" | { src: string } | undefined;
 export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
 
 export function resolveDocumentPreviewKind(
@@ -122,24 +122,21 @@ export function parseAttachmentDelimitedPreview(
   );
 }
 
-async function probeDocumentPreview(source: string, signal: AbortSignal): Promise<boolean> {
+async function fetchDocumentPreviewObjectUrl(
+  source: string,
+  signal: AbortSignal,
+): Promise<string | null> {
   const url = source.replace(/#.*$/u, "");
-  // Iframes report many HTTP failures as load events. Probe after explicit
-  // interaction, and cancel the GET fallback before it buffers the document.
-  let response = await fetch(url, {
+  const response = await fetch(url, {
     credentials: "same-origin",
-    method: "HEAD",
+    method: "GET",
     signal,
   });
-  if (response.status === 405 || response.status === 501) {
-    response = await fetch(url, {
-      credentials: "same-origin",
-      method: "GET",
-      signal,
-    });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
   }
-  await response.body?.cancel().catch(() => undefined);
-  return response.ok;
+  return URL.createObjectURL(await response.blob());
 }
 
 export function resolveDocumentFramePreviewState(
@@ -149,7 +146,7 @@ export function resolveDocumentFramePreviewState(
 ): DocumentFramePreviewState {
   return observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
-    attachmentUrl,
+    attachmentUrl.replace(/#.*$/u, ""),
     onRequestUpdate,
     sourceIdentity,
   ).value;
@@ -166,6 +163,15 @@ function requestDocumentFramePreview(
   if (!(trigger instanceof HTMLButtonElement)) {
     return;
   }
+  const resource = startDocumentFramePreview(source, sourceIdentity, onRequestUpdate);
+  notifyChatMediaResourceSubscribers(resource);
+}
+
+function startDocumentFramePreview(
+  source: string,
+  sourceIdentity: string,
+  onRequestUpdate: (() => void) | undefined,
+) {
   const cacheKey = source.replace(/#.*$/u, "");
   const resource = observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
@@ -173,23 +179,30 @@ function requestDocumentFramePreview(
     onRequestUpdate,
     sourceIdentity,
   );
-  if (resource.pending || resource.value === "loading" || resource.value === "ready") {
-    return;
+  if (resource.pending || resource.value !== undefined) {
+    return resource;
   }
   resource.value = "loading";
-  notifyChatMediaResourceSubscribers(resource);
   const controller = new AbortController();
   resource.abortController = controller;
   const timeout = setTimeout(
-    () => controller.abort(new DOMException("document preview probe timed out", "TimeoutError")),
+    () => controller.abort(new DOMException("document preview fetch timed out", "TimeoutError")),
     DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS,
   );
-  const pending = probeDocumentPreview(source, controller.signal)
-    .then((available) => {
+  const pending = fetchDocumentPreviewObjectUrl(source, controller.signal)
+    .then((previewUrl) => {
       if (!isChatMediaResourceCurrent(resource)) {
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+        }
         return null;
       }
-      resource.value = available ? "ready" : "failed";
+      if (!previewUrl) {
+        resource.value = "failed";
+        return resource.value;
+      }
+      resource.value = { src: previewUrl };
+      resource.dispose = () => URL.revokeObjectURL(previewUrl);
       return resource.value;
     })
     .catch(() => {
@@ -209,6 +222,15 @@ function requestDocumentFramePreview(
       notifyChatMediaResourceSubscribers(resource);
     });
   resource.pending = pending;
+  return resource;
+}
+
+export function loadDocumentFramePreview(
+  source: string,
+  sourceIdentity: string,
+  onRequestUpdate: (() => void) | undefined,
+): DocumentFramePreviewState {
+  return startDocumentFramePreview(source, sourceIdentity, onRequestUpdate).value;
 }
 
 function renderAttachmentTablePreview(
@@ -285,11 +307,12 @@ export function renderAttachmentDocumentPreview(
   framePreviewState: DocumentFramePreviewState,
   onRequestUpdate: (() => void) | undefined,
 ) {
+  const frameSource = typeof framePreviewState === "object" ? framePreviewState.src : null;
   if (previewKind === "html") {
     return html`<div class="chat-assistant-attachment-card__html-preview">
-      ${framePreviewState === "ready"
+      ${frameSource
         ? html`<iframe
-            src=${attachmentUrl}
+            src=${frameSource}
             title=${attachment.label}
             sandbox=""
             loading="lazy"
@@ -313,9 +336,9 @@ export function renderAttachmentDocumentPreview(
   if (previewKind === "table") {
     return renderAttachmentTablePreview(attachment, previewText);
   }
-  const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+  const previewUrl = `${frameSource ?? attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
-    ${framePreviewState === "ready"
+    ${frameSource
       ? html`<iframe
           src=${previewUrl}
           title=${attachment.label}

@@ -63,6 +63,7 @@ export type ChatMediaResource<Value> = {
   unavailableAt: number | undefined;
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
+  dispose: (() => void) | undefined;
 };
 
 type ChatMediaSubscriber = {
@@ -119,6 +120,8 @@ function detachChatMediaResourceSubscriber(
   }
   resource.abortController?.abort();
   resource.abortController = undefined;
+  resource.dispose?.();
+  resource.dispose = undefined;
 }
 
 export function observeChatMediaResource<Value>(
@@ -140,6 +143,7 @@ export function observeChatMediaResource<Value>(
       unavailableAt: undefined,
       abortController: undefined,
       refresh: undefined,
+      dispose: undefined,
     };
     chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
   }
