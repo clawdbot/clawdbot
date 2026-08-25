@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export async function withCrabboxWorkerEnvProfile<Result>(
   values: Record<string, string> | undefined,
@@ -23,7 +23,7 @@ export async function withCrabboxWorkerEnvProfile<Result>(
           return `${name}="${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
         })
         .join("\n");
-      directory = await mkdtemp(join(tmpdir(), "openclaw-crabbox-env-"));
+      directory = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-crabbox-env-"));
       profilePath = join(directory, "setup.env");
       await writeFile(profilePath, `${profile}\n`, { mode: 0o600, flag: "wx" });
     }
