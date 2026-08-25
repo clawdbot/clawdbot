@@ -22,7 +22,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import { loadWebMedia, type WebMediaResult } from "../../media/web-media.js";
+import type { WebMediaResult } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -40,7 +40,7 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import { decodeDataUrl, type ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
 import {
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
@@ -133,22 +133,15 @@ export function applyAgentDefaultModelConfig(
   if (!cfg) {
     return undefined;
   }
-  if (key === "imageModel") {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: { ...cfg.agents?.defaults, imageModel: modelConfig },
-      },
-    };
-  }
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig },
+        ...(key === "imageModel"
+          ? { imageModel: modelConfig }
+          : { mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig } }),
       },
     },
   };
@@ -666,39 +659,45 @@ export async function loadMediaToolReferences<T>(params: {
         `${params.expectedKind} data: URLs are not supported for ${params.toolName}.`,
       );
     }
-    const timeout =
-      params.toolName === "music_generate" && !params.sandbox && !reference.isDataUrl
-        ? buildTimeoutAbortSignal({
-            timeoutMs: params.timeoutMs ?? 30_000,
-            operation: "music-generate.reference-fetch",
-            ...(params.signal ? { signal: params.signal } : {}),
-            ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
-          })
-        : undefined;
     let media: LoadedToolReferenceMedia;
-    try {
-      media = reference.isDataUrl
-        ? decodeDataUrl(
-            resolvedInput,
-            params.toolName === "image_generate" ? { maxBytes: params.maxBytes } : undefined,
-          )
-        : await loadWebMedia(resolvedPath ?? resolvedInput, {
-            ...(params.toolName === "music_generate" ? {} : { maxBytes: params.maxBytes }),
-            ...(params.sandbox
-              ? {
-                  sandboxValidated: true,
-                  readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
-                }
-              : { localRoots, ssrfPolicy: params.ssrfPolicy }),
-            ...(params.toolName === "image_generate" && reference.isHttpUrl
-              ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
-              : {}),
-            ...(timeout?.signal || params.signal
-              ? { requestInit: { signal: timeout?.signal ?? params.signal } }
-              : {}),
-          });
-    } finally {
-      timeout?.cleanup();
+    if (reference.isDataUrl) {
+      const { decodeDataUrl } = await import("./image-tool.helpers.js");
+      params.signal?.throwIfAborted();
+      media = decodeDataUrl(
+        resolvedInput,
+        params.toolName === "image_generate" ? { maxBytes: params.maxBytes } : undefined,
+      );
+    } else {
+      const { loadWebMedia } = await import("../../media/web-media.js");
+      params.signal?.throwIfAborted();
+      const timeout =
+        params.toolName === "music_generate" && !params.sandbox
+          ? buildTimeoutAbortSignal({
+              timeoutMs: params.timeoutMs ?? 30_000,
+              operation: "music-generate.reference-fetch",
+              ...(params.signal ? { signal: params.signal } : {}),
+              ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
+            })
+          : undefined;
+      try {
+        media = await loadWebMedia(resolvedPath ?? resolvedInput, {
+          ...(params.toolName === "music_generate" ? {} : { maxBytes: params.maxBytes }),
+          ...(params.sandbox
+            ? {
+                sandboxValidated: true,
+                readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
+              }
+            : { localRoots, ssrfPolicy: params.ssrfPolicy }),
+          ...(params.toolName === "image_generate" && reference.isHttpUrl
+            ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+            : {}),
+          ...(timeout?.signal || params.signal
+            ? { requestInit: { signal: timeout?.signal ?? params.signal } }
+            : {}),
+        });
+      } finally {
+        timeout?.cleanup();
+      }
     }
     params.signal?.throwIfAborted();
     if (media.kind !== params.expectedKind) {
