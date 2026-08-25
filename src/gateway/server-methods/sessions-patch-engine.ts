@@ -603,6 +603,7 @@ async function executeSessionPatchMutations(params: {
     callerScopes,
     callerCanManageCron,
     category: params.patch.category,
+    loadModelCatalog,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied ? [{ target, entry: outcome.entry }] : [];

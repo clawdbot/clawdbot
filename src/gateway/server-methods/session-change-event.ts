@@ -1,4 +1,5 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -18,6 +19,8 @@ type SessionChangedPayload = {
   agentId?: string;
   reason: string;
   compacted?: boolean;
+  /** Internal projection input; never serialize into the sessions.changed payload. */
+  modelCatalog?: ModelCatalogEntry[];
 };
 
 type SessionChangeContext = Pick<
@@ -72,8 +75,9 @@ function broadcastSessionsChanged(
     ...privateBroadcastScope,
     dropIfSlow: true,
   };
+  const { modelCatalog, ...publicPayload } = payload;
   const eventPayload = {
-    ...payload,
+    ...publicPayload,
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
@@ -87,7 +91,10 @@ function broadcastSessionsChanged(
     context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
     return;
   }
-  const sessionRow = loadGatewaySessionRow(payload.sessionKey, { agentId: routingAgentId });
+  const sessionRow = loadGatewaySessionRow(payload.sessionKey, {
+    agentId: routingAgentId,
+    ...(modelCatalog !== undefined ? { modelCatalog } : {}),
+  });
   const activeRunState =
     sessionRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({

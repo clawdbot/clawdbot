@@ -17,6 +17,9 @@ export async function publishSessionPatchEffects(params: {
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
   category: SessionsPatchParams["category"];
+  loadModelCatalog: (
+    agentId: string,
+  ) => ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>;
   targets: Array<{
     entry: SessionEntry;
     target: {
@@ -43,10 +46,12 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       targetAgentId: target.targetAgentId,
     });
+    const modelCatalog = await params.loadModelCatalog(target.targetAgentId);
     emitSessionsChanged(params.context, {
       sessionKey: target.canonicalKey,
       ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
       reason: "patch",
+      modelCatalog,
     });
     if (target.fullPatch.archived === true) {
       archivedSessionKeys.add(target.canonicalKey);
