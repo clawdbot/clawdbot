@@ -405,11 +405,8 @@ export function createPageState(
   };
   state.handleOpenSidebar = (content) => {
     const attachmentPreview = content?.kind === "attachment";
-    let opened = openSlot(state.sidebarLayout, "detail");
-    if (attachmentPreview) {
-      opened = openSlot(opened, "workspace");
-    }
     const targetSlot = attachmentPreview ? "workspace" : "detail";
+    let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === targetSlot);
@@ -428,7 +425,12 @@ export function createPageState(
     }
   };
   state.handleCloseSidebar = () => {
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, "detail"));
+    const attachmentPreview = state.sidebarContent?.kind === "attachment";
+    const targetSlot = attachmentPreview ? "workspace" : "detail";
+    if (attachmentPreview) {
+      state.sidebarContent = null;
+    }
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, targetSlot));
   };
   state.beginImageOpen = () => {
     const requestVersion = invalidateImageLightbox(state);

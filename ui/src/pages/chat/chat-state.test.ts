@@ -1395,6 +1395,34 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ApplicationContext;
   }
 
+  it("owns attachment previews in the Files slot lifecycle", () => {
+    const state = createPageState(
+      createPageContext(),
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      {
+        getBoundingClientRect: () => ({ width: 1_440 }),
+        querySelector: () => null,
+      },
+    );
+
+    state.handleOpenSidebar({
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    });
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["workspace"]);
+    expect(state.sidebarContent?.kind).toBe("attachment");
+
+    state.handleCloseSidebar();
+
+    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+    expect(state.sidebarContent).toBeNull();
+  });
+
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {
       sessionKey: "agent:main:current",
