@@ -93,6 +93,22 @@ describe("extractLlamaServerArchive", () => {
     ).rejects.toThrow(/unsupported hard link/u);
   });
 
+  it("rejects an oversized release archive before extracting it", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await Promise.all(
+        Array.from({ length: 1_000 }, (_, index) =>
+          fs.writeFile(path.join(buildDir, `component-${index}`), "metadata"),
+        ),
+      );
+    });
+
+    await expect(
+      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
+    ).rejects.toThrow(/preflight entry limits/u);
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
+  });
+
   it("rejects a zip entry that escapes through Windows separators", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createZipArchive(root, {

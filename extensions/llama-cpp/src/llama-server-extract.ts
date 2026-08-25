@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { extractArchive } from "openclaw/plugin-sdk/archive";
@@ -5,6 +6,12 @@ import * as tar from "tar";
 import type { LlamaServerAsset } from "./llama-server-assets.js";
 
 const EXTRACT_TIMEOUT_MS = 10 * 60_000;
+const MEBIBYTE = 1024 * 1024;
+const MAX_TAR_PREFLIGHT_ARCHIVE_BYTES = 256 * MEBIBYTE;
+const MAX_TAR_PREFLIGHT_ENTRIES = 1_000;
+const MAX_TAR_PREFLIGHT_EXTRACTED_BYTES = 512 * MEBIBYTE;
+const MAX_TAR_PREFLIGHT_ENTRY_BYTES = 256 * MEBIBYTE;
+const MAX_TAR_PREFLIGHT_META_ENTRY_BYTES = MEBIBYTE;
 
 type ArchiveSymlink = { entryPath: string; target: string };
 
@@ -23,29 +30,77 @@ function assertSiblingLinkTarget(entryPath: string, target: string): void {
  * headers and keep only same-directory aliases; anything else fails the install.
  */
 async function readTarSymlinks(archivePath: string): Promise<ArchiveSymlink[]> {
-  const entries: Array<{ entryPath: string; type: string; target: string }> = [];
-  await tar.list({
-    file: archivePath,
-    strict: true,
-    onReadEntry: (entry) => {
-      entries.push({
-        entryPath: String(entry.path),
-        type: String(entry.type),
-        target: typeof entry.linkpath === "string" ? entry.linkpath : "",
-      });
-    },
-  });
   const symlinks: ArchiveSymlink[] = [];
-  for (const entry of entries) {
-    if (entry.type === "Link") {
-      throw new Error(`unsupported hard link in llama-server archive: ${entry.entryPath}`);
-    }
-    if (entry.type !== "SymbolicLink") {
-      continue;
-    }
-    assertSiblingLinkTarget(entry.entryPath, entry.target);
-    symlinks.push({ entryPath: entry.entryPath, target: entry.target });
+  const archiveStat = await fsp.stat(archivePath);
+  if (archiveStat.size > MAX_TAR_PREFLIGHT_ARCHIVE_BYTES) {
+    throw new Error("llama-server archive exceeds the preflight size limit");
   }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let entryCount = 0;
+    let extractedBytes = 0;
+    const input = fs.createReadStream(archivePath);
+    const parser = new tar.Parser({
+      strict: true,
+      maxMetaEntrySize: MAX_TAR_PREFLIGHT_META_ENTRY_BYTES,
+      onReadEntry: (entry) => {
+        try {
+          entryCount += 1;
+          const entrySize = Number(entry.size);
+          extractedBytes += entrySize;
+          if (
+            entryCount > MAX_TAR_PREFLIGHT_ENTRIES ||
+            entrySize > MAX_TAR_PREFLIGHT_ENTRY_BYTES ||
+            extractedBytes > MAX_TAR_PREFLIGHT_EXTRACTED_BYTES
+          ) {
+            abort(new Error("llama-server archive exceeds the preflight entry limits"));
+            return;
+          }
+          const entryPath = String(entry.path);
+          if (entry.type === "Link") {
+            abort(new Error(`unsupported hard link in llama-server archive: ${entryPath}`));
+            return;
+          }
+          if (entry.type === "SymbolicLink") {
+            const target = typeof entry.linkpath === "string" ? entry.linkpath : "";
+            assertSiblingLinkTarget(entryPath, target);
+            symlinks.push({ entryPath, target });
+          }
+          entry.resume();
+        } catch (error) {
+          abort(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
+    });
+    const timer = setTimeout(
+      () => abort(new Error("llama-server archive preflight timed out")),
+      EXTRACT_TIMEOUT_MS,
+    );
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      input.destroy(error);
+      parser.abort(error);
+      finish(error);
+    };
+    input.once("error", abort);
+    parser.once("error", abort);
+    parser.once("end", () => finish());
+    input.pipe(parser);
+  });
   return symlinks;
 }
 
