@@ -366,8 +366,44 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const normalizeServiceRegistrationId = (
+    record: PluginRecord,
+    service: OpenClawPluginService | OpenClawGatewayDiscoveryService,
+    label: "service" | "gateway discovery service",
+  ): string | undefined => {
+    const rawId = service.id;
+    const id = rawId.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `${label} registration missing id`,
+      });
+      return undefined;
+    }
+    if (rawId !== id) {
+      try {
+        // Preserve plugin-owned class identity, prototype methods, and private fields.
+        service.id = id;
+        if (service.id !== id) {
+          throw new Error("service registration id normalization was ignored");
+        }
+      } catch {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `${label} registration id cannot be normalized`,
+        });
+        return undefined;
+      }
+    }
+    return id;
+  };
+
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
-    const id = service.id.trim();
+    const id = normalizeServiceRegistrationId(record, service, "service");
     if (!id) {
       return;
     }
@@ -401,7 +437,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     service: OpenClawGatewayDiscoveryService,
   ) => {
-    const id = service.id.trim();
+    const id = normalizeServiceRegistrationId(record, service, "gateway discovery service");
     if (!id) {
       return;
     }
