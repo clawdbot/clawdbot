@@ -191,19 +191,19 @@ describe("session connection hydration", () => {
         expect.objectContaining({ ownerId: "operator", limit: 60 }),
       ),
     );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1);
-    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
-
-    ownerList.resolve(ownerResult);
-    await waitForFast(() => expect(sessions.state.result).toBe(ownerResult));
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
     );
-    expect(sessions.state.loading).toBe(false);
+    expect(sessions.state.result).toBeNull();
     expect(request.mock.calls.at(-1)?.[1]).toEqual(
       expect.objectContaining({ agentId: "main", limit: 60 }),
     );
     expect(request.mock.calls.at(-1)?.[1]).not.toHaveProperty("ownerId");
+    const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
+
+    ownerList.resolve(ownerResult);
+    await waitForFast(() => expect(sessions.state.result).toBe(ownerResult));
+    expect(sessions.state.loading).toBe(false);
 
     sharedList.resolve(sharedResult);
     await waitForFast(() =>
