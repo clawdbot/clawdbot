@@ -733,7 +733,7 @@ describe("handleCompactCommand", () => {
       name: "a decrease with equal formatted labels",
       tokensBefore: 12_499,
       tokensAfter: 12_001,
-      formattedLabels: ["12k", "12k"],
+      formattedLabels: ["12k", "12k"] as [string, string],
       expectedLabel: "Server-side compaction •",
     },
   ])("reports server-side compaction for $name", async (testCase) => {
