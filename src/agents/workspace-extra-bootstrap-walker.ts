@@ -22,6 +22,16 @@ function normalizeWorkspacePatternPath(value: string): string {
     .replace(/^\.\/+/u, "");
 }
 
+// Fold ONLY the platform separator in an fs.glob match, never backslashes: a
+// backslash is a legal POSIX filename byte, so rewriting it (as the pattern-side
+// normalization does) would point the loader at a different, missing path and
+// silently drop the file. Windows folding stays lossless — its names cannot hold
+// a backslash. `separator` is injectable so both branches get test coverage on
+// one platform.
+export function toPortableMatchPath(match: string, separator: string = path.sep): string {
+  return match.replaceAll(separator, "/");
+}
+
 export function hasGlobPattern(pattern: string): boolean {
   // Keep square brackets literal here; workspace paths commonly contain them.
   // Only `? * { }` route a pattern to fs.glob, so an existing config path like
@@ -107,7 +117,7 @@ export async function resolveExtraBootstrapPatternPaths(
         throw error;
       }
       if (isPathInside(workspaceRealpath, realpath)) {
-        matches.add(normalizeWorkspacePatternPath(relativeMatch));
+        matches.add(toPortableMatchPath(relativeMatch));
       }
     }
   } catch (error) {

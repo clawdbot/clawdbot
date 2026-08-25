@@ -9,7 +9,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
+import {
+  resolveExtraBootstrapPatternPaths,
+  toPortableMatchPath,
+} from "./workspace-extra-bootstrap-walker.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 async function nodeGlobRelative(workspaceDir: string, pattern: string): Promise<string[]> {
@@ -832,5 +835,85 @@ describe("resolveExtraBootstrapPatternPaths matched-path realpath failures", () 
       realpathSpy.mockRestore();
       globSpy.mockRestore();
     }
+  });
+});
+
+describe("resolveExtraBootstrapPatternPaths literal-backslash match paths", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createWorkspaceDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    // realpath the root so the loader's containment realpath compares canonical
+    // paths on macOS (/var -> /private/var).
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-walker-backslash-")),
+    );
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a literal backslash byte in a POSIX match path (fs.glob parity)",
+    async () => {
+      // Regression: backslash is a legal filename byte on POSIX. fs.glob yields a
+      // match whose directory name contains a literal backslash; the walker must
+      // keep that byte so the loader opens the real file. Rewriting every "\\" to
+      // "/" (the introduced defect) points the loader at a different, missing path
+      // and silently drops the configured bootstrap file. The parity oracle is raw
+      // fs.glob normalized only by the platform separator — a POSIX no-op — so the
+      // backslash survives untouched.
+      const workspaceDir = await createWorkspaceDir("backslash-dir");
+      const backslashDir = path.join(workspaceDir, "back\\slash-dir");
+      await fs.mkdir(backslashDir, { recursive: true });
+      await fs.writeFile(path.join(backslashDir, "AGENTS.md"), "backslash agents", "utf-8");
+      // Control file with no backslash proves the normal path is unaffected.
+      await fs.mkdir(path.join(workspaceDir, "control"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "control", "AGENTS.md"), "control", "utf-8");
+
+      const pattern = "**/AGENTS.md";
+      const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+      // The backslash byte is present, not folded to a forward slash.
+      expect(matches).toContain("back\\slash-dir/AGENTS.md");
+
+      // The loader must actually load that file's content through the returned
+      // path — proving the match is not degraded into a "missing file" diagnostic.
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        pattern,
+      ]);
+      const backslashFile = files.find(
+        (file) => file.path === path.join(backslashDir, "AGENTS.md"),
+      );
+      expect(backslashFile?.content).toBe("backslash agents");
+      expect(diagnostics).toHaveLength(0);
+    },
+  );
+});
+
+describe("toPortableMatchPath", () => {
+  it("preserves literal backslash bytes on POSIX (separator '/')", () => {
+    // POSIX separator: only "/" is folded (a no-op), so a legal backslash byte in
+    // a filename survives and forward slashes are unchanged.
+    expect(toPortableMatchPath("back\\slash-dir/AGENTS.md", "/")).toBe("back\\slash-dir/AGENTS.md");
+    expect(toPortableMatchPath("a/b/c/AGENTS.md", "/")).toBe("a/b/c/AGENTS.md");
+  });
+
+  it("folds real separators to '/' under a Windows separator ('\\\\')", () => {
+    // Windows separator branch — otherwise unreachable on POSIX CI: real "\\"
+    // separators fold to "/", lossless because Windows filenames cannot contain a
+    // backslash. Any embedded "/" (already portable) is left alone.
+    expect(toPortableMatchPath("a\\b\\c\\AGENTS.md", "\\")).toBe("a/b/c/AGENTS.md");
+    expect(toPortableMatchPath("a\\b/c\\AGENTS.md", "\\")).toBe("a/b/c/AGENTS.md");
   });
 });
