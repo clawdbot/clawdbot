@@ -109,8 +109,8 @@ class DictationAudioContext {
   }
 }
 
-function dictationPointerDown(pointerId: number): PointerEvent {
-  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number): PointerEvent {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
   Object.defineProperty(event, "pointerId", { value: pointerId });
   return event as PointerEvent;
 }
@@ -805,7 +805,7 @@ describe("renderChatComposer controls", () => {
       releasePointerCapture: { value: (pointerId: number) => captures.delete(pointerId) },
     });
 
-    capturedButton!.dispatchEvent(dictationPointerDown(9));
+    capturedButton!.dispatchEvent(dictationPointer("pointerdown", 9));
     expect(capturedButton!.hasPointerCapture(9)).toBe(true);
     await vi.advanceTimersByTimeAsync(300);
     expect(capturedButton?.classList.contains("chat-send-btn--dictation-arming")).toBe(true);
@@ -822,6 +822,51 @@ describe("renderChatComposer controls", () => {
     expect(rerenderedButton).toBe(capturedButton);
     expect(rerenderedButton?.classList.contains("chat-send-btn--dictating")).toBe(true);
     expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
+  });
+
+  it("keeps the microphone picker open without leaking an unavailable hold into Talk", async () => {
+    vi.useFakeTimers();
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { realtime: { ready: true }, transcription: { ready: false } };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const onToggleRealtimeTalk = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      gatewayClient: { request } as unknown as GatewayBrowserClient,
+      onToggleRealtimeTalk,
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector(
+          '[data-chat-talk-capability="dictation"][data-status="unavailable"]',
+        ),
+      ).not.toBeNull(),
+    );
+
+    const microphone = button(container, t("chat.composer.startVoiceInput"));
+    microphone.dispatchEvent(dictationPointer("pointerdown", 10));
+    await vi.advanceTimersByTimeAsync(801);
+    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
+      "wa-dropdown.chat-talk-input-picker",
+    );
+    expect(dropdown?.open).toBe(true);
+
+    document.dispatchEvent(dictationPointer("pointerup", 10));
+    microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(dropdown?.open).toBe(true);
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+
+    microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
   });
 
   it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
@@ -845,7 +890,7 @@ describe("renderChatComposer controls", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
 
     const microphone = button(container, t("chat.composer.startVoiceInput"));
-    microphone.dispatchEvent(dictationPointerDown(12));
+    microphone.dispatchEvent(dictationPointer("pointerdown", 12));
     await vi.advanceTimersByTimeAsync(800);
     await vi.waitFor(() =>
       expect(
