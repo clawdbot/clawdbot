@@ -292,30 +292,47 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toEqual([{ presentation }]);
   });
 
-  it("merges coalesced text into a following media payload", async () => {
-    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
-    const pipeline = createBlockReplyPipeline({
-      onBlockReply: async (payload) => {
-        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
-      },
-      timeoutMs: 5000,
-      coalescing: {
-        minChars: 1,
-        maxChars: 200,
-        idleMs: 0,
-        joiner: " ",
-      },
-    });
+  it.each([
+    {
+      maxChars: 200,
+      mediaText: undefined,
+      expected: [{ text: "Preview below", mediaUrls: ["file:///photo.png"] }],
+    },
+    {
+      maxChars: 16,
+      mediaText: "caption",
+      expected: [
+        { text: "Preview below", mediaUrls: undefined },
+        { text: "caption", mediaUrls: ["file:///photo.png"] },
+      ],
+    },
+  ])(
+    "respects the caption limit when coalescing following media %#",
+    async ({ maxChars, mediaText, expected }) => {
+      const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+        },
+        timeoutMs: 5000,
+        coalescing: {
+          minChars: 1,
+          maxChars,
+          idleMs: 0,
+          joiner: " ",
+        },
+      });
 
-    pipeline.enqueue({ text: "Preview" });
-    pipeline.enqueue({ text: "below" });
-    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
-    await pipeline.flush({ force: true });
+      pipeline.enqueue({ text: "Preview" });
+      pipeline.enqueue({ text: "below" });
+      pipeline.enqueue({ text: mediaText, mediaUrls: ["file:///photo.png"] });
+      await pipeline.flush({ force: true });
 
-    expect(sent).toEqual([{ text: "Preview below", mediaUrls: ["file:///photo.png"] }]);
-    expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
-    expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
-  });
+      expect(sent).toEqual(expected);
+      expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+      expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
+    },
+  );
 
   it("keeps media separate across assistant message boundaries", async () => {
     const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
