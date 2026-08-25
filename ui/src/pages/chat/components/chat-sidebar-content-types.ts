@@ -1,5 +1,5 @@
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
+import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
