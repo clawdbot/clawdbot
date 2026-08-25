@@ -53,6 +53,9 @@ export function removeBrowserAnnotationWithUndo(
   const presentToast = dependencies.presentToast ?? showToast;
   const presented = presentToast({
     message: labels.removed,
+    variant: "info",
+    key: `browser-annotation:${attachment.id}`,
+    scope: { kind: "session", sessionKey: sourceSessionKey },
     actionLabel: labels.undo,
     onAction: () => {
       if (settled) {
@@ -69,7 +72,11 @@ export function removeBrowserAnnotationWithUndo(
       }
       if (!canAdmitBrowserAnnotation(latest, modelContext)) {
         finalizeRemoval();
-        presentToast({ message: labels.undoUnavailable });
+        presentToast({
+          message: labels.undoUnavailable,
+          variant: "danger",
+          scope: { kind: "session", sessionKey: sourceSessionKey },
+        });
         return;
       }
       settled = true;

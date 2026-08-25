@@ -258,6 +258,7 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 const boardFixturePath = "/__fixtures/board/";
+const noticesFixturePath = "/__fixtures/notices/";
 const boardFixtureHtml = `<!doctype html>
 <html lang="en">
   <head>
@@ -298,6 +299,34 @@ const boardFixtureHtml = `<!doctype html>
   <body>
     <div id="app"></div>
     <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+  </body>
+</html>`;
+const noticesFixtureHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>OpenClaw Notice Inventory</title>
+    <script>
+      const requestedTheme = new URLSearchParams(location.search).get("theme");
+      const mediaQuery = matchMedia("(prefers-color-scheme: light)");
+      const applyTheme = () => {
+        const mode = requestedTheme || (mediaQuery.matches ? "light" : "dark");
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.className = "wa-" + mode;
+        document.documentElement.style.colorScheme = mode;
+      };
+      applyTheme();
+      mediaQuery.addEventListener("change", applyTheme);
+    </script>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <style>body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/test-helpers/notices-fixture.ts"></script>
   </body>
 </html>`;
 
@@ -3205,6 +3234,24 @@ function createBoardFixturePlugin(): Plugin {
   };
 }
 
+function createNoticesFixturePlugin(): Plugin {
+  return {
+    name: "openclaw-control-ui-notices-fixture",
+    configureServer(server) {
+      server.middlewares.use(noticesFixturePath, (_req, res, next) => {
+        void server
+          .transformIndexHtml(noticesFixturePath, noticesFixtureHtml)
+          .then((html) => {
+            res.statusCode = 200;
+            res.setHeader("content-type", "text/html; charset=utf-8");
+            res.end(html);
+          })
+          .catch((error: unknown) => next(error as Error));
+      });
+    },
+  };
+}
+
 function hostForUrl(boundAddress: string, requestedHost: string): string {
   const host = boundAddress === "0.0.0.0" || boundAddress === "::" ? requestedHost : boundAddress;
   const reachableHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
@@ -3259,7 +3306,11 @@ const server = await createServer({
       : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
+  plugins: [
+    createMockGatewayPlugin(scenario),
+    createBoardFixturePlugin(),
+    createNoticesFixturePlugin(),
+  ],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
@@ -3281,6 +3332,9 @@ await server.listen();
 console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
 console.log(
   `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+);
+console.log(
+  `[control-ui-mock] notices fixture: ${resolveServerUrl(server, options.host, noticesFixturePath)}`,
 );
 await waitForShutdown();
 await server.close();

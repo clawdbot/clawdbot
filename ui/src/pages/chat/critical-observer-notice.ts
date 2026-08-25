@@ -101,6 +101,7 @@ export function showCriticalSessionObserverNotice(params: {
   const label = resolveSessionDisplayName(sessionKey, row);
   showToast({
     message: `${t("sessionsView.attentionRequired")}: ${label} — ${headline}`,
+    variant: digest.health === "failed" ? "danger" : "warning",
     actionLabel: t("sessionsView.openSession"),
     onAction: () =>
       digest.agentId ? params.onOpen(sessionKey, digest.agentId) : params.onOpen(sessionKey),

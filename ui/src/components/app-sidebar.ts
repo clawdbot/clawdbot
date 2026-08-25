@@ -441,6 +441,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           }}
           >${t("chat.sidebar.sectionHiddenRecovery")}</a
         >`,
+      variant: "info",
+      key: `sidebar-section-hidden:${catalogId}`,
       actionLabel: t("common.undo"),
       onAction: () => setStoredSessionCatalogHidden(catalogId, false),
       durationMs: 12_000,

@@ -491,7 +491,6 @@ describe("session organizer destructive confirmations", () => {
         },
       ],
     });
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
 
     const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
     const actions = await waitForConfirmDialogActions();
@@ -517,10 +516,10 @@ describe("session organizer destructive confirmations", () => {
     ]);
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
     expect(retryError).not.toContain("GatewayRequestError");
-    expect(alertSpy).toHaveBeenCalledWith(
-      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
-    );
-    alertSpy.mockRestore();
+    expect(showToast).toHaveBeenCalledWith({
+      message: "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+      variant: "warning",
+    });
   });
 
   it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {
@@ -553,7 +552,10 @@ describe("session organizer destructive confirmations", () => {
       // The abort resolves the dialog to `false`, same as a user cancel, so the
       // operator needs a distinct, visible outcome or their lost intent reads
       // as a click that simply did nothing.
-      expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+      expect(showToast).toHaveBeenCalledWith({
+        message: operation.staleMessage,
+        variant: "warning",
+      });
 
       // A fresh confirmation (the reconnect's own retry) must be able to open
       // immediately; a stale dialog holding the shared lock would block it.
@@ -596,6 +598,7 @@ describe("session organizer destructive confirmations", () => {
     // the no-access branch, so the operator learns where it went.
     expect(showToast).toHaveBeenCalledWith({
       message: "Managed Worktrees:\nfeature — cleanup failed",
+      variant: "warning",
     });
   });
 

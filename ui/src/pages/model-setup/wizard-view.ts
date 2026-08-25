@@ -48,7 +48,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
         </div>
         <div class="model-setup-wizard__body">
           ${props.refreshWarning
-            ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+            ? html`<div class="callout warn" role="alert">${props.refreshWarning}</div>`
             : nothing}
           ${props.state.phase === "starting"
             ? html`<div role="status">

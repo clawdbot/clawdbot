@@ -20,7 +20,7 @@ export async function retireDeletedComposerDrafts(
   const reportFailure = () => {
     if (!failureReported) {
       failureReported = true;
-      showToast({ message: t("sessionsView.draftCleanupFailed") });
+      showToast({ message: t("sessionsView.draftCleanupFailed"), variant: "warning" });
     }
   };
   void deleteStoredChatSessionSnapshots(

@@ -42,7 +42,7 @@ export function announceVerifiedUpdateInstall(identity: UpdateInstallIdentity): 
   }
   if (!reloadControlUiIfStale(identity)) {
     takeRecordedUpdateSuccess();
-    showToast({ message: formatUpdateSuccess(identity) });
+    showToast({ message: formatUpdateSuccess(identity), variant: "success" });
   }
 }
 
@@ -62,5 +62,5 @@ export function announceRecordedUpdateSuccess(): void {
   } catch {
     return;
   }
-  showToast({ message: formatUpdateSuccess(identity) });
+  showToast({ message: formatUpdateSuccess(identity), variant: "success" });
 }

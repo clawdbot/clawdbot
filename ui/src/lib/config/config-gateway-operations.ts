@@ -5,7 +5,6 @@ import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
-import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
@@ -652,7 +651,6 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     }
     if (isCurrent()) {
       state.lastError = formatUiExternalText(message);
-      showToast({ message: state.lastError });
     }
   };
   try {

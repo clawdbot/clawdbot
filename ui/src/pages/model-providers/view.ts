@@ -120,7 +120,7 @@ function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
       ${message.text}
     </div>
     ${message.warning
-      ? html`<div class="callout warning" role="status">${message.warning}</div>`
+      ? html`<div class="callout warn" role="status">${message.warning}</div>`
       : nothing}
   `;
 }
@@ -651,7 +651,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${props.mutationBlockedReason
-      ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
+      ? html`<div class="callout warn">${props.mutationBlockedReason}</div>`
       : nothing}
   `);
 }

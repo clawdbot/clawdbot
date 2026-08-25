@@ -87,7 +87,6 @@ describe("chat pane composer controls", () => {
       chatStream: null,
     } as unknown as ChatPageHost;
     const onModelSetup = vi.fn();
-    const toastAnchor = document.createElement("div");
 
     const controls = renderChatPaneComposerControls({
       state,
@@ -97,7 +96,6 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
-      toastAnchor,
       onModelSetup,
     });
     render(controls.composerControls, container);
@@ -147,7 +145,6 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: false,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(renderChatPermissionPicker(controls.permissionPicker), container);
@@ -195,7 +192,6 @@ describe("chat pane composer controls", () => {
   ] as const)("shows the next-run notice only for a $label session", async (sessionCase) => {
     showToastMock.mockClear();
     const patch = vi.fn(async () => ({}));
-    const toastAnchor = document.createElement("div");
     const state = {
       chatRunId: sessionCase.chatRunId,
       connected: true,
@@ -224,7 +220,6 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
-      toastAnchor,
       onModelSetup: vi.fn(),
     });
 
@@ -234,9 +229,11 @@ describe("chat pane composer controls", () => {
     if (sessionCase.toastCount === 1) {
       expect(showToastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          anchor: toastAnchor,
           durationMs: 5_000,
           message: "New permissions apply to the next run.",
+          variant: "info",
+          key: `permission-mode:${state.sessionKey}`,
+          scope: { kind: "session", sessionKey: state.sessionKey },
         }),
       );
     }
@@ -270,7 +267,6 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
-      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);

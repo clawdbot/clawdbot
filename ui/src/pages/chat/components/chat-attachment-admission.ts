@@ -20,6 +20,7 @@ function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
         .join(", "),
       more: skipped.length > 3 ? ` +${skipped.length - 3}` : "",
     }),
+    variant: "danger",
   });
 }
 

@@ -409,7 +409,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
       ${renderSettingsPage(
         [
           !props.canAdmin
-            ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
+            ? html`<div class="callout warn" role="note">${t("updates.adminRequired")}</div>`
             : nothing,
           renderBuildFacts(props),
           renderRecordedAttempt(props),

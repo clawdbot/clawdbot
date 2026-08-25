@@ -66,7 +66,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
   const body = html`
     <div class="settings-row settings-row--stacked model-providers__defaults">
       ${props.models.length === 0
-        ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>`
+        ? html`<div class="callout warn">${t("modelProviders.defaults.noModels")}</div>`
         : nothing}
       <div class="model-providers__default-grid">
         <label class="field">
@@ -191,7 +191,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           </div>`
         : nothing}
       ${props.message?.warning
-        ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
+        ? html`<div class="callout warn" role="status">${props.message.warning}</div>`
         : nothing}
     </div>
   `;

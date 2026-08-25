@@ -627,13 +627,7 @@
   margin-top: 0;
 }
 
-.callout.warning {
-  border-color: color-mix(in srgb, var(--warn) 22%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--text);
-}
-
-.callout.warning.usage-cache-warning {
+.callout.warn.usage-cache-warning {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
   background: var(--warn-subtle);
   color: var(--accent);

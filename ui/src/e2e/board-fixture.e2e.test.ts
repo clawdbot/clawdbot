@@ -231,6 +231,26 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
+  it("renders the complete notice inventory by zone", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/__fixtures/notices/", fixtureServer.url).toString(), {
+        waitUntil: "networkidle",
+      });
+
+      await page.getByRole("heading", { name: "Operator notices by zone" }).waitFor();
+      expect(await page.locator(".notice-fixture__zone").count()).toBe(7);
+      expect(await page.locator(".notice-fixture__toast-gallery .app-toast").count()).toBe(4);
+      expect(
+        await page.locator(".notice-fixture__session-chips .notice-fixture__chip").count(),
+      ).toBe(4);
+      expect(await page.locator(".notice-fixture .callout").count()).toBe(6);
+      expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(3);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("opens a visible catalog session with its transcript in chronological order", async () => {
     const page = await browser.newPage();
     try {

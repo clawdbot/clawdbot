@@ -1,7 +1,6 @@
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
@@ -87,7 +86,6 @@ export function renderChatPaneComposerControls(params: {
   effortAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  toastAnchor: Element;
   onModelSetup: () => void;
 }): {
   composerControls: NonNullable<ChatProps["composerControls"]>;
@@ -101,7 +99,6 @@ export function renderChatPaneComposerControls(params: {
     effortAccess,
     permissionAccess,
     canSelectFull,
-    toastAnchor,
     onModelSetup,
   } = params;
   const modelCatalogState = resolveChatModelCatalogState(state);
@@ -170,15 +167,12 @@ export function renderChatPaneComposerControls(params: {
             scopedAgentParamsForSession(state, state.sessionKey),
           );
           if (runWasActive) {
-            const topbarHeight = toastAnchor
-              .querySelector(".chat-pane__header")
-              ?.getBoundingClientRect().height;
             showToast({
-              anchor: toastAnchor,
-              anchorTopOffset: (topbarHeight ?? 0) + 12,
               durationMs: 5_000,
-              icon: icons.shieldCheck,
               message: t("chat.permissionControls.nextRun"),
+              variant: "info",
+              key: `permission-mode:${state.sessionKey}`,
+              scope: { kind: "session", sessionKey: state.sessionKey },
             });
           }
         } catch (error) {

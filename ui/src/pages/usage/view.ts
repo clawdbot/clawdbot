@@ -156,7 +156,7 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[], unavailable: bo
     html`
       ${unavailable
         ? html`
-            <div class="callout warning usage-callout">${t("usage.providerUsage.unavailable")}</div>
+            <div class="callout warn usage-callout">${t("usage.providerUsage.unavailable")}</div>
           `
         : nothing}
       <div class="usage-panel provider-usage-section">
@@ -776,7 +776,7 @@ export function renderUsage(props: UsageProps) {
                 : nothing}
               ${queryWarnings.length > 0
                 ? html`
-                    <div class="callout warning usage-callout usage-callout--tight">
+                    <div class="callout warn usage-callout usage-callout--tight">
                       ${queryWarnings.join(" · ")}
                     </div>
                   `
@@ -788,16 +788,14 @@ export function renderUsage(props: UsageProps) {
               : nothing}
             ${cacheStatusTitle
               ? html`
-                  <div class="callout warning usage-callout usage-cache-warning">
+                  <div class="callout warn usage-callout usage-cache-warning">
                     ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
                   </div>
                 `
               : nothing}
             ${data.sessionsLimitReached
               ? html`
-                  <div class="callout warning usage-callout">
-                    ${t("usage.sessions.limitReached")}
-                  </div>
+                  <div class="callout warn usage-callout">${t("usage.sessions.limitReached")}</div>
                 `
               : nothing}
           </div>

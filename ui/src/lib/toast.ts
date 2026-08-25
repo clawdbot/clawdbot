@@ -6,24 +6,35 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { formatUiExternalText } from "./format-error.ts";
 
+type ToastVariant = "info" | "success" | "warning" | "danger";
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 export type ToastOptions = {
-  /** A template lets a message name a destination the operator can actually open,
-   * instead of spelling out a settings path the toast then makes them find. */
   message: string | TemplateResult;
-  /** Positions a compact toast at the top center of the owning surface. */
-  anchor?: Element;
-  anchorTopOffset?: number;
-  icon?: TemplateResult;
+  variant: ToastVariant;
+  key?: string;
+  scope?: { kind: "session"; sessionKey: string };
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
 };
 
-const DEFAULT_TOAST_DURATION_MS = 6_000;
-const TOAST_EXIT_FALLBACK_MS = 450;
+type ToastEntry = ToastOptions & {
+  id: number;
+  active: boolean;
+  timer: ReturnType<typeof globalThis.setTimeout> | null;
+};
+
+const MAX_VISIBLE_TOASTS = 3;
+const DEFAULT_DURATIONS: Record<ToastVariant, number> = {
+  info: 6_000,
+  success: 5_000,
+  warning: 8_000,
+  danger: 12_000,
+};
+const TOAST_EXIT_MS = 150;
+let nextToastId = 0;
 
 function activeModalToastLayer() {
   return [...(document.openClawModalToastLayers ?? [])].findLast(
@@ -31,24 +42,26 @@ function activeModalToastLayer() {
   );
 }
 
-// Outcomes reported during startup (a restored post-update result, for example)
-// race the shell that owns the host element. Hold the latest one instead of
-// dropping it, so no caller's message disappears because it arrived too early.
-let queuedToast: ToastOptions | null = null;
+function sessionToastAnchor(sessionKey: string): Element | null {
+  const panes = document.querySelectorAll<HTMLElement & { sessionKey?: string }>(
+    "openclaw-chat-pane.chat-pane-cache__pane--visible",
+  );
+  return [...panes].find((pane) => pane.sessionKey === sessionKey) ?? null;
+}
+
+// Startup outcomes can precede the shell. Preserve the same bounded admission
+// policy used by a mounted host so early bursts do not collapse to one event.
+let queuedToasts: ToastOptions[] = [];
 
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
-  @state() private toast: ToastOptions | null = null;
-  @state() private active = false;
-  private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private exitReason: ToastDismissReason | null = null;
+  @state() private entries: ToastEntry[] = [];
 
   override connectedCallback() {
     super.connectedCallback();
-    const pending = queuedToast;
-    queuedToast = null;
-    if (pending) {
-      this.show(pending);
+    const pending = queuedToasts;
+    queuedToasts = [];
+    for (const toast of pending) {
+      this.show(toast);
     }
   }
 
@@ -57,138 +70,147 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
       target.append(this);
     } else {
-      this.dismiss("disconnected");
+      for (const entry of this.entries) {
+        this.finishDismiss(entry, "disconnected");
+      }
     }
     super.disconnectedCallback();
   }
 
-  /** Keep the active outcome intact while moveBefore() crosses top-layer owners. */
+  /** Keep active outcomes intact while moveBefore() crosses top-layer owners. */
   connectedMoveCallback() {}
 
   show(options: ToastOptions) {
-    this.finishDismiss(this.exitReason ?? "replaced");
-    this.toast = options;
-    this.active = true;
-    this.exitReason = null;
-    this.dismissTimer = globalThis.setTimeout(
-      () => this.dismiss("timeout"),
-      options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
+    const matching = options.key
+      ? this.entries.find((entry) => entry.key === options.key)
+      : undefined;
+    if (matching) {
+      matching.onDismiss?.("replaced");
+      this.clearTimer(matching);
+      Object.assign(matching, options, { active: true });
+      this.startTimer(matching);
+      this.entries = [...this.entries];
+      return;
+    }
+
+    if (this.entries.length === MAX_VISIBLE_TOASTS) {
+      this.finishDismiss(this.entries[0]!, "replaced");
+    }
+    const entry: ToastEntry = {
+      ...options,
+      id: ++nextToastId,
+      active: true,
+      timer: null,
+    };
+    this.entries = [...this.entries, entry];
+    this.startTimer(entry);
+  }
+
+  private startTimer(entry: ToastEntry) {
+    entry.timer = globalThis.setTimeout(
+      () => this.dismiss(entry, "timeout"),
+      entry.durationMs ?? DEFAULT_DURATIONS[entry.variant],
     );
   }
 
-  private clearDismissTimer() {
-    if (this.dismissTimer !== null) {
-      globalThis.clearTimeout(this.dismissTimer);
-      this.dismissTimer = null;
-    }
-    if (this.exitTimer !== null) {
-      globalThis.clearTimeout(this.exitTimer);
-      this.exitTimer = null;
+  private clearTimer(entry: ToastEntry) {
+    if (entry.timer !== null) {
+      globalThis.clearTimeout(entry.timer);
+      entry.timer = null;
     }
   }
 
-  private finishDismiss(reason: ToastDismissReason) {
-    const toast = this.toast;
-    this.clearDismissTimer();
-    this.active = false;
-    this.exitReason = null;
-    this.toast = null;
-    toast?.onDismiss?.(reason);
-  }
-
-  private dismiss(reason: ToastDismissReason) {
-    const toast = this.toast;
-    if (!toast) {
+  private finishDismiss(entry: ToastEntry, reason: ToastDismissReason) {
+    if (!this.entries.includes(entry)) {
       return;
     }
-    this.clearDismissTimer();
-    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
-    const anchored = anchorRect !== null && anchorRect.width > 0;
+    this.clearTimer(entry);
+    this.entries = this.entries.filter((candidate) => candidate !== entry);
+    entry.onDismiss?.(reason);
+  }
+
+  private dismiss(entry: ToastEntry, reason: ToastDismissReason) {
+    this.clearTimer(entry);
     if (
-      (reason !== "dismiss" && reason !== "timeout") ||
-      reducedMotion ||
-      !this.isConnected ||
-      !anchored
+      reason === "action" ||
+      reason === "disconnected" ||
+      reason === "replaced" ||
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
     ) {
-      this.finishDismiss(reason);
+      this.finishDismiss(entry, reason);
       return;
     }
-    this.active = false;
-    this.exitReason = reason;
-    this.exitTimer = globalThis.setTimeout(() => {
-      if (this.toast === toast) {
-        this.finishDismiss(reason);
-      }
-    }, TOAST_EXIT_FALLBACK_MS);
+    entry.active = false;
+    this.entries = [...this.entries];
+    globalThis.setTimeout(() => this.finishDismiss(entry, reason), TOAST_EXIT_MS);
   }
 
   override render() {
-    const toast = this.toast;
-    if (!toast) {
-      return nothing;
-    }
-    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
-    const anchored = anchorRect !== null && anchorRect.width > 0;
+    return html`${this.entries.map((entry, index) => this.renderEntry(entry, index))}`;
+  }
+
+  private renderEntry(entry: ToastEntry, index: number) {
+    const anchor = entry.scope ? sessionToastAnchor(entry.scope.sessionKey) : null;
+    const rect = anchor?.getBoundingClientRect();
+    const anchored = rect !== undefined && rect.width > 0;
+    const assertive = entry.variant === "warning" || entry.variant === "danger";
+    const icon =
+      entry.variant === "success"
+        ? icons.check
+        : entry.variant === "info"
+          ? icons.radio
+          : icons.alertTriangle;
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
-        data-active=${this.active ? "true" : "false"}
+        class="app-toast app-toast--${entry.variant} ${anchored ? "app-toast--session" : ""}"
+        data-active=${entry.active ? "true" : "false"}
         style=${styleMap(
           anchored
             ? {
-                "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
-                "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
-                "--app-toast-anchor-width": `${anchorRect.width}px`,
+                "--app-toast-anchor-center": `${rect.left + rect.width / 2}px`,
+                "--app-toast-anchor-top": `${rect.top + 56 + index * 44}px`,
+                "--app-toast-anchor-width": `${rect.width}px`,
               }
-            : {},
+            : { "--app-toast-index": String(this.globalIndex(entry)) },
         )}
-        role="status"
-        aria-live="polite"
+        role=${assertive ? "alert" : "status"}
+        aria-live=${assertive ? "assertive" : "polite"}
         aria-atomic="true"
-        @transitionend=${(event: TransitionEvent) => {
-          if (
-            event.target === event.currentTarget &&
-            event.propertyName === "opacity" &&
-            !this.active &&
-            this.exitReason
-          ) {
-            this.finishDismiss(this.exitReason);
-          }
-        }}
       >
-        ${toast.icon
-          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-          : nothing}
+        <span class="app-toast__icon" aria-hidden="true">${icon}</span>
         <span class="app-toast__message"
-          >${typeof toast.message === "string"
-            ? formatUiExternalText(toast.message)
-            : toast.message}</span
+          >${typeof entry.message === "string"
+            ? formatUiExternalText(entry.message)
+            : entry.message}</span
         >
-        ${toast.actionLabel && toast.onAction
-          ? html`
-              <button
-                type="button"
-                class="app-toast__action"
-                @click=${() => {
-                  this.dismiss("action");
-                  toast.onAction?.();
-                }}
-              >
-                ${toast.actionLabel}
-              </button>
-            `
+        ${entry.actionLabel && entry.onAction
+          ? html`<button
+              type="button"
+              class="app-toast__action"
+              @click=${() => {
+                this.dismiss(entry, "action");
+                entry.onAction?.();
+              }}
+            >
+              ${entry.actionLabel}
+            </button>`
           : nothing}
         <button
           type="button"
           class="app-toast__dismiss"
           aria-label=${t("common.dismiss")}
-          @click=${() => this.dismiss("dismiss")}
+          @click=${() => this.dismiss(entry, "dismiss")}
         >
           ${icons.x}
         </button>
       </div>
     `;
+  }
+
+  private globalIndex(entry: ToastEntry): number {
+    return this.entries
+      .filter((candidate) => !candidate.scope || !sessionToastAnchor(candidate.scope.sessionKey))
+      .indexOf(entry);
   }
 }
 
@@ -198,7 +220,14 @@ export function showToast(options: ToastOptions): boolean {
   }
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
-    queuedToast = options;
+    const matching = options.key
+      ? queuedToasts.findIndex((entry) => entry.key === options.key)
+      : -1;
+    if (matching >= 0) {
+      queuedToasts[matching] = options;
+    } else {
+      queuedToasts = [...queuedToasts.slice(-(MAX_VISIBLE_TOASTS - 1)), options];
+    }
     return false;
   }
   const modal = activeModalToastLayer();
@@ -219,7 +248,6 @@ export function showToast(options: ToastOptions): boolean {
   return true;
 }
 
-// Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.
 if (typeof customElements !== "undefined" && !customElements.get("openclaw-toast-host")) {
   customElements.define("openclaw-toast-host", OpenClawToastHost);
 }

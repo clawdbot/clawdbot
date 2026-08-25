@@ -775,9 +775,7 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
-  it("toasts failed rejection while keeping controls and leaves successful decisions quiet", async () => {
-    const toastHost = document.createElement("openclaw-toast-host");
-    document.body.append(toastHost);
+  it("keeps failed decisions inline and leaves successful decisions quiet", async () => {
     const grant = vi.fn(async (_name: string, decision: "granted" | "rejected") => {
       if (decision === "rejected") {
         throw new Error("approval service unavailable");
@@ -790,16 +788,11 @@ describe("openclaw-board-view", () => {
     allow?.click();
     await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "granted"));
     await vi.waitFor(() => expect(reject?.disabled).toBe(false));
-    expect(toastHost.querySelector(".app-toast")).toBeNull();
-
     reject?.click();
     await vi.waitFor(() => {
       expect(
         view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
       ).toContain("approval service unavailable");
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-        "Could not reject widget access. Try again.",
-      );
     });
     expect(allow?.disabled).toBe(false);
     expect(reject?.disabled).toBe(false);

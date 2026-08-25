@@ -569,11 +569,11 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
     : nothing;
   if (!props.canAdmin) {
     return html`${current}
-      <div class="callout warning" role="note">${t("modelSetup.access.adminRequired")}</div>`;
+      <div class="callout warn" role="note">${t("modelSetup.access.adminRequired")}</div>`;
   }
   if (props.gatewayTooOld) {
     return html`${current}
-      <div class="callout warning" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
+      <div class="callout warn" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
   }
   return html`
     ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
@@ -655,11 +655,11 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
   if (props.page.phase === "ready") {
     body = renderReady(props, props.page.result);
   } else if (!props.canAdmin) {
-    body = html`<div class="callout warning" role="note">
+    body = html`<div class="callout warn" role="note">
       ${t("modelSetup.access.adminRequired")}
     </div>`;
   } else if (props.gatewayTooOld) {
-    body = html`<div class="callout warning" role="note">
+    body = html`<div class="callout warn" role="note">
       ${t("modelSetup.access.gatewayTooOld")}
     </div>`;
   } else if (props.page.phase === "loading") {
@@ -693,7 +693,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           : nothing}
       </div>
       ${props.refreshWarning
-        ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+        ? html`<div class="callout warn" role="alert">${props.refreshWarning}</div>`
         : nothing}
       ${body}
     </div>

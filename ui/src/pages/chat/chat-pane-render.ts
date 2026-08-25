@@ -182,9 +182,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "progressCard.put") === true;
     const onDismissProgressCard = canDismissProgressCard
       ? (card: NonNullable<ChatProps["progressCard"]>) => {
-          void this.progressCard
-            .dismiss(card)
-            .catch(() => showToast({ message: t("sessionProgressCard.dismissFailed") }));
+          void this.progressCard.dismiss(card).catch(() =>
+            showToast({
+              message: t("sessionProgressCard.dismissFailed"),
+              variant: "danger",
+              key: `progress-dismiss:${state.sessionKey}`,
+              scope: { kind: "session", sessionKey: state.sessionKey },
+            }),
+          );
         }
       : undefined;
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
@@ -283,7 +288,6 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
     const props: ChatProps = {

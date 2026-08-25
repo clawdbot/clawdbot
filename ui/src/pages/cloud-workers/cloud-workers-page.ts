@@ -540,17 +540,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const body = renderSettingsPage(
       html`
         ${!this.hasManageAccess()
-          ? html`<div class="callout warning" role="note">
-              ${t("cloudWorkersPage.adminRequired")}
-            </div>`
+          ? html`<div class="callout warn" role="note">${t("cloudWorkersPage.adminRequired")}</div>`
           : nothing}
         ${this.catalogError
-          ? html`<div class="callout warning" role="status">
+          ? html`<div class="callout warn" role="status">
               ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
             </div>`
           : nothing}
         ${this.notice
-          ? html`<div class="callout warning" role="status">${this.notice}</div>`
+          ? html`<div class="callout warn" role="status">${this.notice}</div>`
           : nothing}
         ${renderSettingsSection(
           {

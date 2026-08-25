@@ -59,7 +59,7 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
     button.ariaLabel = t("chat.toolCards.pinToDashboard");
     const failureLabel = t("chat.toolCards.pinToDashboardFailed");
     button.title = failureLabel;
-    showToast({ message: failureLabel });
+    showToast({ message: failureLabel, variant: "danger" });
   }
 }
 
@@ -424,7 +424,14 @@ function renderWidgetContent(
 function handleWidgetExportAction(
   event: CustomEvent<{ item: { value?: string } }>,
   title: string | undefined,
+  sessionKey: string | undefined,
 ) {
+  const present = (message: string, variant: "info" | "success" | "danger") =>
+    showToast({
+      message,
+      variant,
+      scope: sessionKey ? { kind: "session", sessionKey } : undefined,
+    });
   const value = event.detail.item.value;
   if (value === "raw-details") {
     const dropdown = event.currentTarget;
@@ -456,25 +463,29 @@ function handleWidgetExportAction(
           ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame")
       : null;
   if (!frame) {
-    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+    present(t("chat.toolCards.widgetExportFailed"), "danger");
     return;
   }
   void exportWidget(value, frame, title)
     .then((result) => {
       if (result === "rerender-required") {
-        showToast({ message: t("chat.toolCards.widgetExportRerender") });
+        present(t("chat.toolCards.widgetExportRerender"), "info");
       } else if (result === "html") {
-        showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
+        present(t("chat.toolCards.widgetExportHtmlFallback"), "info");
       } else if (value === "copy") {
-        showToast({ message: t("common.copied") });
+        present(t("common.copied"), "success");
       }
     })
     .catch(() => {
-      showToast({ message: t("chat.toolCards.widgetExportFailed") });
+      present(t("chat.toolCards.widgetExportFailed"), "danger");
     });
 }
 
-function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
+function renderWidgetActions(
+  preview: ToolPreview,
+  hasRawDetails: boolean,
+  sessionKey: string | undefined,
+) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
     return nothing;
@@ -485,7 +496,7 @@ function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
       placement="bottom-end"
       aria-label=${t("chat.toolCards.widgetActions")}
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
-        handleWidgetExportAction(event, preview.title)}
+        handleWidgetExportAction(event, preview.title, sessionKey)}
     >
       <button
         slot="trigger"
@@ -579,7 +590,11 @@ function renderWidgetCard(
           ${icons.pin}
         </button>`
       : nothing;
-  const widgetActions = renderWidgetActions(preview, Boolean(options?.rawText));
+  const widgetActions = renderWidgetActions(
+    preview,
+    Boolean(options?.rawText),
+    options?.sessionKey,
+  );
   const actions =
     pinAction === nothing && widgetActions === nothing
       ? nothing

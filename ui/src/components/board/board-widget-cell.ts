@@ -20,7 +20,6 @@ import {
   type PluginBoardWidgetRenderer,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { showToast } from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -154,7 +153,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private async runAction(action: () => Promise<void>, failureMessage?: string): Promise<void> {
+  private async runAction(action: () => Promise<void>): Promise<void> {
     if (this.actionPending || this.busy) {
       return;
     }
@@ -165,9 +164,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       await action();
     } catch (error) {
       this.actionError = formatUiError(error);
-      if (failureMessage) {
-        showToast({ message: failureMessage });
-      }
     } finally {
       this.actionPending = false;
     }
@@ -178,10 +174,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     callbacks: BoardWidgetCellCallbacks,
     decision: BoardGrantDecision,
   ): void {
-    const failureMessage = t(
-      decision === "granted" ? "board.widget.allowFailed" : "board.widget.rejectFailed",
-    );
-    void this.runAction(() => callbacks.grant(widget.name, decision), failureMessage);
+    void this.runAction(() => callbacks.grant(widget.name, decision));
   }
 
   private handleMenuSelect(

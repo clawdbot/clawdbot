@@ -28,6 +28,7 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  sessionKey?: string;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
   authToken?: string | null;

@@ -696,13 +696,10 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
-/* Passive notifications stay in the trailing top corner, away from the chat
- * composer and other bottom-docked controls. The host shows one toast at a time
- * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
   position: fixed;
   right: calc(20px + var(--safe-area-right));
-  top: calc(20px + var(--safe-area-top));
+  bottom: calc(20px + var(--safe-area-bottom) + var(--app-toast-index) * 76px);
   z-index: var(--z-toast);
   display: flex;
   align-items: center;
@@ -714,45 +711,59 @@ openclaw-session-owner-chip {
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
+  transition:
+    translate 200ms var(--ease-out),
+    opacity 150ms var(--ease-out);
 }
 
-.app-toast--anchored {
-  right: auto;
-  left: var(--app-toast-anchor-center);
-  top: var(--app-toast-anchor-top);
-  transform: translateX(-50%);
-  gap: var(--space-2);
-  max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
-  padding: 8px 12px;
-  border-color: color-mix(in srgb, var(--info) 12%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--info) 12%, var(--popover));
-  transition-property: translate, scale, opacity;
-}
-
-.app-toast--anchored[data-active="true"] {
-  translate: 0 0;
-  scale: 1;
-  opacity: 1;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+.app-toast[data-active="false"] {
+  translate: 24px 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 @starting-style {
-  .app-toast--anchored[data-active="true"] {
-    translate: 0 -100%;
-    scale: 0.95;
+  .app-toast[data-active="true"] {
+    translate: 24px 0;
     opacity: 0;
   }
 }
 
-.app-toast--anchored[data-active="false"] {
-  translate: 0 -100%;
-  scale: 0.95;
-  opacity: 0;
-  pointer-events: none;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
+.app-toast--session {
+  right: auto;
+  left: var(--app-toast-anchor-center);
+  top: var(--app-toast-anchor-top);
+  bottom: auto;
+  transform: translateX(-50%);
+  gap: var(--space-2);
+  max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
+  padding: 8px 12px;
+  border-radius: var(--radius-full);
+}
+
+.app-toast--info {
+  --app-toast-tone: var(--info);
+}
+
+.app-toast--success {
+  --app-toast-tone: var(--ok);
+}
+
+.app-toast--warning {
+  --app-toast-tone: var(--warn);
+}
+
+.app-toast--danger {
+  --app-toast-tone: var(--danger);
+}
+
+.app-toast--info,
+.app-toast--success,
+.app-toast--warning,
+.app-toast--danger {
+  border-color: color-mix(in srgb, var(--app-toast-tone) 34%, var(--border));
+  background: color-mix(in srgb, var(--app-toast-tone) 10%, var(--popover));
+  color: color-mix(in srgb, var(--app-toast-tone) 82%, var(--text-strong));
 }
 
 .app-toast__icon {
@@ -761,7 +772,7 @@ openclaw-session-owner-chip {
   width: 16px;
   height: 16px;
   place-items: center;
-  color: var(--info);
+  color: var(--app-toast-tone);
 }
 
 .app-toast__icon svg {
@@ -775,10 +786,12 @@ openclaw-session-owner-chip {
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
+    top: calc(20px + var(--safe-area-top) + var(--app-toast-index) * 64px);
+    bottom: auto;
     max-width: none;
   }
 
-  .app-toast--anchored {
+  .app-toast--session {
     left: var(--app-toast-anchor-center);
     right: auto;
     max-width: calc(var(--app-toast-anchor-width) - 24px);
@@ -801,13 +814,13 @@ openclaw-session-owner-chip {
   -webkit-box-orient: vertical;
 }
 
-.app-toast--anchored .app-toast__message {
+.app-toast--session .app-toast__message {
   display: block;
   white-space: nowrap;
   font-size: var(--control-ui-text-sm);
 }
 
-.app-toast--anchored .app-toast__dismiss {
+.app-toast--session .app-toast__dismiss {
   width: 24px;
   height: 24px;
   margin-left: 2px;
@@ -815,7 +828,7 @@ openclaw-session-owner-chip {
   color: var(--muted);
 }
 
-.app-toast--anchored .app-toast__dismiss svg {
+.app-toast--session .app-toast__dismiss svg {
   width: 16px;
   height: 16px;
 }

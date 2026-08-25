@@ -146,6 +146,12 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
   if (images.length === 0) {
     return nothing;
   }
+  const presentImageToast = (message: string, variant: "success" | "danger") =>
+    showToast({
+      message,
+      variant,
+      scope: opts?.sessionKey ? { kind: "session", sessionKey: opts.sessionKey } : undefined,
+    });
 
   const openImage = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
@@ -177,7 +183,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
             : null;
           if (!safeUrl) {
             pendingWindow?.close();
-            showToast({ message: t("chat.imageLightbox.loadFailed") });
+            presentImageToast(t("chat.imageLightbox.loadFailed"), "danger");
           } else if (pendingWindow) {
             pendingWindow.location.replace(safeUrl);
           } else {
@@ -186,20 +192,20 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
         })
         .catch(() => {
           pendingWindow?.close();
-          showToast({ message: t("chat.imageLightbox.loadFailed") });
+          presentImageToast(t("chat.imageLightbox.loadFailed"), "danger");
         });
       return;
     }
     void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full")
       .then((freshUrl) => {
         if (!freshUrl) {
-          showToast({ message: t("chat.imageLightbox.loadFailed") });
+          presentImageToast(t("chat.imageLightbox.loadFailed"), "danger");
           return;
         }
         const release = cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
         openResolvedImage(opts.onOpenImage, freshUrl, title, release, requestVersion);
       })
-      .catch(() => showToast({ message: t("chat.imageLightbox.loadFailed") }));
+      .catch(() => presentImageToast(t("chat.imageLightbox.loadFailed"), "danger"));
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => {
@@ -505,7 +511,11 @@ function renderManagedImageActions(
       const blob = await readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId);
       downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
     } catch {
-      showToast({ message: t("chat.imageLightbox.downloadFailed") });
+      showToast({
+        message: t("chat.imageLightbox.downloadFailed"),
+        variant: "danger",
+        scope: opts?.sessionKey ? { kind: "session", sessionKey: opts.sessionKey } : undefined,
+      });
     }
   };
   const copy = async () => {
@@ -518,9 +528,17 @@ function renderManagedImageActions(
       );
       void png.catch(() => {});
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
-      showToast({ message: t("common.copied") });
+      showToast({
+        message: t("common.copied"),
+        variant: "success",
+        scope: opts?.sessionKey ? { kind: "session", sessionKey: opts.sessionKey } : undefined,
+      });
     } catch {
-      showToast({ message: t("chat.imageLightbox.copyFailed") });
+      showToast({
+        message: t("chat.imageLightbox.copyFailed"),
+        variant: "danger",
+        scope: opts?.sessionKey ? { kind: "session", sessionKey: opts.sessionKey } : undefined,
+      });
     }
   };
   return html`
