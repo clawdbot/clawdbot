@@ -364,7 +364,11 @@ describe("gateway register option collisions", () => {
     });
 
     expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("Invalid --days"));
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -396,21 +400,22 @@ describe("gateway register option collisions", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("uses the effective local port override for gateway health auth diagnostics", async () => {
+  it("uses the effective local port and timeout for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
     emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
 
-    await sharedProgram.parseAsync(["gateway", "health", "--port", "19081", "--json"], {
-      from: "user",
-    });
+    await sharedProgram.parseAsync(
+      ["gateway", "health", "--port", "19081", "--timeout", "1234", "--json"],
+      { from: "user" },
+    );
 
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
       error: authError,
       config: {},
       runtime: defaultRuntime,
-      timeoutMs: 10000,
+      timeoutMs: 1234,
       token: undefined,
       password: undefined,
       localPortOverride: 19081,

@@ -349,17 +349,25 @@ describe("gateway-cli coverage", () => {
       await expectGatewayExit(["gateway", "usage-cost", "--days", days, "--json"]);
 
       expect(callGateway).not.toHaveBeenCalled();
-      expect(runtimeErrors.join("\n")).toContain("Invalid --days");
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+      });
+      expect(runtimeErrors).toHaveLength(0);
     },
   );
 
-  it("rejects a malformed --timeout before the health auth diagnostic", async () => {
+  it("rejects a malformed health --timeout before calling Gateway", async () => {
     callGateway.mockClear();
-    callGateway.mockRejectedValueOnce(new Error("unauthorized"));
 
     await expectGatewayExit(["gateway", "health", "--timeout", "abc", "--json"]);
 
-    expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+    });
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("writes JSON for gateway health transport failures in JSON mode", async () => {
