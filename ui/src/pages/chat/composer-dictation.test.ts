@@ -190,18 +190,43 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
-  it("blocks unavailable dictation before microphone or session startup", async () => {
-    const { controller, onDictationUnavailable, target } = createHarness({
+  it("consumes the click tail when a hold falls back to unavailable dictation", async () => {
+    const { controller, onDictationUnavailable, onTap, target } = createHarness({
       dictationAvailable: false,
     });
 
     target.dispatchEvent(pointer("pointerdown"));
     await vi.advanceTimersByTimeAsync(800);
+    await vi.advanceTimersByTimeAsync(1);
+    document.dispatchEvent(pointer("pointerup"));
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     expect(onDictationUnavailable).toHaveBeenCalledOnce();
+    expect(onTap).not.toHaveBeenCalled();
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(controller.locksComposer).toBe(false);
+
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(onTap).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("consumes release after the pointer enters the visible hold state", async () => {
+    const { controller, onTap, target } = createHarness();
+
+    target.dispatchEvent(pointer("pointerdown"));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(controller.arming).toBe(true);
+    document.dispatchEvent(pointer("pointerup"));
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(onTap).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(controller.locksComposer).toBe(false);
+
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(onTap).toHaveBeenCalledOnce();
     controller.dispose();
   });
 

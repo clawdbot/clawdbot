@@ -570,9 +570,12 @@ export class ComposerDictationController {
       return;
     }
     if (this.phase === "pressing" || this.phase === "holding") {
+      const cleanTap = this.phase === "pressing";
       this.clearGesture();
       this.setPhase("idle");
-      this.options.onTap();
+      if (cleanTap) {
+        this.options.onTap();
+      }
       this.expireClickSuppression();
       return;
     }
@@ -637,7 +640,8 @@ export class ComposerDictationController {
       this.clearGesture();
       this.setPhase("idle");
       this.options.onDictationUnavailable?.();
-      this.expireClickSuppression();
+      // The held pointer still owns a synthetic click. Its release expires this
+      // suppression only after handleClick has had a chance to consume the tail.
       return;
     }
     // Crossing the threshold latches dictation. Pointer ownership ends here,
