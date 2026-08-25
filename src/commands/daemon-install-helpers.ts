@@ -187,49 +187,32 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   durableEnvironment: Record<string, string | undefined>;
   authProfileEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
   platform: NodeJS.Platform;
 }): Promise<Record<string, string>> {
   if (params.platform !== "linux") {
     return {};
   }
-  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
-  const existingManagedFileEnvironment = Object.fromEntries(
-    Object.entries(params.existingEnvironment ?? {}).filter(
-      ([key, value]) =>
-        existingManagedKeys.has(key.toUpperCase()) &&
-        readEnvironmentValueSource(params.existingEnvironmentValueSources, key) === "file" &&
-        value?.trim(),
-    ),
-  );
   const ownedKeys = new Set(
     [
       ...Object.keys(params.durableEnvironment),
       ...Object.keys(params.authProfileEnvironment),
-      ...Object.keys(params.existingEnvironment ?? {}).filter(
-        (key) => !Object.hasOwn(existingManagedFileEnvironment, key),
-      ),
+      ...Object.keys(params.existingEnvironment ?? {}),
     ].map((key) => key.toUpperCase()),
   );
   const candidates = new Map(
-    Object.entries({ ...params.env, ...existingManagedFileEnvironment }).flatMap(
-      ([rawKey, rawValue]) => {
-        const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
-        const value = rawValue?.trim();
-        return key &&
-          key.endsWith("_API_KEY") &&
-          !key.endsWith("_ADMIN_API_KEY") &&
-          !ownedKeys.has(key) &&
-          value &&
-          !isDangerousHostEnvVarName(key) &&
-          !isDangerousHostEnvOverrideVarName(key)
-          ? [[key, value] as const]
-          : [];
-      },
-    ),
+    Object.entries(params.env).flatMap(([rawKey, rawValue]) => {
+      const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+      const value = rawValue?.trim();
+      return key &&
+        key.endsWith("_API_KEY") &&
+        !key.endsWith("_ADMIN_API_KEY") &&
+        !ownedKeys.has(key) &&
+        value &&
+        !isDangerousHostEnvVarName(key) &&
+        !isDangerousHostEnvOverrideVarName(key)
+        ? [[key, value] as const]
+        : [];
+    }),
   );
   if (candidates.size === 0) {
     return {};
@@ -730,7 +713,6 @@ async function buildGatewayInstallEnvironment(params: {
     durableEnvironment,
     authProfileEnvironment,
     existingEnvironment: params.existingEnvironment,
-    existingEnvironmentValueSources: params.existingEnvironmentValueSources,
     platform: params.platform,
   });
   const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(

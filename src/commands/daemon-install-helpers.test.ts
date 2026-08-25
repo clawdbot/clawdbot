@@ -754,12 +754,15 @@ describe("buildGatewayInstallPlan", () => {
     },
   );
 
-  it("preserves operator ownership when migrating a managed file-backed provider API key", async () => {
+  it("removes managed provider credentials when their configuration no longer owns them", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
     const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({ OPENAI_API_KEY: "rotated-shell-openai" }),
+      env: isolatedPlanEnv({
+        OPENAI_API_KEY: "existing-managed-openai",
+        ANTHROPIC_API_KEY: "fresh-operator-anthropic",
+      }),
       existingEnvironment: {
         OPENAI_API_KEY: "existing-managed-openai",
         OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
@@ -771,8 +774,10 @@ describe("buildGatewayInstallPlan", () => {
       config: {},
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("existing-managed-openai");
-    expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environmentValueSources?.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_API_KEY).toBe("fresh-operator-anthropic");
+    expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
