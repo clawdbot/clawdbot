@@ -19,6 +19,7 @@ import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-ta
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
@@ -217,6 +218,22 @@ export async function applySkillProposalTransition(
 
       assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
       assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      // Agents rewrite only Workshop-authored skills; operators (gateway, CLI) approve the rest.
+      // Rechecked under the commit lock so a claim released after the autonomous pre-check
+      // cannot let an agent write a user-authored skill.
+      const operatorActor =
+        input.eventActor?.type === "gateway" || input.eventActor?.type === "system";
+      if (
+        record.kind === "update" &&
+        !operatorActor &&
+        !isWorkshopOwnedSkillDir(
+          input.workspaceDir,
+          record.target.skillDir,
+          storeOptions(input.env),
+        )
+      ) {
+        throw new Error(`Skill Workshop does not own this skill path: ${record.target.skillKey}`);
+      }
       const workshopConfig = resolveSkillWorkshopConfig(input.config);
       const symlinkPolicy = {
         allowWrites: workshopConfig.allowSymlinkTargetWrites,

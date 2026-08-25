@@ -252,6 +252,42 @@ describe("skill workshop proposals", () => {
     });
   });
 
+  it("lets only an operator apply an update to a user-authored skill", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "handwritten");
+    await writeSkill({
+      dir: skillDir,
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+
+    await expect(
+      applySkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        eventActor: { type: "agent", id: "main" },
+      }),
+    ).rejects.toThrow("Skill Workshop does not own this skill path: handwritten");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Old body.",
+    );
+
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      eventActor: { type: "gateway" },
+    });
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "New body.",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "allows a pending operator review for a user-authored trusted symlink skill",
     async () => {

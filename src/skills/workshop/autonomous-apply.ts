@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listWorkshopAuthoredSkillNames } from "./ownership.js";
+import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { applySkillProposal } from "./service.js";
 import { updateSkillProposalRecord } from "./store.js";
 import type { SkillProposalReadResult, SkillProposalRecord } from "./types.js";
@@ -22,11 +22,10 @@ export async function applyAutonomousSkillProposal(params: {
   reason: string;
 }): Promise<AutonomousSkillProposalResult> {
   const store = params.env ? { env: params.env } : {};
+  // Decides pending-vs-apply only; the apply transition rechecks ownership under its commit lock.
   if (
     params.proposal.record.kind !== "create" &&
-    !listWorkshopAuthoredSkillNames(params.workspaceDir, store).has(
-      params.proposal.record.target.skillName,
-    )
+    !isWorkshopOwnedSkillDir(params.workspaceDir, params.proposal.record.target.skillDir, store)
   ) {
     const record = {
       ...params.proposal.record,

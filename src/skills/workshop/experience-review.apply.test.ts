@@ -112,6 +112,7 @@ describe("experience review auto apply", () => {
       }),
     );
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
   });
 
   it("auto-applies updates to the durable workspace from a session worktree", async () => {

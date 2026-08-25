@@ -501,7 +501,7 @@ async function runSkillExperienceReviewInner(
           sessionKey,
           ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
         },
-        cleanupBundleMcpOnRunEnd: true,
+        // The review shares the foreground session, so its MCP runtime stays warm for the next turn.
         verboseLevel: "off",
         reasoningLevel: candidate.ctx.reasoningLevel,
         suppressToolErrorWarnings: true,
