@@ -231,6 +231,49 @@ describe("cli json stdout contract", () => {
   });
 
   it.each([
+    { name: "piped stdout", tty: false },
+    { name: "dual TTYs", tty: true },
+  ])("writes successful telemetry show JSON to clean $name", async ({ tty }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const ttyPreload = Buffer.from(
+          [
+            'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+            'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, ["telemetry", "show", "--json"], {
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          ...(tty
+            ? {
+                NODE_OPTIONS: `--import=data:text/javascript;base64,${ttyPreload}`,
+                FORCE_COLOR: "1",
+              }
+            : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        const payload = JSON.parse(result.stdout);
+        expect(payload).toEqual({
+          featureStatsEnabled: false,
+          reason: "never-asked",
+          endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+          lastPingAt: null,
+          request: {
+            method: "GET",
+            userAgent: expect.stringMatching(/^openclaw\/[^ ]+ \(.+; gateway\)$/u),
+          },
+        });
+        expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
+        expect(result.stderr).not.toContain('"featureStatsEnabled"');
+      },
+      { prefix: "openclaw-telemetry-json-success-e2e-" },
+    );
+  });
+
+  it.each([
     { name: "leaf JSON", args: ["models", "refresh", "--json"] },
     { name: "parent JSON", args: ["models", "--json", "refresh"] },
     { name: "human output", args: ["models", "refresh"], human: true },
