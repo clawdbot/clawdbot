@@ -860,13 +860,13 @@ describe("checkInboundAccessControl replyRate", () => {
         whatsapp: {
           dmPolicy: "allowlist",
           allowFrom: ["+15550001111"],
-          replyRate: 1.0, // Account admits
+          replyRate: 1, // Account admits
           direct: {
             "*": {
-              replyRate: 1.0, // Wildcard admits
+              replyRate: 1, // Wildcard admits
             },
             "+15550001111": {
-              replyRate: 0.0, // Exact drops
+              replyRate: 0, // Exact drops
             },
           },
         },

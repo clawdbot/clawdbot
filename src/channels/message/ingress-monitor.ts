@@ -101,13 +101,8 @@ export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-export type CreateChannelIngressMonitorOptions<
-  TRaw,
-  TBody,
-  TStoredPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
-> = {
+// prettier-ignore
+export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
   queue:
     | ChannelIngressQueue<TStoredPayload, TMetadata, TCompletedMetadata>
     | (() => ChannelIngressQueue<TStoredPayload, TMetadata, TCompletedMetadata>);
@@ -158,20 +153,9 @@ export type CreateChannelIngressMonitorOptions<
  * Creates the shared monitor around a durable queue and ingress drain.
  * Channel code keeps transport inspection, payload shape, and delivery policy.
  */
-export function createChannelIngressMonitor<
-  TRaw,
-  TBody,
-  TStoredPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
->(
-  options: CreateChannelIngressMonitorOptions<
-    TRaw,
-    TBody,
-    TStoredPayload,
-    TMetadata,
-    TCompletedMetadata
-  >,
+// prettier-ignore
+export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+  options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata, TCompletedMetadata>,
 ) {
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;

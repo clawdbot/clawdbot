@@ -221,8 +221,8 @@ export async function checkInboundAccessControl(params: {
       const messageHash = createHash("md5")
         .update(params.messageId ?? "test-fixture-id")
         .digest("hex")
-        .substring(0, 8);
-      const randomValue = parseInt(messageHash, 16) / 0xffffffff;
+        .slice(0, 8);
+      const randomValue = Number.parseInt(messageHash, 16) / 0xffffffff;
       if (randomValue >= rate) {
         logWhatsAppVerbose(
           params.verbose,
