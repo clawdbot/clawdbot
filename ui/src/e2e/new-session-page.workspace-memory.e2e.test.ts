@@ -162,8 +162,8 @@ suite.define(() => {
       expect(draftBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
       // The row reads as the settings for the next turn, in the order the
-      // operator decides them: attachments, then the model and its reasoning,
-      // then whether the session begins as a draft. This viewport is narrow enough that
+      // operator decides them: attachments, draft visibility, then the model and
+      // its reasoning. This viewport is narrow enough that
       // the row wraps, so the comparison is reading order — which line a control
       // is on first, then where it sits on that line.
       const followsInReadingOrder = (
@@ -178,7 +178,7 @@ suite.define(() => {
         const sameLine = Math.abs(nextCenter - previousCenter) <= previous.height / 2;
         return sameLine ? next.x > previous.x : nextCenter > previousCenter;
       };
-      const sequence = [attachBox, modelBox, draftBox];
+      const sequence = [attachBox, draftBox, modelBox];
       for (let index = 1; index < sequence.length; index += 1) {
         expect(followsInReadingOrder(sequence[index - 1] ?? null, sequence[index] ?? null)).toBe(
           true,
