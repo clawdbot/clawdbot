@@ -71,6 +71,7 @@
     "features.goals": false,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
+    "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
@@ -115,6 +116,7 @@
     "features.goals": false,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
+    "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
