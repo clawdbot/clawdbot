@@ -97,7 +97,29 @@ describe("cli json stdout contract", () => {
       commander: true,
     },
     {
-      name: "dual-TTY JSON",
+      name: "dual-TTY implicit JSON",
+      args: ["cron", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY automation alias implicit JSON",
+      args: ["automations", "edit", "job-1", "--enable", "--disable"],
+      tty: true,
+    },
+    {
+      name: "dual-TTY implicit JSON command sibling",
+      args: ["cron", "runs", "--id", "job-1", "--limit", "invalid"],
+      message: "Invalid --limit (must be a positive integer).",
+      tty: true,
+    },
+    {
+      name: "dual-TTY raw-output command sibling",
+      args: ["cron", "scratch", "job-1", "--set", "updated", "--unset"],
+      message: "choose only one of --set, --file, or --unset",
+      tty: true,
+    },
+    {
+      name: "dual-TTY explicit JSON",
       args: ["cron", "edit", "job-1", "--enable", "--disable", "--json"],
       tty: true,
     },
@@ -106,6 +128,13 @@ describe("cli json stdout contract", () => {
       args: ["cron", "list", "--agent", ""],
       message: "--agent must not be blank",
       human: true,
+    },
+    {
+      name: "dual-TTY human-output sibling",
+      args: ["cron", "list", "--agent", ""],
+      message: "--agent must not be blank",
+      human: true,
+      tty: true,
     },
   ])("renders cron edit failures through the shared owner for $name", async (testCase) => {
     await withTempHome(
@@ -139,10 +168,14 @@ describe("cli json stdout contract", () => {
             : (testCase.message ?? "Choose --enable or --disable, not both");
 
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
         if ("human" in testCase) {
-          expect(result.stdout).toBe("");
+          if ("tty" in testCase) {
+            expect(result.stdout).toContain("OpenClaw");
+          } else {
+            expect(result.stdout).toBe("");
+          }
         } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
             error: { type: "cli_error", message },
@@ -155,7 +188,7 @@ describe("cli json stdout contract", () => {
           expect(result.stderr).not.toContain(gatewayError);
           await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        if ("tty" in testCase) {
+        if ("tty" in testCase && !("human" in testCase)) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
         await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });

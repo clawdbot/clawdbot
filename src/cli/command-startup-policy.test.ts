@@ -328,6 +328,9 @@ describe("command-startup-policy", () => {
       }).hideBanner,
     ).toBe(true);
     expect(resolvePolicy({ commandPath: ["status"], env: {} }).hideBanner).toBe(false);
+    expect(
+      resolvePolicy({ commandPath: ["status"], jsonOutputMode: true, env: {} }).hideBanner,
+    ).toBe(true);
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
@@ -366,7 +369,7 @@ describe("command-startup-policy", () => {
       }),
     ).toEqual({
       suppressDoctorStdout: true,
-      hideBanner: false,
+      hideBanner: true,
       skipConfigGuard: true,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
