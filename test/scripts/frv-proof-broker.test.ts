@@ -39,6 +39,7 @@ function brokerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     GITHUB_EVENT_NAME: "workflow_dispatch",
     GITHUB_REF: "refs/heads/main",
     GITHUB_REPOSITORY: repository,
+    GITHUB_RUN_ATTEMPT: "1",
     GITHUB_RUN_ID: "12345",
     GITHUB_SHA: workflowSha,
     GITHUB_TRIGGERING_ACTOR: "maintainer",
@@ -61,7 +62,7 @@ function brokerEvent(overrides: Record<string, unknown> = {}) {
 function fixtureRun(overrides: Record<string, unknown> = {}) {
   return {
     conclusion: "failure",
-    display_title: "FRV Proof Fixture [noop] frv-proof-12345",
+    display_title: "FRV Proof Fixture [noop] frv-proof-12345-1",
     event: "workflow_dispatch",
     head_branch: "main",
     head_sha: workflowSha,
@@ -87,6 +88,7 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
 function successfulApi(
   options: {
     initialRun?: Record<string, unknown>;
+    mainShas?: string[];
     permissions?: string[];
     pulls?: Array<Record<string, unknown>>;
     rerun?: Record<string, unknown>;
@@ -96,6 +98,7 @@ function successfulApi(
   const calls: Array<{ body?: unknown; method: string; path: string }> = [];
   let permissionRead = 0;
   let pullRead = 0;
+  let mainRead = 0;
   const initialRun = options.initialRun ?? fixtureRun();
   const rerun =
     options.rerun ??
@@ -125,7 +128,9 @@ function successfulApi(
         };
       }
       if (method === "GET" && path === "/git/ref/heads/main") {
-        return { object: { sha: workflowSha }, ref: "refs/heads/main" };
+        const sha = options.mainShas?.[mainRead] ?? workflowSha;
+        mainRead += 1;
+        return { object: { sha }, ref: "refs/heads/main" };
       }
       if (method === "POST" && path === "/actions/workflows/frv-proof-fixture.yml/dispatches") {
         return null;
@@ -152,7 +157,7 @@ describe("FRV proof broker request validation", () => {
   it("accepts only the exact two operator inputs", () => {
     const parsed = validateBrokerRequest(brokerEvent(), brokerEnv());
     expect(parsed).toMatchObject({
-      correlation: "frv-proof-12345",
+      correlation: "frv-proof-12345-1",
       headSha,
       prNumber: 128141,
       workflowSha,
@@ -175,6 +180,9 @@ describe("FRV proof broker request validation", () => {
   it("rejects malformed PR and SHA inputs", () => {
     expect(() => validateBrokerRequest(brokerEvent({ pr_number: "0" }), brokerEnv())).toThrow();
     expect(() => validateBrokerRequest(brokerEvent({ head_sha: "ABC" }), brokerEnv())).toThrow();
+    expect(() =>
+      validateBrokerRequest(brokerEvent(), brokerEnv({ GITHUB_RUN_ATTEMPT: "0" })),
+    ).toThrow(/GITHUB_RUN_ATTEMPT/u);
   });
 });
 
@@ -183,7 +191,7 @@ describe("FRV proof fixture identity", () => {
     attempt: 1,
     branch: "main",
     conclusion: "failure" as const,
-    correlation: "frv-proof-12345",
+    correlation: "frv-proof-12345-1",
     headSha: workflowSha,
     repository,
     runId: 777,
@@ -199,7 +207,7 @@ describe("FRV proof fixture identity", () => {
     ["workflow", { path: ".github/workflows/full-release-validation.yml" }],
     ["run", { id: 778 }],
     ["attempt", { run_attempt: 2 }],
-    ["operation", { display_title: "FRV Proof Fixture [publish] frv-proof-12345" }],
+    ["operation", { display_title: "FRV Proof Fixture [publish] frv-proof-12345-1" }],
   ])("rejects the wrong %s identity", (_label, overrides) => {
     expect(() => validateFixtureRun(fixtureRun(overrides), expected)).toThrow();
   });
@@ -217,9 +225,9 @@ describe("FRV proof broker mutation boundary", () => {
     const firstMutation = calls.findIndex((call) => call.method !== "GET");
     expect(calls.slice(0, firstMutation).map((call) => call.path)).toEqual([
       "/actions/workflows/frv-proof-fixture.yml",
-      "/git/ref/heads/main",
       "/collaborators/maintainer/permission",
       "/pulls/128141",
+      "/git/ref/heads/main",
     ]);
   });
 
@@ -240,7 +248,7 @@ describe("FRV proof broker mutation boundary", () => {
     expect(calls.filter((call) => call.method !== "GET")).toEqual([
       {
         body: {
-          inputs: { correlation: "frv-proof-12345", operation: "noop" },
+          inputs: { correlation: "frv-proof-12345-1", operation: "noop" },
           ref: "main",
         },
         method: "POST",
@@ -273,6 +281,41 @@ describe("FRV proof broker mutation boundary", () => {
     expect(calls.some((call) => call.method !== "GET")).toBe(false);
   });
 
+  it("rejects a moved main immediately before dispatch", async () => {
+    const { api, calls } = successfulApi({ mainShas: ["c".repeat(40)] });
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv(),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/trusted main moved/u);
+    expect(calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+
+  it("does not adopt a fixture from a prior broker attempt", async () => {
+    const { api, calls } = successfulApi();
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv({ GITHUB_RUN_ATTEMPT: "2" }),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/timed out waiting/u);
+    expect(calls.filter((call) => call.method !== "GET")).toEqual([
+      {
+        body: {
+          inputs: { correlation: "frv-proof-12345-2", operation: "noop" },
+          ref: "main",
+        },
+        method: "POST",
+        path: "/actions/workflows/frv-proof-fixture.yml/dispatches",
+      },
+    ]);
+  });
+
   it("rejects revoked actor authority before rerunning", async () => {
     const { api, calls } = successfulApi({ permissions: ["maintain", "read"] });
     await expect(
@@ -286,7 +329,7 @@ describe("FRV proof broker mutation boundary", () => {
     expect(calls.filter((call) => call.method !== "GET")).toEqual([
       {
         body: {
-          inputs: { correlation: "frv-proof-12345", operation: "noop" },
+          inputs: { correlation: "frv-proof-12345-1", operation: "noop" },
           ref: "main",
         },
         method: "POST",

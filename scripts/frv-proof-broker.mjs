@@ -72,6 +72,10 @@ export function validateBrokerRequest(event, env) {
     throw new Error("FRV proof broker actor must match the triggering actor");
   }
   const runId = requiredPositiveInteger(requiredEnv(env, "GITHUB_RUN_ID"), "GITHUB_RUN_ID");
+  const runAttempt = requiredPositiveInteger(
+    requiredEnv(env, "GITHUB_RUN_ATTEMPT"),
+    "GITHUB_RUN_ATTEMPT",
+  );
 
   assertExactKeys(event.inputs, ["head_sha", "pr_number"], "workflow inputs");
   const inputs = event.inputs;
@@ -80,7 +84,7 @@ export function validateBrokerRequest(event, env) {
   if (!SHA_PATTERN.test(headSha)) {
     throw new Error("head_sha must be exactly 40 lowercase hex characters");
   }
-  const correlation = `frv-proof-${runId}`;
+  const correlation = `frv-proof-${runId}-${runAttempt}`;
 
   return {
     actor,
@@ -259,15 +263,19 @@ async function validateMutationAuthority(api, context) {
   validatePullRequest(await api.request("GET", `/pulls/${context.prNumber}`), context);
 }
 
-async function validateTrustedPrerequisites(api, context) {
+async function validateFixturePrerequisite(api) {
   validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
+}
+
+async function validateTrustedMain(api, context) {
   validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
 }
 
 export async function runProofBroker({ api, env, event, sleep = setTimeoutPromise }) {
   const context = validateBrokerRequest(event, env);
-  await validateTrustedPrerequisites(api, context);
+  await validateFixturePrerequisite(api);
   await validateMutationAuthority(api, context);
+  await validateTrustedMain(api, context);
 
   await api.request("POST", `/actions/workflows/${FIXTURE_WORKFLOW_ID}/dispatches`, {
     inputs: {
