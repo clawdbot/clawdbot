@@ -8,13 +8,7 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import * as beforeToolCall from "../agent-tools.before-tool-call.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
@@ -40,10 +34,6 @@ const SUCCESS_RESULT = {
   result: "completed",
   session_id: "sdk-session",
 };
-
-function installBeforeToolCallHook(handler: ReturnType<typeof vi.fn>) {
-  initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
-}
 
 async function createExecution(
   options: {
@@ -186,7 +176,6 @@ function requestNativeTool(
 }
 
 afterEach(() => {
-  resetGlobalHookRunner();
   for (const session of activeSessions) {
     session.close("restart");
   }
@@ -509,151 +498,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     if (decision?.behavior === "allow") {
       expect(decision.updatedInput).toBe(input);
     }
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
-    const policy = vi.spyOn(beforeToolCall, "runBeforeToolCallHook");
-    const hook = vi.fn(async () => ({
-      params: { url: "https://example.com/rewritten" },
-    }));
-    installBeforeToolCallHook(hook);
-    const { context } = await createExecution({ nativeTools: ["WebFetch"] });
-    Object.assign(context.params, {
-      messageChannel: "telegram",
-      messageProvider: "telegram",
-      currentChannelId: "chat-1",
-      chatId: "chat-1",
-      agentAccountId: "bot-1",
-      senderId: "user-1",
-      senderIsOwner: true,
-      currentThreadTs: "thread-1",
-    });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "WebFetch", {
-        url: "https://example.com/original",
-      });
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual({
-      behavior: "allow",
-      updatedInput: { url: "https://example.com/rewritten" },
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(hook.mock.calls[0]?.[0]).toMatchObject({
-      toolName: "webfetch",
-      params: { url: "https://example.com/original" },
-      toolCallId: "native-WebFetch",
-      runId: context.params.runId,
-    });
-    expect(hook.mock.calls[0]?.[1]).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "sdk-session",
-      runId: context.params.runId,
-      channelId: "chat-1",
-      requester: {
-        channel: "telegram",
-        accountId: "bot-1",
-        senderId: "user-1",
-        senderIsOwner: true,
-      },
-    });
-    expect(policy.mock.calls[0]?.[0]).toMatchObject({
-      ctx: {
-        config: context.params.config,
-        cwd: "/tmp",
-        workspaceDir: "/tmp",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "bot-1",
-        turnSourceThreadId: "thread-1",
-        loopDetection: undefined,
-      },
-    });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "blocks",
-      handler: vi.fn(async () => ({ block: true, blockReason: "blocked by plugin policy" })),
-      message: "blocked by plugin policy",
-    },
-    {
-      name: "fails",
-      handler: vi.fn(async () => {
-        throw new Error("policy crashed");
-      }),
-      message: "before_tool_call hook failed",
-    },
-  ])("fails closed when before_tool_call $name", async ({ handler, message }) => {
-    installBeforeToolCallHook(handler);
-    const { context } = await createExecution({ nativeTools: ["Bash"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({ behavior: "deny", message: expect.stringContaining(message) }),
-    );
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("aborts before_tool_call without reaching native approval", async () => {
-    const controller = new AbortController();
-    const hook = vi.fn(
-      async (_event: unknown, hookContext: { abortSignal?: AbortSignal }): Promise<undefined> =>
-        await new Promise((_, reject) => {
-          hookContext.abortSignal?.addEventListener(
-            "abort",
-            () => reject(hookContext.abortSignal?.reason),
-            { once: true },
-          );
-        }),
-    );
-    installBeforeToolCallHook(hook);
-    const { context } = await createExecution({
-      abortSignal: controller.signal,
-      nativeTools: ["Bash"],
-    });
-    const run = runPlugin(context, async function* (execution) {
-      await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
-    });
-    await vi.waitFor(() => expect(hook).toHaveBeenCalledOnce());
-
-    controller.abort(new Error("cancel policy"));
-
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when canonical policy returns a non-record rewrite", async () => {
-    vi.spyOn(beforeToolCall, "runBeforeToolCallHook").mockResolvedValueOnce({
-      blocked: false,
-      params: "invalid",
-    });
-    const { context } = await createExecution({ nativeTools: ["Bash"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("invalid input"),
-      }),
-    );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

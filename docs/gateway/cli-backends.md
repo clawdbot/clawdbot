@@ -136,16 +136,14 @@ claude update
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 The Agent SDK always runs with Claude Code's default permission mode.
-OpenClaw supplies a managed ask rule so every schema-valid executable call
-reaches the SDK permission callback, even when user settings would otherwise
-preapprove it. The callback runs OpenClaw's canonical `before_tool_call`
-policy before native exec policy and approval. Per-agent and session
+OpenClaw's SDK permission callback and `PreToolUse` hook keep native tools under
+host control, including when user or enterprise settings would otherwise
+preapprove a call. Native requests pass through canonical `before_tool_call`
+policy before exec policy and approval, with native tool names and file
+arguments projected into their OpenClaw equivalents. Per-agent and session
 restrictions still override broader global policy. OpenClaw-owned MCP tools
-already execute canonical policy inside the Gateway, so the adapter allows
-those exact `mcp__openclaw__*` calls without a duplicate approval; other MCP
-tools remain host-permission controlled. Claude Code rejects schema-invalid
-tool input before any permission callback, so policy parity applies to
-schema-valid executable calls.
+remain authorized by the Gateway rather than receiving duplicate native
+approval; other MCP tools stay host-permission controlled.
 
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's

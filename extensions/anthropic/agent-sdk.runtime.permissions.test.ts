@@ -75,6 +75,26 @@ function sdkNativeTool(options: Record<string, unknown>): SdkNativeToolCallback 
   return options.canUseTool as SdkNativeToolCallback;
 }
 
+type SdkPreToolUseCallback = (
+  input: {
+    hook_event_name: "PreToolUse";
+    tool_name: string;
+    tool_input: unknown;
+    tool_use_id: string;
+  },
+  toolUseId: string | undefined,
+  options: { signal: AbortSignal },
+) => Promise<unknown>;
+
+function sdkPreToolUse(options: Record<string, unknown>): SdkPreToolUseCallback {
+  const hooks = options.hooks as { PreToolUse?: Array<{ hooks?: SdkPreToolUseCallback[] }> };
+  const callback = hooks.PreToolUse?.[0]?.hooks?.[0];
+  if (!callback) {
+    throw new Error("Claude Agent SDK did not register its native permission hook.");
+  }
+  return callback;
+}
+
 afterEach(() => {
   queryMock.mockReset();
   vi.restoreAllMocks();
@@ -124,75 +144,74 @@ describe("Anthropic Agent SDK native permission bridge", () => {
     expect(requestUserInput).toHaveBeenCalledOnce();
   });
 
-  it("forces schema-valid calls through the sole permission callback", async () => {
+  it("enforces native tool policy before user settings can shadow the permission callback", async () => {
     const requestToolPermission = vi.fn(async () => ({
       behavior: "deny" as const,
       message: "The session policy denied native execution.",
     }));
     let nativeDecision: unknown;
-    let openClawMcpDecision: unknown;
-    let externalMcpDecision: unknown;
+    let gatewayDecision: unknown;
+    let malformedDecision: unknown;
     useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const canUseTool = sdkNativeTool(options);
+      const hook = sdkPreToolUse(options);
       const signal = new AbortController().signal;
 
-      nativeDecision = await canUseTool(
-        "Bash",
-        { command: "cat private.txt" },
-        { signal, toolUseID: "native-tool" },
+      nativeDecision = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "cat private.txt" },
+          tool_use_id: "native-tool-shadowed",
+        },
+        "native-tool-shadowed",
+        { signal },
       );
-      openClawMcpDecision = await canUseTool(
-        "mcp__openclaw__message",
-        { action: "send" },
-        { signal, toolUseID: "gateway-tool-owned" },
+      gatewayDecision = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__openclaw__message",
+          tool_input: { action: "send" },
+          tool_use_id: "gateway-tool-owned",
+        },
+        "gateway-tool-owned",
+        { signal },
       );
-      externalMcpDecision = await canUseTool(
-        "mcp__external__search",
-        { query: "policy" },
-        { signal, toolUseID: "external-mcp" },
+      malformedDecision = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: "not-an-object",
+          tool_use_id: "malformed-native-tool",
+        },
+        "malformed-native-tool",
+        { signal },
       );
     });
 
     await collect(createContext({ requestToolPermission }));
 
-    expect(sdkOptions().managedSettings).toEqual({ permissions: { ask: ["*"] } });
-    expect(sdkOptions()).not.toHaveProperty("hooks");
-    expect(sdkOptions()).not.toHaveProperty("allowedTools");
     expect(nativeDecision).toEqual({
-      behavior: "deny",
-      message: "The session policy denied native execution.",
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "The session policy denied native execution.",
+      },
     });
-    expect(openClawMcpDecision).toEqual({
-      behavior: "allow",
-      updatedInput: { action: "send" },
+    expect(gatewayDecision).toEqual({ continue: true });
+    expect(malformedDecision).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "OpenClaw rejected malformed native tool input.",
+      },
     });
-    expect(externalMcpDecision).toEqual({
-      behavior: "deny",
-      message: "The session policy denied native execution.",
+    expect(requestToolPermission).toHaveBeenCalledOnce();
+    expect(requestToolPermission).toHaveBeenCalledWith({
+      toolName: "Bash",
+      toolInput: { command: "cat private.txt" },
+      toolCallId: "native-tool-shadowed",
+      abortSignal: expect.any(AbortSignal),
     });
-    expect(requestToolPermission).toHaveBeenCalledTimes(2);
-    expect(requestToolPermission).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ toolName: "Bash" }),
-    );
-    expect(requestToolPermission).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ toolName: "mcp__external__search" }),
-    );
-  });
-
-  it("keeps schema validation SDK-owned before any permission callback", async () => {
-    useSdkMessages();
-
-    await collect(createContext());
-
-    expect(sdkOptions()).toEqual(
-      expect.objectContaining({
-        managedSettings: { permissions: { ask: ["*"] } },
-        canUseTool: expect.any(Function),
-      }),
-    );
-    expect(sdkOptions()).not.toHaveProperty("hooks");
   });
 
   it("keeps bypass-shaped backend arguments behind the host permission callback", async () => {

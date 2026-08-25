@@ -175,9 +175,6 @@ async function authorizeClaudeAgentSdkTool(params: {
   if (!turn || params.signal.aborted || turn.controller.signal.aborted) {
     return { behavior: "deny", message: "The OpenClaw run is no longer active." };
   }
-  if (params.toolName.startsWith("mcp__openclaw__")) {
-    return { behavior: "allow", updatedInput: params.input };
-  }
   try {
     const decision =
       params.toolName === "AskUserQuestion"
@@ -215,7 +212,6 @@ function resolveClaudeAgentSdkOptions(
     env: context.env,
     includePartialMessages: true,
     model: context.modelId,
-    managedSettings: { permissions: { ask: ["*"] } },
     pathToClaudeCodeExecutable: context.command,
     permissionMode: "default",
     settingSources: ["user"],
@@ -233,6 +229,49 @@ function resolveClaudeAgentSdkOptions(
         signal: request.signal,
         toolUseId: request.toolUseID,
       }),
+    hooks: {
+      PreToolUse: [
+        {
+          hooks: [
+            async (input, toolUseId, request) => {
+              if (input.hook_event_name !== "PreToolUse") {
+                return {};
+              }
+              if (input.tool_name.startsWith("mcp__openclaw__")) {
+                return { continue: true };
+              }
+              if (!isRecord(input.tool_input)) {
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse",
+                    permissionDecision: "deny",
+                    permissionDecisionReason: "OpenClaw rejected malformed native tool input.",
+                  },
+                };
+              }
+              // Settings-level allow rules run before canUseTool. A native
+              // pre-tool hook keeps every action under its admitted run owner.
+              const decision = await authorizeClaudeAgentSdkTool({
+                currentTurn,
+                toolName: input.tool_name,
+                input: input.tool_input,
+                signal: request.signal,
+                toolUseId: toolUseId ?? input.tool_use_id,
+              });
+              return {
+                hookSpecificOutput: {
+                  hookEventName: "PreToolUse",
+                  permissionDecision: decision.behavior,
+                  ...(decision.behavior === "allow"
+                    ? { updatedInput: decision.updatedInput }
+                    : { permissionDecisionReason: decision.message }),
+                },
+              };
+            },
+          ],
+        },
+      ],
+    },
   };
 
   if (context.useResume && context.sessionId) {
@@ -241,6 +280,7 @@ function resolveClaudeAgentSdkOptions(
     options.sessionId = context.sessionId;
   }
 
+  const allowedTools: string[] = [];
   const disallowedTools: string[] = [];
   const extraArgs: NonNullable<ClaudeAgentSdkOptions["extraArgs"]> = {};
   let excludeDynamicSystemPromptSections = false;
@@ -284,8 +324,13 @@ function resolveClaudeAgentSdkOptions(
       }
       case "--allowedTools":
       case "--allowed-tools": {
-        // Managed ask policy routes every schema-valid executable call through
-        // canUseTool, so argv allow rules cannot bypass the host owner.
+        // SDK allowedTools grants automatic approval; native tools must always
+        // remain behind the closure-bound OpenClaw permission callback.
+        allowedTools.push(
+          ...values
+            .flatMap(splitClaudeToolNames)
+            .filter((toolName) => toolName.startsWith("mcp__openclaw__")),
+        );
         break;
       }
       case "--disallowedTools":
@@ -377,6 +422,16 @@ function resolveClaudeAgentSdkOptions(
 
   if (context.toolAvailability) {
     options.tools = [...context.toolAvailability.native];
+    const approvedOpenClawTools = context.toolAvailability.openClaw.map(
+      (toolName) => `mcp__openclaw__${toolName}`,
+    );
+    const authorizedOpenClawTools = new Set(allowedTools);
+    options.allowedTools = approvedOpenClawTools.filter(
+      (toolName) =>
+        authorizedOpenClawTools.has(toolName) || authorizedOpenClawTools.has("mcp__openclaw__*"),
+    );
+  } else if (allowedTools.length > 0) {
+    options.allowedTools = [...new Set(allowedTools)];
   }
   if (disallowedTools.length > 0) {
     options.disallowedTools = [...new Set(disallowedTools)];

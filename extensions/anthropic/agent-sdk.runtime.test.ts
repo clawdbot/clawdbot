@@ -116,6 +116,28 @@ function sdkNativeTool(options: Record<string, unknown>): SdkNativeToolCallback 
   return callback;
 }
 
+type SdkPreToolUseCallback = (
+  input: {
+    hook_event_name: "PreToolUse";
+    tool_name: string;
+    tool_input: unknown;
+    tool_use_id: string;
+  },
+  toolUseId: string | undefined,
+  options: { signal: AbortSignal },
+) => Promise<unknown>;
+
+function sdkPreToolUse(options: Record<string, unknown>): SdkPreToolUseCallback {
+  const hooks = options.hooks as {
+    PreToolUse?: Array<{ hooks?: SdkPreToolUseCallback[] }>;
+  };
+  const callback = hooks.PreToolUse?.[0]?.hooks?.[0];
+  if (!callback) {
+    throw new Error("Claude Agent SDK did not register its native permission hook.");
+  }
+  return callback;
+}
+
 function createLiveCapability(
   fingerprint = "matching-session-policy",
   state: { current?: CliBackendLiveSessionHandle } = {},
@@ -352,9 +374,20 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       }
       const requestToolPermission = vi.fn(async () => decision);
       const input = { command: "cat /tmp/openclaw-proof-private.txt" };
+      let hookDecision: unknown;
       let callbackDecision: unknown;
       useSdkMessages([SUCCESS_RESULT], async (options) => {
         const signal = new AbortController().signal;
+        hookDecision = await sdkPreToolUse(options)(
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: input,
+            tool_use_id: "restricted-native-bash",
+          },
+          undefined,
+          { signal },
+        );
         callbackDecision = await sdkNativeTool(options)("Bash", input, {
           signal,
           toolUseID: "restricted-native-bash",
@@ -372,13 +405,11 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       expect(sdkOptions()).toEqual(
         expect.objectContaining({
           tools: ["Bash"],
-          managedSettings: { permissions: { ask: ["*"] } },
+          allowedTools: ["mcp__openclaw__message"],
           settingSources: [],
           permissionMode: "default",
         }),
       );
-      expect(sdkOptions()).not.toHaveProperty("hooks");
-      expect(sdkOptions()).not.toHaveProperty("allowedTools");
       if (credential) {
         expect(sdkOptions().spawnClaudeCodeProcess).toEqual(expect.any(Function));
         expect(sdkOptions().env).toEqual(
@@ -386,8 +417,17 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         );
         expect(JSON.stringify(sdkOptions().env)).not.toContain(credential.token);
       }
+      expect(hookDecision).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
       expect(callbackDecision).toEqual(decision);
-      expect(requestToolPermission).toHaveBeenCalledOnce();
+      expect(requestToolPermission).toHaveBeenCalledTimes(2);
       expect(requestToolPermission).toHaveBeenCalledWith(
         expect.objectContaining({
           toolName: "Bash",
@@ -743,13 +783,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions()).toEqual(
       expect.objectContaining({
         tools: [],
-        managedSettings: { permissions: { ask: ["*"] } },
+        allowedTools: ["mcp__openclaw__message"],
         disallowedTools: ["Bash", "Edit", "Write"],
         settingSources: [],
         strictMcpConfig: true,
       }),
     );
-    expect(sdkOptions()).not.toHaveProperty("allowedTools");
+    expect(sdkOptions().allowedTools).not.toContain("Bash");
     expect(sdkOptions()).not.toHaveProperty("mcpServers");
     expect(sdkOptions().extraArgs).toEqual(
       expect.objectContaining({ "mcp-config": "/tmp/openclaw-restricted-mcp.json" }),
@@ -805,7 +845,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
-  it("does not project argv allow rules into SDK auto-approval", async () => {
+  it("expands wildcard MCP grants into only the exact tools admitted by OpenClaw", async () => {
     useSdkMessages();
 
     await collect(
@@ -821,10 +861,12 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions()).toEqual(
       expect.objectContaining({
         tools: [],
-        managedSettings: { permissions: { ask: ["*"] } },
+        allowedTools: ["mcp__openclaw__message", "mcp__openclaw__memory_search"],
       }),
     );
-    expect(sdkOptions()).not.toHaveProperty("allowedTools");
+    expect(sdkOptions().allowedTools).not.toContain("mcp__openclaw__*");
+    expect(sdkOptions().allowedTools).not.toContain("Bash");
+    expect(sdkOptions().allowedTools).not.toContain("Edit");
   });
 
   it.each([429, 529])(
