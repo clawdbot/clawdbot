@@ -361,7 +361,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.124.9`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -374,7 +374,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.145.0`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.145.0`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -387,22 +387,23 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0-alpha.2`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.146.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks Codex app-server build metadata on the exact supported version", async () => {
+  it("accepts compatible build metadata on the minimum supported version", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0+alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.146.0+desktop (macOS; test)" },
     });
 
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0+alpha.2`,
-    );
-    expect(harness.writes).toHaveLength(1);
+    await expect(initializing).resolves.toBeUndefined();
+    expect(harness.client.getServerVersion()).toBe("0.146.0+desktop");
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("blocks Codex app-server prereleases outside generated stable schemas", async () => {
@@ -413,7 +414,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -426,14 +427,15 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it.each(["0.146.1", "0.149.0"])(
-    "accepts newer stable Codex app-server version %s",
+  it.each(["0.146.1", "0.147.0-alpha.9", "0.149.0", "1.0.0"])(
+    "accepts a newer app-server version %s for normal startup validation",
     async (newerVersion) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
       const { harness, initializing, outbound } = startInitialize();
       harness.send({
         id: outbound.id,
@@ -441,7 +443,28 @@ describe("CodexAppServerClient", () => {
       });
 
       await expect(initializing).resolves.toBeUndefined();
-      expect(harness.writes).toHaveLength(2);
+      expect(harness.client.getServerVersion()).toBe(newerVersion);
+      expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
+        { detectedVersion: newerVersion, validatedVersion: CODEX_APP_SERVER_VERSION },
+      );
+    },
+  );
+
+  it.each(["0.146.00", "0.147.0-alpha..9", "0.147.0-alpha.09"])(
+    "blocks malformed app-server version %s during initialize",
+    async (version) => {
+      const { harness, initializing, outbound } = startInitialize();
+      harness.send({
+        id: outbound.id,
+        result: { userAgent: `openclaw/${version} (macOS; test)` },
+      });
+
+      await expect(initializing).rejects.toThrow(
+        `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required`,
+      );
+      expect(harness.writes).toHaveLength(1);
     },
   );
 
@@ -450,7 +473,7 @@ describe("CodexAppServerClient", () => {
     harness.send({ id: outbound.id, result: {} });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });

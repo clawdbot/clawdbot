@@ -632,6 +632,9 @@ importers:
       '@openai/codex':
         specifier: 0.146.0
         version: 0.146.0
+      semver:
+        specifier: 7.8.5
+        version: 7.8.5
       smol-toml:
         specifier: 1.7.1
         version: 1.7.1

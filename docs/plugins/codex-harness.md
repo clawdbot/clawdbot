@@ -66,10 +66,11 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.146.0`. The plugin ships and manages `@openai/codex`
+- Codex app-server `0.146.0` or newer. The plugin ships and manages `@openai/codex`
   `0.146.0` by default, so a `codex` command on `PATH` does not affect normal
   startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.146.0` version.
+  meet the same compatibility floor. Newer prereleases are accepted and still
+  pass through normal startup validation.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -1189,11 +1190,11 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.146.0`. Older or
-newer versions, prereleases, build-suffixed versions, and unversioned servers
-are rejected because OpenClaw validates generated schemas and runtime contracts
-against the Codex version it ships. Update or remove custom, remote, or desktop
-binary overrides that select another version.
+**The app-server is rejected:** use Codex `0.146.0` or newer. Older, malformed,
+and unversioned servers are rejected during the initialize handshake. Newer
+stable releases and prereleases above the compatibility floor continue through
+normal startup validation. Update incompatible custom, remote, or desktop
+binary overrides, or remove them to use the managed binary.
 
 **`/codex status` cannot connect:** check that the `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is

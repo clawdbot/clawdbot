@@ -253,10 +253,11 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin accepts exactly stable Codex app-server `0.146.0`. Older or newer
-versions, prereleases, build-suffixed versions, and unversioned app-server
-handshakes are rejected. The same exact-version requirement applies to explicit
-custom executables, remote app-servers, and macOS desktop binaries.
+The plugin requires Codex app-server `0.146.0` or newer. Newer stable releases
+and prereleases above that compatibility floor proceed through normal startup
+validation; build metadata does not change version precedence. Older, malformed,
+and unversioned handshakes are rejected. This applies to explicit custom
+executables, remote app-servers, and macOS desktop binaries.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -305,7 +306,7 @@ configured plugin's details to reserve the denied app IDs. It does not scan
 unrelated marketplaces or install, enable, or authenticate the disabled plugin;
 missing ownership fails closed.
 
-Only connect OpenClaw to a `0.146.0` remote app-server trusted to accept
+Only connect OpenClaw to a compatible remote app-server trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
 

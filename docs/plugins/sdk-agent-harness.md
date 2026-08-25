@@ -259,8 +259,9 @@ For operator setup, model prefix examples, and Codex-only configs, see
 
 The Codex plugin enforces the minimum app-server version documented in
 [Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
-blocks older or unversioned servers, so OpenClaw only runs against the protocol
-surface it has tested.
+blocks older, malformed, or unversioned servers. Newer runtimes, including
+prereleases above the compatibility floor, continue through normal startup
+validation.
 
 ### Tool-result middleware
 

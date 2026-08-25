@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -1038,7 +1039,7 @@ class CodexAppServerVersionError extends Error {
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
     super(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
     this.detectedVersion = detectedVersion;
@@ -1047,16 +1048,16 @@ class CodexAppServerVersionError extends Error {
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  // External app-servers may advance independently of OpenClaw's bundled runtime.
-  // Keep the reviewed stable release as a compatibility floor, not an exact pin.
-  if (
-    !detectedVersion ||
-    !/^\d+\.\d+\.\d+$/.test(detectedVersion) ||
-    detectedVersion.localeCompare(CODEX_APP_SERVER_VERSION, "en", { numeric: true }) < 0
-  ) {
+  if (!detectedVersion) {
     throw new CodexAppServerVersionError(detectedVersion);
   }
-  if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
+  // External app-servers may advance independently of OpenClaw's bundled runtime.
+  // Keep the reviewed stable release as a compatibility floor, not an exact pin.
+  const detected = parseSemver(detectedVersion);
+  if (!detected || detected.compare(CODEX_APP_SERVER_VERSION) < 0) {
+    throw new CodexAppServerVersionError(detectedVersion);
+  }
+  if (detected.compare(CODEX_APP_SERVER_VERSION) > 0) {
     embeddedAgentLog.warn(
       "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
       { detectedVersion, validatedVersion: CODEX_APP_SERVER_VERSION },

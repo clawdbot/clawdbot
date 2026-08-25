@@ -260,7 +260,7 @@ describe("shared Codex app-server client", () => {
     await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
     await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
