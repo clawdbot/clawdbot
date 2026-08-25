@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -60,6 +65,42 @@ async function flushMicrotasks(): Promise<void> {
 afterEach(() => vi.useRealTimers());
 
 describe("skill experience review scheduler", () => {
+  it("runs detached review work outside the foreground prepared generation", async () => {
+    const generation: PreparedModelRuntimePluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {} as never,
+    };
+    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    let finishReview: (() => void) | undefined;
+    const reviewFinished = new Promise<void>((resolve) => {
+      finishReview = resolve;
+    });
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        return false;
+      },
+      prepareReview: async (candidate) => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        return candidate;
+      },
+      runReview: async () => {
+        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+        finishReview?.();
+      },
+      setTimer: (callback) => setTimeout(callback, 0),
+    });
+
+    withPreparedModelRuntimePluginGenerationScope(generation, () => {
+      scheduler.schedule(completedRun());
+    });
+    await reviewFinished;
+
+    expect(observedGenerations).toEqual([undefined, undefined, undefined]);
+    scheduler.clear();
+  });
+
   it("runs one deep turn after the idle window", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);

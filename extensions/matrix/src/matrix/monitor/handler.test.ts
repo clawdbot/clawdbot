@@ -3635,7 +3635,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("keeps partial preview-first finalization on the existing draft when text is unchanged", async () => {
+  it.each([
+    { name: "plain text", payload: { text: "Single block" } },
+    { name: "blank-only media", payload: { text: "Single block", mediaUrls: ["   "] } },
+  ])("finalizes unchanged partial drafts for $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({
       blockStreamingEnabled: true,
       streaming: "partial",
@@ -3654,7 +3657,7 @@ describe("matrix monitor handler draft streaming", () => {
     expect(draftOptions.msgtype).not.toBe("m.notice");
     expect(draftOptions.includeMentions).toBe(false);
 
-    await deliver({ text: "Single block" }, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     // MSC4357: even when text is unchanged, a finalize edit is sent to clear
     // the live marker so supporting clients stop the streaming animation.
@@ -4706,7 +4709,10 @@ describe("matrix monitor handler draft streaming", () => {
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 
-  it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
+  it.each([
+    { name: "no media", payload: {} },
+    { name: "blank-only media", payload: { mediaUrls: ["   "] } },
+  ])("cleans up empty final drafts with $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4720,7 +4726,7 @@ describe("matrix monitor handler draft streaming", () => {
       visibleReplySent: false,
       suppression: { reason: "no_visible_result" },
     });
-    await deliver({}, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(redactEventMock).not.toHaveBeenCalled();
@@ -4857,7 +4863,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("finalizes partial drafts before reusing unchanged media captions", async () => {
+  it.each([
+    { name: "a singular attachment", mediaUrls: undefined },
+    { name: "a singular fallback after blank plural entries", mediaUrls: ["   "] },
+  ])("reuses partial-draft captions for $name", async ({ mediaUrls }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4871,6 +4880,7 @@ describe("matrix monitor handler draft streaming", () => {
       {
         text: "screenshot ready",
         mediaUrl: "https://example.com/image.png",
+        mediaUrls,
       },
       { kind: "final" },
     );
