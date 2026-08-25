@@ -192,11 +192,16 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   if (params.platform !== "linux") {
     return {};
   }
+  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
   const ownedKeys = new Set(
     [
       ...Object.keys(params.durableEnvironment),
       ...Object.keys(params.authProfileEnvironment),
-      ...Object.keys(params.existingEnvironment ?? {}),
+      ...Object.entries(params.existingEnvironment ?? {}).flatMap(([key, value]) =>
+        existingManagedKeys.has(key.toUpperCase()) && params.env[key]?.trim() !== value?.trim()
+          ? []
+          : [key],
+      ),
     ].map((key) => key.toUpperCase()),
   );
   const candidates = new Map(

@@ -754,32 +754,40 @@ describe("buildGatewayInstallPlan", () => {
     },
   );
 
-  it("removes managed provider credentials when their configuration no longer owns them", async () => {
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
-    mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
+  it.each([
+    { currentOpenAiKey: "existing-managed-openai", expectedOpenAiKey: undefined },
+    { currentOpenAiKey: "rotated-operator-openai", expectedOpenAiKey: "rotated-operator-openai" },
+  ])(
+    "retires managed provider keys while preserving genuinely rotated replacements",
+    async ({ currentOpenAiKey, expectedOpenAiKey }) => {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
-        OPENAI_API_KEY: "existing-managed-openai",
-        ANTHROPIC_API_KEY: "fresh-operator-anthropic",
-      }),
-      existingEnvironment: {
-        OPENAI_API_KEY: "existing-managed-openai",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
-      },
-      existingEnvironmentValueSources: { OPENAI_API_KEY: "file" },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      config: {},
-    });
+      const plan = await buildGatewayInstallPlan({
+        env: isolatedPlanEnv({
+          OPENAI_API_KEY: currentOpenAiKey,
+          ANTHROPIC_API_KEY: "fresh-operator-anthropic",
+        }),
+        existingEnvironment: {
+          OPENAI_API_KEY: "existing-managed-openai",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
+        },
+        existingEnvironmentValueSources: { OPENAI_API_KEY: "file" },
+        port: 3000,
+        runtime: "node",
+        platform: "linux",
+        config: {},
+      });
 
-    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
-    expect(plan.environmentValueSources?.OPENAI_API_KEY).toBeUndefined();
-    expect(plan.environment.ANTHROPIC_API_KEY).toBe("fresh-operator-anthropic");
-    expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-  });
+      expect(plan.environment.OPENAI_API_KEY).toBe(expectedOpenAiKey);
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe(
+        expectedOpenAiKey ? "file" : undefined,
+      );
+      expect(plan.environment.ANTHROPIC_API_KEY).toBe("fresh-operator-anthropic");
+      expect(plan.environmentValueSources?.ANTHROPIC_API_KEY).toBe("file");
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    },
+  );
 
   it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
     mockNodeGatewayPlanFixture({
