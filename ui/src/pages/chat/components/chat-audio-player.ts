@@ -21,7 +21,6 @@ import {
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
-  createChatAudioWaveformPlaceholder,
   retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
@@ -105,7 +104,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private buffered = 0;
   @state() private playing = false;
   @state() private muted = false;
-  @state() private waveformPeaks: readonly number[] = createChatAudioWaveformPlaceholder();
+  @state() private waveformPeaks: readonly number[] | null = null;
   @state() private waveformWidth = 0;
 
   private media: HTMLAudioElement | null = null;
@@ -162,7 +161,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         this.waveformController = null;
         this.releaseWaveformBlob?.();
         this.releaseWaveformBlob = undefined;
-        this.waveformPeaks = createChatAudioWaveformPlaceholder();
+        this.waveformPeaks = null;
         this.waveformAttempted = false;
         this.currentTime = 0;
         this.duration = 0;
@@ -258,7 +257,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = prepared.release;
-    this.waveformPeaks = prepared.value.peaks ?? createChatAudioWaveformPlaceholder();
+    this.waveformPeaks = prepared.value.peaks?.length ? prepared.value.peaks : null;
     if (prepared.value.durationSeconds !== undefined) {
       this.duration = prepared.value.durationSeconds;
     }
@@ -457,8 +456,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   private renderSeek(progress: number) {
+    const waveformPeaks = this.waveformPeaks;
     const seek = html`<input
-      class=${this.waveformPeaks
+      class=${waveformPeaks
         ? "chat-audio-player__seek chat-audio-player__seek--waveform"
         : "chat-audio-player__seek"}
       type="range"
@@ -474,7 +474,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       @input=${(event: Event) =>
         this.seekTo(Number((event.currentTarget as HTMLInputElement).value))}
     />`;
-    if (!this.waveformPeaks) {
+    if (!waveformPeaks) {
       return seek;
     }
     const bucketWidth = WAVEFORM_MIN_BAR_WIDTH_PX + WAVEFORM_MIN_GAP_PX;
@@ -482,20 +482,35 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.waveformWidth > 0
         ? Math.max(
             1,
-            Math.min(this.waveformPeaks.length, Math.floor(this.waveformWidth / bucketWidth)),
+            Math.min(waveformPeaks.length, Math.floor(this.waveformWidth / bucketWidth)),
           )
-        : this.waveformPeaks.length;
+        : waveformPeaks.length;
+    const displayedPeaks = Array.from({ length: count }, (_, index) => {
+      const start = Math.floor((index * waveformPeaks.length) / count);
+      const end = Math.max(
+        start + 1,
+        Math.floor(((index + 1) * waveformPeaks.length) / count),
+      );
+      let total = 0;
+      for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+        total += waveformPeaks[sourceIndex] ?? 0;
+      }
+      const peak = total / Math.max(1, end - start);
+      return Math.min(1, Math.max(0, peak));
+    });
     return html`<div class="chat-audio-player__waveform" ${ref(this.setWaveform)}>
       <svg viewBox="0 0 ${count} 24" preserveAspectRatio="none" aria-hidden="true">
-        ${Array.from({ length: count }, (_, index) => svg`<rect
-            class=${index / count < progress ? "is-played" : ""}
-            x=${String(index + 0.25)}
-            y="2"
-            width="0.5"
-            height="20"
-            rx="0.25"
-          ></rect>`,
-        )}
+        ${displayedPeaks.map((peak, index) => {
+          const height = Math.max(2, peak * 20);
+          return svg`<rect
+              class=${index / count < progress ? "is-played" : ""}
+              x=${String(index + 0.25)}
+              y=${String((24 - height) / 2)}
+              width="0.5"
+              height=${String(height)}
+              rx="0.25"
+            ></rect>`;
+        })}
       </svg>
       ${seek}
     </div>`;

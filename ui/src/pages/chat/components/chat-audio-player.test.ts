@@ -248,6 +248,7 @@ describe("ChatAudioPlayer", () => {
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const player = await createPlayer("waveform-reuse");
     player.serverDurationMs = 4_000;
+    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
     const media = player.querySelector("audio")!;
     let paused = true;
     Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
@@ -273,6 +274,13 @@ describe("ChatAudioPlayer", () => {
       expect(player.querySelectorAll(".chat-audio-player__waveform rect")).toHaveLength(96),
     );
     await player.updateComplete;
+    expect(
+      new Set(
+        Array.from(player.querySelectorAll(".chat-audio-player__waveform rect"), (rect) =>
+          rect.getAttribute("height"),
+        ),
+      ).size,
+    ).toBeGreaterThan(1);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(decodeAudioData).toHaveBeenCalledOnce();
     expect(media.getAttribute("src")).toBe("https://example.com/waveform-reuse.mp3");

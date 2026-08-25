@@ -93,7 +93,9 @@ function buildWavAsset(): FixtureAsset {
   body.writeUInt32LE(sampleCount * 2, 40);
   for (let index = 0; index < sampleCount; index += 1) {
     const envelope = Math.min(1, index / 240, (sampleCount - index) / 240);
-    const sample = Math.sin((2 * Math.PI * 440 * index) / sampleRate) * envelope * 0.35;
+    const modulation = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin((2 * Math.PI * 2 * index) / sampleRate));
+    const sample =
+      Math.sin((2 * Math.PI * 440 * index) / sampleRate) * envelope * modulation * 0.35;
     body.writeInt16LE(Math.round(sample * 0x7fff), 44 + index * 2);
   }
   return { body, contentType: "audio/wav" };
