@@ -696,6 +696,30 @@ describe("killSubagentRunAdmin", () => {
     expect(result).toEqual({ found: false, killed: false });
   });
 
+  it("does not kill a replacement run when an exact run id is required", async () => {
+    const childSessionKey = "agent:main:subagent:replacement";
+    addSubagentRunForTests({
+      runId: "run-current",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "replacement work",
+      cleanup: "keep",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(),
+      sessionKey: childSessionKey,
+      expectedRunId: "run-stale",
+    });
+
+    expect(result).toEqual({ found: false, killed: false });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+  });
+
   it("retries task reconciliation for an already-killed run", async () => {
     const childSessionKey = "agent:main:subagent:already-killed";
     const endedAt = Date.now() - 1_000;

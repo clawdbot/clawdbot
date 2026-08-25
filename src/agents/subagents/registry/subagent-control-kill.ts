@@ -273,14 +273,18 @@ export async function killSubagentRunAdmin(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  expectedRunId?: string;
 }) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
-    return { found: false as const, killed: false };
+    return { found: false as const, killed: false as const };
   }
   const entry = getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
-    return { found: false as const, killed: false };
+    return { found: false as const, killed: false as const };
+  }
+  if (params.expectedRunId?.trim() && entry.runId !== params.expectedRunId.trim()) {
+    return { found: false as const, killed: false as const };
   }
 
   const killCache = new Map<string, Record<string, SessionEntry>>();

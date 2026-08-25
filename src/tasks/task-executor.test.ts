@@ -212,6 +212,7 @@ function expectCancelledAcpChildTask(
     cfg: {} as never,
     sessionKey: "agent:codex:acp:child",
     reason: "task-cancel",
+    expectedRunId: child.runId,
   });
 }
 
@@ -483,6 +484,7 @@ describe("task-executor", () => {
           to: "notifychat:123",
         },
       });
+      createRunningAcpChildTaskRun({ runId: "run-linear-cancel" });
       const child = createRunningTaskRun({
         runtime: "acp",
         ownerKey: "agent:main:main",
@@ -502,7 +504,7 @@ describe("task-executor", () => {
 
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
-      const task = findTaskByRunId("run-linear-cancel");
+      const task = getTaskById(child.taskId);
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("cancelled");
       const cancelledFlow = getTaskFlowById(flow.flowId);
@@ -517,6 +519,15 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Cancel a killed child",
+      });
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:flow-killed",
+        runId: "run-flow-provisional-kill",
+        task: "Stop the child",
+        startedAt: 10,
       });
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -649,6 +660,7 @@ describe("task-executor", () => {
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-sticky-cancel" });
       const created = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -736,6 +748,45 @@ describe("task-executor", () => {
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
       expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
+    });
+  });
+
+  it("does not let a managed flow cancel another owner's backing run", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-foreign-child",
+        task: "Victim task",
+        startedAt: 10,
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+      const linked = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-foreign-child",
+        task: "Forged projection",
+        status: "running",
+        startedAt: 10,
+      });
+      expect(linked.created).toBe(true);
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Child task ownership could not be verified; no cancellation was performed.",
+      });
+      expect(getTaskFlowById(flow.flowId)?.cancelRequestedAt).toBeUndefined();
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1046,6 +1097,7 @@ describe("task-executor", () => {
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
+        expectedRunId: "run-subagent-cancel",
       });
     });
   });
@@ -1059,6 +1111,7 @@ describe("task-executor", () => {
         controllerId: "tests/cancel-flow",
         goal: "Cancel linked tasks",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-cancel-via-runtime" });
       const child = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -1098,7 +1151,7 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const victim = createRunningTaskRun({
         runtime: "acp",
-        ownerKey: "agent:victim:main",
+        ownerKey: "agent:main:victim",
         scopeKind: "session",
         childSessionKey: "agent:victim:acp:child",
         runId: "run-shared-executor-scope",
@@ -1107,7 +1160,7 @@ describe("task-executor", () => {
       });
       const attacker = createRunningTaskRun({
         runtime: "cli",
-        ownerKey: "agent:attacker:main",
+        ownerKey: "agent:main:attacker",
         scopeKind: "session",
         childSessionKey: "agent:attacker:main",
         runId: "run-shared-executor-scope",
@@ -1128,6 +1181,48 @@ describe("task-executor", () => {
       expect(attackerTask?.status).toBe("failed");
       expect(attackerTask?.error).toBe("attacker controlled error");
       expect(getTaskById(victim.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("does not deliver backing lifecycle updates to a foreign managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const backing = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-shared-child",
+        task: "Victim ACP task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/foreign-projection",
+        goal: "Foreign projection",
+      });
+      const projected = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-shared-child",
+        task: "Forged projection",
+        status: "running",
+      });
+      if (!projected.created) {
+        throw new Error(projected.reason);
+      }
+      const projection = requireCreatedFlowTask(projected);
+
+      failTaskRunByRunId({
+        runId: "run-shared-child",
+        runtime: "acp",
+        sessionKey: "agent:main:acp:victim-child",
+        endedAt: 40,
+        error: "victim failure",
+      });
+
+      expect(getTaskById(backing.taskId)?.status).toBe("failed");
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
     });
   });
 });

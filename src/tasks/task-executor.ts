@@ -21,6 +21,7 @@ import {
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import {
   isProvisionalSubagentKillTask,
   isTaskFlowCancellationPending,
@@ -504,6 +505,17 @@ export async function cancelFlowById(params: {
       tasks: listTasksForFlowId(flow.flowId),
     };
   }
+  const linkedTasks = listTasksForFlowId(flow.flowId);
+  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
+  if (activeTasks.some((task) => !hasAuthoritativeTaskBacking(task))) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "Child task ownership could not be verified; no cancellation was performed.",
+      flow,
+      tasks: linkedTasks,
+    };
+  }
   const cancelRequestedFlow = markFlowCancelRequested(flow);
   if ("reason" in cancelRequestedFlow) {
     return {
@@ -514,8 +526,6 @@ export async function cancelFlowById(params: {
       tasks: listTasksForFlowId(flow.flowId),
     };
   }
-  const linkedTasks = listTasksForFlowId(flow.flowId);
-  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
   for (const task of activeTasks) {
     await cancelDetachedTaskRunById({
       cfg: params.cfg,

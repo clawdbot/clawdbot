@@ -140,6 +140,7 @@ export type AcpStartupIdentityReconcileResult = {
 };
 
 export type ActiveTurnState = {
+  requestId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   abortController: AbortController;

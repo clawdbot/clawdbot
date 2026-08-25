@@ -340,12 +340,20 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     reason?: string;
+    expectedRunId?: string;
   }): Promise<void> {
     const sessionKey = canonicalizeAcpSessionKey(params);
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const expectedRunId = params.expectedRunId?.trim();
+    if (
+      expectedRunId &&
+      this.activeTurnBySession.get(normalizeActorKey(sessionKey))?.requestId !== expectedRunId
+    ) {
+      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task is no longer the active run.");
+    }
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,

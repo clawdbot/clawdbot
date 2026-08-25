@@ -11,6 +11,7 @@ type CancelAcpSessionAdmin = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: string;
+  expectedRunId?: string;
 }) => Promise<void>;
 
 type KillSubagentRunAdminResult =
@@ -28,6 +29,7 @@ type KillSubagentRunAdminResult =
 type KillSubagentRunAdmin = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  expectedRunId?: string;
 }) => Promise<KillSubagentRunAdminResult>;
 
 export type TaskRegistryControlRuntime = {

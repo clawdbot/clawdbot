@@ -92,4 +92,50 @@ describe("AcpSessionManager cancelSession", () => {
       expect(states).not.toContain("error");
     });
   });
+
+  it("does not cancel a replacement active turn", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
+      let enteredRun = false;
+      let releaseRun: (() => void) | undefined;
+      runtimeState.runTurn.mockImplementation(async function* () {
+        enteredRun = true;
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        });
+        yield { type: "done" as const, stopReason: "end_turn" };
+      });
+      const manager = new AcpSessionManager();
+      const runPromise = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "replacement task",
+        mode: "prompt",
+        requestId: "run-current",
+      });
+      await vi.waitFor(() => expect(enteredRun).toBe(true), { interval: 1 });
+
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "stale-task-cancel",
+          expectedRunId: "run-stale",
+        }),
+      ).rejects.toThrow("ACP task is no longer the active run.");
+      expect(runtimeState.cancel).not.toHaveBeenCalled();
+
+      releaseRun?.();
+      await runPromise;
+    });
+  });
 });

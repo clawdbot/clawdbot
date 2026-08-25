@@ -243,6 +243,7 @@ export async function runManagerTurn(params: {
           }
 
           activeTurn = {
+            requestId: input.requestId,
             runtime,
             handle,
             abortController: internalAbortController,
