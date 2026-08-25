@@ -1,6 +1,10 @@
 // Skill filter tests cover active skill selection for isolated cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -68,8 +72,12 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
   function mockCliFallbackInvocation() {
     runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        const result = await params.run("claude-cli", "claude-opus-4-6");
+      async (params: TestModelFallbackRunnerParams) => {
+        const result = await runInitialModelFallbackAttempt(
+          params,
+          "claude-cli",
+          "claude-opus-4-6",
+        );
         return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
       },
     );

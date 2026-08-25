@@ -1,5 +1,9 @@
 // Fast mode tests cover isolated cron run behavior in fast execution mode.
 import { describe, expect, it } from "vitest";
+import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -21,15 +25,15 @@ const OPENAI_GPT4_MODEL = "openai/gpt-4";
 const EXPECTED_OPENAI_MODEL = "gpt-5.4";
 
 function mockSuccessfulModelFallback() {
-  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-    await run(provider, model);
+  runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+    await runInitialModelFallbackAttempt(params);
     return {
       result: {
         payloads: [{ text: "ok" }],
         meta: { agentMeta: {} },
       },
-      provider,
-      model,
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     };
   });
