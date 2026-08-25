@@ -20,7 +20,12 @@ import {
   type MemoryWikiCompiledClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
-import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
+import type {
+  ResolvedMemoryWikiConfig,
+  WikiBridgeOwnership,
+  WikiSearchBackend,
+  WikiSearchCorpus,
+} from "./config.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -929,28 +934,118 @@ function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
   );
 }
 
+// Owners whose bridge pages a viewer may read. "owner" is the viewer alone;
+// "delegation" additionally trusts the agents the viewer is already allowed to
+// spawn, so read access cannot drift away from the delegation graph operators
+// already maintain. Delegation is deliberately not transitive: an A -> B -> C
+// chain cannot be spawned either, so granting reads across it would describe a
+// delegation that cannot happen.
+// Owners whose bridge pages a viewer may read, or null when the delegation graph
+// cannot be evaluated at all.
+//
+// Returning null rather than "just the viewer" matters: a missing or unreadable
+// agent list is a configuration problem, and silently narrowing a delegation
+// viewer down to owner-only scope would hide pages the operator expected to be
+// visible while emitting nothing. Narrowing on missing input is the wrong
+// direction for this filter, so the caller treats null as "do not filter".
+//
+// An agent that is present in the graph with no delegates is a real answer, not
+// a missing one, and correctly yields owner-only scope.
+function resolveBridgeOwnershipViewers(
+  viewerId: string,
+  appConfig: OpenClawConfig | undefined,
+  mode: WikiBridgeOwnership,
+): Set<string> | null {
+  const viewers = new Set<string>([viewerId]);
+  if (mode !== "delegation") {
+    return viewers;
+  }
+  const agents = appConfig?.agents?.list;
+  if (!Array.isArray(agents)) {
+    return null;
+  }
+  const entry = agents.find((agent) => normalizeLowercaseStringOrEmpty(agent?.id) === viewerId);
+  if (!entry) {
+    // The viewer is not in the graph, so its delegates are unknowable.
+    return null;
+  }
+  for (const delegate of entry.subagents?.allowAgents ?? []) {
+    const normalized = normalizeLowercaseStringOrEmpty(delegate);
+    if (normalized.length > 0) {
+      viewers.add(normalized);
+    }
+  }
+  return viewers;
+}
+
 function createWikiPageVisibilityFilter(params: {
+  config?: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  /** Identity as the caller supplied it; absent when the caller supplied none. */
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /**
+   * Identity after the host's own default-agent substitution. Used only by the
+   * legacy `sandboxed-only` path, so that mode stays exactly as it was.
+   */
+  resolvedAgentId?: string;
 }): (page: QueryableWikiPage) => boolean {
-  if (params.sandboxed !== true) {
+  const ownership = params.config?.bridge.ownership ?? "sandboxed-only";
+  const sandboxed = params.sandboxed === true;
+  const legacy = ownership === "sandboxed-only";
+  // "sandboxed-only" keeps the historical contract exactly: filter sandboxed
+  // callers, leave everyone else untouched.
+  if (!sandboxed && legacy) {
     return () => true;
   }
   const sessionKey = params.agentSessionKey?.trim();
-  const scopedAgentId = normalizeLowercaseStringOrEmpty(
+  const suppliedAgentId = normalizeLowercaseStringOrEmpty(
     params.agentId?.trim() ||
       (params.appConfig && sessionKey
         ? resolveSessionAgentId({ sessionKey, config: params.appConfig })
         : undefined),
   );
+  // The legacy path keeps consuming the host's substituted identity, so enabling
+  // nothing changes nothing. Configured modes deliberately refuse it: scoping a
+  // caller to whichever agent happens to be the default silently hands it a
+  // foreign view of the vault, and returns fewer results with no error.
+  const scopedAgentId = legacy
+    ? normalizeLowercaseStringOrEmpty(params.resolvedAgentId?.trim()) || suppliedAgentId
+    : suppliedAgentId;
+  if (scopedAgentId.length === 0) {
+    // A sandboxed caller we cannot identify is precisely who this filter exists
+    // to stop, so it stays closed for them. Configured filtering instead fails
+    // open: an unidentified caller would otherwise receive an empty vault, which
+    // is indistinguishable from "the knowledge base is empty" and therefore
+    // reports as no error at all.
+    return sandboxed ? (page) => !isBridgeCompiledPage(page) : () => true;
+  }
+  // Sandboxed callers always get "owner" semantics. A sandbox exists to
+  // constrain, and an operator widening reads for ordinary agents is not asking
+  // to loosen the sandbox boundary too, so `ownership` governs non-sandboxed
+  // callers only.
+  const viewers = resolveBridgeOwnershipViewers(
+    scopedAgentId,
+    params.appConfig,
+    sandboxed ? "owner" : ownership,
+  );
+  if (!viewers) {
+    // Delegation was requested but the graph could not be read. Do not filter.
+    return () => true;
+  }
   return (page) =>
     !isBridgeCompiledPage(page) ||
-    (scopedAgentId.length > 0 &&
-      page.bridgeAgentIds.some(
-        (agentId) => normalizeLowercaseStringOrEmpty(agentId) === scopedAgentId,
-      ));
+    // A bridge page that records no owner is shared, not orphaned-and-hidden.
+    // Sandboxed callers keep the stricter historical contract (an unowned page
+    // stays hidden from them); configured filtering widens instead, so a page
+    // that loses or never gained its owner metadata degrades to "visible to
+    // everyone" rather than silently vanishing from every reader at once.
+    // NOTE: providers that omit `agentIds` produce empty `bridgeAgentIds` on
+    // every page (see memory-state coercion), so for those deployments the
+    // configured modes are a no-op rather than a partial filter.
+    (!sandboxed && page.bridgeAgentIds.length === 0) ||
+    page.bridgeAgentIds.some((agentId) => viewers.has(normalizeLowercaseStringOrEmpty(agentId)));
 }
 
 function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
@@ -1304,7 +1399,15 @@ export async function searchMemoryWiki(input: {
         query: params.query,
         maxResults,
         mode,
-        canReadPage: createWikiPageVisibilityFilter(params),
+        // Identity comes from `input`, not `params`: `params` has already had a
+        // default agent id substituted for callers that supplied none, and
+        // scoping a caller to the default agent's view is exactly the silent
+        // narrowing this filter must never do.
+        canReadPage: createWikiPageVisibilityFilter({
+          ...input,
+          config: effectiveConfig,
+          ...(params.agentId ? { resolvedAgentId: params.agentId } : {}),
+        }),
       })
     : [];
 
@@ -1380,7 +1483,12 @@ export async function getMemoryWikiPage(input: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
-    const canReadPage = createWikiPageVisibilityFilter(params);
+    // See the note in searchMemoryWiki: identity must come from `input`.
+    const canReadPage = createWikiPageVisibilityFilter({
+      ...input,
+      config: effectiveConfig,
+      ...(params.agentId ? { resolvedAgentId: params.agentId } : {}),
+    });
     const digest = await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath

@@ -195,6 +195,7 @@ describe("memory-wiki manifest config schema", () => {
         enabled: true,
         readMemoryArtifacts: true,
         followMemoryEvents: true,
+        ownership: "owner",
       },
       unsafeLocal: {
         allowPrivateMemoryCoreAccess: true,

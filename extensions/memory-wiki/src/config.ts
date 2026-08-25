@@ -19,8 +19,13 @@ const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
 const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
 export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
+// Who the bridge-ownership visibility filter applies to. "sandboxed-only" is the
+// historical behavior: sandboxed callers see only their own bridge pages and
+// everyone else sees the whole vault.
+const WIKI_BRIDGE_OWNERSHIP_MODES = ["sandboxed-only", "owner", "delegation"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
+export type WikiBridgeOwnership = (typeof WIKI_BRIDGE_OWNERSHIP_MODES)[number];
 type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
 type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
 type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
@@ -47,6 +52,7 @@ export type MemoryWikiPluginConfig = {
     indexDailyNotes?: boolean;
     indexMemoryRoot?: boolean;
     followMemoryEvents?: boolean;
+    ownership?: WikiBridgeOwnership;
   };
   unsafeLocal?: {
     allowPrivateMemoryCoreAccess?: boolean;
@@ -92,6 +98,7 @@ export type ResolvedMemoryWikiConfig = {
     indexDailyNotes: boolean;
     indexMemoryRoot: boolean;
     followMemoryEvents: boolean;
+    ownership: WikiBridgeOwnership;
   };
   unsafeLocal: {
     allowPrivateMemoryCoreAccess: boolean;
@@ -153,6 +160,7 @@ const MemoryWikiConfigSource = z
         indexDailyNotes: z.boolean().optional(),
         indexMemoryRoot: z.boolean().optional(),
         followMemoryEvents: z.boolean().optional(),
+        ownership: z.enum(WIKI_BRIDGE_OWNERSHIP_MODES).optional(),
       })
       .optional(),
     unsafeLocal: z
@@ -277,6 +285,7 @@ export function resolveMemoryWikiConfig(
       indexDailyNotes: safeConfig.bridge?.indexDailyNotes ?? true,
       indexMemoryRoot: safeConfig.bridge?.indexMemoryRoot ?? true,
       followMemoryEvents: safeConfig.bridge?.followMemoryEvents ?? true,
+      ownership: safeConfig.bridge?.ownership ?? "sandboxed-only",
     },
     unsafeLocal: {
       allowPrivateMemoryCoreAccess: safeConfig.unsafeLocal?.allowPrivateMemoryCoreAccess ?? false,

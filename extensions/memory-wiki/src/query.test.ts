@@ -2262,10 +2262,19 @@ describe("wiki corpus bridge page agent scoping", () => {
     );
   }
 
-  async function createBridgeVisibilityVault() {
+  async function createBridgeVisibilityVault(params?: {
+    ownership?: MemoryWikiPluginConfig["bridge"] extends infer B
+      ? B extends { ownership?: infer O }
+        ? O
+        : never
+      : never;
+  }) {
     const vault = await createQueryVault({
       initialize: true,
-      config: { vault: { scope: "global" } },
+      config: {
+        vault: { scope: "global" },
+        ...(params?.ownership ? { bridge: { ownership: params.ownership } } : {}),
+      },
     });
     await writeBridgePage({
       rootDir: vault.rootDir,
@@ -2405,6 +2414,171 @@ describe("wiki corpus bridge page agent scoping", () => {
       "sources/shared-note.md",
       "sources/unowned-daily-note.md",
     ]);
+  });
+
+  function createDelegationAppConfig(): OpenClawConfig {
+    return {
+      agents: {
+        list: [
+          { id: "main", default: true, subagents: { allowAgents: ["secondary"] } },
+          { id: "secondary", subagents: { allowAgents: ["tertiary"] } },
+          { id: "tertiary" },
+        ],
+      },
+      tools: { sessions: { visibility: "agent" } },
+    } as OpenClawConfig;
+  }
+
+  it("leaves non-sandboxed reads untouched under the default ownership mode", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    // The default is "sandboxed-only": this is the pre-change contract and the
+    // reason the option can ship without a migration.
+    expect(config.bridge.ownership).toBe("sandboxed-only");
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" }))?.content,
+    ).toContain("wikiscope marker secondary");
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" }))?.content,
+    ).toContain("wikiscope marker unowned");
+  });
+
+  it("scopes non-sandboxed reads to the caller when ownership is owner", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    expect((await getMemoryWikiPage({ ...caller, lookup: "main-daily-note" }))?.content).toContain(
+      "wikiscope marker main",
+    );
+    expect(await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" })).toBeNull();
+    // Non-bridge pages are never in scope for this filter.
+    expect((await getMemoryWikiPage({ ...caller, lookup: "shared-note" }))?.content).toContain(
+      "wikiscope marker shared",
+    );
+    // An unowned bridge page widens rather than disappearing.
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" }))?.content,
+    ).toContain("wikiscope marker unowned");
+  });
+
+  it("extends reads to delegates, without transitivity, when ownership is delegation", async () => {
+    const { config, rootDir } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    await writeBridgePage({
+      rootDir,
+      slug: "tertiary-daily-note",
+      title: "Tertiary Daily Note",
+      agentIds: ["tertiary"],
+      marker: "wikiscope marker tertiary",
+    });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+    };
+
+    // main -> secondary is a configured delegation, so secondary's pages are readable.
+    expect(
+      (await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" }))?.content,
+    ).toContain("wikiscope marker secondary");
+    // main -> secondary -> tertiary is not: that chain cannot be spawned either.
+    expect(await getMemoryWikiPage({ ...caller, lookup: "tertiary-daily-note" })).toBeNull();
+  });
+
+  it("fails open for configured filtering when the caller cannot be identified", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+
+    // An operator or internal caller with no resolvable agent id must not be
+    // handed an empty vault: that is indistinguishable from an empty knowledge
+    // base and therefore surfaces as no error at all.
+    const appConfig = createDelegationAppConfig();
+    const control = await getMemoryWikiPage({ config, appConfig, lookup: "shared-note" });
+    const page = await getMemoryWikiPage({ config, appConfig, lookup: "secondary-daily-note" });
+
+    // Control: a non-bridge page proves the lookup itself works without an
+    // agent id, so a null bridge page below would be the filter's doing.
+    expect(control?.content).toContain("wikiscope marker shared");
+    expect(page?.content).toContain("wikiscope marker secondary");
+  });
+
+  it("keeps sandboxed isolation strict regardless of the configured mode", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    const caller = {
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+      sandboxed: true,
+    };
+
+    // Sandboxed callers keep the historical contract: own pages only, an unowned
+    // bridge page stays hidden, and "delegation" does not reach delegates —
+    // widening reads for ordinary agents must not loosen the sandbox boundary.
+    expect((await getMemoryWikiPage({ ...caller, lookup: "main-daily-note" }))?.content).toContain(
+      "wikiscope marker main",
+    );
+    expect(await getMemoryWikiPage({ ...caller, lookup: "unowned-daily-note" })).toBeNull();
+    expect(await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" })).toBeNull();
+  });
+
+  it("preserves the legacy sandboxed contract when the caller supplies no identity", async () => {
+    // This is the claim the default mode rests on: with `ownership` unset, a
+    // sandboxed caller that supplies neither an agent id nor a session key still
+    // reads through the host's substituted default identity, exactly as before
+    // this option existed. Regressing it would ship a visibility change to
+    // deployments that enabled nothing.
+    const { config } = await createBridgeVisibilityVault();
+    const page = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig(),
+      sandboxed: true,
+      lookup: "main-daily-note",
+    });
+
+    expect(config.bridge.ownership).toBe("sandboxed-only");
+    expect(page?.content).toContain("wikiscope marker main");
+  });
+
+  it("does not filter when delegation is requested but the agent graph is unreadable", async () => {
+    // Narrowing a delegation viewer to owner-only scope because the graph is
+    // missing would hide pages the operator expected to see and emit nothing at
+    // all, so an unevaluatable graph must not filter.
+    const { config } = await createBridgeVisibilityVault({ ownership: "delegation" });
+    const caller = { config, agentId: "main" } as const;
+
+    const foreign = await getMemoryWikiPage({ ...caller, lookup: "secondary-daily-note" });
+    const unknownViewer = await getMemoryWikiPage({
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "not-in-the-graph",
+      lookup: "secondary-daily-note",
+    });
+
+    // No appConfig at all: the graph cannot be read.
+    expect(foreign?.content).toContain("wikiscope marker secondary");
+    // Viewer absent from the graph: its delegates are unknowable.
+    expect(unknownViewer?.content).toContain("wikiscope marker secondary");
+  });
+
+  it("applies the same scoping to search results, not only page reads", async () => {
+    const { config } = await createBridgeVisibilityVault({ ownership: "owner" });
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createDelegationAppConfig(),
+      agentId: "main",
+      query: "wikiscope",
+    });
+    const paths = results.map((result) => result.path);
+
+    expect(paths).toContain("sources/main-daily-note.md");
+    expect(paths).not.toContain("sources/secondary-daily-note.md");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
