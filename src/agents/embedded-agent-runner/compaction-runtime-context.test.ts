@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
@@ -227,15 +228,23 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       models: { "openai/gpt-5.4-mini": { alias: "fast" } },
     },
   ])(
-    "keeps literal compaction model overrides off provider runtime discovery $name",
+    "resolves literal compaction overrides without discovering provider plugins $name",
     ({ models }) => {
-      const normalizeProviderModelId = vi.spyOn(
-        providerModelNormalizationRuntime,
-        "normalizeProviderModelIdWithRuntime",
-      );
+      const manifestNormalization = vi
+        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not discover plugin manifests");
+        });
+      const runtimeNormalization = vi
+        .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not activate provider plugins");
+        });
 
       try {
-        const result = resolveEmbeddedCompactionTarget({
+        const result = buildEmbeddedCompactionRuntimeContext({
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
           config: {
             agents: {
               defaults: {
@@ -249,14 +258,14 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
           authProfileId: "openai:p1",
         });
 
-        expect(result).toEqual({
-          provider: "openai",
-          model: "gpt-4o",
-          authProfileId: "openai:p1",
-        });
-        expect(normalizeProviderModelId).not.toHaveBeenCalled();
+        expect(result.provider).toBe("openai");
+        expect(result.model).toBe("gpt-4o");
+        expect(result.authProfileId).toBe("openai:p1");
+        expect(manifestNormalization).not.toHaveBeenCalled();
+        expect(runtimeNormalization).not.toHaveBeenCalled();
       } finally {
-        normalizeProviderModelId.mockRestore();
+        runtimeNormalization.mockRestore();
+        manifestNormalization.mockRestore();
       }
     },
   );

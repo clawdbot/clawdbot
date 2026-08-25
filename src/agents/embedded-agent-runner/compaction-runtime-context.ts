@@ -187,6 +187,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
+    allowManifestNormalization: false,
   });
   if (inferredLiteralProvider) {
     return assembleTarget(inferredLiteralProvider, override);

@@ -376,7 +376,11 @@ function latestVisibleAgentSessionRow(input: {
     filterByAgent: true,
     archivedFilter: "active",
   });
-  return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+  return visible.reduce<SessionRow | null>(
+    (latest, row) =>
+      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
+    null,
+  );
 }
 
 export function resolveActiveSidebarAgent(input: {

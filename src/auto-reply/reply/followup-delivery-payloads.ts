@@ -6,11 +6,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  resolveOriginAccountId,
-  resolveOriginMessageProvider,
-  resolveOriginMessageTo,
-} from "./origin-routing.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
 import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
 import {
@@ -49,9 +45,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       params.originatingAccountId,
       params.originatingChatType,
     );
-  const accountId = resolveOriginAccountId({
-    originatingAccountId: params.originatingAccountId,
-  });
+  const accountId = params.originatingAccountId;
   const replyDelivery = createReplyDeliveryContext(replyToMode, params.originatingChatType);
   const replyDeliverySource = replyMessageProvider
     ? {
@@ -80,9 +74,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       sanitizedPayloads.push(sanitized);
     }
   }
-  const originatingTo = resolveOriginMessageTo({
-    originatingTo: params.originatingTo,
-  });
+  const originatingTo = params.originatingTo;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   return sanitizedPayloads.flatMap((payload) =>
     filterMessagingToolReplyPayload({

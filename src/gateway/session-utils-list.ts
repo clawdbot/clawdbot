@@ -280,6 +280,7 @@ function filterSessionEntries(params: {
         entry.label,
         entry.subject,
         entry.sessionId,
+        entry.category,
         key,
       ];
       appendStoredSessionModelSearchFields(cheapFields, entry);
