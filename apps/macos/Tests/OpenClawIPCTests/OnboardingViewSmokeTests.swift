@@ -179,6 +179,22 @@ struct OnboardingViewSmokeTests {
         #expect(state.connectionMode == .local)
     }
 
+    @Test func `choosing another computer never commits the recommended local gateway`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        view.handleRemoteSelection()
+
+        #expect(view.selectedConnectionMode == .remote)
+        #expect(state.connectionMode == .remote)
+
+        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+
+        #expect(state.connectionMode == .remote)
+    }
+
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
