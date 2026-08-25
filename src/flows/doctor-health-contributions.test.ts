@@ -51,9 +51,13 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
     config: cfg,
-    retiredProfileCleanupPlans: [],
+    retiredProfileCleanupPlans: [] as Array<{
+      agentDir?: string;
+      profileIds: readonly string[];
+    }>,
   })),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+  removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
@@ -324,6 +328,11 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
 
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+  removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
 
 vi.mock("../commands/doctor-auth.js", () => ({
@@ -659,6 +668,7 @@ describe("doctor health contributions", () => {
     mocks.legacyPluginManifestContractMigrationToHealthFinding.mockClear();
     mocks.maybeRepairLegacyPluginManifestContracts.mockClear().mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear().mockResolvedValue(undefined);
+    mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
     mocks.collectAuthProfileHealthFindings.mockClear().mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear().mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
@@ -2218,6 +2228,89 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeRepairLegacyOAuthProfileIds.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.maybeMigrateModelCatalogCredentials.mock.invocationCallOrder[0]!,
     );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.noteAuthProfileHealth).toHaveBeenCalledOnce();
+  });
+
+  it("cleans retired auth profiles before reporting profile health", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const cfg = {
+      auth: {
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" as const },
+        },
+      },
+    };
+    const repairedCfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    mocks.maybeRepairLegacyOAuthProfileIds.mockResolvedValue({
+      config: repairedCfg,
+      retiredProfileCleanupPlans: [
+        {
+          agentDir: "/tmp/openclaw/agents/main",
+          profileIds: ["anthropic:claude-cli"],
+        },
+      ],
+    });
+    const ctx = createDoctorHealthFlowContext({
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: repairedCfg }),
+    );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      profileIds: ["anthropic:claude-cli"],
+    });
+    expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.noteAuthProfileHealth.mock.invocationCallOrder[0]!,
+    );
+    expect(ctx.configResult.retiredAuthProfileCleanupPlans).toBeUndefined();
+  });
+
+  it("does not clean or report retired profiles when an update handoff skips persistence", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const cfg = {};
+    mocks.maybeRepairLegacyOAuthProfileIds.mockResolvedValue({
+      config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
+      retiredProfileCleanupPlans: [
+        {
+          agentDir: "/tmp/openclaw/agents/main",
+          profileIds: ["anthropic:claude-cli"],
+        },
+      ],
+    });
+    const ctx = createDoctorHealthFlowContext({
+      cfg,
+      cfgForPersistence: cfg,
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      prompter: buildDoctorPrompter(true),
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.noteAuthProfileHealth).not.toHaveBeenCalled();
+    expect(ctx.configResult.retiredAuthProfileCleanupPlans).toHaveLength(1);
   });
 
   it("persists provider runtime mappings added while removing retired auth profiles", async () => {

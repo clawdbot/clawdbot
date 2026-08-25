@@ -383,6 +383,21 @@ describe("Code Mode swarm host bridge", () => {
     });
   });
 
+  it("refuses swarm globals when the run executes only an allowlist", async () => {
+    const harness = createSwarmHarness();
+    Object.assign(harness.ctx, { toolExecutionAllow: ["skill_workshop"] });
+
+    // Guest phase/log are fire-and-forget, so the refusal shows as no foreground event.
+    const noted = await runSwarmCode(harness, 'phase("Plan"); return "ok";');
+    const spawned = await runSwarmCode(harness, 'return await agents.run("Research");');
+
+    expect(noted).toMatchObject({ status: "completed", value: "ok" });
+    expect(spawned).toMatchObject({ status: "failed" });
+    expect(String(spawned.error)).toContain("Unavailable during skill review");
+    expect(swarmMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
+  });
+
   it("re-settles a persisted collector after restart without double-spawn", async () => {
     let persisted: SubagentRunRecord | undefined;
     const harness = createSwarmHarness(async (_toolCallId, input) => {
