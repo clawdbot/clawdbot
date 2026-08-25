@@ -293,8 +293,14 @@ describe("status.command-sections", () => {
   });
 
   it("marks activated plugin service failures as warnings in deep health rows", () => {
-    const health = {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
       durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
       channels: {},
       channelOrder: [],
       channelLabels: {},
@@ -310,7 +316,7 @@ describe("status.command-sections", () => {
           },
         ],
       },
-    } as HealthSummary;
+    };
     const rows = buildStatusHealthRows({
       health,
       formatHealthChannelLines,
