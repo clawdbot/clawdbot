@@ -4759,14 +4759,9 @@ button.chat-pr__diff {
     opacity 120ms ease-out;
 }
 
-/* Pointer capture rerenders the mic while the press is arming. Keep the picker
-   subtree and its layout slot mounted so the microphone never slides sideways;
-   visibility removes the inactive affordance without collapsing its geometry. */
-.chat-talk-control--holding .chat-talk-input-picker {
-  visibility: hidden;
-  pointer-events: none;
-}
-
+/* The captured hold outlives transient hover recalculation during rerenders.
+   Keep it as an explicit reveal owner so the mic and chevron never reflow mid-gesture. */
+.chat-talk-control--holding .chat-talk-input-picker,
 .chat-talk-control:has(:focus-visible) .chat-talk-input-picker,
 .chat-talk-input-picker[open] {
   width: var(--chat-microphone-picker-width);
@@ -4828,6 +4823,7 @@ button.chat-pr__diff {
    interaction that opened it: after picking a device with the mouse the control
    stayed expanded with the pointer nowhere near it. :focus-visible ignores that
    restored pointer focus while still holding the reveal for a keyboard user. */
+.chat-talk-control--holding .chat-talk-input-picker__trigger,
 .chat-talk-control:has(:focus-visible) .chat-talk-input-picker__trigger,
 .chat-talk-input-picker[open] .chat-talk-input-picker__trigger {
   /* Wide enough to seat its glyph the way the microphone seats its own: at 16 the

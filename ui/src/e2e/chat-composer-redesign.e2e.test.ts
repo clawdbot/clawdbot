@@ -271,6 +271,22 @@ suite.define(() => {
       await expect.poll(pickerWidth).toBe(0);
       await voice.hover();
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
+      const voiceBeforeHold = await voice.boundingBox();
+      expect(voiceBeforeHold).not.toBeNull();
+      await page.mouse.down();
+      await expect
+        .poll(() =>
+          voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
+        )
+        .toBe(true);
+      await expect.poll(() => microphonePicker.isVisible()).toBe(true);
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
+      const voiceDuringHold = await voice.boundingBox();
+      expect(voiceDuringHold).not.toBeNull();
+      expect(Math.abs((voiceDuringHold?.x ?? 0) - (voiceBeforeHold?.x ?? 0))).toBeLessThanOrEqual(
+        1,
+      );
+      await page.mouse.up();
       await page.mouse.move(0, 0);
       await expect.poll(pickerWidth).toBe(0);
       await expect
