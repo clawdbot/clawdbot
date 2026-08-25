@@ -511,6 +511,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const progress = this.duration > 0 ? Math.min(1, this.currentTime / this.duration) : 0;
     const downloadHref = safeAttachmentHref(this.src);
     const failed = this.sourceController.readiness === "unavailable";
+    const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--audio"
@@ -552,10 +553,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   ${this.playing ? icons.pause : icons.play}
                 </button>
                 <div class="chat-audio-player__time" aria-live="off">
-                  <span
-                    >${formatChatMediaTime(this.currentTime)} /
-                    ${formatChatMediaTime(this.duration)}</span
-                  >
+                  <span>${timeLabel}</span>
                 </div>
                 <div class="chat-audio-player__timeline">${this.renderSeek(progress)}</div>
                 <button
