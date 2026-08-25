@@ -330,9 +330,15 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it.each(["Run `notify @15551234567", "Run `notify\n@15551234567"])(
-    "does not send native mentions for phone numbers inside unterminated inline code: %j",
-    async (messageText) => {
+  it.each([
+    { messageText: "Run `notify @15551234567" },
+    { messageText: "Run `notify\n@15551234567" },
+    { messageText: "Run ``notify ` @15551234567" },
+    { messageText: "literal \\` ping @15551234567", nativeMention: true },
+    { messageText: "literal \\\\` inside @15551234567" },
+  ])(
+    "only sends native mentions for visible phone numbers outside inline code: $messageText",
+    async ({ messageText, nativeMention }) => {
       api = createWebSendApi({
         sock: { sendMessage, sendPresenceUpdate },
         defaultAccountId: "main",
@@ -348,6 +354,7 @@ describe("createWebSendApi", () => {
 
       expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
         text: messageText,
+        ...(nativeMention ? { mentions: ["15551234567@s.whatsapp.net"] } : {}),
       });
     },
   );
