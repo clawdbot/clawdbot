@@ -1,6 +1,5 @@
 type ManagedSystemdPostExitState = {
   activeState: string;
-  generation?: "replacement";
   id?: string;
   loadState?: string;
   mainPid?: "parent" | "replacement" | "none";
@@ -17,12 +16,12 @@ export type ManagedServiceManagerBoundaryOptions = {
     pendingBootstrapFailures?: number;
     pendingOperationInProgress?: number;
   };
-  lateCommand?: "park" | "commit";
   overdueCommit?: boolean;
   systemdFault?: "start-failed" | "dead-restored-pid";
   systemdHandoffDeadlineMs?: number;
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
+  systemdStopDelayMs?: number;
   updaterExitCode?: number;
 };
 
@@ -53,7 +52,6 @@ type ManagedTestApi = {
 };
 
 type ManagedExpectation = {
-  toBeGreaterThan(expected: number): void;
   toBeNull(): void;
   toBeUndefined(): void;
   toEqual(expected: unknown): void;
@@ -75,77 +73,62 @@ export function registerManagedSystemdHandoffConvergenceTests(
   itUnix: ManagedTestApi,
   expect: ManagedExpect,
 ): void {
-  itUnix(
-    "waits for the same systemd execution to finish deactivating after its parent exits",
-    async () => {
-      const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-        systemdPostExitStates: [
-          { activeState: "deactivating", mainPid: "parent" },
-          { activeState: "deactivating", mainPid: "none" },
-          { activeState: "inactive", mainPid: "none" },
-        ],
-        updaterExitCode: 0,
-      });
+  itUnix("waits for the exact systemd stop job to finish after parent exit", async () => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdStopDelayMs: 100,
+      updaterExitCode: 0,
+    });
 
-      expect(commands.map((command) => command.split(" ")[1])).toEqual([
-        "show",
-        "--no-block",
-        "show",
-        "show",
-        "show",
-      ]);
-      expect(state).toMatchObject({ parked: true, postExitShows: 3 });
-      expect(state.reset).toBeUndefined();
-      expect(state.restored).toBeUndefined();
-      expect(sentinel).toBeNull();
-    },
-  );
+    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
+    expect(state).toMatchObject({ parked: true, stopCompleted: true });
+    expect(state.reset).toBeUndefined();
+    expect(state.restored).toBeUndefined();
+    expect(sentinel).toBeNull();
+  });
 
   itUnix.each([
-    ["a replaced execution generation", { activeState: "deactivating", generation: "replacement" }],
-    ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
-    ["an active service", { activeState: "active", mainPid: "parent" }],
+    ["a replacement main PID", { activeState: "inactive", mainPid: "replacement" }],
+    ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
     ["a failed service", { activeState: "failed", mainPid: "none" }],
     ["an inactive service retaining a main PID", { activeState: "inactive", mainPid: "parent" }],
-    ["a replaced service unit", { activeState: "deactivating", id: "replacement.service" }],
-    ["an unloaded service unit", { activeState: "deactivating", loadState: "not-found" }],
-  ] as const)("fails closed immediately when systemd reports %s", async (_label, invalidState) => {
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-      systemdHandoffFailure: true,
-      systemdPostExitStates: [
-        { activeState: "deactivating", mainPid: "none" },
-        invalidState,
-        { activeState: "inactive", mainPid: "none" },
-      ],
-    });
+    ["a replaced service unit", { activeState: "inactive", id: "replacement.service" }],
+    ["an unloaded service unit", { activeState: "inactive", loadState: "not-found" }],
+  ] as const)(
+    "fails closed after stop completion when systemd reports %s",
+    async (_label, invalidState) => {
+      const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+        systemdHandoffFailure: true,
+        systemdPostExitStates: [invalidState],
+      });
 
-    expect(state).toMatchObject({ parked: true, postExitShows: 2, reset: true, restored: true });
-    expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(1);
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-helper-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-          ]),
+      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 1 });
+      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(1);
+      expect(sentinel).toMatchObject({
+        payload: {
+          status: "error",
+          stats: {
+            reason: "managed-service-handoff-helper-failed",
+            steps: expect.arrayContaining([
+              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+            ]),
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   itUnix(
-    "fails closed when systemd stop convergence exhausts the existing parent-exit deadline",
+    "fails closed when the exact systemd stop job exhausts the parent-exit deadline",
     async () => {
       const { sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-        systemdHandoffDeadlineMs: 1_500,
+        systemdHandoffDeadlineMs: 5_000,
         systemdHandoffFailure: true,
-        systemdPostExitStates: [{ activeState: "deactivating", mainPid: "none" }],
+        systemdStopDelayMs: 6_000,
       });
 
       expect(state).toMatchObject({ parked: true, reset: true, restored: true });
-      expect(state.postExitShows).toBeGreaterThan(1);
+      expect(state.stopCompleted).toBeUndefined();
       expect(sentinel).toMatchObject({
         payload: { status: "error", stats: { reason: "managed-service-handoff-helper-failed" } },
       });
@@ -166,11 +149,19 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const statePath = ${JSON.stringify(statePath)};
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
 if (${JSON.stringify(kind)} === "systemd") {
-  if (action === "stop") state.parked = true;
-  if (action === "stop" && ${Boolean(options?.lateCommand)}) setTimeout(() => {}, 200);
+  if (action === "stop") {
+    state.parked = true;
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    for (;;) {
+      try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
+    }
+    sleep(${options?.systemdStopDelayMs ?? 0});
+    state.stopCompleted = true;
+  }
   if (action === "reset-failed") state.reset = true;
   if (action === "start" && ${JSON.stringify(options?.systemdFault)} === "start-failed") {
     state.startFailed = true;
@@ -189,12 +180,13 @@ if (${JSON.stringify(kind)} === "systemd") {
       : observation?.mainPid === "replacement" ? ${process.pid}
       : observation?.mainPid === "none" ? 0
       : state.restored ? restoredPid : active ? ${parentPid} : 0;
+    const observedGeneration = state.restored ? "222" : active ? "111" : "0";
     process.stdout.write([
       "Id=" + (observation?.id || "openclaw-gateway.service"),
       "LoadState=" + (observation?.loadState || "loaded"),
       "ActiveState=" + (observation?.activeState || (active ? "active" : "inactive")),
       "MainPID=" + observedPid,
-      "ExecMainStartTimestampMonotonic=" + (state.restored || observation?.generation === "replacement" ? "222" : "111"),
+      "ExecMainStartTimestampMonotonic=" + observedGeneration,
     ].join("\\n") + "\\n");
   }
   } else {

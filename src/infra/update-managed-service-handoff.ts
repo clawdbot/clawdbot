@@ -674,10 +674,10 @@ function markUpdateSentinelFailureIfPending(reason, restored) {
   return recorded;
 }
 
-function runServiceCommand(command, args, onSpawn, deadline) {
+function runServiceCommand(command, args, onSpawn, deadline, timeoutCap) {
   if (!ownsManagedUpdateLease()) return Promise.resolve({ code: 1, stdout: "", stderr: "" });
   return new Promise((resolve) => {
-    const cap = args[0] === "bootout" ? ${PARENT_EXIT_SHUTDOWN_RESERVE_MS} : 5000;
+    const cap = timeoutCap ?? (args[0] === "bootout" ? ${PARENT_EXIT_SHUTDOWN_RESERVE_MS} : 5000);
     const remaining = deadline === undefined ? cap : deadline - Date.now();
     if (remaining <= 0) return resolve({ code: 1, stdout: "", stderr: "" });
     let stdout = "", stderr = "";
@@ -727,10 +727,23 @@ async function parkGatewayService() {
       throw new Error("systemd service does not match the exact active gateway parent");
     }
     parkedServiceGeneration = current.ExecMainStartTimestampMonotonic;
-    // A submitted stop can kill its parent even when the transport later times out.
-    restorationArmed = true;
-    const stopped = await runServiceCommand("systemctl", ["--user", "--no-block", "stop", recovery.unit]);
-    if (stopped.code !== 0) throw new Error("systemd stop submission failed: " + stopped.stderr);
+    // Keep the exact stop job open across parent exit; its completion is the
+    // authoritative systemd fact, even after inactive-unit metadata is collected.
+    await new Promise((resolve, reject) => {
+      pendingServiceStop = runServiceCommand(
+        "systemctl",
+        ["--user", "stop", recovery.unit],
+        () => {
+          restorationArmed = true;
+          resolve();
+        },
+        params.parentExitDeadlineAt,
+        params.parentExitTimeoutMs,
+      );
+      pendingServiceStop.then((result) => {
+        if (!restorationArmed) reject(new Error("systemd stop failed: " + result.stderr));
+      });
+    });
     return;
   }
   if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
@@ -930,7 +943,8 @@ async function restoreGatewayService(reason) {
     }
     clearTimeout(parentExitDeadline);
     const stopped = pendingServiceStop ? await pendingServiceStop : null;
-    if (stopped && stopped.code !== 0 && !isLaunchdNotLoaded(stopped)) {
+    if (stopped && stopped.code !== 0 && params.serviceRecovery?.kind === "launchd" &&
+      !isLaunchdNotLoaded(stopped)) {
       throw new Error("launchctl bootout failed: " + stopped.stderr);
     }
     if (outcome !== "update") {
@@ -939,20 +953,14 @@ async function restoreGatewayService(reason) {
       return;
     }
     if (params.serviceRecovery?.kind === "systemd") {
+      if (!stopped || stopped.code !== 0 || Date.now() >= params.parentExitDeadlineAt) {
+        throw new Error("systemd stop failed or exceeded the parent-exit deadline");
+      }
       const unit = params.serviceRecovery.unit;
-      for (;;) {
-        const current = await inspectSystemdService(unit, params.parentExitDeadlineAt);
-        if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
-          current.ExecMainStartTimestampMonotonic !== parkedServiceGeneration ||
-          (current.MainPID !== "0" && current.MainPID !== String(params.parentPid)) ||
-          (current.ActiveState !== "deactivating" &&
-            (current.ActiveState !== "inactive" || current.MainPID !== "0")) ||
-          Date.now() >= params.parentExitDeadlineAt) {
-          throw new Error("systemd service remained active or changed execution generation");
-        }
-        if (current.ActiveState === "inactive") break;
-        // systemd observes parent exit before the same-generation stop becomes inactive.
-        await sleep(Math.min(25, Math.max(0, params.parentExitDeadlineAt - Date.now())));
+      const current = await inspectSystemdService(unit, params.parentExitDeadlineAt);
+      if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
+        current.ActiveState !== "inactive" || current.MainPID !== "0") {
+        throw new Error("systemd service remained active or changed execution generation");
       }
     }
     if (params.serviceRecovery?.kind === "launchd") {
