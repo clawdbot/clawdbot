@@ -219,7 +219,7 @@ suite.define(() => {
     }
   });
 
-  it("recovers a failed CLI-agent catalog without reloading ready model metadata", async () => {
+  it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
     if (captureCatalogRetryProof) {
       await mkdir(catalogRetryProofDir, { recursive: true });
     }
@@ -298,7 +298,7 @@ suite.define(() => {
         ),
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       if (captureCatalogRetryProof) {
         await page.screenshot({
           animations: "disabled",
@@ -336,7 +336,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);

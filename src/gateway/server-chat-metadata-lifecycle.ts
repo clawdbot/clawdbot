@@ -67,11 +67,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
-        preparedModelRuntimeEventVersion += 1;
         if (event.phase === "catalog-published") {
           invalidateForSubordinateChange();
           return;
         }
+        preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
           preparedModelRuntimeAvailable = false;
           runtime.invalidate();

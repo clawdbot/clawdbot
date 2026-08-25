@@ -6,12 +6,14 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-catalog-worker.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   type GetPublishedPreparedModelCatalogOwnerParams,
 } from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  getPreparedModelRuntimeAuthMaterializations,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -138,6 +140,9 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
     const fullCatalogAuth = fullModelCatalog
       ? getPreparedModelFullCatalogAuth(fullModelCatalog)
       : undefined;
+    if (fullModelCatalog && !fullCatalogAuth) {
+      throw new Error("prepared full model catalog omitted its auth generation");
+    }
     return {
       agentId,
       owner,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -151,10 +152,11 @@ describe("gateway chat metadata lifecycle", () => {
     expect(skillsListener).toEqual(expect.any(Function));
 
     modelListener({ phase: "invalidated" });
+    modelListener({ phase: "catalog-published" });
     authListener();
     skillsListener();
 
-    expect(mocks.invalidate).toHaveBeenCalledTimes(3);
+    expect(mocks.invalidate).toHaveBeenCalledTimes(4);
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
 
@@ -192,6 +194,25 @@ describe("gateway chat metadata lifecycle", () => {
 
     expect(mocks.invalidate).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
+  });
+
+  it("keeps an owner available when a subordinate catalog publishes during attachment", async () => {
+    const pendingRefresh = createDeferred<void>();
+    mocks.refresh.mockReturnValueOnce(pendingRefresh.promise);
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    const attachment = lifecycle.attachContext(context, []);
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+    modelListener({ phase: "catalog-published" });
+    pendingRefresh.resolve();
+    await attachment;
+
+    const authListener = mocks.registerAuthListener.mock.calls[0]?.[0];
+    authListener();
+
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
   });
 
   it("propagates a failed model publication without starting a refresh", async () => {
