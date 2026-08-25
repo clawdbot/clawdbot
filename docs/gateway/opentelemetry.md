@@ -68,8 +68,9 @@ and the deepest internal single-file include that solely owns the changed
 `diagnostics.otel` keys, including an unambiguous nested include chain. For root
 includes, actual array-entry includes, include arrays, sibling overrides,
 same-path or ancestor merges, changes spanning ownership boundaries, external
-include targets, or another ambiguous source, Doctor leaves the files unchanged
-and lists the candidate source file or files to edit manually.
+include targets, an owning file that still authors a nested `$include`
+directive, or another ambiguous source, Doctor leaves the files unchanged and
+lists the candidate source file or files to edit manually.
 
 When `diagnostics.otel.protocol` is unset, each plugin-owned OTLP signal first
 checks its nonblank `OTEL_EXPORTER_OTLP_*_PROTOCOL` value, then

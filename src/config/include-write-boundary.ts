@@ -74,10 +74,12 @@ function isSoleOwner(entry: ConfigIncludeOwnership): boolean {
  * Finds the deepest authored include that solely owns every changed path.
  *
  * A boundary is writable only when it names exactly one file, carries no
- * sibling overrides, and every enclosing include is itself a sole owner —
- * otherwise an ancestor could merge over the included content. The deepest such
- * boundary wins so the write stays in the narrowest owning file rather than
- * flattening a nested include into its parent.
+ * sibling overrides, every enclosing include is itself a sole owner —
+ * otherwise an ancestor could merge over the included content — and no deeper
+ * include was recorded beneath it, since a file that still authors $include
+ * directives cannot absorb a write. The deepest such boundary wins so the
+ * write stays in the narrowest owning file rather than flattening a nested
+ * include into its parent.
  */
 export function resolveIncludeWriteBoundary(params: {
   provenance: readonly ConfigIncludeOwnership[] | undefined;
@@ -108,6 +110,19 @@ export function resolveIncludeWriteBoundary(params: {
         !isSoleOwner(candidate),
     );
     if (enclosingMerges) {
+      continue;
+    }
+    // A strictly deeper include event under this entry means its authored value
+    // still carries $include directives; the guarded writer declines such a
+    // file, so selecting it would only defer the failure to the root flatten
+    // guard after Doctor already advertised the path as writable.
+    const containsDeeperInclude = provenance.some(
+      (candidate) =>
+        candidate !== entry &&
+        candidate.path.length > entry.path.length &&
+        isPathPrefix(entry.path, candidate.path),
+    );
+    if (containsDeeperInclude) {
       continue;
     }
     if (!params.changed.paths.every((changedPath) => isPathPrefix(entry.path, changedPath))) {
@@ -146,6 +161,7 @@ export function writeConfigPathValue(
   if (configPath.length === 0) {
     return nextValue;
   }
+  // SAFETY: the zero-length case returns above, so a first segment exists.
   const [segment, ...rest] = configPath as [string, ...string[]];
   const base = isRecord(value) ? value : {};
   return {

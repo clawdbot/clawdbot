@@ -21,7 +21,7 @@ type ConfigPathMigrationOwnership =
 type OtelGrpcMigrationOwnership = ConfigPathMigrationOwnership | { kind: "resolved-only" };
 
 /** Classify whether Doctor can safely persist a migration at one resolved config path. */
-export function classifyConfigPathMigrationOwnership(params: {
+function classifyConfigPathMigrationOwnership(params: {
   snapshot: Pick<ConfigFileSnapshot, "path" | "includeProvenance">;
   configPath: readonly string[];
 }): ConfigPathMigrationOwnership {

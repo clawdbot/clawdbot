@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../../../test-helpers/temp-dir.js";
-import {
-  classifyConfigPathMigrationOwnership,
-  classifyOtelGrpcMigrationOwnership,
-} from "./include-migration-ownership.js";
+import { classifyOtelGrpcMigrationOwnership } from "./include-migration-ownership.js";
 
 describe("include migration ownership", () => {
   const configDir = path.resolve("/tmp/openclaw-config");
@@ -24,69 +21,51 @@ describe("include migration ownership", () => {
 
   it("classifies direct config even when an unrelated include exists", () => {
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["agents"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              hasArrayAncestor: false,
-              targetPath: path.join(configDir, "agents.json5"),
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["agents"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: path.join(configDir, "agents.json5"),
         },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+      ]),
     ).toEqual({ kind: "direct" });
   });
 
   it("allows one internal top-level include that solely owns diagnostics", () => {
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["diagnostics"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              hasArrayAncestor: false,
-              targetPath: diagnosticsPath,
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["diagnostics"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: diagnosticsPath,
         },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+      ]),
     ).toEqual({ kind: "single-include", targetPath: diagnosticsPath });
   });
 
   it("allows the deepest sole owner in a nested include chain", () => {
     const otelPath = path.join(configDir, "otel.json5");
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["diagnostics", "otel"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              hasArrayAncestor: false,
-              targetPath: otelPath,
-            },
-            {
-              path: ["diagnostics"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              hasArrayAncestor: false,
-              targetPath: diagnosticsPath,
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["diagnostics", "otel"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: otelPath,
         },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+        {
+          path: ["diagnostics"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: diagnosticsPath,
+        },
+      ]),
     ).toEqual({ kind: "single-include", targetPath: otelPath });
   });
 
@@ -176,7 +155,7 @@ describe("include migration ownership", () => {
       await fs.symlink(externalTarget, linkPath);
 
       expect(
-        classifyConfigPathMigrationOwnership({
+        classifyOtelGrpcMigrationOwnership({
           snapshot: {
             path: path.join(realConfigDir, "openclaw.json"),
             includeProvenance: [
@@ -189,7 +168,8 @@ describe("include migration ownership", () => {
               },
             ],
           },
-          configPath: ["diagnostics", "otel", "protocol"],
+          authoredConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+          resolvedConfig: { diagnostics: { otel: { protocol: "grpc" } } },
         }),
       ).toEqual({ kind: "manual", targetPaths: [linkPath] });
     });
@@ -202,7 +182,7 @@ describe("include migration ownership", () => {
       await fs.writeFile(targetPath, "{}\n", "utf-8");
 
       expect(
-        classifyConfigPathMigrationOwnership({
+        classifyOtelGrpcMigrationOwnership({
           snapshot: {
             path: path.join(realConfigDir, "openclaw.json"),
             includeProvenance: [
@@ -215,7 +195,8 @@ describe("include migration ownership", () => {
               },
             ],
           },
-          configPath: ["diagnostics", "otel", "protocol"],
+          authoredConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+          resolvedConfig: { diagnostics: { otel: { protocol: "grpc" } } },
         }),
       ).toEqual({ kind: "single-include", targetPath });
     });
@@ -224,21 +205,15 @@ describe("include migration ownership", () => {
   it("requires manual repair below an actual array entry", () => {
     const targetPath = path.join(configDir, "otel.json5");
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["diagnostics", "0"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              hasArrayAncestor: true,
-              targetPath,
-            },
-          ],
+      classifyOtelOwnership([
+        {
+          path: ["diagnostics", "otel"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: true,
+          targetPath,
         },
-        configPath: ["diagnostics", "0", "protocol"],
-      }),
+      ]),
     ).toEqual({ kind: "manual", targetPaths: [targetPath] });
   });
 });

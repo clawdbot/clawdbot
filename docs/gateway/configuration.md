@@ -510,7 +510,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
       `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
     - **Unsupported write-through**: root includes, actual array-entry includes,
       include arrays, sibling overrides, changes spanning ownership boundaries,
-      and any nested include beneath a merged owner fail closed instead of
+      any nested include beneath a merged owner, and any include whose own file
+      still authors a nested `$include` directive fail closed instead of
       flattening the config. Numeric object keys are treated as map keys, not
       array positions.
     - **Confinement**: `$include` paths must resolve under the directory holding

@@ -1805,7 +1805,7 @@ Split config into multiple files:
 - Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Set `OPENCLAW_INCLUDE_ROOTS` (absolute paths) to allow additional roots outside the config directory.
 - Limits: paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution; each included file is capped at 2 MB.
 - OpenClaw-owned writes whose changed keys are all owned by one single-file include at an object-key path write through to the deepest owning include. This supports top-level sections and nested object-map entries, including numeric object keys, while leaving `openclaw.json` intact. Write-through only targets include files inside the top-level config directory; includes admitted through `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
-- Root includes, actual array-entry includes, include arrays, sibling overrides, changes spanning ownership boundaries, and nested includes beneath a merged same-path or ancestor owner are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
+- Root includes, actual array-entry includes, include arrays, sibling overrides, changes spanning ownership boundaries, nested includes beneath a merged same-path or ancestor owner, and includes whose own file still authors a nested `$include` directive are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
 - Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
 ---

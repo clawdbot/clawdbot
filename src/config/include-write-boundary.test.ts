@@ -75,7 +75,10 @@ describe("resolveIncludeWriteBoundary", () => {
     ).toBe("/cfg/alpha.json5");
   });
 
-  it("falls back to the parent include when changes span nested siblings", () => {
+  it("declines the parent include when changes span nested siblings", () => {
+    // The parent file authors alpha's $include directive, so the guarded writer
+    // cannot persist it; selecting it would defer the failure to the root
+    // flatten guard.
     const outer = {
       path: ["agents"],
       kind: "single" as const,
@@ -93,8 +96,56 @@ describe("resolveIncludeWriteBoundary", () => {
           ],
           rootChanged: false,
         },
-      })?.includePath,
-    ).toBe("/cfg/agents.json5");
+      }),
+    ).toBeNull();
+  });
+
+  it("declines a parent whose changed children are both nested includes", () => {
+    const outer = {
+      path: ["agents"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/agents.json5",
+    };
+    const betaInclude = {
+      path: ["agents", "entries", "beta"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/beta.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude, betaInclude, outer],
+        changed: {
+          paths: [
+            ["agents", "entries", "alpha", "model"],
+            ["agents", "entries", "beta", "model"],
+          ],
+          rootChanged: false,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("declines a directive-carrying parent when only a plain sibling changes", () => {
+    const outer = {
+      path: ["agents"],
+      kind: "single" as const,
+      hasSiblingOverrides: false,
+      hasArrayAncestor: false,
+      targetPath: "/cfg/agents.json5",
+    };
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [alphaInclude, outer],
+        changed: {
+          paths: [["agents", "entries", "beta", "model"]],
+          rootChanged: false,
+        },
+      }),
+    ).toBeNull();
   });
 
   it("declines a nested include enclosed by a merged parent", () => {

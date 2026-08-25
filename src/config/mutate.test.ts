@@ -771,6 +771,60 @@ describe("config mutate helpers", () => {
     expect(reloaded.sourceConfig.plugins?.entries?.demo?.enabled).toBe(false);
   });
 
+  it("declines a parent include when both changed children are nested includes", async () => {
+    const home = await suiteRootTracker.make("nested-sibling-includes");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const entriesPath = path.join(home, ".openclaw", "entries.json5");
+    const alphaPath = path.join(home, ".openclaw", "agent-alpha.json5");
+    const betaPath = path.join(home, ".openclaw", "agent-beta.json5");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const rootRaw = JSON.stringify({ agents: { entries: { $include: "./entries.json5" } } });
+    await fs.writeFile(configPath, rootRaw);
+    const entriesRaw = JSON.stringify({
+      alpha: { $include: "./agent-alpha.json5" },
+      beta: { $include: "./agent-beta.json5" },
+    });
+    await fs.writeFile(entriesPath, entriesRaw);
+    const alphaRaw = JSON.stringify({ model: "alpha-old" });
+    await fs.writeFile(alphaPath, alphaRaw);
+    const betaRaw = JSON.stringify({ model: "beta-old" });
+    await fs.writeFile(betaPath, betaRaw);
+    const configIO = createActualConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath },
+      observe: false,
+      pluginValidation: "skip",
+    });
+    const { snapshot, writeOptions } = await configIO.readConfigFileSnapshotForWrite();
+    const nextConfig = structuredClone(snapshot.sourceConfig) as OpenClawConfig;
+    nextConfig.agents!.entries!.alpha!.model = "alpha-new";
+    nextConfig.agents!.entries!.beta!.model = "beta-new";
+
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: snapshot.includeProvenance,
+        changed: collectChangedConfigPaths(snapshot.sourceConfig, nextConfig),
+      }),
+    ).toBeNull();
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions,
+        nextConfig,
+        io: {
+          readConfigFileSnapshotForWrite: () => configIO.readConfigFileSnapshotForWrite(),
+          writeConfigFile: (config, options) => configIO.writeConfigFile(config, options),
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config");
+
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+    await expect(fs.readFile(entriesPath, "utf-8")).resolves.toBe(entriesRaw);
+    await expect(fs.readFile(alphaPath, "utf-8")).resolves.toBe(alphaRaw);
+    await expect(fs.readFile(betaPath, "utf-8")).resolves.toBe(betaRaw);
+  });
+
   it("writes through an include beneath a numeric object key", async () => {
     const home = await suiteRootTracker.make("numeric-object-key-include");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
