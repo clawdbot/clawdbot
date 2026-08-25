@@ -38,6 +38,36 @@ afterEach(() => {
 });
 
 describe("attachment sidebar source ownership", () => {
+  it.each([
+    ["sample-image.png", "image/png"],
+    ["photo.jpg", "image/jpeg"],
+    ["vector.svg", "image/svg+xml"],
+  ])("renders document-shaped %s attachments as expandable images", (label, mimeType) => {
+    const source = `https://example.com/${label}`;
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenImage = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: { kind: "document", label, mimeType, url: source },
+          },
+        ],
+        { onOpenImage },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({ src: source, title: label }),
+    );
+    container.remove();
+  });
+
   it("retries a failed managed attachment resolution", async () => {
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_document_${attachmentId}`;

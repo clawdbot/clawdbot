@@ -32,6 +32,7 @@ import {
 } from "./chat-message-local-media.ts";
 import {
   isChatMediaResourceCurrent,
+  isImageMediaPath,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
@@ -487,7 +488,11 @@ export function renderAssistantAttachments(
               : {}),
           })
       : undefined;
-    if (attachment.kind === "image") {
+    if (
+      attachment.kind === "image" ||
+      (attachment.kind === "document" &&
+        isImageMediaPath(attachment.label, attachment.mimeType))
+    ) {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
           kind: "image",

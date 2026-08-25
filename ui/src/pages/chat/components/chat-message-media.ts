@@ -340,7 +340,7 @@ function buildBase64ImageUrl(params: { data: string; mediaType?: string }): stri
     : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
 }
 
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+export function isImageMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim()) {
     const normalized = mediaType.trim().toLowerCase();
     if (normalized.startsWith("image/")) {
@@ -488,7 +488,7 @@ export function extractImages(message: unknown): ImageBlock[] {
   for (const { path: mediaPath, mediaType, fileName, sizeBytes } of readTranscriptMediaEntries(
     message,
   )) {
-    if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
+    if (!isImageMediaPath(mediaPath, mediaType)) {
       continue;
     }
     appendImageBlock(images, { url: mediaPath, fileName, sizeBytes });
@@ -596,7 +596,7 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
     width,
     height,
   } of readTranscriptMediaEntries(message)) {
-    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
+    if (isImageMediaPath(mediaPath, mediaType)) {
       continue;
     }
     const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
