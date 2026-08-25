@@ -2572,13 +2572,19 @@ describe("gateway server chat", () => {
         });
         expectAgentWaitTimeout(waitWhileChatActive);
 
+        // Match the published ownership fact, not the `reason` label: sessions.changed
+        // coalesces bursts per session key and keeps only the newest payload, so any
+        // same-key mutation inside that window legitimately replaces the label while
+        // the row (activeRunIds/lastRunId) is still rebuilt at broadcast time.
         const settledSessionChange = onceMessage(
           ws,
           (event) =>
             event.type === "event" &&
             event.event === "sessions.changed" &&
-            event.payload?.reason === "chat.run.settled" &&
             event.payload?.sessionKey === "agent:main:main" &&
+            event.payload?.hasActiveRun === false &&
+            Array.isArray(event.payload?.activeRunIds) &&
+            event.payload.activeRunIds.length === 0 &&
             event.payload?.lastRunId === runId,
           8_000,
         );
