@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
@@ -2200,6 +2202,92 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(expectCompactionResult(result).summary).toBe(acceptedSummary);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("completes a real numeric-tool-output compaction without guard_blocked", async () => {
+    // End-to-end at the compaction owner: the summary is produced by a real model
+    // call over a loopback socket (summarizeInStages is not stubbed here), then the
+    // real extractor and real audit decide. Numeric tool output must not block it.
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report the deployment status";
+    const modelSummary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-compaction",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: "compaction-model",
+            choices: [{ index: 0, delta: { content: modelSummary }, finish_reason: "stop" }],
+          })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const sessionManager = stubSessionManager();
+      setCompactionSafeguardRuntime(sessionManager, {
+        model: createAnthropicModelFixture({
+          id: "compaction-model",
+          provider: "openai",
+          api: "openai-completions" as never,
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        }),
+        recentTurnsPreserve: 0,
+        qualityGuardEnabled: true,
+        qualityGuardMaxRetries: 1,
+      });
+
+      const numericToolResult =
+        "latency_p50=0.123456789 throughput=1.234567e+12345678 cost_usd=12345678.90";
+      const event = createCompactionEvent({
+        messageText: `${latestAsk} ${numericToolResult}`,
+        tokensBefore: 1_500,
+      });
+      (
+        event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+      ).settings = { reserveTokens: 4_000 };
+      (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+      (event as { streamFn?: unknown }).streamFn = createOpenAICompletionsTransportStreamFn();
+
+      const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+      // The model never echoed the numbers; before the extractor fix they were
+      // required identifiers and this compaction cancelled with guard_blocked.
+      expect(requireRecord(mockCallArg(mockAuditSummaryQuality)).identifiers).toEqual([]);
+      expect(expectCompactionResult(result).summary).toContain("## Decisions");
+      expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("propagates caller abort during corrective generation", async () => {
