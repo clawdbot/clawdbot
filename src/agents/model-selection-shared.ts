@@ -166,6 +166,7 @@ function buildEffectiveModelAliases(
   }
   for (const candidate of candidates) {
     const isColdDefaultProviderAlias =
+      params.allowManifestNormalization !== false &&
       hasSlashFormModelRef(candidate.keyRaw) &&
       normalizeProviderId(candidate.keyRaw.slice(0, candidate.keyRaw.indexOf("/"))) ===
         normalizeProviderId(DEFAULT_PROVIDER) &&
