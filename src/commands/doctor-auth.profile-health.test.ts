@@ -176,7 +176,7 @@ describe("noteAuthProfileHealth", () => {
       } as OpenClawConfig,
     });
 
-    expect(findings.map((finding) => finding.target).toSorted()).toEqual([
+    expect(findings.map((finding) => finding.target)).toEqual([
       "anthropic:custom-cli",
       "anthropic:static-cli",
     ]);
