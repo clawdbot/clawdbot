@@ -7,6 +7,39 @@ describe("buzzSetupContract", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    {
+      name: "plaintext private key",
+      privateKey: "11".repeat(32),
+    },
+    {
+      name: "private-key SecretRef",
+      privateKey: { source: "env" as const, provider: "default", id: "BUZZ_EXISTING_KEY" },
+    },
+  ])("rejects named account setup without changing the existing $name", ({ privateKey }) => {
+    const buzz = {
+      enabled: false,
+      relayUrl: "wss://original.example.com",
+      privateKey,
+      authTag: '["auth","owner","kind=9","signature"]',
+    };
+    const cfg = { channels: { buzz } } as OpenClawConfig;
+    const input = {
+      relayUrl: "wss://new.example.com",
+      privateKey: "22".repeat(32),
+    };
+    const requestedAccountId = "ada";
+    const resolvedAccountId =
+      buzzSetupContract.resolveAccountId?.({ cfg, accountId: requestedAccountId, input }) ??
+      requestedAccountId;
+
+    expect(resolvedAccountId).toBe(requestedAccountId);
+    expect(buzzSetupContract.validateInput?.({ cfg, accountId: resolvedAccountId, input })).toBe(
+      "Buzz currently supports only the default account.",
+    );
+    expect(cfg.channels?.buzz).toEqual(buzz);
+  });
+
   it("validates and applies BUZZ_PRIVATE_KEY setup without storing the key", () => {
     expect(buzzSetupContract.metadata.fields.find((field) => field.key === "useEnv")).toMatchObject(
       {

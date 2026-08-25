@@ -42,7 +42,6 @@ export function isSameBuzzIdentity(currentKey?: string, nextKey?: string): boole
 }
 
 const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,
