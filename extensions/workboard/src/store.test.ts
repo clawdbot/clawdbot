@@ -2748,6 +2748,50 @@ describe("WorkboardStore", () => {
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
   });
 
+  it("heals oversized persisted notifications and keeps dispatching sibling cards", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(stores.cards);
+      const poisoned = await store.create({ title: "Oversized notification", status: "ready" });
+      const sibling = await store.create({ title: "Unaffected sibling", status: "ready" });
+      const oversized = `${"x".repeat(238)}🦞${" tail".repeat(60)}`;
+      const rawDb = new DatabaseSync(dbPath);
+      try {
+        rawDb
+          .prepare(
+            "INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run("oversized", poisoned.id, 0, "failed", oversized, Date.now());
+      } finally {
+        rawDb.close();
+      }
+
+      expect((await store.get(poisoned.id))?.metadata?.notifications?.[0]?.message).toBe(oversized);
+      await expect(store.dispatch()).resolves.toBeDefined();
+
+      const repaired = await store.get(poisoned.id);
+      expect(repaired?.metadata?.notifications?.[0]?.message).toBe(`${"x".repeat(238)}…`);
+      expect(repaired?.metadata?.automation?.dispatchCount).toBe(1);
+      expect((await store.get(sibling.id))?.metadata?.automation?.dispatchCount).toBe(1);
+
+      const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          verifyDb
+            .prepare("SELECT message FROM workboard_card_notifications WHERE id = ?")
+            .get("oversized"),
+        ).toEqual({ message: `${"x".repeat(238)}…` });
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("dispatches ready cards and blocks expired or timed-out work", async () => {
     vi.useFakeTimers();
     try {

@@ -588,6 +588,9 @@ async function maybePinFirstDeliveredMessage(params: {
       disable_notification: !notify,
     });
   } catch (err) {
+    if (typeof params.pin === "object" && params.pin.required === true) {
+      throw err;
+    }
     logVerbose(
       `telegram pinChatMessage failed chat=${params.chatId} message=${params.firstDeliveredMessageId}: ${formatErrorMessage(err)}`,
     );
@@ -912,6 +915,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          acceptedMessageIds,
           recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
         });

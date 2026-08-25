@@ -1641,7 +1641,7 @@ describe("models.list", () => {
           prefix: "openclaw-models-list-cli-runtime-",
           agentEnv: "main",
         },
-        async (state) => {
+        async () => {
           const runtimeConfig = {
             agents: {
               defaults: {

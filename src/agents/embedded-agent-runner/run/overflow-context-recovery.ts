@@ -214,6 +214,7 @@ export async function recoverEmbeddedRunOverflow(
         config: runParams.config,
         sessionKey: runParams.sessionKey,
         agentId: input.sessionAgentId,
+        sessionPersistence: runParams.sessionPersistence,
       });
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +

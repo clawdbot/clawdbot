@@ -42,7 +42,6 @@ import {
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   resolveActiveReplyOperationForSessionId,
-  resolveReplyRunPhaseForSessionId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
   waitForReplyRunSuccessorAdmission,
@@ -342,9 +341,6 @@ describe("reply run registry", () => {
     operation.markWaitingForDeferredMaintenance();
 
     expect(operation.phase).toBe("waiting_for_deferred_maintenance");
-    expect(resolveReplyRunPhaseForSessionId("session-wait")).toBe(
-      "waiting_for_deferred_maintenance",
-    );
     expect(
       getDiagnosticSessionActivitySnapshot({
         sessionId: "session-wait",

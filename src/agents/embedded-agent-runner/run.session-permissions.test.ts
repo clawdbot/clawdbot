@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -6,9 +6,14 @@ import {
   overflowBaseRunParams,
 } from "./run.overflow-compaction.harness.js";
 
+const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+
 describe("embedded run session permissions", () => {
+  beforeEach(() => {
+    mockedRunEmbeddedAttempt.mockReset();
+  });
+
   it("prepares the exec mode with plugin-owned permission facts", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
 
     await runEmbeddedAgent({
@@ -28,7 +33,6 @@ describe("embedded run session permissions", () => {
   });
 
   it("shares the final plugin-clamped exec mode with the outer run", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const execOverrides = {};
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
       expect(attempt.execOverrides).toBe(execOverrides);
