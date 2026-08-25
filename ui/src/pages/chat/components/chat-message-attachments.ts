@@ -418,7 +418,7 @@ export function renderAssistantAttachments(
         : managedAvailability?.status === "unavailable" &&
             Boolean(attachment.artifactId && resolveArtifactDownload)
           ? () => retryManagedAttachmentAvailability(attachment, onRequestUpdate)
-        : undefined;
+          : undefined;
     const openAttachmentSidebar = attachmentUrl
       ? () =>
           onOpenSidebar?.({

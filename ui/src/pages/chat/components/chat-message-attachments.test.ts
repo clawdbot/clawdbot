@@ -2,9 +2,9 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type AttachmentSidebarContent = Extract<SidebarContent, { kind: "attachment" }>;
 

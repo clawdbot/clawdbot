@@ -49,10 +49,7 @@ export function openAttachmentCardFromClick(
   onOpen();
 }
 
-function attachmentFormatLabel(
-  label: string,
-  mimeType: string | undefined,
-): string {
+function attachmentFormatLabel(label: string, mimeType: string | undefined): string {
   return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
 }
 
@@ -88,14 +85,10 @@ export function renderAttachmentCardIcon(options: {
   });
 }
 
-export function renderAttachmentCardHeader(
-  options: AttachmentCardHeaderOptions,
-): TemplateResult {
+export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const compactPreview = options.visualMode === "preview-with-favicon";
   const compactSize =
-    compactPreview && options.sizeBytes !== undefined
-      ? formatBytes(options.sizeBytes)
-      : undefined;
+    compactPreview && options.sizeBytes !== undefined ? formatBytes(options.sizeBytes) : undefined;
   const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
   const metadata = [
     typeLabel,
@@ -117,9 +110,9 @@ export function renderAttachmentCardHeader(
       >`;
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
   const hasOpenAction = options.showExpandAction === true && options.onExpand !== undefined;
-  const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${hasOpenAction
-    ? "chat-assistant-attachment-card__download--secondary"
-    : ""}`;
+  const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
+    hasOpenAction ? "chat-assistant-attachment-card__download--secondary" : ""
+  }`;
   return html`
     <div
       class="chat-assistant-attachment-card__header ${compactPreview
@@ -141,9 +134,7 @@ export function renderAttachmentCardHeader(
           ${title}
           ${compactPreview
             ? compactSize
-              ? html`<span
-                    class="chat-assistant-attachment-card__separator"
-                    aria-hidden="true"
+              ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                     >·</span
                   ><span class="chat-assistant-attachment-card__meta">${compactSize}</span>`
               : null
@@ -174,8 +165,9 @@ export function renderAttachmentCardHeader(
                 aria-label=${downloadTitle}
                 title=${downloadTitle}
                 @click=${options.onDownload}
-                >${icons.download}</button
-              >`
+              >
+                ${icons.download}
+              </button>`
             : null}
         ${hasOpenAction
           ? html`<button
@@ -186,10 +178,11 @@ export function renderAttachmentCardHeader(
               aria-label=${t("chat.attachments.expand", { filename: options.label })}
               title=${t("chat.attachments.expand", { filename: options.label })}
               @click=${options.onExpand}
-              >${compactPreview
+            >
+              ${compactPreview
                 ? icons.chevronsUpDown
-                : html`<span>${t("chat.attachments.open")}</span>`}</button
-            >`
+                : html`<span>${t("chat.attachments.open")}</span>`}
+            </button>`
           : null}
       </span>
     </div>
