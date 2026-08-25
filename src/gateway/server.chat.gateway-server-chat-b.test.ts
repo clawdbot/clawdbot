@@ -6608,6 +6608,10 @@ describe("gateway server chat", () => {
       expect(hidden.ok).toBe(false);
       expect(hidden.unavailableReason).toBe("not_found");
 
+      const announce = await fetchChatMessage(ws, makeMainMessageParams("msg-announce"));
+      expect(announce.ok).toBe(false);
+      expect(announce.unavailableReason).toBe("not_found");
+
       const visible = await fetchChatMessage(ws, makeMainMessageParams("msg-visible-assistant"));
       expect(visible.ok).toBe(true);
       expect(JSON.stringify(visible.message)).toContain("visible reply");
