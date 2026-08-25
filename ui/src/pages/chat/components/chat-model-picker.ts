@@ -34,6 +34,7 @@ type ChatModelPickerParams = {
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
+  open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
   sessionKey: string;
@@ -42,6 +43,7 @@ type ChatModelPickerParams = {
   triggerLoading?: boolean;
   onModelSetup?: () => void;
   onOpen?: () => unknown;
+  onOpenChange?: (open: boolean) => void;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
@@ -439,9 +441,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      ?open=${params.open === true}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
         const details = event.currentTarget as HTMLDetailsElement;
+        params.onOpenChange?.(details.open);
         handleChatComposerDetailsToggle(event);
         syncChatPickerOverlay(details);
         if (!details.open) {

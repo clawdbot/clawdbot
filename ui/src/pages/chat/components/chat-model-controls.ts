@@ -42,6 +42,7 @@ type ChatModelControlsProps = {
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
+  modelPickerOpen?: boolean;
   modelSwitching: boolean;
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
@@ -58,6 +59,7 @@ type ChatModelControlsProps = {
   onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
+  onModelPickerOpenChange?: (open: boolean) => void;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
@@ -367,11 +369,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const commonDisabled =
     !props.connected || busy || props.modelSwitching || !props.gatewayAvailable;
   const effortMutationDisabled = Boolean(props.effortMutationDisabledReason);
-  const modelDisabled =
-    commonDisabled ||
-    Boolean(props.modelMutationDisabledReason) ||
-    catalogLoadingWithoutSnapshot ||
-    (Boolean(props.modelsLoading) && selectOptions.length === 0);
+  // Loading owns the menu contents, not the trigger. Keeping the trigger
+  // interactive lets the first gesture open the picker and observe that state.
+  const modelDisabled = commonDisabled || Boolean(props.modelMutationDisabledReason);
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
@@ -420,6 +420,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         disabledReason: props.modelMutationDisabledReason,
         mobileSecondary,
         modelCatalogState: managedCatalog,
+        open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
@@ -430,6 +431,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         triggerLoading: catalogLoadingWithoutSnapshot,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
+        onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
         onTargetRetry: props.onModelPickerTargetRetry,

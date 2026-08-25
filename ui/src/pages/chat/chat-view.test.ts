@@ -5747,6 +5747,7 @@ describe("chat model controls", () => {
     const trigger = getChatModelSelect(container);
 
     expect(trigger.getAttribute("aria-busy")).toBe("true");
+    expect(trigger.getAttribute("aria-disabled")).toBe("false");
     expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
     expect(trigger.textContent).not.toContain("Loading models");
     expect(container.querySelector(".chat-controls__effort-picker")).toBeNull();
@@ -6000,6 +6001,26 @@ describe("chat model controls", () => {
     picker!.dispatchEvent(new Event("toggle"));
 
     expect(onModelPickerOpen).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the model picker open through catalog refresh renders", () => {
+    const { state } = createOpenAiHeaderState();
+    const container = renderModelControls(state, { modelPickerOpen: true });
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    expect(picker?.open).toBe(true);
+
+    renderModelControls(
+      state,
+      {
+        modelCatalogState: { hasSnapshot: true, status: "refreshing" },
+        modelPickerOpen: true,
+        modelsLoading: true,
+      },
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__model-picker")).toBe(picker);
+    expect(picker?.open).toBe(true);
   });
 
   it("keeps model enabled while write-only access disables effort controls", () => {
