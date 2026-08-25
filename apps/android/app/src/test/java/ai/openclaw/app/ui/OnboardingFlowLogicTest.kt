@@ -219,6 +219,8 @@ class OnboardingFlowLogicTest {
       PermissionApprovalCase(expected = true, requestedCameraEnabled = true),
       PermissionApprovalCase(expected = true, requestedLocationMode = LocationMode.WhileUsing),
       PermissionApprovalCase(expected = true, currentSmsGranted = false),
+      PermissionApprovalCase(expected = true, requestedSmsGranted = false),
+      PermissionApprovalCase(expected = false),
       PermissionApprovalCase(
         expected = false,
         currentCameraEnabled = true,
@@ -235,7 +237,7 @@ class OnboardingFlowLogicTest {
           currentLocationMode = case.currentLocationMode,
           requestedLocationMode = case.requestedLocationMode,
           currentSmsGranted = case.currentSmsGranted,
-          requestedSmsGranted = true,
+          requestedSmsGranted = case.requestedSmsGranted,
         ),
       )
     }
@@ -347,6 +349,22 @@ class OnboardingFlowLogicTest {
         currentlyGranted = { true },
       )
     assertFalse(deniedRead)
+
+    val afterUnrelatedPermission =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertTrue(afterUnrelatedPermission)
+
+    val afterUnrelatedPermissionWithSmsDenied =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterUnrelatedPermissionWithSmsDenied)
   }
 
   @Test
@@ -912,6 +930,7 @@ class OnboardingFlowLogicTest {
     val currentLocationMode: LocationMode = LocationMode.Off,
     val requestedLocationMode: LocationMode = LocationMode.Off,
     val currentSmsGranted: Boolean = true,
+    val requestedSmsGranted: Boolean = true,
   )
 
   private data class GatewayContinueCase(
