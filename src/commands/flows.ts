@@ -118,14 +118,19 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
 }
 
 function formatFlowListSummary(flows: TaskFlowRecord[]) {
-  const active = flows.filter(
-    (flow) => flow.status === "queued" || flow.status === "running",
-  ).length;
-  const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  const cancelRequested = flows.filter(
-    (flow) => flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
-  ).length;
-  return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
+  const counts = { active: 0, waiting: 0, blocked: 0, issues: 0, cancelRequested: 0 };
+  for (const flow of flows) {
+    counts.active += Number(flow.status === "queued" || flow.status === "running");
+    counts.waiting += Number(flow.status === "waiting");
+    counts.blocked += Number(flow.status === "blocked");
+    counts.issues += Number(flow.status === "failed" || flow.status === "lost");
+    counts.cancelRequested += Number(
+      flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
+    );
+  }
+  const waiting = counts.waiting ? ` · ${counts.waiting} waiting` : "";
+  const issues = counts.issues ? ` · ${counts.issues} issues` : "";
+  return `${counts.active} active${waiting} · ${counts.blocked} blocked${issues} · ${counts.cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
 function summarizeWait(flow: TaskFlowRecord): string {

@@ -235,6 +235,62 @@ describe("flows commands", () => {
     });
   });
 
+  it.each([
+    {
+      status: "waiting",
+      pressure: "0 active · 1 waiting · 0 blocked · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "failed",
+      pressure: "0 active · 0 blocked · 1 issues · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "lost",
+      pressure: "0 active · 0 blocked · 1 issues · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "succeeded",
+      pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "cancelled",
+      pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
+    },
+  ] as const)(
+    "accounts for filtered $status flows in TaskFlow pressure",
+    async ({ status, pressure }) => {
+      await withTaskFlowCommandStateDir(async () => {
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: `tests/flows-command-${status}`,
+          goal: `Inspect ${status} work`,
+          status,
+        });
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/flows-command-unrelated",
+          goal: "Unrelated running work",
+          status: "running",
+        });
+
+        const runtime = createRuntime();
+        await flowsListCommand({ status }, runtime);
+
+        expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
+          `TaskFlow pressure: ${pressure}`,
+        );
+
+        const jsonRuntime = createRuntime();
+        await flowsListCommand({ json: true, status }, jsonRuntime);
+        expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+          count: 1,
+          status,
+          flows: [expect.objectContaining({ status })],
+        });
+      });
+    },
+  );
+
   it("keeps truncated text rows UTF-16 well-formed", async () => {
     await withTaskFlowCommandStateDir(async () => {
       createManagedTaskFlow({
