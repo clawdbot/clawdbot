@@ -100,6 +100,40 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
+  it("lets a released deferred lifecycle own settlement without a watchdog", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 40_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-lifecycle-owned", { text: "x" }, { laneKey: "l1" });
+      let adopt: (() => void | Promise<void>) | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 1_000,
+        deferredLaneOccupancy: "release-until-settled",
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          adopt = lifecycle.onAdopted;
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await vi.waitFor(() => expect(drain.activeLaneKeys()).toEqual(new Set()));
+      clock += 60_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(await queue.listFailed?.()).toEqual([]);
+      expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["evt-lifecycle-owned"]);
+
+      await adopt?.();
+      await expect(queue.enqueue("evt-lifecycle-owned", { text: "x" })).resolves.toMatchObject({
+        kind: "completed",
+      });
+      drain.dispose();
+    });
+  });
+
   it("does not kill healthy long turns after adoption", async () => {
     await withTempState(async (stateDir) => {
       let clock = 20_000;

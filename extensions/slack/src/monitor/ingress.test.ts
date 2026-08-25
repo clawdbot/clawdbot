@@ -211,12 +211,13 @@ function createReceiverEventWithBody(body: Record<string, unknown>): ReceiverEve
 function attachIngress(
   queue: ChannelIngressQueue<SlackIngressPayload>,
   processEvent: (event: ReceiverEvent) => Promise<void>,
+  options: { adoptionStallTimeoutMs?: number } = {},
 ) {
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue,
     pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
+    adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? 5_000,
   });
   const harness = createReceiverHarness();
   ingress.wrapReceiver(harness.receiver).init({ processEvent } as App);
@@ -298,6 +299,43 @@ describe("Slack durable ingress", () => {
       await ingress.waitForIdle();
 
       expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      await ingress.stop();
+    });
+  });
+
+  it("keeps deferred Slack work recoverable while later channel events start", async () => {
+    await withQueue(async (queue) => {
+      const starts: string[] = [];
+      let adoptFirst: (() => void | Promise<void>) | undefined;
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        const eventId = (event.body as { event_id?: string }).event_id ?? "unknown";
+        starts.push(eventId);
+        const lifecycle = resolveSlackIngressTurnLifecycle(event.customProperties);
+        if (eventId === "Ev-deferred") {
+          adoptFirst = lifecycle?.onAdopted;
+          lifecycle?.onDeferred();
+          return;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent, {
+        adoptionStallTimeoutMs: 25,
+      });
+      ingress.start();
+
+      await receive(createReceiverEvent("Ev-deferred"));
+      await vi.waitFor(() => expect(starts).toEqual(["Ev-deferred"]));
+      await receive(createReceiverEvent("Ev-next", undefined, { ts: "1700000000.000200" }));
+      await vi.waitFor(() => expect(starts).toEqual(["Ev-deferred", "Ev-next"]));
+      await new Promise<void>((resolve) => setTimeout(resolve, 75));
+
+      expect(await queue.listFailed?.()).toEqual([]);
+      expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["Ev-deferred"]);
+
+      await adoptFirst?.();
+      await expect(queue.enqueue("Ev-deferred", {} as SlackIngressPayload)).resolves.toMatchObject({
+        kind: "completed",
+      });
       await ingress.stop();
     });
   });

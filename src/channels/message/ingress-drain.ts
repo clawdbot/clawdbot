@@ -53,7 +53,7 @@ export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
 /** Bounded tombstone write retries — wedged ownership beats silent double-dispatch. */
 const INGRESS_TOMBSTONE_RETRY_MAX_ATTEMPTS = 8;
 
-type DeferredLaneOccupancy = "hold" | "release";
+type DeferredLaneOccupancy = "hold" | "release" | "release-until-settled";
 
 export type CreateChannelIngressDrainOptions<
   TPayload,
@@ -88,7 +88,9 @@ export type CreateChannelIngressDrainOptions<
   claimLeaseMs?: number;
   /**
    * Whether a claimed event keeps occupying its ingress serialization lane after
-   * dispatch hands ownership to deferred work. Default "hold" (current behavior).
+   * dispatch hands ownership to deferred work. "release-until-settled" also lets
+   * the deferred lifecycle own its timeout instead of the ingress stall watchdog.
+   * Default "hold" (current behavior).
    */
   deferredLaneOccupancy?: DeferredLaneOccupancy;
   retryPolicy?: IngressRetryPolicyConfig;
@@ -469,9 +471,14 @@ export function createChannelIngressDrain<
         if (state.phase !== "dispatching") {
           return;
         }
-        // Deferred holds the claim; watchdog remains armed until adoption or abandon.
+        // Deferred always holds the durable claim until adoption or abandonment.
+        // A lifecycle-owned deferral has its own terminal callbacks, so the ingress
+        // watchdog must not dead-letter legitimate queued work before they run.
         state.phase = "deferred";
-        if (deferredLaneOccupancy === "release") {
+        if (deferredLaneOccupancy === "release-until-settled") {
+          clearStallTimer(state);
+        }
+        if (deferredLaneOccupancy !== "hold") {
           if (laneOwnerByKey.get(state.laneKey) === state) {
             laneOwnerByKey.delete(state.laneKey);
           }

@@ -299,6 +299,9 @@ export function createSlackDurableIngress(
     retention: "standard",
     appendRetryDelaysMs: [0],
     drain: {
+      // Reply-lane deferral has explicit adopt/fail/abandon settlement. Release
+      // channel ingress so one long agent turn cannot dead-letter unrelated Slack work.
+      deferredLaneOccupancy: "release-until-settled",
       resolveNonRetryableFailure: resolveSlackIngressNonRetryableFailure,
       // Shipped Slack rows did not store lanes, so replay still derives them from payloads.
       deriveLaneKey: (record) =>
