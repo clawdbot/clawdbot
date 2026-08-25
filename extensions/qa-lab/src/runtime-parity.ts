@@ -1164,9 +1164,8 @@ function hasForcedCodexOpenClawResponsesRecord(records: readonly RuntimeParityTr
     ) {
       return false;
     }
-    const metadata = isMessageRecord(record.message.__openclaw)
-      ? record.message.__openclaw
-      : undefined;
+    const openClawMetadata = record.message["__openclaw"];
+    const metadata = isMessageRecord(openClawMetadata) ? openClawMetadata : undefined;
     return readNonEmptyString(metadata?.mirrorOrigin) !== "codex-app-server";
   });
 }
