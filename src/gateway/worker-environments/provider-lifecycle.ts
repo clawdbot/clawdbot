@@ -1,6 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -14,7 +12,6 @@ import {
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import {
@@ -24,6 +21,7 @@ import {
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import {
   normalizeWorkerMachineOptions,
+  requireInheritedWorkerProfileAuthorization,
   requireProviderProvisionTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
@@ -650,29 +648,23 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       let provider: WorkerProvider;
       let providerId: string;
       let profileSnapshot: WorkerProfile;
+      const profiles = options.getConfig().cloudWorkers?.profiles;
+      const configuredProfile =
+        profiles && Object.hasOwn(profiles, normalizedProfileId)
+          ? profiles[normalizedProfileId]
+          : undefined;
       if (inherited) {
         providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
         if (providerId !== inherited.providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
         }
-        const inheritedSettings = inherited.profileSnapshot.settings;
-        const syntheticDeviceProfile =
-          providerId === DEVICE_WORKER_PROVIDER_ID &&
-          isRecord(inheritedSettings) &&
-          typeof inheritedSettings.device === "string" &&
-          normalizedProfileId === `device:${inheritedSettings.device}`;
-        if (!syntheticDeviceProfile) {
-          const configured = options.getConfig().cloudWorkers?.profiles?.[normalizedProfileId];
-          if (!configured) {
-            throw serviceError(
-              "profile_not_found",
-              `Unknown worker profile: ${normalizedProfileId}`,
-            );
-          }
-          if (normalizeCapabilityProviderId(configured.provider) !== providerId) {
-            throw serviceError("invalid_profile", "Inherited worker provider identity changed");
-          }
-        }
+        requireInheritedWorkerProfileAuthorization(
+          normalizedProfileId,
+          providerId,
+          inherited.profileSnapshot.settings,
+          configuredProfile?.provider,
+          serviceError,
+        );
         provider = providerFor(providerId);
         const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
         if (resolvedProviderId !== providerId) {
@@ -683,19 +675,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           ...provisionSnapshot,
         });
       } else {
-        const profiles = options.getConfig().cloudWorkers?.profiles;
-        if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
+        if (!configuredProfile) {
           throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
         }
-        const profile = expectDefined(
-          profiles[normalizedProfileId],
-          "profiles entry at normalized profile id",
-        );
-        provider = providerFor(profile.provider);
+        provider = providerFor(configuredProfile.provider);
         providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
-        const settings = requireWorkerProfile(profile.settings ?? {});
+        const settings = requireWorkerProfile(configuredProfile.settings ?? {});
         profileSnapshot = requireWorkerProfile({
-          install: profile.install ?? "bundle",
+          install: configuredProfile.install ?? "bundle",
           settings,
           ...provisionSnapshot,
         });
