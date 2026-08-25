@@ -41,6 +41,35 @@ type TelegramOriginResolverInput = Parameters<
   NonNullable<NonNullable<ChannelApprovalCapability["native"]>["resolveOriginTarget"]>
 >[0];
 
+function clearTelegramTurnSource(request: ApprovalRequest): ApprovalRequest {
+  if ("command" in request.request) {
+    return {
+      ...request,
+      request: {
+        ...request.request,
+        turnSourceChannel: undefined,
+        turnSourceTo: undefined,
+        turnSourceAccountId: undefined,
+        turnSourceThreadId: undefined,
+      },
+    };
+  }
+  return {
+    ...request,
+    request: {
+      ...request.request,
+      turnSourceChannel: undefined,
+      turnSourceTo: undefined,
+      turnSourceAccountId: undefined,
+      turnSourceThreadId: undefined,
+    },
+  };
+}
+
+function formatTelegramDirectTopicTarget(chatId: string, topicId: number): string {
+  return `telegram:${chatId}:direct-topic:${topicId}`;
+}
+
 function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
   sessionTarget: ReturnType<typeof resolveApprovalRequestSessionTarget>,
@@ -63,14 +92,16 @@ function resolveTurnSourceTelegramOriginTarget(
       })
     : null;
   const parsedSessionTarget = sessionTarget ? parseTelegramTarget(sessionTarget.to) : null;
-  // Keep Telegram direct-message scope on the live side before shared exact matching.
+  // Keep verified Telegram direct-message scope on the live side before shared exact matching.
   const directTopicSessionTarget =
     parsedSessionTarget?.directMessagesTopicId !== undefined &&
     normalizeTelegramChatId(parsedSessionTarget.chatId) === turnSourceTo &&
-    request.request.turnSourceThreadId == null &&
-    parsedTurnSourceTarget?.messageThreadId === undefined &&
-    parsedTurnSourceTarget?.directMessagesTopicId === undefined
+    parsedTurnSourceTarget?.messageThreadId === undefined
       ? sessionTarget
+      : null;
+  const directTopicTurnSourceTarget =
+    parsedTurnSourceTarget?.directMessagesTopicId !== undefined
+      ? formatTelegramDirectTopicTarget(turnSourceTo, parsedTurnSourceTarget.directMessagesTopicId)
       : null;
 
   if (
@@ -84,10 +115,11 @@ function resolveTurnSourceTelegramOriginTarget(
   const rawThreadId =
     request.request.turnSourceThreadId ??
     parsedTurnSourceTarget?.messageThreadId ??
+    parsedTurnSourceTarget?.directMessagesTopicId ??
     sessionThreadId ??
     undefined;
   return {
-    to: directTopicSessionTarget?.to ?? turnSourceTo,
+    to: directTopicTurnSourceTarget ?? directTopicSessionTarget?.to ?? turnSourceTo,
     accountId: normalizeOptionalString(request.request.turnSourceAccountId),
     threadId: parseTelegramThreadId(rawThreadId),
   };
@@ -117,16 +149,7 @@ const resolveTelegramOriginTarget = (input: TelegramOriginResolverInput) => {
   })
     ? resolveApprovalRequestSessionTarget({
         cfg: input.cfg,
-        request: {
-          ...input.request,
-          request: {
-            ...input.request.request,
-            turnSourceChannel: undefined,
-            turnSourceTo: undefined,
-            turnSourceAccountId: undefined,
-            turnSourceThreadId: undefined,
-          },
-        },
+        request: clearTelegramTurnSource(input.request),
       })
     : null;
   return createChannelNativeOriginTargetResolver({

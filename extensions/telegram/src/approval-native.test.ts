@@ -351,6 +351,94 @@ describe("telegram native approval adapter", () => {
     });
   });
 
+  it("preserves an encoded live Direct Messages topic target", async () => {
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-direct-topic-live-target",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1001234567890:direct-topic:77",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:telegram:group:-1001234567890:direct-topic:77",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "telegram:-1001234567890:direct-topic:77",
+      accountId: "default",
+      threadId: 77,
+    });
+  });
+
+  it("preserves a persisted Direct Messages topic with an explicit live thread", async () => {
+    const storePath = createTempStorePath();
+    await writeSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:77",
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "telegram:-1001234567890:direct-topic:77",
+            accountId: "default",
+            threadId: 77,
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig({
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "channel",
+          },
+        }),
+        approvals: {
+          plugin: {
+            enabled: true,
+            mode: "session",
+            agentFilter: ["main", "todo"],
+          },
+        },
+        session: { store: storePath },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-direct-topic-explicit-thread",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1001234567890",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: 77,
+          sessionKey: "agent:main:telegram:group:-1001234567890:topic:77",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "telegram:-1001234567890:direct-topic:77",
+      accountId: "default",
+      threadId: 77,
+    });
+  });
+
   it("rejects a session topic from a different live chat", async () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),
