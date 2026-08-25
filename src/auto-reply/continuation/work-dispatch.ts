@@ -13,7 +13,14 @@ import {
   resetContinuationDispatchClaimsForTests,
 } from "./continuation-dispatch-claims.js";
 import { checkContinuationBudget } from "./scheduler.js";
-import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import type {
+  ChainState,
+  ContinuationRuntimeConfig,
+  ContinuationWorkBatchParams,
+  ContinuationWorkBatchResult,
+  ContinuationWorkScheduleParams,
+  ContinuationWorkScheduleResult,
+} from "./types.js";
 import {
   commitFoldedContinuationWork,
   executePendingContinuationWork,
@@ -626,16 +633,9 @@ export async function dispatchPendingContinuationWork(
   return { dispatched, failed, reaped };
 }
 
-export async function scheduleContinuationWork(params: {
-  sessionKey: string;
-  chainState: ChainState;
-  request: { delaySeconds: number; reason: string; traceparent?: string };
-  config: ContinuationRuntimeConfig;
-  parentRunId?: string;
-  originRunId?: string;
-  originTurnId?: string;
-  log?: (message: string) => void;
-}): Promise<{ scheduled: boolean; capped: boolean; chainState: ChainState }> {
+export async function scheduleContinuationWork(
+  params: ContinuationWorkScheduleParams,
+): Promise<ContinuationWorkScheduleResult> {
   const budgetCheck = checkContinuationBudget({
     chainState: params.chainState,
     config: params.config,
@@ -714,6 +714,10 @@ export async function scheduleContinuationWork(params: {
   if (!enqueued) {
     return { scheduled: false, capped: false, chainState: params.chainState };
   }
+  if (!enqueued.flowId) {
+    throw new Error("continuation work enqueue did not return a durable flow ID");
+  }
+  params.onFlowEnqueued?.(enqueued.flowId);
   emitContinuationWorkSpan({
     chainId: params.chainState.chainId,
     chainStepRemaining: params.config.maxChainLength - hop,
@@ -737,17 +741,6 @@ export async function scheduleContinuationWork(params: {
   return { scheduled: true, capped: false, chainState: nextState };
 }
 
-type ContinuationWorkBatchResult = {
-  /** Elections that successfully enqueued a durable wake. */
-  scheduledCount: number;
-  /** Elections rejected once the cumulative chain/cost cap was reached. */
-  cappedCount: number;
-  /** True when a cap rejection ended the batch early. */
-  capped: boolean;
-  /** Chain state after the last scheduled election; persist this once. */
-  chainState: ChainState;
-};
-
 /**
  * Schedule every continue_work election captured in a single model turn.
  *
@@ -761,17 +754,9 @@ type ContinuationWorkBatchResult = {
  * because the cumulative chain count only grows, so every later election would
  * hit the same cap.
  */
-export async function scheduleContinuationWorkBatch(params: {
-  sessionKey: string;
-  chainState: ChainState;
-  requests: readonly ContinueWorkRequest[];
-  config: ContinuationRuntimeConfig;
-  parentRunId?: string;
-  originRunId?: string;
-  originTurnId?: string;
-  coalescePriorParkedWork?: boolean;
-  log?: (message: string) => void;
-}): Promise<ContinuationWorkBatchResult> {
+export async function scheduleContinuationWorkBatch(
+  params: ContinuationWorkBatchParams,
+): Promise<ContinuationWorkBatchResult> {
   let chainState = params.chainState;
   let scheduledCount = 0;
   // cross-turn coalesce: a new model turn's election(s) supersede any
@@ -801,6 +786,7 @@ export async function scheduleContinuationWorkBatch(params: {
       ...(params.parentRunId !== undefined ? { parentRunId: params.parentRunId } : {}),
       ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
       ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
+      ...(params.onFlowEnqueued ? { onFlowEnqueued: params.onFlowEnqueued } : {}),
       ...(params.log ? { log: params.log } : {}),
     });
     if (!result.scheduled) {

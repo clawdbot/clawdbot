@@ -55,6 +55,9 @@ vi.mock("../../auto-reply/continuation/lazy.runtime.js", async (importOriginal) 
       const result = await actual.scheduleContinuationWorkBatch(...args);
       if (continuationRuntimeState.enqueueConcurrentAfterScheduling) {
         continuationRuntimeState.enqueueConcurrentAfterScheduling = false;
+        if (!args[0].originRunId || !args[0].originTurnId) {
+          throw new Error("same-origin test requires scheduling provenance");
+        }
         const { enqueuePendingWork } = await import("../../auto-reply/continuation/work-store.js");
         const now = Date.now();
         enqueuePendingWork({
@@ -67,8 +70,8 @@ vi.mock("../../auto-reply/continuation/lazy.runtime.js", async (importOriginal) 
           chainStartedAt: now,
           accumulatedChainTokens: 0,
           reason: "concurrent same-owner work",
-          originRunId: "concurrent-run",
-          originTurnId: "concurrent-turn",
+          originRunId: args[0].originRunId,
+          originTurnId: args[0].originTurnId,
           anchorFinalizedAt: now,
         });
       }

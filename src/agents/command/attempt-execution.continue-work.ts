@@ -243,6 +243,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
   let result: Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>;
   let failCreatedWork: ((summary: string) => void) | undefined;
   let supersedePriorParkedWork: (() => string[]) | undefined;
+  const createdFlowIds: string[] = [];
   if (reservedRequests.length === 0 || liveBudgetRejection) {
     result = {
       scheduledCount: 0,
@@ -262,7 +263,6 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         import("../../auto-reply/continuation/work-store.js"),
       ]);
       const existingFlows = listTaskFlowsForOwnerKey(params.sessionKey);
-      const existingFlowIds = new Set(existingFlows.map((flow) => flow.flowId));
       const priorParkedFlows = existingFlows.flatMap((flow) => {
         const state = isContinuationWorkFlow(flow) ? decodeWorkState(flow) : undefined;
         return flow.status === "queued" && state?.idleRetry?.trigger === "reply-run-ended"
@@ -294,15 +294,13 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
       };
       failCreatedWork = (summary) => {
         const unresolvedFlowIds: string[] = [];
-        for (const flow of listTaskFlowsForOwnerKey(params.sessionKey)) {
-          const state = isContinuationWorkFlow(flow) ? decodeWorkState(flow) : undefined;
-          if (
-            existingFlowIds.has(flow.flowId) ||
-            !state ||
-            state.originRunId !== params.originRunId ||
-            state.originTurnId !== params.originTurnId ||
-            (flow.status !== "queued" && flow.status !== "running")
-          ) {
+        for (const flowId of createdFlowIds) {
+          const flow = getTaskFlowById(flowId);
+          if (!flow || (flow.status !== "queued" && flow.status !== "running")) {
+            continue;
+          }
+          if (!isContinuationWorkFlow(flow)) {
+            unresolvedFlowIds.push(flow.flowId);
             continue;
           }
           const failed = failFlow({
@@ -367,6 +365,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         }),
         config: liveSchedulingConfig,
         coalescePriorParkedWork: false,
+        onFlowEnqueued: (flowId) => createdFlowIds.push(flowId),
         // Same-session own-turn work has no spawning parent. Adding parentRunId
         // would let orphan recovery reap the row after its electing turn settles.
         originRunId: params.originRunId,

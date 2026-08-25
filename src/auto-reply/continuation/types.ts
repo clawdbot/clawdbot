@@ -245,3 +245,35 @@ export type ChainState = {
   accumulatedChainTokens: number;
   chainId?: string;
 };
+
+export type ContinuationWorkScheduleResult =
+  | { scheduled: false; capped: boolean; chainState: ChainState }
+  | { scheduled: true; capped: false; chainState: ChainState };
+
+export type ContinuationWorkBatchResult = {
+  scheduledCount: number;
+  cappedCount: number;
+  capped: boolean;
+  chainState: ChainState;
+};
+
+export type ContinuationWorkScheduleParams = {
+  sessionKey: string;
+  chainState: ChainState;
+  request: ContinueWorkRequest;
+  config: ContinuationRuntimeConfig;
+  parentRunId?: string;
+  originRunId?: string;
+  originTurnId?: string;
+  onFlowEnqueued?: (flowId: string) => void;
+  log?: (message: string) => void;
+};
+
+export type ContinuationWorkBatchParams = Omit<
+  ContinuationWorkScheduleParams,
+  "request" | "onFlowEnqueued"
+> & {
+  requests: readonly ContinueWorkRequest[];
+  coalescePriorParkedWork?: boolean;
+  onFlowEnqueued?: (flowId: string) => void;
+};
