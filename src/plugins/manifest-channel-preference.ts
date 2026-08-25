@@ -1,19 +1,6 @@
 // Reads a manifest record's channel replacement preference without pulling in the registry builder.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeChatChannelId } from "../channels/ids.js";
+import { normalizeOwnedChannelId } from "../channels/ids.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-
-/** The canonical spelling of a declared channel id, or the id itself when it names no known channel. */
-function canonicalChannelId(channelId: string): string {
-  // Lowercased like `normalizeCededChannelId`, not left raw: a custom channel id is unknown to
-  // `normalizeChatChannelId`, and runtime lookup and the cede comparator both fold its case. A
-  // manifest that claims `channels: ["acmechat"]` while declaring `channelConfigs.AcmeChat` names
-  // one serving channel, so keeping the two spellings distinct here dropped the replacement edge
-  // and left ownership decided by registration order.
-  return (
-    normalizeChatChannelId(channelId) ?? normalizeOptionalLowercaseString(channelId) ?? channelId
-  );
-}
 
 /**
  * Manifest-declared `preferOver` ids for one channel on one record. A channel-specific
@@ -30,11 +17,11 @@ export function resolveManifestChannelPreferOverIds(
   // Callers canonicalize before asking, so match the record's own spelling the same way rather
   // than by exact key: a descriptor written under any other spelling of this channel would
   // otherwise be missed and its replacement edge dropped without a diagnostic.
-  const target = canonicalChannelId(channelId);
+  const target = normalizeOwnedChannelId(channelId);
   const channelPreferOver =
     record.channelConfigs?.[channelId]?.preferOver ??
     Object.entries(record.channelConfigs ?? {}).find(
-      ([declaredId]) => canonicalChannelId(declaredId) === target,
+      ([declaredId]) => normalizeOwnedChannelId(declaredId) === target,
     )?.[1]?.preferOver;
   if (channelPreferOver?.length) {
     return channelPreferOver;
@@ -45,7 +32,7 @@ export function resolveManifestChannelPreferOverIds(
   // resolveManifestChannelPlugin in src/channels/plugins/read-only.ts).
   if (
     record.channelCatalogMeta === undefined ||
-    canonicalChannelId(record.channelCatalogMeta.id) !== target
+    normalizeOwnedChannelId(record.channelCatalogMeta.id) !== target
   ) {
     return [];
   }

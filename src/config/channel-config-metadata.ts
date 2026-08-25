@@ -8,7 +8,7 @@ import {
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { normalizeOwnedChannelId } from "../channels/ids.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -190,7 +190,7 @@ function resolveOriginRank(origin: PluginOrigin): number {
 }
 
 function normalizeClaimedChannelId(channelId: string): string {
-  return normalizeChatChannelId(channelId) ?? channelId;
+  return normalizeOwnedChannelId(channelId);
 }
 
 /** Plugin ids some other claimant declares it replaces, per claimed channel. */

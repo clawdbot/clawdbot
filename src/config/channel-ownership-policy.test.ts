@@ -1,7 +1,7 @@
 /** Covers how the configured channel ownership policy reads operator intent. */
 import { afterEach, describe, expect, it } from "vitest";
+import { collectCededChannelIdsByPlugin } from "../plugins/channel-cede-planning.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
-import { collectCededChannelIdsByPlugin } from "../plugins/loader-shared.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginRegistryIdNormalizer } from "../plugins/plugin-registry-id-normalizer.js";
 import { collectRuntimeChannelOwnership } from "./channel-config-metadata.js";

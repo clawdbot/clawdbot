@@ -91,6 +91,21 @@ function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId
 }
 
 /**
+ * Key for deciding whether two channel-id spellings name the same channel for ownership.
+ *
+ * A built-in resolves through its aliases; an unknown custom id falls back to its lowercased form
+ * rather than its raw spelling, because runtime channel lookup lowercases too. Ownership, cede
+ * planning and manifest preference all have to agree on one key: a manifest that claims
+ * `channels: ["acmechat"]` while describing `channelConfigs.AcmeChat` otherwise lands in two
+ * buckets, and the replacement declaration is silently dropped.
+ */
+export function normalizeOwnedChannelId(channelId: string): string {
+  return (
+    normalizeChatChannelId(channelId) ?? normalizeOptionalLowercaseString(channelId) ?? channelId
+  );
+}
+
+/**
  * Normalizes a raw chat channel id or alias to a known canonical built-in channel id.
  */
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {

@@ -27,12 +27,12 @@ import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/ru
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { collectCededChannelIdsByPlugin } from "../plugins/channel-cede-planning.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
-import { collectCededChannelIdsByPlugin } from "../plugins/loader-shared.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";

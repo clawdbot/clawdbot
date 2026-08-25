@@ -4,6 +4,7 @@ import {
   recordPluginInstallOwnerLookup,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
+import { collectCededChannelIdsByPlugin } from "./channel-cede-planning.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
@@ -25,7 +26,6 @@ import {
 } from "./loader-runtime-candidate.js";
 import {
   activatePluginRegistry,
-  collectCededChannelIdsByPlugin,
   createPluginLoaderLogger,
   maybeThrowOnPluginLoadError,
   pushCededChannelWithoutOwnerDiagnostics,

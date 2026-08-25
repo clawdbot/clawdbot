@@ -10,6 +10,7 @@ import {
   type ChannelPresenceSignalSource,
   listPotentialConfiguredChannelPresenceSignals,
 } from "../channels/config-presence.js";
+import { normalizeOwnedChannelId } from "../channels/ids.js";
 import {
   hasBundledChannelConfiguredState,
   listBundledChannelIdsWithConfiguredState,
@@ -23,7 +24,7 @@ import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function normalizeManifestChannelId(channelId: string): string {
-  return normalizeChatChannelId(channelId) ?? channelId;
+  return normalizeOwnedChannelId(channelId);
 }
 
 type ConfiguredChannelCandidateSet = {
@@ -163,7 +164,9 @@ export function collectAutoEnableConfiguredChannelIds(
   })
     .map((signal) => ({
       source: signal.source,
-      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
+      // Same ownership key as the manifest side: a custom channel spelled `AcmeChat` in an env
+      // trigger names the channel a manifest claims as `acmechat`.
+      channelId: normalizeOwnedChannelId(signal.channelId),
     }))
     .filter(({ channelId, source }) =>
       isAutoEnableConfiguredChannelSignal({

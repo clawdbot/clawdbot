@@ -639,14 +639,22 @@ function validateSubmittedConfigOrRespond(params: {
   authoredCandidate?: OpenClawConfig;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
   respond: RespondFn;
-}): { validationCandidate: OpenClawConfig; config: OpenClawConfig } | null {
-  const validationCandidate = normalizeSubmittedConfigModelRefs(
-    stripBundledProviderRuntimeDefaults({
-      candidate: params.candidate,
-      sourceConfig: params.sourceConfig,
-    }) as OpenClawConfig,
-    params.modelIdNormalizationPolicies,
-  );
+}): {
+  validationCandidate: OpenClawConfig;
+  writeCandidate: OpenClawConfig;
+  config: OpenClawConfig;
+} | null {
+  const prepareCandidate = (candidate: unknown): OpenClawConfig =>
+    normalizeSubmittedConfigModelRefs(
+      // SAFETY: the submitted candidate is a parsed config object; the strip pass only removes
+      // materialized provider overlays and returns the same shape it was handed.
+      stripBundledProviderRuntimeDefaults({
+        candidate,
+        sourceConfig: params.sourceConfig,
+      }) as OpenClawConfig,
+      params.modelIdNormalizationPolicies,
+    );
+  const validationCandidate = prepareCandidate(params.candidate);
   const respondInvalid = (issues: ReadonlyArray<ConfigValidationIssue>) => {
     params.respond(
       false,
@@ -669,7 +677,20 @@ function validateSubmittedConfigOrRespond(params: {
     respondInvalid(validated.issues);
     return null;
   }
-  return { validationCandidate: validationCandidate as OpenClawConfig, config: validated.config };
+  return {
+    validationCandidate,
+    // What reaches the file. The candidate validation reads is merged onto the runtime-shaped
+    // `snapshot.config`, so it carries validation-seeded `plugins.entries.<id>.config` records and
+    // other materialized shape the operator never wrote. Persisting that put those seeds in the
+    // authored config, where the next validation reads them back as explicit selection, sets the
+    // declared `preferOver` aside, and moves the channel to a different plugin. Callers that pass
+    // an authored counterpart persist it; config.set/apply have none and already submit an
+    // authored candidate.
+    writeCandidate: params.authoredCandidate
+      ? prepareCandidate(params.authoredCandidate)
+      : validationCandidate,
+    config: validated.config,
+  };
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
@@ -1206,11 +1227,11 @@ export const configHandlers: GatewayRequestHandlers = {
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
-    const restoredMerge = restoreRedactedValues(
-      merged,
+    const patchRedactionUiHints = buildSchemaForConfig(
       snapshot.config,
-      buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
-    );
+      snapshot.sourceConfig,
+    ).uiHints;
+    const restoredMerge = restoreRedactedValues(merged, snapshot.config, patchRedactionUiHints);
     if (!restoredMerge.ok) {
       respond(
         false,
@@ -1246,17 +1267,36 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    // Same patch, applied to the authored snapshot: channel schema ownership inside validation
+    // Same patch, applied to the authored snapshot. Channel schema ownership inside validation
     // must read explicit selection from what the operator wrote, and `restoredMerge.result` is
-    // built on `snapshot.config`, which carries validation-seeded entry configs. Sentinel values
-    // the restore step above resolves stay redacted here, which is fine for ownership: presence
-    // and the policy booleans it reads are unchanged by a placeholder string.
-    const authoredCandidate = coerceConfig(
+    // built on `snapshot.config`, which carries validation-seeded entry configs. This is also the
+    // config that gets persisted, so the file keeps holding what the operator authored instead of
+    // gaining a materialized shape it never asked for.
+    //
+    // Sentinels resolve against `snapshot.config`, not `snapshot.sourceConfig`: a sensitive value
+    // can be materialized from a default, an env var or a secret ref and so live only in the
+    // runtime half. Restoring from the authored half would fail to resolve exactly those, turning
+    // a patch that succeeds today into an error.
+    const restoredAuthoredMerge = restoreRedactedValues(
       applyMergePatch(snapshot.sourceConfig, normalizedPatch, {
         mergeObjectArraysById: true,
         replaceArrayPaths: replacePaths,
       }),
+      snapshot.config,
+      patchRedactionUiHints,
     );
+    if (!restoredAuthoredMerge.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          restoredAuthoredMerge.humanReadableMessage ?? "invalid config",
+        ),
+      );
+      return;
+    }
+    const authoredCandidate = coerceConfig(restoredAuthoredMerge.result);
     // An edit can move ownership while leaving the materialized config byte-identical: adding an
     // explicit selection auto-enable already materialized, or removing one that re-materializes to
     // the same effective config. Both diffs above compare runtime shapes only, so such an edit was
@@ -1293,7 +1333,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!validatedSubmission) {
       return;
     }
-    const writeConfig = validatedSubmission.validationCandidate;
+    const writeConfig = validatedSubmission.writeCandidate;
     const validatedConfig = validatedSubmission.config;
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
       config: validatedConfig,

@@ -741,13 +741,20 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ noop: true }), undefined);
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
     expect(configValidationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledTimes(1);
-    const authoredCandidate =
+    const validationInput =
       configValidationMocks.validateConfigObjectWithPlugins.mock.calls[0]?.[0];
+    const authoredInput = (
+      configValidationMocks.validateConfigObjectWithPlugins.mock.calls[0]?.[1] as
+        | { sourceConfig?: unknown }
+        | undefined
+    )?.sourceConfig;
     const noopBuild = buildRuntimeConfigSchemaForConfigMock.mock.calls.at(-1);
     expect(noopBuild?.[0]).toBe(validatedEcho);
-    // The source half is the exact authored object validation was handed, never its output.
-    expect(noopBuild?.[1]).toBe(authoredCandidate);
+    // The source half is the authored config — never validation's output, and never the
+    // runtime-shaped candidate validation reads, which carries validation-seeded entry configs.
+    expect(noopBuild?.[1]).toEqual(authoredInput);
     expect(noopBuild?.[1]).not.toBe(validatedEcho);
+    expect(noopBuild?.[1]).not.toBe(validationInput);
   });
 
   it("preserves stale-hash rejection for strict patches", async () => {

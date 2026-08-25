@@ -3,6 +3,10 @@ import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary
 import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
+  type AuthorizedDreamingSidecar,
+  matchesScopedPluginOrDreamingSidecar,
+} from "./channel-cede-planning.js";
+import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
@@ -33,11 +37,9 @@ import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
   applyManifestSnapshotMetadata,
   applyPluginManifestRecordDetails,
-  type AuthorizedDreamingSidecar,
   createManifestPluginRecord,
   detailPluginStartupTrace,
   isAuthorizedDreamingSidecarPlugin,
-  matchesScopedPluginOrDreamingSidecar,
   pushPluginValidationError,
   safeRealpathOrResolve,
   validatePluginConfig,

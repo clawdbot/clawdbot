@@ -91,6 +91,47 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(ownerOf(plugins.map((id) => byId[id as keyof typeof byId]))).toBe("clickclack-plus");
   });
 
+  // Codex review P2 on #128904: ownership bucketed claims by their raw spelling, so a custom
+  // channel two manifests spell differently — unknown to `normalizeChatChannelId`, which only
+  // resolves built-ins — produced two independent channels instead of one contested one. The
+  // declaration was never compared, and each claimant kept its own schema. Runtime channel lookup
+  // folds case, so both spellings name one serving channel.
+  it("contests a custom channel two manifests spell with different case", () => {
+    const core = {
+      id: "acme-core",
+      origin: "global",
+      channels: ["AcmeChat"],
+      channelConfigs: {
+        AcmeChat: {
+          schema: { type: "object", additionalProperties: true, properties: {} },
+        },
+      },
+    };
+    const replacement = {
+      id: "acme-plus",
+      origin: "global",
+      channels: ["acmechat"],
+      channelConfigs: {
+        acmechat: {
+          preferOver: ["acme-core"],
+          schema: { type: "object", additionalProperties: true, properties: {} },
+        },
+      },
+    };
+    const registry = {
+      plugins: [core, replacement],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    const entries = collectChannelSchemaMetadataWithOwnership(registry).filter((entry) =>
+      entry.id.toLowerCase().includes("acmechat"),
+    );
+
+    // One contested channel, not one per spelling.
+    expect(entries.map((entry) => entry.id)).toEqual(["acmechat"]);
+    expect(entries[0]?.schemaPluginId).toBe("acme-plus");
+  });
+
   it("reads a replacement declared through channelCatalogMeta", () => {
     const core = claimant({ id: "clickclack-core" });
     const replacement = claimant({

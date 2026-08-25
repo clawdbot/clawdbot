@@ -5,6 +5,10 @@ import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import {
+  collectCededChannelIdsByPlugin,
+  matchesScopedPluginOrDreamingSidecar,
+} from "./channel-cede-planning.js";
+import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
@@ -27,11 +31,9 @@ import {
 } from "./loader-records.js";
 import {
   applyPluginManifestRecordDetails,
-  collectCededChannelIdsByPlugin,
   createManifestPluginRecord,
   createPluginLoaderLogger,
   isAuthorizedDreamingSidecarPlugin,
-  matchesScopedPluginOrDreamingSidecar,
   pushPluginValidationError,
   resolveAuthorizedDreamingSidecar,
   safeRealpathOrResolve,
