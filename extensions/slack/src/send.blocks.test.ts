@@ -155,7 +155,7 @@ describe("sendMessageSlack thread participation", () => {
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
   });
 
-  it("does not record participation for unthreaded sends", async () => {
+  it("records each top-level send as a thread root", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
 
@@ -165,7 +165,7 @@ describe("sendMessageSlack thread participation", () => {
       client,
     });
 
-    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(false);
+    expect(hasSlackThreadParticipation("default", "C123", "171234.567")).toBe(true);
   });
 
   it("does not record participation for invalid thread ids", async () => {
