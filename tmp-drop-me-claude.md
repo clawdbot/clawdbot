@@ -266,3 +266,27 @@ credited. The installed prebuilt fork was
 `karmaterminal/GitNexus`). Direct imports, callers, sibling owners, parent
 blobs, focused tests, and exact dependency source were used as the documented
 fallback.
+
+## 2026-08-25T13:36Z - §4 handoff boundary
+
+This lane stops at the requested Gate-4 handoff boundary. It did not mutate the
+presentation ref, open or update a pull request, deploy any runtime, publish or
+transpose the proof corpus, or dispatch Mode-B. The current branch history
+retains the ordinary merge commit plus isolated successor repairs and the
+append-only journal.
+
+Final exact-head verification after this journal commit will re-run the
+content gates and establish:
+
+- pure `80311e8aa07fd560cb957475517c5ea18164541c` and upstream
+  `1ba243c88ed800986909bc50e4ce7b8139891b94` are both ancestors;
+- a merge-tree against the already-absorbed upstream is conflict-free;
+- the candidate diff exposes no `src/skills/**` paths and no path matched by
+  the current `r: skill` labeler rule;
+- the tracked worktree is clean; and
+- local, tracking, and server lane heads are identical.
+
+The broad CI disposition is `focused-only`: Mode-B belongs to the scribe after
+independent exact-SHA reproof, and Gate 3g is not authorized because the current
+runbook makes it an exceptional fallback rather than the normal local
+acceptance route.
