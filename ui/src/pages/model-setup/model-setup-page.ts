@@ -683,7 +683,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
-      onDetect: () => void this.detect(),
+      onDetect: () => {
+        this.firstRun.retryDetection();
+        void this.detect();
+      },
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option: AuthOption) => {
