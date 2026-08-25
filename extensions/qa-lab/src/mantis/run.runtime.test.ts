@@ -17,32 +17,53 @@ import {
 
 async function writePublishedGenerationSentinels(outputDir: string) {
   const generationDir = path.join(outputDir, ".mantis-generations", "generation-old");
-  const paths = {
+  const generationPaths = {
     baseline: path.join(generationDir, "baseline", "last-good.txt"),
     candidate: path.join(generationDir, "candidate", "last-good.txt"),
     comparison: path.join(generationDir, "comparison.json"),
     manifest: path.join(generationDir, "mantis-evidence.json"),
     report: path.join(generationDir, "mantis-report.md"),
   };
-  await fs.mkdir(path.dirname(paths.baseline), { recursive: true });
-  await fs.mkdir(path.dirname(paths.candidate), { recursive: true });
+  const compatibilityPaths = {
+    baseline: path.join(outputDir, "baseline", "last-good.txt"),
+    candidate: path.join(outputDir, "candidate", "last-good.txt"),
+    comparison: path.join(outputDir, "comparison.json"),
+    manifest: path.join(outputDir, "mantis-evidence.json"),
+    report: path.join(outputDir, "mantis-report.md"),
+  };
+  await fs.mkdir(path.dirname(generationPaths.baseline), { recursive: true });
+  await fs.mkdir(path.dirname(generationPaths.candidate), { recursive: true });
+  await fs.mkdir(path.dirname(compatibilityPaths.baseline), { recursive: true });
+  await fs.mkdir(path.dirname(compatibilityPaths.candidate), { recursive: true });
   await Promise.all(
-    Object.entries(paths).map(async ([component, filePath]) => {
-      await fs.writeFile(filePath, `old ${component}`, "utf8");
-    }),
+    [generationPaths, compatibilityPaths].flatMap((paths) =>
+      Object.entries(paths).map(async ([component, filePath]) => {
+        await fs.writeFile(filePath, `old ${component}`, "utf8");
+      }),
+    ),
   );
   await fs.writeFile(
     path.join(outputDir, "mantis-current.json"),
     `${JSON.stringify({ generation: ".mantis-generations/generation-old", schemaVersion: 1 })}\n`,
     "utf8",
   );
-  return paths;
+  return { compatibilityPaths, generationPaths };
 }
 
 async function expectPublishedGenerationSentinels(
   paths: Awaited<ReturnType<typeof writePublishedGenerationSentinels>>,
 ) {
-  for (const [component, filePath] of Object.entries(paths)) {
+  for (const view of [paths.generationPaths, paths.compatibilityPaths]) {
+    for (const [component, filePath] of Object.entries(view)) {
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`old ${component}`);
+    }
+  }
+}
+
+async function expectImmutableGenerationSentinels(
+  paths: Awaited<ReturnType<typeof writePublishedGenerationSentinels>>,
+) {
+  for (const [component, filePath] of Object.entries(paths.generationPaths)) {
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`old ${component}`);
   }
 }
@@ -52,7 +73,10 @@ async function expectNoMantisTransientEvidence(outputDir: string) {
   const siblingEntries = await fs.readdir(path.dirname(outputDir));
   expect([
     ...outputEntries.filter(
-      (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
+      (entry) =>
+        entry.startsWith(".mantis-staged-") ||
+        entry.startsWith(".mantis-previous-") ||
+        entry.startsWith(".mantis-compat-"),
     ),
     ...siblingEntries.filter(
       (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
@@ -667,7 +691,7 @@ describe("mantis before/after runtime", () => {
       throw new Error("Mantis publication did not return a result");
     }
     await expect(fs.stat(result.outputDir)).resolves.toBeDefined();
-    await expectPublishedGenerationSentinels(sentinels);
+    await expectImmutableGenerationSentinels(sentinels);
     await expectNoMantisTransientEvidence(outputDir);
   });
 
@@ -763,12 +787,15 @@ describe("mantis before/after runtime", () => {
   });
 
   it("copies lane artifacts before asking Git to remove the worktree", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-order");
     const events: string[] = [];
     const originalCopy = fs.cp.bind(fs);
     const copy = vi.spyOn(fs, "cp").mockImplementation(async (source, target, options) => {
       const sourcePath = String(source);
-      const artifactMarker = `${path.sep}.artifacts${path.sep}`;
-      events.push(`copy:${sourcePath.slice(0, sourcePath.lastIndexOf(artifactMarker))}`);
+      if (sourcePath.startsWith(`${outputDir}.worktrees${path.sep}`)) {
+        const artifactMarker = `${path.sep}.artifacts${path.sep}`;
+        events.push(`copy:${sourcePath.slice(0, sourcePath.lastIndexOf(artifactMarker))}`);
+      }
       await originalCopy(source, target, options);
     });
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {

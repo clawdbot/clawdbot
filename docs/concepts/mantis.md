@@ -105,13 +105,17 @@ the checkout, the runner copies the lane evidence into a fresh immutable
 generation under `<output-dir>/.mantis-generations/`.
 
 After both lanes finish, the runner writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` in that generation. An atomic
-replacement of `<output-dir>/mantis-current.json` is the only publication
-commit point. Readers should resolve the `generation` field in that file to
-find the current `baseline/`, `candidate/`, report, manifest, and comparison.
-Existing files in the output container and older generations are preserved.
-The command exits nonzero if the comparison did not pass (baseline `fail` and
-candidate `pass`).
+`mantis-report.md`, and `mantis-evidence.json` in that generation. Publication
+is serialized per output container. The runner first refreshes the documented
+top-level `baseline/`, `candidate/`, report, manifest, and comparison paths as
+a compatibility snapshot, then atomically replaces
+`<output-dir>/mantis-current.json`. Existing automation can continue reading
+the top-level paths. Readers that need a crash-consistent view across several
+artifacts should resolve the `generation` field in `mantis-current.json`
+instead; the top-level compatibility snapshot spans several filesystem
+entries. Existing unrelated files in the output container and older
+generations are preserved. The command exits nonzero if the comparison did not
+pass (baseline `fail` and candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's
@@ -344,6 +348,11 @@ generation have this layout:
 ```text
 .artifacts/qa-e2e/mantis/<run-id>/
   mantis-current.json
+  mantis-report.md
+  mantis-evidence.json
+  baseline/
+  candidate/
+  comparison.json
   .mantis-generations/
     generation-<pid>-<uuid>/
       error.txt # failures only
@@ -366,14 +375,17 @@ could have been replaced.
 Each failed attempt writes `error.txt` inside its own immutable generation. The
 thrown error, or the concise stderr diagnostic for an expected CLI interrupt,
 reports that exact path. Successful publication only atomically replaces
-`mantis-current.json`; it does not erase earlier failure diagnostics. A failure
-or crash before publication therefore leaves the pointer on the previous complete
-generation. Mantis does not recursively delete a worktree after Git no longer
-owns its registration: if cleanup fails, inspect the retained unique directory
-under `<output-dir>.worktrees/` together with the reported generation
-`error.txt`, then remove it through Git after resolving the failure. If an owned
-path disappears while its Git registration remains, cleanup fails closed instead
-of recreating the path. At startup, Mantis also checks the exact historical
+`mantis-current.json`; it does not erase earlier failure diagnostics. A normal
+publication failure rolls the top-level compatibility snapshot back and leaves
+the pointer on the previous complete generation. A process crash can interrupt
+the multi-entry compatibility refresh, so pointer-based readers remain the
+authoritative crash-consistent path. Mantis does not recursively delete a
+worktree after Git no longer owns its registration: if cleanup fails, inspect
+the retained unique directory under `<output-dir>.worktrees/` together with the
+reported generation `error.txt`, then remove it through Git after resolving the
+failure. If an owned path disappears while its Git registration remains,
+cleanup fails closed instead of recreating the path. At startup, Mantis also
+checks the exact historical
 `<output-dir>/worktrees/baseline` and `<output-dir>/worktrees/candidate` paths
 and removes them through Git when they are still registered and present. Other
 registered or unregistered entries in that legacy directory are left

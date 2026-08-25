@@ -406,9 +406,9 @@ export async function runMantisBeforeAfter(
     "Mantis before/after worktree directory",
     { mode: 0o755 },
   );
-  const comparisonPath = path.join(generationDir, "comparison.json");
-  const manifestPath = path.join(generationDir, "mantis-evidence.json");
-  const reportPath = path.join(generationDir, "mantis-report.md");
+  const generationComparisonPath = path.join(generationDir, "comparison.json");
+  const generationManifestPath = path.join(generationDir, "mantis-evidence.json");
+  const generationReportPath = path.join(generationDir, "mantis-report.md");
 
   try {
     await removeLegacyMantisWorktrees({
@@ -472,20 +472,24 @@ export async function runMantisBeforeAfter(
       scenario,
       transport,
     } satisfies MantisComparison;
-    await fs.writeFile(comparisonPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
     await fs.writeFile(
-      reportPath,
+      generationComparisonPath,
+      `${JSON.stringify(comparison, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      generationReportPath,
       renderReport({
         baseline: baselineResult,
         candidate: candidateResult,
         comparison,
-        outputDir: generationDir,
+        outputDir,
         scenarioConfig,
       }),
       "utf8",
     );
     await fs.writeFile(
-      manifestPath,
+      generationManifestPath,
       `${JSON.stringify(
         buildEvidenceManifest({
           baseline: baselineResult,
@@ -509,10 +513,10 @@ export async function runMantisBeforeAfter(
       signal: opts.signal,
     });
     return {
-      comparisonPath,
-      manifestPath,
-      outputDir: generationDir,
-      reportPath,
+      comparisonPath: path.join(outputDir, "comparison.json"),
+      manifestPath: path.join(outputDir, "mantis-evidence.json"),
+      outputDir,
+      reportPath: path.join(outputDir, "mantis-report.md"),
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
