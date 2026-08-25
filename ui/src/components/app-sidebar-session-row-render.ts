@@ -47,6 +47,7 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import type { SidebarSessionOwnerFilterController } from "./sidebar-session-owner-filter-controller.ts";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
 
@@ -97,8 +98,10 @@ export interface SessionListHost {
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
-  readonly sessionOwnerFilterActive: boolean;
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnerFilter: Pick<
+    SidebarSessionOwnerFilterController,
+    "active" | "ownershipVisible"
+  >;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
     routeId: NavigationRouteId,
@@ -191,7 +194,7 @@ export function renderRecentSession(params: {
       : session.owner?.assignedAt !== undefined
         ? "owned"
         : "created";
-  const ownerActor = host.sessionOwnershipVisible
+  const ownerActor = host.sessionOwnerFilter.ownershipVisible
     ? host.sessionsStatusFilter === "archived"
       ? session.archivedBy
       : session.owner?.actor

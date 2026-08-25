@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import "../components/app-sidebar.ts";
 import "./app-host.ts";
 
 type PairingShell = HTMLElement & {

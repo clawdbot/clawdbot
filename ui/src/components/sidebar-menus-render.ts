@@ -417,9 +417,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     showPreview: host.sessionsShowPreview,
     showSystem: host.sessionsShowSystem,
-    owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
-    ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
-    involvingMe: host.sessionInvolvingMeFilterActive,
+    owners: host.sessionOwnerFilter.ownershipVisible ? host.sessionOwnerFilter.ownerOptions : [],
+    ownerFilterId: host.sessionOwnerFilter.active ? host.sessionOwnerFilter.ownerId : null,
+    involvingMe: host.sessionOwnerFilter.involvingMe,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
@@ -434,11 +434,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.sessionOwnerFilter.set(ownerId, involvingMe);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
@@ -469,9 +465,9 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     position,
     trigger: controller.catalogViewMenuTrigger,
     grouping: host.catalogProjectGrouping,
-    owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
-    ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
-    involvingMe: host.sessionInvolvingMeFilterActive,
+    owners: host.sessionOwnerFilter.ownershipVisible ? host.sessionOwnerFilter.ownerOptions : [],
+    ownerFilterId: host.sessionOwnerFilter.active ? host.sessionOwnerFilter.ownerId : null,
+    involvingMe: host.sessionOwnerFilter.involvingMe,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
@@ -485,11 +481,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       controller.closeCatalogViewMenu();
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.sessionOwnerFilter.set(ownerId, involvingMe);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

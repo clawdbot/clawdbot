@@ -36,8 +36,8 @@ import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
+import type { SidebarSessionOwnerFilterController } from "./sidebar-session-owner-filter-controller.ts";
 
 const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
 const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
@@ -108,11 +108,7 @@ interface SidebarMenusControllerHost
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionOwnerFilterActive: boolean;
-  sessionOwnerFilterId: string | null;
-  sessionInvolvingMeFilterActive: boolean;
-  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnerFilter: SidebarSessionOwnerFilterController;
   readSessionMutationAccess(request: {
     method: string;
     params?: unknown;

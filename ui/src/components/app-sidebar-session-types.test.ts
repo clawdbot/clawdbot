@@ -5,10 +5,12 @@ import {
   loadStoredCollapsedSessionSections,
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
+  loadStoredSidebarSessionOwnerFilter,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
   storeSidebarSessionSortMode,
+  storeSidebarSessionOwnerFilter,
   storeSidebarSessionStatusFilter,
   storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
@@ -59,6 +61,18 @@ describe("sidebar session status preference", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
     storeSidebarSessionStatusFilter("all");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("all");
+  });
+});
+
+describe("sidebar session owner preference", () => {
+  it.each(["involving-me", "owner:profile-ada"] as const)("round-trips %s", (filter) => {
+    storeSidebarSessionOwnerFilter(filter);
+    expect(loadStoredSidebarSessionOwnerFilter()).toBe(filter);
+  });
+
+  it.each(["unexpected", "owner:"])("defaults malformed value %s to all owners", (stored) => {
+    localStorage.setItem("openclaw:sidebar:sessions:owner-filter", stored);
+    expect(loadStoredSidebarSessionOwnerFilter()).toBe("all");
   });
 });
 

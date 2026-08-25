@@ -184,6 +184,7 @@ export type SidebarSessionGroupMenuState = {
 
 export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
+export type SidebarSessionOwnerFilter = "all" | "involving-me" | `owner:${string}`;
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
 export function resolveSidebarSessionsScrollState(
@@ -249,6 +250,7 @@ const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
+const SIDEBAR_SESSION_OWNER_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:owner-filter";
 const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
@@ -300,6 +302,12 @@ export function loadStoredSidebarSessionsShowSystem(): boolean {
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
+}
+
+export function loadStoredSidebarSessionOwnerFilter(): SidebarSessionOwnerFilter {
+  const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_OWNER_FILTER_STORAGE_KEY);
+  const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
+  return stored === "involving-me" ? stored : ownerId ? `owner:${ownerId}` : "all";
 }
 
 export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
@@ -365,6 +373,15 @@ export function storeSidebarSessionsShowSystem(show: boolean) {
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
+export function storeSidebarSessionOwnerFilter(value: SidebarSessionOwnerFilter) {
+  try {
+    getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_OWNER_FILTER_STORAGE_KEY, value);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+  return value;
 }
 
 /** People collapses to Created only where the gateway has authoritatively

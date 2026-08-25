@@ -335,7 +335,7 @@ function renderSessionCatalog(params: {
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
-      ownerFilterActive: host.sessionOwnerFilterActive,
+      ownerFilterActive: host.sessionOwnerFilter.active,
       onOpenViewMenu: (catalogId, trigger, position) => {
         if (position) {
           host.sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);
@@ -393,7 +393,7 @@ function renderSessionListBody(params: {
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !params.nativeSessionsHaveMore &&
-        !host.sessionOwnershipVisible &&
+        !host.sessionOwnerFilter.ownershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null
       ) {
@@ -410,7 +410,7 @@ function renderSessionListBody(params: {
 
 function renderSessionListToolbar(host: SidebarSessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
+  const filtered = host.sessionOwnerFilter.active || host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
