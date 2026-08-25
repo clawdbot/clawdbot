@@ -67,6 +67,35 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `session sharing decodes present unknown and absent actor evidence`() throws {
+        let members = try JSONDecoder().decode(
+            [SessionMember].self,
+            from: Data(
+                #"[{"identityId":"present","addedBy":"profile-ada","addedAt":1},{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}]"#
+                    .utf8))
+
+        #expect(members[0].addedby == "profile-ada")
+        #expect(members[0].addedbystate == nil)
+        #expect(members[1].addedby == nil)
+        #expect(members[1].addedbystate == "unknown")
+        #expect(members[2].addedby == nil)
+        #expect(members[2].addedbystate == nil)
+
+        let events = try JSONDecoder().decode(
+            [SessionSharingEvent].self,
+            from: Data(
+                #"[{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1},{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                    .utf8))
+
+        #expect(events[0].actor?.id == "profile-ada")
+        #expect(events[0].actorstate == nil)
+        #expect(events[1].actor == nil)
+        #expect(events[1].actorstate == "unknown")
+        #expect(events[2].actor == nil)
+        #expect(events[2].actorstate == nil)
+    }
+
+    @Test
     func `device pair setup results decode older gateway payloads`() throws {
         let result = try JSONDecoder().decode(
             DevicePairSetupCodeResult.self,

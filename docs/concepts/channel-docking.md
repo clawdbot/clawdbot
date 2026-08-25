@@ -122,6 +122,10 @@ Docking does not:
 
 It only changes the delivery route for the current session.
 
+Dock commands are handled directly as chat commands rather than admitted model
+runs. Their success or failure remains visible in the command reply, but they
+do not create a run-audit selector or decision receipt.
+
 ## Troubleshooting
 
 **The command says the sender is not linked.**

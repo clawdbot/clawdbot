@@ -81,7 +81,9 @@ import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
   isExpectedSessionLookupMiss,
+  recordSessionToolActionFact,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
@@ -918,7 +920,10 @@ export function createSessionsSendTool(opts?: {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: access.status,
-          error: access.error,
+          error: formatSessionToolAccessDenial(access, {
+            action: "send",
+            targetSessionKey: unresolvedDisplayKey,
+          }),
           sessionKey: unresolvedDisplayKey,
         });
       }
@@ -1149,6 +1154,12 @@ export function createSessionsSendTool(opts?: {
             if (!start.ok) {
               return start.result;
             }
+            recordSessionToolActionFact({
+              operation: "send",
+              fact: "committed",
+              targetAgentId,
+              targetSessionKey: start.a2aSessionKey ?? resolvedKey,
+            });
             recordSessionsSendParticipant({
               cfg,
               requesterAgentId,
@@ -1179,6 +1190,12 @@ export function createSessionsSendTool(opts?: {
           if (!start.ok) {
             return start.result;
           }
+          recordSessionToolActionFact({
+            operation: "send",
+            fact: "committed",
+            targetAgentId,
+            targetSessionKey: start.a2aSessionKey ?? resolvedKey,
+          });
           recordSessionsSendParticipant({
             cfg,
             requesterAgentId,

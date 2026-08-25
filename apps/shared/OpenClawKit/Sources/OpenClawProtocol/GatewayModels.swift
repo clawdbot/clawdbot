@@ -6791,22 +6791,26 @@ public struct SessionMembersListParams: Codable, Sendable {
 
 public struct SessionMember: Codable, Sendable {
     public let identityid: String
-    public let addedby: String
+    public let addedby: String?
+    public let addedbystate: String?
     public let addedat: Int
 
     public init(
         identityid: String,
-        addedby: String,
+        addedby: String? = nil,
+        addedbystate: String? = nil,
         addedat: Int)
     {
         self.identityid = identityid
         self.addedby = addedby
+        self.addedbystate = addedbystate
         self.addedat = addedat
     }
 
     private enum CodingKeys: String, CodingKey {
         case identityid = "identityId"
         case addedby = "addedBy"
+        case addedbystate = "addedByState"
         case addedat = "addedAt"
     }
 }
@@ -6915,7 +6919,8 @@ public struct SessionSharingEvent: Codable, Sendable {
     public let action: SessionSharingAction
     public let sessionkey: String
     public let agentid: String
-    public let actor: SessionSharingIdentity
+    public let actor: SessionSharingIdentity?
+    public let actorstate: String?
     public let visibility: SessionVisibility?
     public let identityid: String?
     public let ts: Int
@@ -6924,7 +6929,8 @@ public struct SessionSharingEvent: Codable, Sendable {
         action: SessionSharingAction,
         sessionkey: String,
         agentid: String,
-        actor: SessionSharingIdentity,
+        actor: SessionSharingIdentity? = nil,
+        actorstate: String? = nil,
         visibility: SessionVisibility? = nil,
         identityid: String? = nil,
         ts: Int)
@@ -6933,6 +6939,7 @@ public struct SessionSharingEvent: Codable, Sendable {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.actor = actor
+        self.actorstate = actorstate
         self.visibility = visibility
         self.identityid = identityid
         self.ts = ts
@@ -6943,6 +6950,7 @@ public struct SessionSharingEvent: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case actor
+        case actorstate = "actorState"
         case visibility
         case identityid = "identityId"
         case ts

@@ -1,4 +1,11 @@
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  SessionMembersListResultSchema,
+  SessionSharingEventSchema,
+  type SessionMembersListResult,
+  type SessionSharingEvent,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -16,6 +23,11 @@ import {
 import { ensureProfileForEmail, listProfiles, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
+import {
+  attachGatewayLocalUserIngress,
+  getGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../local-user-ingress.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
@@ -124,7 +136,181 @@ async function call(
   return responses;
 }
 
+function sessionMembersListResult(responses: Parameters<RespondFn>[]): SessionMembersListResult {
+  const response = responses[0];
+  if (response?.[0] !== true || response[1] === undefined) {
+    throw new Error("expected one successful Gateway response");
+  }
+  return Value.Decode(SessionMembersListResultSchema, response[1]);
+}
+
+function sharingEvents(broadcast: ReturnType<typeof vi.fn>): SessionSharingEvent[] {
+  return broadcast.mock.calls.flatMap(([name, event]) =>
+    name === "session.sharing" ? [Value.Decode(SessionSharingEventSchema, event)] : [],
+  );
+}
+
 describe("session sharing handlers", () => {
+  it("preserves profile actors and distinguishes unknown from absent profileless evidence", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const member = ensureProfileForEmail("sharing-evidence-member@example.com");
+      const profiled = identifiedClient("profile-ada", "Ada");
+      const unknown = soloClient();
+      attachGatewayLocalUserIngress(
+        unknown,
+        prepareGatewayLocalUserIngress({
+          authMethod: "trusted-proxy",
+          authenticatedUserExpected: true,
+          isLocalClient: false,
+        }),
+      );
+      const absent = soloClient();
+      const cases = [
+        { name: "present", client: profiled },
+        { name: "unknown", client: unknown },
+        { name: "absent", client: absent },
+      ] as const;
+      const events = new Map<string, SessionSharingEvent[]>();
+      const listings = new Map<string, SessionMembersListResult>();
+
+      for (const item of cases) {
+        const sessionKey = `agent:main:sharing-actor-${item.name}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-sharing-actor-${item.name}`,
+            updatedAt: 1,
+            visibility: "shared",
+            ...(item.name === "present"
+              ? { createdActor: { type: "human" as const, id: "profile-ada" } }
+              : {}),
+          },
+        );
+        const broadcast = vi.fn();
+        expect(
+          await call(
+            "session.visibility.set",
+            { sessionKey, visibility: "draft" },
+            context(broadcast),
+            item.client,
+          ),
+        ).toMatchObject([[true, { ok: true, sessionKey }, undefined]]);
+        expect(
+          await call(
+            "session.members.add",
+            { sessionKey, identityId: member.id },
+            context(broadcast),
+            item.client,
+          ),
+        ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
+        const listed = await call(
+          "session.members.list",
+          { sessionKey },
+          context(broadcast),
+          item.client,
+        );
+        expect(listed[0]?.[0]).toBe(true);
+        listings.set(item.name, sessionMembersListResult(listed));
+        expect(
+          await call(
+            "session.members.remove",
+            { sessionKey, identityId: member.id },
+            context(broadcast),
+            item.client,
+          ),
+        ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
+        const publishedEvents = sharingEvents(broadcast);
+        expect(publishedEvents.map((event) => event.action)).toEqual([
+          "visibility",
+          "member-added",
+          "member-removed",
+        ]);
+        events.set(item.name, publishedEvents);
+        expect(JSON.stringify(broadcast.mock.calls)).not.toContain("actor-evidence:");
+      }
+
+      for (const event of events.get("present") ?? []) {
+        expect(event).toMatchObject({
+          actor: { type: "human", id: "profile-ada", label: "Ada" },
+        });
+      }
+      for (const event of events.get("unknown") ?? []) {
+        expect(event).toMatchObject({ actorState: "unknown" });
+        expect(event).not.toHaveProperty("actor");
+      }
+      for (const event of events.get("absent") ?? []) {
+        expect(event).not.toHaveProperty("actor");
+        expect(event).not.toHaveProperty("actorState");
+      }
+      const listedMember = (name: "present" | "unknown" | "absent") =>
+        listings.get(name)?.members[0];
+      expect(listings.get("present")).toMatchObject({
+        members: [{ identityId: member.id, addedBy: "profile-ada" }],
+      });
+      expect(listings.get("unknown")).toMatchObject({
+        members: [{ identityId: member.id, addedByState: "unknown" }],
+      });
+      expect(listedMember("unknown")).not.toHaveProperty("addedBy");
+      expect(listings.get("absent")).toMatchObject({
+        members: [{ identityId: member.id }],
+      });
+      expect(listedMember("absent")).not.toHaveProperty("addedBy");
+      expect(listedMember("absent")).not.toHaveProperty("addedByState");
+      expect(getGatewayLocalUserIngress(unknown)?.facts.invoker).toEqual({ state: "unknown" });
+      expect(getGatewayLocalUserIngress(absent)).toBeUndefined();
+      for (const name of ["unknown", "absent"] as const) {
+        const serialized = JSON.stringify(events.get(name));
+        expect(serialized).not.toContain("local-operator");
+        expect(serialized).not.toContain("operator.admin");
+        expect(serialized).not.toContain("actor-evidence:");
+        expect(JSON.stringify(listings.get(name))).not.toContain("actor-evidence:");
+      }
+      expect(JSON.stringify(listings.get("present"))).not.toContain("actor-evidence:");
+      const actorEvidence = (name: "unknown" | "absent") => {
+        const { sessionKey: _sessionKey, ts: _ts, ...evidence } = events.get(name)?.[0] ?? {};
+        return evidence;
+      };
+      expect(actorEvidence("unknown")).not.toEqual(actorEvidence("absent"));
+    });
+  });
+
+  it("keeps real actor-evidence profile ids while discarding beta synthetic actors", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-storage-projection";
+      const sessionId = "session-sharing-storage-projection";
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+      for (const [identityId, addedBy, addedAt] of [
+        ["legacy-admin-member", "operator.admin", 1],
+        ["legacy-local-member", "local-operator", 2],
+        ["real-prefix-member", "actor-evidence:profile-ada", 3],
+      ] as const) {
+        expect(
+          addSessionMember(
+            { agentId: "main", sessionKey },
+            { identityId, addedBy, addedAt, expectedSessionId: sessionId },
+          ).inserted,
+        ).toBe(true);
+      }
+
+      const response = await call("session.members.list", { sessionKey }, context(vi.fn()));
+      const result = sessionMembersListResult(response);
+      const member = (identityId: string) =>
+        result.members.find((candidate) => candidate.identityId === identityId);
+      expect(member("real-prefix-member")).toMatchObject({
+        addedBy: "actor-evidence:profile-ada",
+      });
+      for (const identityId of ["legacy-admin-member", "legacy-local-member"]) {
+        expect(member(identityId)).not.toHaveProperty("addedBy");
+        expect(member(identityId)).not.toHaveProperty("addedByState");
+      }
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("actor-evidence:unknown");
+      expect(serialized).not.toContain("actor-evidence:unattributed");
+      expect(serialized).not.toContain("operator.admin");
+      expect(serialized).not.toContain("local-operator");
+    });
+  });
+
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
@@ -720,6 +906,7 @@ describe("session sharing handlers", () => {
       );
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
+      const member = ensureProfileForEmail("member-change@example.com");
       const transcriptBefore = await loadTranscriptEvents({
         agentId: "main",
         sessionId: "session-main",
@@ -736,23 +923,18 @@ describe("session sharing handlers", () => {
       expect(loadSessionEntry({ agentId: "main", sessionKey })?.visibility).toBe("read-only");
 
       expect(
-        await call(
-          "session.members.add",
-          { sessionKey, identityId: "local-operator" },
-          requestContext,
-        ),
-      ).toEqual([[true, { ok: true, sessionKey, identityId: "local-operator" }, undefined]]);
+        await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
       expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([
-        expect.objectContaining({ identityId: "local-operator", addedBy: "local-operator" }),
+        expect.objectContaining({
+          identityId: member.id,
+          addedBy: "actor-evidence:unattributed",
+        }),
       ]);
 
       expect(
-        await call(
-          "session.members.remove",
-          { sessionKey, identityId: "local-operator" },
-          requestContext,
-        ),
-      ).toEqual([[true, { ok: true, sessionKey, identityId: "local-operator" }, undefined]]);
+        await call("session.members.remove", { sessionKey, identityId: member.id }, requestContext),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
       expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
 
       expect(
@@ -762,10 +944,10 @@ describe("session sharing handlers", () => {
           sessionKey,
         }),
       ).toEqual(transcriptBefore);
-      const sharingEvents = broadcast.mock.calls
+      const publishedEvents = broadcast.mock.calls
         .filter(([event]) => event === "session.sharing")
         .map(([, payload, options]) => ({ payload, options }));
-      expect(sharingEvents).toEqual([
+      expect(publishedEvents).toEqual([
         {
           payload: expect.objectContaining({
             action: "visibility",
@@ -778,7 +960,7 @@ describe("session sharing handlers", () => {
           payload: expect.objectContaining({
             action: "member-added",
             sessionKey,
-            identityId: "local-operator",
+            identityId: member.id,
           }),
           options: { sessionKeys: [sessionKey] },
         },
@@ -786,7 +968,7 @@ describe("session sharing handlers", () => {
           payload: expect.objectContaining({
             action: "member-removed",
             sessionKey,
-            identityId: "local-operator",
+            identityId: member.id,
           }),
           options: { sessionKeys: [sessionKey] },
         },

@@ -8,12 +8,14 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
@@ -210,6 +212,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    setActivePluginRegistry(createTestRegistry([]));
     cliBackendsTesting.resetDepsForTest();
     vi.unstubAllEnvs();
   });

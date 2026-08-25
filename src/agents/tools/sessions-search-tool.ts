@@ -35,6 +35,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
@@ -482,7 +483,13 @@ export function createSessionsSearchTool(opts?: {
           callGateway: gatewayCall,
         });
         if (!access.allowed) {
-          return jsonResult({ status: access.status, error: access.error });
+          return jsonResult({
+            status: access.status,
+            error: formatSessionToolAccessDenial(access, {
+              action: "search",
+              targetSessionKey: key,
+            }),
+          });
         }
         if (access.expectedSessionId) {
           sessionTarget.expectedSessionId = access.expectedSessionId;

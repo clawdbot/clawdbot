@@ -43,11 +43,16 @@ export const SessionVisibilitySetResultSchema = closedObject({
 
 export const SessionMembersListParamsSchema = closedObject(SessionSharingTargetParamsSchema);
 
-export const SessionMemberSchema = closedObject({
-  identityId: NonEmptyString,
-  addedBy: NonEmptyString,
-  addedAt: Type.Integer({ minimum: 0 }),
-});
+export const SessionMemberSchema = Object.assign(
+  closedObject({
+    identityId: NonEmptyString,
+    addedBy: Type.Optional(NonEmptyString),
+    /** Explicit principal-less evidence; omission means no actor evidence was supplied. */
+    addedByState: Type.Optional(Type.Literal("unknown")),
+    addedAt: Type.Integer({ minimum: 0 }),
+  }),
+  { not: { required: ["addedBy", "addedByState"] } },
+);
 
 export const SessionMembersListResultSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -71,15 +76,20 @@ export const SessionMemberMutationResultSchema = closedObject({
   identityId: NonEmptyString,
 });
 
-export const SessionSharingEventSchema = closedObject({
-  action: SessionSharingActionSchema,
-  sessionKey: NonEmptyString,
-  agentId: NonEmptyString,
-  actor: SessionSharingIdentitySchema,
-  visibility: Type.Optional(SessionVisibilitySchema),
-  identityId: Type.Optional(NonEmptyString),
-  ts: Type.Integer({ minimum: 0 }),
-});
+export const SessionSharingEventSchema = Object.assign(
+  closedObject({
+    action: SessionSharingActionSchema,
+    sessionKey: NonEmptyString,
+    agentId: NonEmptyString,
+    actor: Type.Optional(SessionSharingIdentitySchema),
+    /** Explicit principal-less evidence; omission means no actor evidence was supplied. */
+    actorState: Type.Optional(Type.Literal("unknown")),
+    visibility: Type.Optional(SessionVisibilitySchema),
+    identityId: Type.Optional(NonEmptyString),
+    ts: Type.Integer({ minimum: 0 }),
+  }),
+  { not: { required: ["actor", "actorState"] } },
+);
 
 export type SessionSharingIdentity = Static<typeof SessionSharingIdentitySchema>;
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
