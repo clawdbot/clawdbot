@@ -153,12 +153,12 @@ export async function deliverMatrixReplies(params: {
         params.runtime.error?.("matrix reply missing text/media");
         continue;
       }
+      const explicitReplyToId =
+        reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
       const replyToId =
         params.threadId || params.replyToMode !== "off"
           ? (reply.replyToId ?? params.replyToId)?.trim()
-          : reply.replyToTag || reply.replyToCurrent
-            ? reply.replyToId?.trim()
-            : undefined;
+          : explicitReplyToId;
       const rawText = visibleText ?? "";
       const mediaList = reply.mediaUrls?.length
         ? reply.mediaUrls
@@ -166,9 +166,11 @@ export async function deliverMatrixReplies(params: {
           ? [reply.mediaUrl]
           : [];
 
-      const shouldIncludeReply = (id?: string) =>
-        Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value);
-      const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
+      const replyToIdForReply =
+        explicitReplyToId ||
+        (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value
+          ? replyToId
+          : undefined);
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.
         acceptedResults.push(result);

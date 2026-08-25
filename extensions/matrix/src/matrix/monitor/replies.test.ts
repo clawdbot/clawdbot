@@ -250,6 +250,50 @@ describe("deliverMatrixReplies", () => {
     expect(hasRepliedRef.value).toBe(true);
   });
 
+  it.each(["first", "off"] as const)(
+    "preserves explicit replies after shared reply state is consumed when replyToMode=%s",
+    async (replyToMode) => {
+      const hasRepliedRef = { value: false };
+      const delivery = {
+        cfg,
+        roomId: "room:1",
+        client: {} as MatrixClient,
+        runtime: runtimeEnv,
+        textLimit: 4000,
+        replyToMode,
+        replyToId: "ambient-reply",
+        hasRepliedRef,
+      };
+
+      await deliverMatrixReplies({
+        ...delivery,
+        replies: [
+          {
+            text: "consume implicit slot",
+            replyToId: "first-reply",
+            ...(replyToMode === "off" ? { replyToTag: true } : {}),
+          },
+        ],
+      });
+      await deliverMatrixReplies({
+        ...delivery,
+        replies: [{ text: "explicit tag", replyToId: "tag-reply", replyToTag: true }],
+      });
+      await deliverMatrixReplies({
+        ...delivery,
+        replies: [{ text: "explicit current", replyToId: "current-reply", replyToCurrent: true }],
+      });
+      await deliverMatrixReplies({ ...delivery, replies: [{ text: "implicit follow-up" }] });
+
+      expect(hasRepliedRef.value).toBe(true);
+      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(4);
+      expect(sendOptions(0).replyToId).toBe("first-reply");
+      expect(sendOptions(1).replyToId).toBe("tag-reply");
+      expect(sendOptions(2).replyToId).toBe("current-reply");
+      expect(sendOptions(3).replyToId).toBeUndefined();
+    },
+  );
+
   it("does not consume the first reply when Matrix delivery fails", async () => {
     const hasRepliedRef = { value: false };
     const delivery = {
