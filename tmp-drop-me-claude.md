@@ -98,3 +98,99 @@ The exact dependency install was prepared in a normal same-host clone at
 `1ba243c88ed800986909bc50e4ce7b8139891b94`; its `package.json` and
 `pnpm-lock.yaml` hashes equal the merged worktree, and this linked worktree now
 points at that clone's `node_modules`.
+
+## 2026-08-25T12:29Z - §2 Gates 2, 2.5, and 2.7
+
+### Complete 85-path semantic-overlap disposition
+
+The Gate 2 projection algorithm was run over the complete frozen 85-path
+intersection. Sixty-eight paths are `EXACT_PURE_PLUS_UPSTREAM`: each candidate
+blob equals the deterministic application of the pinned upstream delta to the
+pure blob. The remaining 17 paths were manually reviewed:
+
+| Path                                                                                                   | Disposition                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions/codex/src/app-server/auth-bridge.test.ts`                                                  | Keep canonical `withTestDir` plus upstream managed-marketplace/reconcile coverage.                                                                               |
+| `extensions/codex/src/app-server/computer-use.test.ts`                                                 | Use upstream 0.149.1 managed security-policy inheritance; the former readiness override is intentionally superseded.                                             |
+| `extensions/codex/src/app-server/computer-use.ts`                                                      | Use upstream 0.149.1 managed security-policy inheritance; the dependency still accepts overrides, but upstream deliberately rejects them for this managed probe. |
+| `extensions/codex/src/app-server/shared-client.test.ts`                                                | Keep canonical `withTestDir` plus upstream deferred lifecycle coverage.                                                                                          |
+| `packages/agent-core/src/agent-loop.test.ts`                                                           | Keep pure repeated-tool-error termination/redaction regressions plus upstream deferred-stream helper.                                                            |
+| `src/agents/command/attempt-execution.ts`                                                              | Keep pure fork recovery and media invalidation plus upstream latest session-binding revalidation.                                                                |
+| `src/agents/embedded-agent-runner/run/attempt-client-tools.ts`                                         | Keep loop detection at the tool-construction owner and upstream's narrowed returned phase state.                                                                 |
+| `src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts`                                         | Apply pure runtime-config setup to upstream's canonical `createBaseRun` helper.                                                                                  |
+| `src/gateway/server-chat.agent-events.test.ts`                                                         | Preserve pure terminal-summary ownership and add upstream Guardian reconnect-snapshot coverage without resurrecting the retired callback seam.                   |
+| `src/gateway/server-methods/chat.directive-tags.test.ts`                                               | Use upstream source-reply fixtures and retain the pure terminal-before-broadcast assertion.                                                                      |
+| `src/gateway/server-methods/server-methods.test.ts`                                                    | Adapt the upstream-added validation-loop assertion to pure's canonical `projectChatDisplayMessages` API.                                                         |
+| `src/gateway/server-runtime-services.ts`                                                               | Keep upstream's scheduler owner and pure delegate-artifact cleanup in `clearGatewayMaintenanceHandles`; do not retain the dead intermediate helper.              |
+| `src/state/openclaw-state-db-contract.ts`                                                              | Union additive delegate-artifact and execution-owner first-use tables at schema version 9.                                                                       |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md`   | Accept canonical merged generator output.                                                                                                                        |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md` | Accept canonical merged generator output.                                                                                                                        |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md`      | Accept canonical merged generator output.                                                                                                                        |
+| `test/scripts/full-release-validation-at-sha.test.ts`                                                  | Apply pure's bare-origin helper to upstream parent-state coverage.                                                                                               |
+
+The complete 85-row local ledger is `overlap-dispositions.tsv`, SHA-256
+`83fadfcfe479cdd7b89a5d47a1f6daa198a687efe4abbe84fb8289dfa4a3af71`.
+Its source list is the exact 947/1,340 intersection and contains no omitted
+path.
+
+### Gate 2
+
+Canonical bootstrap-main `feature-cores-byte-check.sh`, using the exact
+bootstrap-main primitive-core inventory, passed all 40 invariants at successor
+`3b969b145340c65c3be919890be400393da99566`: 34 byte-identical, three exact
+upstream projections, and three tombstones.
+
+### Gate 2.5
+
+The frozen upstream range contains 547 touched test files. Thirty-seven
+intersect the pure feature surface. Every intersection was run locally through
+its owning Vitest config with `--maxWorkers=1` at exact successor
+`3b969b145340c65c3be919890be400393da99566`: 37 files, 4,093 passed assertions,
+and two platform skips.
+
+The first merge checkpoint `2f4b7be93812b96c4e5a780959cedb46955f59fa`
+provided two deterministic negative controls:
+
+1. `src/gateway/server-methods/server-methods.test.ts` failed because an
+   upstream-added test called removed `projectRecentChatDisplayMessages`.
+   Exact upstream `1ba243c8` passed its 218-test file; the successor calls the
+   canonical pure `projectChatDisplayMessages` owner and passes 220/220 plus the
+   full six-file gateway intersection set (847/847).
+2. `test/scripts/full-release-validation-at-sha.test.ts` failed because an
+   upstream-added parent-status case called `runGit` against a bare origin.
+   Exact upstream reproduced the same bare-repository failure class in three
+   cases. Pure had already introduced `runBareGit` and repaired two of them; the
+   successor applies that owner helper to the new case and passes 31/31.
+
+Additional owner-boundary coverage passed for client-tool phase/session
+preparation, gateway subscription ownership, SQLite first-use schema,
+compaction/overflow, continuation delivery, session cleanup/recovery, cron
+state, task-flow persistence/maintenance, display projection, doctor runtime,
+and generated prompt snapshots.
+
+### Gate 2.7
+
+At exact successor `3b969b145340c65c3be919890be400393da99566`,
+the canonical walker examined 946 files:
+
+| Class           | Count |
+| --------------- | ----: |
+| `SAFE-NEW`      |   300 |
+| `GENUINE`       |   294 |
+| `MIXED-CLOBBER` |   352 |
+| `FROZEN-STALE`  |     0 |
+
+Every final MIXED row was joined to the pre-merge pure census. There are zero
+new or increased rows: 311 are unchanged inherited feature differences, 41
+decreased because the pinned merge restored upstream lines, and 35 baseline
+rows cleared entirely. The deterministic disposition is therefore
+`KEEP_INHERITED_FEATURE` for all 311 unchanged rows and
+`KEEP_INHERITED_REMAINDER` for all 41 decreased rows; no row remains
+`REVIEW_REQUIRED`.
+
+The complete 352-row disposition ledger is `mixed-dispositions.tsv`, SHA-256
+`7cf8902b89eabadbf0e411d1ba404eb6c8e11aebe741f4377b56a56edc162c4b`.
+The pre-merge classification SHA-256 is
+`b6b1c43e069957d279687bbad49aadafe7484e45d25983116bf4f96cf542b328`;
+the final classification SHA-256 is
+`bd4b9ff2972dd543ac413c9f7eb76dd5b135675a0db0a29f24688b597265b45e`.
