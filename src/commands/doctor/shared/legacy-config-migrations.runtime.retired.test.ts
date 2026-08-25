@@ -45,6 +45,44 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it("removes ui.assistant without changing the agent identity", () => {
+    const result = applyAll({
+      ui: {
+        seamColor: "#ff4500",
+        assistant: { name: "UI name", avatar: "avatars/ui.png" },
+      },
+      agents: {
+        list: [
+          { id: "worker", identity: { name: "Worker" } },
+          { id: "primary", default: true, identity: { name: "Main", emoji: "🦞" } },
+        ],
+      },
+    });
+
+    expect(result.raw).toMatchObject({
+      ui: { seamColor: "#ff4500" },
+      agents: {
+        list: [
+          { id: "worker", identity: { name: "Worker" } },
+          { id: "primary", default: true, identity: { name: "Main", emoji: "🦞" } },
+        ],
+      },
+    });
+    expect(result.raw).not.toHaveProperty("ui.assistant");
+    expect(result.changes).toContain(
+      "Removed retired ui.assistant; configure agents.list[].identity instead.",
+    );
+  });
+
+  it("removes ui.assistant without creating an agent identity", () => {
+    const result = applyAll({ ui: { assistant: { name: "OpenClaw", avatar: "🦞" } } });
+
+    expect(result.raw).toEqual({});
+    expect(result.changes).toContain(
+      "Removed retired ui.assistant; configure agents.list[].identity instead.",
+    );
+  });
+
   it.each([
     ["a normal registration", [{ event: "command:new", module: "hooks/legacy.js" }]],
     ["an empty array", []],

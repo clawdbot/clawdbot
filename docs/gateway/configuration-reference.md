@@ -529,10 +529,6 @@ See [Plugins](/tools/plugin).
 {
   ui: {
     seamColor: "#FF4500",
-    assistant: {
-      name: "OpenClaw",
-      avatar: "CB", // emoji, short text, image URL, or data URI
-    },
     prefs: {
       theme: "claw", // claw | knot | dash | custom
       themeMode: "system", // light | dark | system
@@ -547,11 +543,12 @@ See [Plugins](/tools/plugin).
 }
 ```
 
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.list`; see [Agent configuration](/gateway/config-agents#agentslist-per-agent-overrides).
+
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
   `talk.config` payloads and the macOS app's config snapshot. If neither is set,
   the theme default applies.
-- `assistant`: Control UI identity override. Falls back to active agent identity.
 - `prefs`: cross-device operator preferences. This is the canonical home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An
