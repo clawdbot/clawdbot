@@ -124,32 +124,17 @@ type StatusArgs = {
   now?: number;
 };
 
-type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
+const NORMALIZED_AUTH_MODES = ["api-key", "oauth", "token", "aws-sdk", "mixed", "native"] as const;
+type NormalizedAuthMode = (typeof NORMALIZED_AUTH_MODES)[number] | "unknown";
 
 function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
-    return "api-key";
-  }
-  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
-    return "oauth";
-  }
-  if (normalized === "token" || normalized.startsWith("token ")) {
-    return "token";
-  }
-  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
-    return "aws-sdk";
-  }
-  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
-    return "mixed";
-  }
   if (normalized === "unknown") {
     return "unknown";
   }
-  return undefined;
+  return NORMALIZED_AUTH_MODES.find(
+    (mode) => normalized === mode || normalized?.startsWith(`${mode} `),
+  );
 }
 
 function resolveConfiguredTextVerbosity(params: {
