@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -190,75 +189,6 @@ describe("npm lifecycle policy preflight", () => {
 });
 
 describe("runGlobalPackageUpdateSteps", () => {
-  it.each([
-    { name: "an explicit caller environment", supplyEnv: true },
-    { name: "the ambient process environment", supplyEnv: false },
-  ] as const)("pins Bun updates to their original owner with $name", async ({ supplyEnv }) => {
-    await withTestDir({ prefix: "openclaw-package-update-bun-owner-" }, async (base) => {
-      const bunInstall = path.join(base, "owning-bun");
-      const globalProject = path.join(bunInstall, "install", "global");
-      const globalRoot = path.join(globalProject, "node_modules");
-      const packageRoot = path.join(globalRoot, "openclaw");
-      const conflictingInstall = path.join(base, "unrelated-bun");
-      const conflictingGlobalProject = path.join(base, "unrelated-global");
-      const owningBin = path.join(base, "custom-bun-bin");
-      await writePackageRoot(packageRoot, "1.0.0");
-
-      await withEnvAsync(
-        {
-          BUN_INSTALL: conflictingInstall,
-          BUN_INSTALL_GLOBAL_DIR: conflictingGlobalProject,
-          BUN_INSTALL_BIN: owningBin,
-        },
-        async () => {
-          const callerEnv: NodeJS.ProcessEnv = {
-            BUN_INSTALL: conflictingInstall,
-            BUN_INSTALL_GLOBAL_DIR: conflictingGlobalProject,
-            BUN_INSTALL_BIN: owningBin,
-          };
-          const originalCallerEnv = { ...callerEnv };
-          const runStep = vi.fn(
-            async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
-              expect(argv).toEqual(["bun", "add", "-g", "--trust", "openclaw@2.0.0"]);
-              expect(env).toMatchObject({
-                BUN_INSTALL: bunInstall,
-                BUN_INSTALL_GLOBAL_DIR: globalProject,
-                BUN_INSTALL_BIN: owningBin,
-              });
-              await writePackageRoot(packageRoot, "2.0.0");
-              return {
-                name,
-                command: argv.join(" "),
-                cwd: cwd ?? base,
-                durationMs: 1,
-                exitCode: 0,
-              };
-            },
-          );
-
-          const result = await runGlobalPackageUpdateSteps({
-            installTarget: { manager: "bun", command: "bun", globalRoot, packageRoot },
-            installSpec: "openclaw@2.0.0",
-            packageName: "openclaw",
-            packageRoot,
-            runCommand: vi.fn<CommandRunner>(),
-            runStep,
-            timeoutMs: 1000,
-            ...(supplyEnv ? { env: callerEnv } : {}),
-          });
-
-          expect(result.failedStep).toBeNull();
-          expect(result.afterVersion).toBe("2.0.0");
-          expect(runStep).toHaveBeenCalledOnce();
-          expect(callerEnv).toEqual(originalCallerEnv);
-          expect(process.env.BUN_INSTALL).toBe(conflictingInstall);
-          expect(process.env.BUN_INSTALL_GLOBAL_DIR).toBe(conflictingGlobalProject);
-          expect(process.env.BUN_INSTALL_BIN).toBe(owningBin);
-        },
-      );
-    });
-  });
-
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
     await withTestDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");

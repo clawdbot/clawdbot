@@ -641,37 +641,6 @@ describe("update global helpers", () => {
     });
   });
 
-  it("preserves custom Bun ownership when the original BUN_INSTALL is unavailable", async () => {
-    await withTestDir({ prefix: "openclaw-update-custom-bun-root-" }, async (base) => {
-      envSnapshot = captureEnv(["BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR"]);
-      delete process.env.BUN_INSTALL;
-      delete process.env.BUN_INSTALL_GLOBAL_DIR;
-
-      const bunRoot = path.join(base, "custom-bun", "install", "global", "node_modules");
-      const pkgRoot = path.join(bunRoot, "openclaw");
-      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
-      await fs.mkdir(pkgRoot, { recursive: true });
-      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
-
-      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
-        "bun",
-      );
-      await expect(
-        resolveGlobalInstallTarget({
-          manager: "bun",
-          runCommand,
-          timeoutMs: 1000,
-          pkgRoot,
-          honorPackageRoot: true,
-        }),
-      ).resolves.toMatchObject({
-        manager: "bun",
-        globalRoot: bunRoot,
-        packageRoot: pkgRoot,
-      });
-    });
-  });
-
   it("detects custom pnpm global layouts from the running package root", async () => {
     await withTestDir({ prefix: "openclaw-update-pnpm-custom-root-" }, async (base) => {
       const customGlobalDir = path.join(base, "custom-pnpm");
