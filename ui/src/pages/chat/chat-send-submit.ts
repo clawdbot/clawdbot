@@ -585,6 +585,7 @@ export async function handleSendChat(
       ...(pendingSettings ? { pendingSettings } : {}),
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+      restoreOnTerminalFailure: Boolean(rawParsedCommand),
       routingSessionKey: submittedSessionKey,
       storageMode: canSendFromMemory ? "memory" : "durable",
     });

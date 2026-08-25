@@ -1,5 +1,5 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -302,10 +302,16 @@ async function sendQueuedChatMessage(
     });
     if (isTerminalFailureChatSendAck(ack)) {
       const error = formatTerminalChatSendAckError(ack, "chat");
+      const restoreCommand =
+        options?.restoreOnTerminalFailure === true && canRestoreComposer(host, options);
       // Release in-flight ownership before publishing Retry; an immediate click
       // must not see this completed send as the run that blocks its replacement.
       finishScopedChatSending(host, scope);
-      setState("failed", error);
+      if (restoreCommand) {
+        cancelChatDelivery(host, prepared, options ?? {});
+      } else {
+        setState("failed", error);
+      }
       if (isVisible()) {
         const projectionScope = readChatSessionProjectionScope(host, {
           sessionKey,
@@ -329,7 +335,7 @@ async function sendQueuedChatMessage(
         });
       }
       surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
-        inline: storageMode === "durable",
+        inline: storageMode === "durable" && !restoreCommand,
       });
       recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
         error,
@@ -423,6 +429,18 @@ async function sendQueuedChatMessage(
     const error = activeLeafChanged
       ? t("chat.sendErrors.activeLeafChanged")
       : formatConnectError(err);
+    if (err instanceof GatewayPayloadLimitError) {
+      if (canRestoreComposer(host, options)) {
+        cancelChatDelivery(host, prepared, options ?? {});
+      } else {
+        setState("failed", error);
+      }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
+      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
+      return "failed";
+    }
+    const restoreCommand =
+      options?.restoreOnTerminalFailure === true && canRestoreComposer(host, options);
     const recoverable =
       !activeLeafChanged &&
       (err instanceof GatewayRequestError
@@ -510,14 +528,18 @@ async function sendQueuedChatMessage(
     }
     // Keep the retry action behind terminal ownership release, as above.
     finishScopedChatSending(host, scope);
-    setState("failed", error);
+    if (restoreCommand) {
+      cancelChatDelivery(host, prepared, options ?? {});
+    } else {
+      setState("failed", error);
+    }
     if (isVisible()) {
       if (activeLeafChanged) {
         void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
       }
     }
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
-      inline: storageMode === "durable",
+      inline: storageMode === "durable" && !restoreCommand,
     });
     recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
     return "failed";
