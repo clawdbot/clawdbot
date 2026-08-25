@@ -646,57 +646,48 @@ function collectSlackShareMaps(file: SlackFileInfoSummary): Array<Record<string,
   );
 }
 
-function collectSlackSharedChannelIds(file: SlackFileInfoSummary): Set<string> {
-  const ids = new Set<string>();
+function collectSlackShares(file: SlackFileInfoSummary): SlackFileThreadShare[] {
+  const shares: SlackFileThreadShare[] = [];
   for (const shareMap of collectSlackShareMaps(file)) {
-    for (const channelId of Object.keys(shareMap)) {
-      const normalized = normalizeOptionalString(channelId);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  return ids;
-}
-
-function collectSlackThreadShares(
-  file: SlackFileInfoSummary,
-  channelId: string,
-): SlackFileThreadShare[] {
-  const matches: SlackFileThreadShare[] = [];
-  for (const shareMap of collectSlackShareMaps(file)) {
-    const rawEntries = shareMap[channelId];
-    if (!Array.isArray(rawEntries)) {
-      continue;
-    }
-    for (const rawEntry of rawEntries) {
-      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    for (const [rawChannelId, rawEntries] of Object.entries(shareMap)) {
+      const channelId = normalizeOptionalString(rawChannelId);
+      if (!channelId || !Array.isArray(rawEntries)) {
         continue;
       }
-      const entry = rawEntry as Record<string, unknown>;
-      const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
-      const threadTs =
-        typeof entry.thread_ts === "string" ? normalizeOptionalString(entry.thread_ts) : undefined;
-      matches.push({ channelId, ts, threadTs });
+      for (const rawEntry of rawEntries) {
+        if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+          continue;
+        }
+        const entry = rawEntry as Record<string, unknown>;
+        const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
+        const threadTs =
+          typeof entry.thread_ts === "string"
+            ? normalizeOptionalString(entry.thread_ts)
+            : undefined;
+        if (ts || threadTs) {
+          shares.push({ channelId, ts, threadTs });
+        }
+      }
     }
   }
-  return matches;
+  return shares;
 }
 
 function lacksSlackScopeProof(params: {
   file: SlackFileInfoSummary;
-  channelId?: string;
+  channelId: string;
   threadId?: string;
 }): boolean {
   const channelId = normalizeOptionalString(params.channelId);
   if (!channelId) {
-    return false;
+    return true;
   }
   const threadId = normalizeOptionalString(params.threadId);
 
   const directIds = collectSlackDirectShareChannelIds(params.file);
-  const sharedIds = collectSlackSharedChannelIds(params.file);
-  const inChannel = directIds.has(channelId) || sharedIds.has(channelId);
+  const shares = collectSlackShares(params.file);
+  const inChannel =
+    directIds.has(channelId) || shares.some((entry) => entry.channelId === channelId);
   if (!inChannel) {
     return true;
   }
@@ -704,9 +695,10 @@ function lacksSlackScopeProof(params: {
   if (!threadId) {
     return false;
   }
-  const threadShares = collectSlackThreadShares(params.file, channelId);
-  const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
-  return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
+  return !shares.some(
+    (entry) =>
+      entry.channelId === channelId && (entry.threadTs === threadId || entry.ts === threadId),
+  );
 }
 
 /**
@@ -716,7 +708,7 @@ function lacksSlackScopeProof(params: {
  */
 export async function downloadSlackFile(
   fileId: string,
-  opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
+  opts: SlackActionClientOpts & { maxBytes: number; channelId: string; threadId?: string },
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);

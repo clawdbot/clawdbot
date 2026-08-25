@@ -35,6 +35,7 @@ function makeSlackFileInfo(overrides?: Record<string, unknown>) {
     name: "image.png",
     mimetype: "image/png",
     url_private_download: "https://files.slack.com/files-pri/T1-F123/image.png",
+    channels: ["C123"],
     ...overrides,
   };
 }
@@ -109,6 +110,7 @@ describe("downloadSlackFile", () => {
       client,
       token: "xoxb-test",
       maxBytes: 1024,
+      channelId: "C123",
     });
 
     expect(result).toBeNull();
@@ -123,6 +125,7 @@ describe("downloadSlackFile", () => {
       client,
       token: "xoxb-test",
       maxBytes: 1024,
+      channelId: "C123",
     });
 
     expect(client.files.info).toHaveBeenCalledWith({ file: "F123" });
@@ -143,6 +146,7 @@ describe("downloadSlackFile", () => {
       client,
       token: "xoxb-test",
       maxBytes: 1024,
+      channelId: "C123",
     });
 
     expect(resolveSlackMedia).toHaveBeenCalledWith(expect.objectContaining({ client }));
@@ -169,6 +173,7 @@ describe("downloadSlackFile", () => {
       client,
       token: "xoxb-test",
       maxBytes: 1024,
+      channelId: "C123",
     });
 
     expect(resolveSlackMedia).toHaveBeenCalledWith({
@@ -217,7 +222,10 @@ describe("downloadSlackFile", () => {
     { name: "DM metadata", file: { ims: ["C123"] } },
     {
       name: "share metadata",
-      file: { shares: { private: { C123: [{ ts: "111.111" }] } } },
+      file: {
+        channels: undefined,
+        shares: { private: { C123: [{ ts: "111.111" }] } },
+      },
     },
   ])("downloads when $name proves the requested channel", async ({ file }) => {
     const client = createClient();
@@ -349,7 +357,39 @@ describe("downloadSlackFile", () => {
     ).toBe(false);
   });
 
-  it("returns null when file metadata does not prove the requested channel", async () => {
+  it.each([
+    { name: "absent channel/share evidence", file: { channels: undefined } },
+    {
+      name: "malformed shares container",
+      file: { channels: undefined, shares: "invalid" },
+    },
+    {
+      name: "requested channel with a non-array share value",
+      file: { channels: undefined, shares: { private: { C123: {} } } },
+    },
+    {
+      name: "requested channel with an empty share array",
+      file: { channels: undefined, shares: { private: { C123: [] } } },
+    },
+    {
+      name: "requested channel with a share entry lacking timestamps",
+      file: { channels: undefined, shares: { private: { C123: [{}] } } },
+    },
+  ])("returns null for $name", async ({ file }) => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({ file: makeSlackFileInfo(file) });
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+    });
+
+    expectNoMediaDownload(result);
+  });
+
+  it("returns null when the requested channel is empty after normalization", async () => {
     const client = createClient();
     mockSuccessfulMediaDownload(client);
 
@@ -357,7 +397,7 @@ describe("downloadSlackFile", () => {
       client,
       token: "xoxb-test",
       maxBytes: 1024,
-      channelId: "C123",
+      channelId: "   ",
     });
 
     expectNoMediaDownload(result);
@@ -387,6 +427,7 @@ describe("downloadSlackFile", () => {
       cfg,
       accountId: "default",
       maxBytes: 1024,
+      channelId: "C123",
     });
 
     expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg", {
