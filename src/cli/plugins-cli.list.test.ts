@@ -5,9 +5,10 @@ import type {
   ConfigValidationIssue,
   OpenClawConfig,
 } from "../config/types.openclaw.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { createCompatibilityNotice, createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  buildPluginCompatibilityNoticesMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
   buildPluginRegistrySnapshotReportMock,
@@ -171,6 +172,50 @@ describe("plugins cli list", () => {
     });
     expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
   });
+
+  it.each([
+    { severity: "info", code: "hook-only", healthy: true, args: [] },
+    { severity: "info", code: "hook-only", healthy: true, args: ["--json"] },
+    { severity: "warn", code: "removed-session-transcript-file-api", healthy: false, args: [] },
+    {
+      severity: "warn",
+      code: "removed-session-transcript-file-api",
+      healthy: false,
+      args: ["--json"],
+    },
+  ] as const)(
+    "keeps $severity compatibility notices visible while reporting healthy=$healthy ($args)",
+    async ({ code, healthy, args }) => {
+      const notice = createCompatibilityNotice({ pluginId: "compatible-plugin", code });
+      buildPluginDiagnosticsReportMock.mockReturnValue({
+        plugins: [createPluginRecord({ id: "compatible-plugin" })],
+        diagnostics: [],
+      });
+      buildPluginCompatibilityNoticesMock.mockReturnValue([notice]);
+
+      await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      if (args.includes("--json")) {
+        expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
+          ok: healthy,
+          compatibility: [notice],
+          pluginErrors: [],
+          diagnostics: [],
+          configurationWarnings: [],
+        });
+        return;
+      }
+
+      const output = pluginsCliRuntimeLogs.join("\n");
+      expect(output).toContain(notice.message);
+      expect(output).toContain(`[${notice.severity}]`);
+      if (healthy) {
+        expect(output).toContain(cleanDoctorMessage);
+      } else {
+        expect(output).not.toContain(cleanDoctorMessage);
+      }
+    },
+  );
 
   it.each([
     { format: "human", args: [] },
