@@ -1969,11 +1969,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
+    const deliveryError = expect.stringContaining(
+      "scheduled at 2026-03-18T13:59:59.999Z, started 180m late",
+    );
     expectResultFields(state.result, {
       status: "ok",
       delivered: false,
       deliveryAttempted: true,
+      deliveryError,
     });
+    expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
