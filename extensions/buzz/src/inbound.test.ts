@@ -296,7 +296,7 @@ describe("handleBuzzInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("preserves Buzz thread and reply identifiers for agent replies", async () => {
+  it("anchors Buzz agent replies and typing to the original thread root", async () => {
     const runtime = createPluginRuntimeMock();
     setBuzzRuntime(runtime);
     const bus = createBus();
@@ -329,7 +329,7 @@ describe("handleBuzzInbound", () => {
       channelId: ROOM_ID,
       text: "threaded reply to @Alice",
       threadId: "event-root",
-      replyToId: "event-reply",
+      replyToId: "event-root",
     });
 
     const typing = dispatch.replyPipeline?.typing;
@@ -338,7 +338,7 @@ describe("handleBuzzInbound", () => {
     expect(bus.sendTyping).toHaveBeenCalledWith({
       channelId: ROOM_ID,
       threadId: "event-root",
-      replyToId: "event-reply",
+      replyToId: "event-root",
     });
   });
 
