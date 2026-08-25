@@ -244,7 +244,8 @@ export function redactContextFileContent(
     return "";
   }
 
-  if (config.pii?.enabled && config.pii.systemPrompt !== false) {
+  // pii.enabled defaults to true when privacy.enabled=true (same as redactPii)
+  if (config.pii?.enabled !== false && config.pii?.systemPrompt !== false) {
     const { text, stats } = redactPii(content, config);
     if (stats.totalReplacements > 0) {
       // Light logging — avoid leaking the redacted values themselves.

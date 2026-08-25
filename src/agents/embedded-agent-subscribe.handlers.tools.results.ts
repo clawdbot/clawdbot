@@ -14,6 +14,7 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import {
   normalizeProgressCardInput,
   ProgressCardInputError,
@@ -684,7 +685,19 @@ export async function emitToolResultOutput(params: {
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
+      const privacyConfig = ctx.params.config?.privacy;
+      const redactedOutput =
+        privacyConfig?.enabled &&
+        privacyConfig.pii?.enabled !== false &&
+        privacyConfig.pii?.toolOutputs !== false
+          ? redactPiiText(outputText, privacyConfig)
+          : outputText;
+      ctx.emitToolOutput(
+        rawToolName,
+        meta,
+        redactedOutput,
+        hasStructuredMedia ? undefined : result,
+      );
     }
     if (!hasStructuredMedia) {
       return;
