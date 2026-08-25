@@ -434,6 +434,92 @@ describe("authorized beta focused evidence", () => {
     });
   });
 
+  it("accepts skipped historical release-plan children without run identities", () => {
+    const { policy, root } = fixturePolicy();
+    const trustedRoot = tempDirs.make("authorized-beta-focused-historical-plan-");
+    const validatorPath = stageValidatorClosure(trustedRoot, false);
+    writeFileSync(join(trustedRoot, "authorized-beta-focused-policy.json"), JSON.stringify(policy));
+
+    const producerSha = "a".repeat(40);
+    const producerRef = "release-publish/aaaaaaaaaaaa-1";
+    const historical = policy.historicalFrv;
+    const plan = {
+      parentRunId: historical.runId,
+      parentRunAttempt: historical.runAttempt,
+      workflowRef: historical.workflowRef,
+      workflowSha: policy.historicalToolingSha,
+      targetSha: historical.targetSha,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      children: [
+        { key: "normalCi", selected: true, runId: historical.ciRunId },
+        { key: "pluginPrerelease", selected: true, runId: historical.pluginRunId },
+        { key: "releaseChecks", selected: true, runId: historical.releaseChecksRunId },
+        { key: "npmTelegram", selected: false, runId: "" },
+        { key: "productPerformance", selected: true, runId: historical.performanceRunId },
+      ],
+    };
+    const producerRun = {
+      id: 123,
+      run_attempt: 1,
+      name: "Authorized Beta Focused Validation",
+      path: ".github/workflows/authorized-beta-focused-validation.yml",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      head_branch: producerRef,
+      head_sha: producerSha,
+    };
+    writeFileSync(
+      join(trustedRoot, "gh"),
+      [
+        "#!/usr/bin/env node",
+        'import { writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const [command, route, ...args] = process.argv.slice(2);",
+        'if (command === "api" && route.endsWith("/actions/runs/123")) {',
+        `  process.stdout.write(JSON.stringify(${JSON.stringify(producerRun)}));`,
+        '} else if (command === "api" && route.includes("/git/ref/tags/")) {',
+        `  process.stdout.write(JSON.stringify({ object: { type: "commit", sha: ${JSON.stringify(producerSha)} } }));`,
+        '} else if (command === "run" && route === "download") {',
+        '  const directory = args[args.indexOf("--dir") + 1];',
+        `  writeFileSync(join(directory, "full-release-execution-plan.json"), JSON.stringify(${JSON.stringify(plan)}));`,
+        "} else {",
+        '  console.error("historical execution plan child identities accepted");',
+        "  process.exitCode = 1;",
+        "}",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        validatorPath,
+        "verify",
+        "--candidate-root",
+        root,
+        "--artifact",
+        join(trustedRoot, "unused-evidence.json"),
+        "--producer-run-id",
+        "123",
+        "--producer-run-attempt",
+        "1",
+        "--producer-workflow-full-ref",
+        `refs/tags/${producerRef}`,
+        "--producer-workflow-sha",
+        producerSha,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${trustedRoot}:${process.env.PATH ?? ""}` },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("historical execution plan child identities accepted");
+    expect(result.stderr).not.toContain("historical execution plan child run id");
+  });
+
   it("binds the direct-child tree, exact diff, and unchanged published projection", () => {
     const { policy, root } = fixturePolicy();
     const changedPath = policy.changedPaths[0];

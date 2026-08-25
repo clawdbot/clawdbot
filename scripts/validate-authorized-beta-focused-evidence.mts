@@ -350,13 +350,18 @@ function requireHistoricalExecutionPlan(policy: AuthorizedBetaFocusedPolicy) {
       fail("historical execution plan children must be an array");
     }
     const childRuns = new Map(
-      plan.children.map((entry: unknown) => {
+      plan.children.flatMap((entry: unknown) => {
         if (!isRecord(entry)) {
           fail("historical execution plan child must be an object");
         }
+        if (entry.selected !== true) {
+          return [];
+        }
         return [
-          exactString(entry.key, "historical execution plan child key"),
-          exactJsonId(entry.runId, "historical execution plan child run id"),
+          [
+            exactString(entry.key, "historical execution plan child key"),
+            exactJsonId(entry.runId, "historical execution plan child run id"),
+          ],
         ];
       }),
     );
