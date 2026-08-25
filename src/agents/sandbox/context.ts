@@ -26,6 +26,7 @@ import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSharedSandboxWorkspaceConflictReason } from "./shared-workspace-policy.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
@@ -250,6 +251,12 @@ async function resolveProvisionedSandboxContext(
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
   const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
+  const newRuntimeBlockReason = resolveSharedSandboxWorkspaceConflictReason({
+    config: params.config,
+    backendId: resolvedCfg.backend,
+    activeAgentId: runtime.agentId,
+    activeWorkspaceDir: agentWorkspaceDir,
+  });
   const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
     backendId: resolvedCfg.backend,
     scopeKey,
@@ -262,6 +269,7 @@ async function resolveProvisionedSandboxContext(
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(newRuntimeBlockReason ? { newRuntimeBlockReason } : {}),
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
@@ -311,6 +319,7 @@ async function resolveProvisionedSandboxContext(
           agentWorkspaceDir,
           skillsWorkspaceDir,
           cfg: resolvedCfg,
+          ...(newRuntimeBlockReason ? { newRuntimeBlockReason } : {}),
           evaluateEnabled,
           bridgeAuth,
           ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,

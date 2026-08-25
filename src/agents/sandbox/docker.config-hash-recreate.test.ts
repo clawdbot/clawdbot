@@ -299,6 +299,32 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it("does not replace a cold grandfathered runtime with stale mounts", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "legacy-workspace-hash";
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    await ensureSandboxContainer({
+      scopeKey: "shared",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+      newRuntimeBlockReason: "alpha and beta require different workspace mounts",
+    });
+
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "start")).toBe(true);
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining("Reusing grandfathered shared sandbox runtime"),
+    );
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(
+      "legacy-workspace-hash",
+    );
+  });
+
   it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);

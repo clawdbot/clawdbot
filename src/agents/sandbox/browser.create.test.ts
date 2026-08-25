@@ -352,6 +352,50 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
   });
 
+  it("blocks a new shared browser when agent workspace mounts conflict", async () => {
+    const cfg = buildConfig(false);
+    cfg.scope = "shared";
+
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "shared",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+        newRuntimeBlockReason: "alpha and beta require different workspace mounts",
+      }),
+    ).rejects.toThrow("Cannot create shared sandbox runtime");
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+  });
+
+  it("reuses a matching grandfathered shared browser", async () => {
+    const cfg = buildConfig(false);
+    cfg.scope = "shared";
+    const expectedHash = computeTestBrowserHash({
+      cfg,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+    });
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+    dockerMocks.readDockerContainerLabel.mockResolvedValue(expectedHash);
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "shared",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+      newRuntimeBlockReason: "alpha and beta require different workspace mounts",
+    });
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining("Reusing grandfathered shared sandbox runtime"),
+    );
+  });
+
   it("serializes concurrent provisioning for the same browser container", async () => {
     let created = false;
     let cdpAuthToken: string | undefined;

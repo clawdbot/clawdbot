@@ -39,6 +39,8 @@ export type CreateSandboxBackendParams = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  /** Actionable reason why this call may reuse, but must not create, a shared runtime. */
+  newRuntimeBlockReason?: string;
   requireCurrentConfig?: boolean;
 };
 

@@ -15,6 +15,7 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { assertSharedSandboxRuntimeRemovalAllowed } from "./shared-workspace-policy.js";
 import { resolveSandboxAgentId } from "./shared.js";
 
 export type SandboxContainerInfo = SandboxRegistryEntry & {
@@ -115,6 +116,14 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
+  if (entry) {
+    assertSharedSandboxRuntimeRemovalAllowed({
+      config,
+      containerName: entry.containerName,
+      sessionKey: entry.sessionKey,
+      backendId: "docker",
+    });
+  }
   await stopCachedBrowserBridgesForContainer(containerName);
   if (entry) {
     await dockerSandboxBackendManager.removeRuntime({

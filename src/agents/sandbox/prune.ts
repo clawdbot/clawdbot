@@ -17,6 +17,7 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { assertSharedSandboxRuntimeRemovalAllowed } from "./shared-workspace-policy.js";
 import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
@@ -120,6 +121,12 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
       });
     },
     beforeRemove: async (entry) => {
+      assertSharedSandboxRuntimeRemovalAllowed({
+        config,
+        containerName: entry.containerName,
+        sessionKey: entry.sessionKey,
+        backendId: "docker",
+      });
       await stopCachedBrowserBridgesForContainer(entry.containerName);
     },
   });

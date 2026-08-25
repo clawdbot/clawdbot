@@ -25,6 +25,13 @@ openclaw sandbox list --json
 
 Remove sandbox runtimes to force recreation with current config. Runtimes are recreated automatically the next time the agent is used.
 
+Before removing a grandfathered shared Docker or Podman runtime, `recreate` verifies that the
+current agent roster can recreate the same workspace mount layout. If shared agents resolve
+incompatible mounts, the command leaves the existing runtime intact and tells you to select
+`scope: "agent"` or `"session"`, use `workspaceAccess: "none"` with one shared `workspaceRoot`, or
+configure identical mounts. Save the compatible `agents.*` configuration, then rerun `recreate`;
+the default Gateway reload mode does not require a restart.
+
 ```bash
 openclaw sandbox recreate --all
 openclaw sandbox recreate --agent mybot        # includes agent:mybot:* sub-sessions

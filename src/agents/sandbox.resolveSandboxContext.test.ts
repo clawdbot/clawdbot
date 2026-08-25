@@ -613,6 +613,63 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it("passes incompatible shared workspace mounts to the backend creation guard", async () => {
+    const backendFactory = vi.fn(async () => ({
+      id: "docker",
+      runtimeId: "docker-shared-runtime",
+      runtimeLabel: "Docker Shared Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["docker", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("docker", backendFactory);
+    const alphaWorkspace = await createSandboxFixtureDir("shared-alpha");
+    const betaWorkspace = await createSandboxFixtureDir("shared-beta");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "docker",
+              scope: "shared",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+          entries: {
+            alpha: { workspace: alphaWorkspace },
+            beta: { workspace: betaWorkspace },
+          },
+        },
+      };
+
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:alpha:main",
+        workspaceDir: alphaWorkspace,
+      });
+
+      expect(backendFactory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          newRuntimeBlockReason: expect.stringContaining(
+            "Configured agents require incompatible mounts",
+          ),
+        }),
+      );
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("uses Podman directly when the Podman backend is configured", async () => {
     containerEngineMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValueOnce({
       rootless: true,

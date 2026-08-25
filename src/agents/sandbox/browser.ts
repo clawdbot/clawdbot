@@ -35,6 +35,10 @@ import {
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
 } from "./constants.js";
 import {
+  assertSharedSandboxRuntimeCreationAllowed,
+  retainLegacySharedSandboxRuntime,
+} from "./current-config.js";
+import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
@@ -232,6 +236,7 @@ type EnsureSandboxBrowserParams = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  newRuntimeBlockReason?: string;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
@@ -326,6 +331,11 @@ async function ensureSandboxBrowserContainer(
     cdpAuthToken =
       (await readDockerContainerEnvVar(containerName, CDP_AUTH_TOKEN_ENV_KEY)) ?? undefined;
     if (!cdpAuthToken) {
+      if (params.newRuntimeBlockReason) {
+        throw new Error(
+          `Shared sandbox browser runtime ${containerName} must be replaced to restore its CDP authentication contract, but creating its replacement is blocked.\n${params.newRuntimeBlockReason}`,
+        );
+      }
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
@@ -346,33 +356,52 @@ async function ensureSandboxBrowserContainer(
       hashMismatch = !currentHash || currentHash !== expectedHash;
     }
     if (hashMismatch) {
-      const lastUsedAtMs = registryEntry?.lastUsedAtMs;
-      const isHot =
-        running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
-      if (isHot) {
-        const hint = (() => {
-          if (params.cfg.scope === "session") {
-            return `openclaw sandbox recreate --browser --session ${params.scopeKey}`;
-          }
-          if (params.cfg.scope === "agent") {
-            const agentId = resolveSandboxAgentId(params.scopeKey) ?? "main";
-            return `openclaw sandbox recreate --browser --agent ${agentId}`;
-          }
-          return "openclaw sandbox recreate --browser --all";
-        })();
-        defaultRuntime.log(
-          `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
-        );
+      if (params.newRuntimeBlockReason) {
+        retainLegacySharedSandboxRuntime({
+          containerName,
+          configMismatch: true,
+          newRuntimeBlockReason: params.newRuntimeBlockReason,
+        });
       } else {
-        await stopExistingForContainer();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        const lastUsedAtMs = registryEntry?.lastUsedAtMs;
+        const isHot =
+          running &&
+          (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
+        if (isHot) {
+          const hint = (() => {
+            if (params.cfg.scope === "session") {
+              return `openclaw sandbox recreate --browser --session ${params.scopeKey}`;
+            }
+            if (params.cfg.scope === "agent") {
+              const agentId = resolveSandboxAgentId(params.scopeKey) ?? "main";
+              return `openclaw sandbox recreate --browser --agent ${agentId}`;
+            }
+            return "openclaw sandbox recreate --browser --all";
+          })();
+          defaultRuntime.log(
+            `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
+          );
+        } else {
+          await stopExistingForContainer();
+          await execDocker(["rm", "-f", containerName], { allowFailure: true });
+          hasContainer = false;
+          running = false;
+        }
       }
+    } else {
+      retainLegacySharedSandboxRuntime({
+        containerName,
+        configMismatch: false,
+        newRuntimeBlockReason: params.newRuntimeBlockReason,
+      });
     }
   }
 
   if (!hasContainer) {
+    assertSharedSandboxRuntimeCreationAllowed({
+      containerName,
+      newRuntimeBlockReason: params.newRuntimeBlockReason,
+    });
     if (noVncEnabled) {
       noVncPassword = generateNoVncPassword();
     }
@@ -566,7 +595,7 @@ async function ensureSandboxBrowserContainer(
     createdAtMs: now,
     lastUsedAtMs: now,
     image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash: hasContainer && hashMismatch ? (currentHash ?? undefined) : expectedHash,
     cdpPort: mappedCdp,
     noVncPort: mappedNoVnc ?? undefined,
   });

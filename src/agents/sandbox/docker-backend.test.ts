@@ -55,6 +55,25 @@ function createConfig(): OpenClawConfig {
   };
 }
 
+function createConflictingSharedConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          scope: "shared",
+          workspaceAccess: "rw",
+        },
+      },
+      entries: {
+        alpha: { workspace: "/tmp/openclaw-alpha" },
+        beta: { workspace: "/tmp/openclaw-beta" },
+      },
+    },
+  };
+}
+
 describe("docker sandbox backend manager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,10 +103,11 @@ describe("docker sandbox backend manager", () => {
       workspaceDir: "/tmp/customer/workspace",
       agentWorkspaceDir: "/tmp/customer/workspace",
       cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
+      newRuntimeBlockReason: "incompatible shared mounts",
     });
 
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey }),
+      expect.objectContaining({ scopeKey, newRuntimeBlockReason: "incompatible shared mounts" }),
     );
   });
 
@@ -268,6 +288,25 @@ describe("docker sandbox backend manager", () => {
         config: createConfig(),
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("refuses to remove a grandfathered shared runtime before config recovery", async () => {
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "oc-shared",
+          backendId: "docker",
+          runtimeLabel: "oc-shared",
+          sessionKey: "shared",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConflictingSharedConfig(),
+      }),
+    ).rejects.toThrow("Refusing to remove grandfathered shared sandbox runtime oc-shared");
+
+    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
   });
 
   it("uses Podman for Podman registry entries", async () => {

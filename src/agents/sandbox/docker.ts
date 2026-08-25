@@ -17,7 +17,11 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  assertSharedSandboxRuntimeCreationAllowed,
+  handleHotSandboxConfigMismatch,
+  retainLegacySharedSandboxRuntime,
+} from "./current-config.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -549,6 +553,7 @@ type EnsureSandboxContainerParams = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  newRuntimeBlockReason?: string;
   requireCurrentConfig?: boolean;
 };
 
@@ -649,27 +654,46 @@ async function ensureSandboxContainerLifecycle(
     }
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
-      const lastUsedAtMs = registryEntry?.lastUsedAtMs;
-      const isHot =
-        running &&
-        (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
-      if (isHot) {
-        handleHotSandboxConfigMismatch({
+      if (params.newRuntimeBlockReason) {
+        retainLegacySharedSandboxRuntime({
           containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
+          configMismatch: true,
+          newRuntimeBlockReason: params.newRuntimeBlockReason,
+          requireCurrentConfig: params.requireCurrentConfig,
         });
       } else {
-        await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        const lastUsedAtMs = registryEntry?.lastUsedAtMs;
+        const isHot =
+          running &&
+          (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            ...(params.requireCurrentConfig !== undefined
+              ? { requireCurrentConfig: params.requireCurrentConfig }
+              : {}),
+          });
+        } else {
+          await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+          hasContainer = false;
+          running = false;
+        }
       }
+    } else {
+      retainLegacySharedSandboxRuntime({
+        containerName,
+        configMismatch: false,
+        newRuntimeBlockReason: params.newRuntimeBlockReason,
+      });
     }
   }
   if (!hasContainer) {
+    assertSharedSandboxRuntimeCreationAllowed({
+      containerName,
+      newRuntimeBlockReason: params.newRuntimeBlockReason,
+    });
     await createSandboxContainer({
       engine,
       name: containerName,
@@ -697,7 +721,7 @@ async function ensureSandboxContainerLifecycle(
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
     configLabelKind: "Image",
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash: hasContainer && hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;
 }

@@ -25,6 +25,7 @@ import {
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
 import type { SandboxRegistryEntry } from "./registry.js";
+import { assertSharedSandboxRuntimeRemovalAllowed } from "./shared-workspace-policy.js";
 
 function resolveConfiguredDockerRuntimeImage(params: {
   config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
@@ -60,6 +61,9 @@ async function createContainerSandboxBackend(
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
+    ...(params.newRuntimeBlockReason
+      ? { newRuntimeBlockReason: params.newRuntimeBlockReason }
+      : {}),
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
@@ -250,7 +254,13 @@ function createContainerSandboxBackendManager(
         configLabelMatch,
       };
     },
-    async removeRuntime({ entry }) {
+    async removeRuntime({ entry, config }) {
+      assertSharedSandboxRuntimeRemovalAllowed({
+        config,
+        containerName: entry.containerName,
+        sessionKey: entry.sessionKey,
+        backendId: engine.id,
+      });
       const podmanTarget = resolvePodmanTarget(entry);
       await validateSandboxContainerEngineTarget(engine, podmanTarget);
       const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
