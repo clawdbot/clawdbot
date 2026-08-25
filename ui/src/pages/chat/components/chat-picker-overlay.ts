@@ -87,7 +87,10 @@ function ensureChatComposerPickerDismissal(): void {
           (node): node is HTMLElement =>
             node instanceof HTMLElement && node.localName === "wa-dropdown",
         );
-      dropdown?.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
+      if (dropdown) {
+        pointerOpenedDropdowns.delete(dropdown);
+        dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
+      }
     },
     true,
   );

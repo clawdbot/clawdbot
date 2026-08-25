@@ -7,12 +7,17 @@ const dictationHarness = vi.hoisted(() => ({
     onCommit: (transcript: string) => void;
     onTap: () => void;
   },
-  controllers: [] as Array<{ active: boolean; handlePointerDown: () => void }>,
+  controllers: [] as Array<{
+    active: boolean;
+    locksComposer: boolean;
+    handlePointerDown: () => void;
+  }>,
 }));
 
 vi.mock("../chat/composer-dictation.ts", () => ({
   ComposerDictationController: class {
     active = false;
+    locksComposer = false;
 
     constructor(options: { onCommit: (transcript: string) => void; onTap: () => void }) {
       dictationHarness.options = options;
@@ -132,5 +137,29 @@ describe("NewSessionDictationControl", () => {
     expect(dictationHarness.controllers).toHaveLength(2);
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("publishes whether dictation currently locks draft submission", () => {
+    const control = new NewSessionDictationControl({
+      textarea: { captureSelection: vi.fn(), insertTranscript: vi.fn() } as never,
+      getClient: () => ({}) as never,
+      isConnected: () => true,
+      canCommit: () => true,
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClearError: vi.fn(),
+      requestUpdate: vi.fn(),
+    });
+
+    control.render("agent-a");
+    expect(control.locked).toBe(false);
+
+    const controller = dictationHarness.controllers[0];
+    if (!controller) {
+      throw new Error("expected dictation controller");
+    }
+    controller.locksComposer = true;
+
+    expect(control.locked).toBe(true);
   });
 });

@@ -38,6 +38,10 @@ export class NewSessionDictationControl {
     this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
   }
 
+  get locked(): boolean {
+    return this.dictation?.locksComposer === true;
+  }
+
   dispose(): void {
     this.owner = null;
     this.dictation?.dispose();
