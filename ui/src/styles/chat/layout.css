@@ -2044,13 +2044,22 @@ button.chat-reply-preview--message:disabled {
   margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
 
-/* Fade transcript content before the highest composer-stack surface covers it.
-   The chat-surface endpoint stays invisible when there is no content behind. */
+/* Fade the transcript across its whole column before the highest stack surface
+   covers it. The solid tail sits behind rounded corners, so card silhouettes
+   cannot expose unfaded text; its chat-surface color is invisible when there
+   is no transcript behind it. */
 .agent-chat__composer-shell::before {
   position: absolute;
-  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
-  height: var(--chat-transcript-fade-height, 20px);
-  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) calc(0px - var(--chat-thread-gutter))
+    auto;
+  height: calc(
+    var(--chat-transcript-fade-height, 20px) + var(--chat-transcript-fade-stack-overlap, 20px)
+  );
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--chat-surface) var(--chat-transcript-fade-height, 20px)
+  );
   content: "";
   pointer-events: none;
 }

@@ -69,6 +69,7 @@
   --chat-composer-top-margin: 8px;
   --chat-transcript-composer-underlap: 30px;
   --chat-transcript-fade-height: 24px;
+  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
 
   position: relative;
   display: flex;
