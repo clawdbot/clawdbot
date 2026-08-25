@@ -7,8 +7,6 @@ const CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS = 5_000;
 
 type ExecSyncFn = typeof execSync;
 
-const execFileAsync = promisify(execFile);
-
 function parseClaudeCliKeychainPayload(raw: string): Record<string, unknown> | null {
   const parsed = JSON.parse(raw.trim());
   return parsed && typeof parsed === "object" ? parsed : null;
@@ -40,7 +38,10 @@ export async function readClaudeCliKeychainPayloadAsync(
   timeout = CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | null> {
   try {
-    const { stdout } = await execFileAsync(
+    // promisify is called here rather than at module scope on purpose. A test
+    // that partially mocks node:child_process without execFile would otherwise
+    // throw while merely importing this module, taking unrelated suites with it.
+    const { stdout } = await promisify(execFile)(
       "security",
       ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
       { encoding: "utf8", timeout },
