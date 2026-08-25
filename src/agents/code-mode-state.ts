@@ -325,6 +325,10 @@ function isPendingBridgeRequestReplaySafe(
   return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
+function isPendingBridgeRequestSideEffectFree(request: PendingBridgeRequest): boolean {
+  return request.method === "nodes" && (request.args[0] === "list" || request.args[0] === "get");
+}
+
 function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
@@ -363,14 +367,10 @@ export function createPendingBridgeStates(params: {
     const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
     const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
     const tracksDispatch = request.method !== "sleep";
-    const replaySafe = isPendingBridgeRequestReplaySafe(
-      request,
-      params.runtime,
-      params.catalogProjection,
-    );
+    const sideEffectFree = isPendingBridgeRequestSideEffectFree(request);
     if (tracksDispatch) {
       params.bridgeDispatch.started = true;
-      if (!replaySafe) {
+      if (!sideEffectFree) {
         params.bridgeDispatch.potentiallyMutatingDispatches += 1;
       }
     }
@@ -398,7 +398,7 @@ export function createPendingBridgeStates(params: {
       ...request,
       promise: completion.then((settled) => {
         const trustedNoStart = tracksDispatch && consumeTrustedToolNoStartError(settled);
-        if (trustedNoStart && !replaySafe) {
+        if (trustedNoStart && !sideEffectFree) {
           params.bridgeDispatch.potentiallyMutatingDispatches = Math.max(
             0,
             params.bridgeDispatch.potentiallyMutatingDispatches - 1,
