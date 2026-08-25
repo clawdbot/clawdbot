@@ -58,21 +58,6 @@ export type SidebarVisibleSections = {
   visibleRows: SidebarRecentSession[];
 };
 
-function baselineSessionRows(rows: readonly SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
-
 /** Attention, agent-declared status, and the queued explanation are messages
  * the operator must act on; they replace a held subtitle immediately. */
 function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
@@ -105,28 +90,27 @@ export class SidebarSessionProjection {
   }
 
   observeRows(results: readonly { sessions: readonly { key: string }[] }[]): void {
-    const retainedKeys = new Set<string>();
     for (const result of results) {
       for (const { key } of result.sessions) {
-        if (!key) {
-          continue;
-        }
-        retainedKeys.add(key);
-        if (!this.observedOrder.has(key)) {
+        if (key && !this.observedOrder.has(key)) {
           this.observedOrder.set(key, this.nextCreatedOrder++);
         }
       }
     }
     // Paging gaps must retain their tie-break index; evict absent keys only
     // when the sidebar-lifetime registry actually exceeds its memory bound.
-    if (this.observedOrder.size > SIDEBAR_CREATED_ORDER_CAP) {
-      for (const key of this.observedOrder.keys()) {
-        if (this.observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
-          break;
-        }
-        if (!retainedKeys.has(key)) {
-          this.observedOrder.delete(key);
-        }
+    if (this.observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
+      return;
+    }
+    const retainedKeys = new Set(
+      results.flatMap((result) => result.sessions.map(({ key }) => key)),
+    );
+    for (const key of this.observedOrder.keys()) {
+      if (this.observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
+        break;
+      }
+      if (!retainedKeys.has(key)) {
+        this.observedOrder.delete(key);
       }
     }
   }
@@ -248,32 +232,32 @@ export class SidebarSessionProjection {
       const renderHeader = section.id !== "ungrouped" || ungroupedHasPeerHeader;
       const collapsed = renderHeader && input.collapsedSections.has(section.id);
       const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
-      const collapsedVisibleRowCount = baselineSessionRows(
-        section.rows,
-        SIDEBAR_SESSION_PAGE_SIZE,
-      ).length;
+      const requiredRowCount = section.rows.reduce(
+        (count, row) => count + Number(row.active || row.pinned),
+        0,
+      );
+      const collapsedVisibleRowCount = Math.max(
+        requiredRowCount,
+        Math.min(totalRowCount, SIDEBAR_SESSION_PAGE_SIZE),
+      );
       let visibleRowCount = 0;
       if (!collapsed) {
         expandedRows.push(...section.rows);
-        const baselineKeys = new Set(
-          baselineSessionRows(section.rows, visibleLimit).map((row) => row.key),
-        );
-        const sticky = this.stickySections.get(section.id) ?? new Set<string>();
-        const sectionKeys = new Set(section.rows.map((row) => row.key));
-        for (const key of sticky) {
-          if (!sectionKeys.has(key)) {
-            sticky.delete(key);
-          }
-        }
+        let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
+        const sticky = this.stickySections.get(section.id);
         // Union after normal paging keeps newly sorted rows visible without
         // evicting rows the operator already saw before a run-state transition.
-        section.rows = section.rows.filter(
-          (row) => baselineKeys.has(row.key) || sticky.has(row.key),
-        );
-        for (const row of section.rows) {
-          sticky.add(row.key);
-        }
-        this.stickySections.set(section.id, sticky);
+        section.rows = section.rows.filter((row) => {
+          if (row.active || row.pinned) {
+            return true;
+          }
+          if (optionalSlots > 0) {
+            optionalSlots -= 1;
+            return true;
+          }
+          return sticky?.has(row.key) === true;
+        });
+        this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
         visibleRowCount = section.rows.length;
       }
