@@ -1,9 +1,8 @@
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
-import { isGatewayCapabilityAdvertised } from "../gateway-methods.ts";
+import { supportsSessionUnreadAckContract } from "../gateway-methods.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   readSessionChangedEvent,
@@ -181,11 +180,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const mutations = createSessionMutations({
     connection,
-    supportsSessionUnreadAckContract: () =>
-      isGatewayCapabilityAdvertised(
-        gateway.snapshot,
-        GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-      ) === true,
+    supportsSessionUnreadAckContract: () => supportsSessionUnreadAckContract(gateway.snapshot),
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),

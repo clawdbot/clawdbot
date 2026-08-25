@@ -1,4 +1,3 @@
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   type SessionsPatchManyParams,
@@ -8,8 +7,8 @@ import {
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-archive-timeout.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
-  isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
+  supportsSessionUnreadAckContract,
 } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isExplicitSessionReadPatch } from "../lib/sessions/patch.ts";
@@ -125,11 +124,7 @@ export async function patchSessionRows(
   }> = [];
   let terminalError: unknown = null;
   const readIntent =
-    isExplicitSessionReadPatch(patch) &&
-    isGatewayCapabilityAdvertised(
-      scope.gateway.snapshot,
-      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-    ) === true
+    isExplicitSessionReadPatch(patch) && supportsSessionUnreadAckContract(scope.gateway.snapshot)
       ? ("explicit" as const)
       : undefined;
   for (let offset = 0; offset < rows.length; offset += SESSIONS_PATCH_MANY_MAX_TARGETS) {
