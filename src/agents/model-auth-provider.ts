@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
+  resolveProviderDeprecatedAuthProfileIds,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
@@ -37,6 +38,27 @@ import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
+
+function isAuthProfileRetired(params: {
+  profileId: string;
+  deprecatedProfileIds: ReadonlySet<string>;
+  provider: string;
+  store: AuthProfileStore;
+}): boolean {
+  if (!params.deprecatedProfileIds.has(params.profileId)) {
+    return false;
+  }
+  return true;
+}
+
+function assertAuthProfileNotRetired(params: Parameters<typeof isAuthProfileRetired>[0]): void {
+  if (!isAuthProfileRetired(params)) {
+    return;
+  }
+  throw new Error(
+    `Auth profile "${params.profileId}" is retired. Run ${formatCliCommand("openclaw doctor --fix")}.`,
+  );
+}
 
 function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
@@ -96,6 +118,11 @@ export async function resolveApiKeyForProviderCore(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  let deprecatedProfileIds: ReadonlySet<string> | undefined;
+  const getDeprecatedProfileIds = () =>
+    (deprecatedProfileIds ??= new Set(
+      resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
+    ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   // Pending credential files own this agent's auth route until Doctor commits
   // and archives them; do not fall through to env/config credentials.
@@ -123,6 +150,12 @@ export async function resolveApiKeyForProviderCore(params: {
       return awsSdkProfileAuth;
     }
     const store = getScopedStore(profileId);
+    assertAuthProfileNotRetired({
+      profileId,
+      deprecatedProfileIds: getDeprecatedProfileIds(),
+      provider,
+      store,
+    });
     const configuredProfileType = store.profiles[profileId]?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
@@ -269,6 +302,19 @@ export async function resolveApiKeyForProviderCore(params: {
   // Matched profile references are terminal so bad bindings cannot silently
   // fall through to a different credential or to the profile id as bearer text.
   const providerEntryStore = getScopedStore();
+  const providerEntryReference = authConfig.resolveProviderEntryApiKeyProfileReference({
+    cfg,
+    provider,
+    store: providerEntryStore,
+  });
+  if ("profileId" in providerEntryReference) {
+    assertAuthProfileNotRetired({
+      profileId: providerEntryReference.profileId,
+      deprecatedProfileIds: getDeprecatedProfileIds(),
+      provider,
+      store: providerEntryStore,
+    });
+  }
   const providerEntryBinding = await authConfig.resolveProviderEntryApiKeyBinding({
     cfg,
     provider,
@@ -371,7 +417,15 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
-        });
+        }).filter(
+          (candidateProfileId) =>
+            !isAuthProfileRetired({
+              profileId: candidateProfileId,
+              deprecatedProfileIds: getDeprecatedProfileIds(),
+              provider,
+              store,
+            }),
+        );
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {

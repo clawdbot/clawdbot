@@ -301,8 +301,35 @@ function requireJob(params: {
   }
 }
 
+function jobLogArgs(jobId: string, allowEscapeSequences = true) {
+  const args = ["api", `repos/${REPOSITORY}/actions/jobs/${jobId}/logs`];
+  if (allowEscapeSequences) {
+    args.push("--allow-escape-sequences");
+  }
+  return args;
+}
+
+function isUnknownAllowEscapeSequencesFlag(error: unknown) {
+  if (typeof error !== "object" || error === null || !("stderr" in error)) {
+    return false;
+  }
+  const stderr = error.stderr;
+  return (
+    typeof stderr === "string" &&
+    stderr.replace(/\r\n?/gu, "\n").split("\n").includes("unknown flag: --allow-escape-sequences")
+  );
+}
+
 function requireJobLogTarget(jobId: string, targetSha: string) {
-  const log = gh(["api", `repos/${REPOSITORY}/actions/jobs/${jobId}/logs`]);
+  let log: string;
+  try {
+    log = gh(jobLogArgs(jobId));
+  } catch (error) {
+    if (!isUnknownAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    log = gh(jobLogArgs(jobId, false));
+  }
   if (!log.includes(targetSha)) {
     fail(`job ${jobId} log does not bind target ${targetSha}`);
   }

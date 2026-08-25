@@ -323,7 +323,6 @@ src/agents/bash-tools.exec.approval-id.test.ts
 src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
-src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts

@@ -53,6 +53,7 @@ function createContext(
     cwd: "/tmp/openclaw-workspace",
     env: {
       HOME: "/tmp/claude-login-home",
+      CLAUDE_CONFIG_DIR: "/tmp/claude-login-home/custom-config",
       PATH: "/usr/local/bin:/usr/bin",
       OPENCLAW_MCP_TOKEN: "test-grant-not-a-real-secret",
     },

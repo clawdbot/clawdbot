@@ -1769,6 +1769,7 @@ describe("gateway run option collisions", () => {
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
           REMOVED_KEY: "stale-service-value",
           SECRET_REF_KEY: "file-backed-value",
+          OPENAI_API_KEY: "operator-owned-provider-key",
           OPERATOR_KEY: "operator-value",
         },
         async () => {
@@ -1777,6 +1778,7 @@ describe("gateway run option collisions", () => {
           await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
           expect(process.env.REMOVED_KEY).toBeUndefined();
           expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+          expect(process.env.OPENAI_API_KEY).toBe("operator-owned-provider-key");
           expect(process.env.OPERATOR_KEY).toBe("operator-value");
           await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
         },

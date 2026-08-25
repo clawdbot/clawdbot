@@ -31,6 +31,8 @@ type PairingSidebar = HTMLElement & {
 
 type PairingAuth = { role: string; scopes?: string[] };
 
+let renderedSidebar = false;
+
 function createPairingShell(params: {
   auth: PairingAuth | null;
   connected?: boolean;
@@ -109,6 +111,7 @@ function createPairingShell(params: {
   const container = document.createElement("div");
 
   const renderSidebar = () => {
+    renderedSidebar = true;
     render(shell.render(), container);
     const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
     if (!sidebar) {
@@ -146,8 +149,11 @@ function createPairingShell(params: {
 
 afterEach(async () => {
   vi.useRealTimers();
+  if (renderedSidebar) {
+    await waitForFast(() => expect(customElements.get("openclaw-app-sidebar")).toBeDefined());
+    renderedSidebar = false;
+  }
   document.body.replaceChildren();
-  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");

@@ -58,6 +58,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       skills: [],
       hooks: [],
       origin: "bundled",
+      enabledByDefault: true,
       rootDir: "/test/anthropic",
       source: "/test/anthropic/index.js",
       manifestPath: "/test/anthropic/openclaw.plugin.json",
@@ -1632,7 +1633,7 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps catalog models available through a refresh-owned CLI runtime", async () => {
+  it("keeps catalog models available through a native CLI runtime", async () => {
     await withoutAnthropicEnvAuth(async () => {
       await withModelsTestState(
         {
@@ -1640,35 +1641,8 @@ describe("models.list", () => {
           prefix: "openclaw-models-list-cli-runtime-",
           agentEnv: "main",
         },
-        async (state) => {
-          const store = {
-            version: 1,
-            profiles: {
-              "anthropic:claude-cli": {
-                type: "oauth",
-                provider: "claude-cli",
-                access: "claude-cli-access",
-                refresh: "claude-cli-refresh",
-                expires: Date.now() - 60_000,
-              },
-            },
-          } as const;
-          await state.writeAuthProfiles(store);
-          replaceRuntimeAuthProfileStoreSnapshots([
-            {
-              agentDir: state.agentDir(),
-              store: Object.assign({}, store, {
-                runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
-              }),
-            },
-          ]);
-
+        async () => {
           const runtimeConfig = {
-            auth: {
-              profiles: {
-                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
-              },
-            },
             agents: {
               defaults: {
                 models: {

@@ -152,6 +152,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .local)
         #expect(view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 2, 3])
         #expect(state.connectionMode == .unconfigured)
     }
 
@@ -163,6 +164,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .unconfigured)
         #expect(!view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 9])
         #expect(state.connectionMode == .unconfigured)
     }
 

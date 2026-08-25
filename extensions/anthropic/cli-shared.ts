@@ -22,7 +22,8 @@ export {
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
-// endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+// endpoint, token source, plugin source, or telemetry bootstrap mode. Claude's
+// config directory remains inherited because it owns the selected native login.
 /** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
@@ -33,7 +34,6 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_CUSTOM_HEADERS",
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
-  "CLAUDE_CONFIG_DIR",
   // Re-injected per run from OpenClaw's canonical context budget.
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   // Re-injected only for 200K runs. Claude's user settings `env` block has

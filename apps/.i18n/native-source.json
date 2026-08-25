@@ -237,17 +237,6 @@
       ]
     },
     {
-      "id": "native.android.df03ebb12a9184ac",
-      "source": "$emoji $name",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.c8d4706f1ebe8e51",
       "source": "$held held",
       "surface": "android",
@@ -9030,17 +9019,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.895a25d9e1e76ae9",
-      "source": "More Agents",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
         }
       ]
     },

@@ -12,28 +12,23 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
-  () => ({
-    readClaudeCliCredentialsForSetupMock: vi.fn(),
-    readClaudeCliCredentialsForRuntimeMock: vi.fn(),
-  }),
-);
+const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
+  probeClaudeCliAuthStatusMock: vi.fn(),
+}));
 
 vi.mock("./cli-auth-seam.js", () => {
   return {
-    readClaudeCliCredentialsForSetup: readClaudeCliCredentialsForSetupMock,
-    readClaudeCliCredentialsForRuntime: readClaudeCliCredentialsForRuntimeMock,
+    probeClaudeCliAuthStatus: probeClaudeCliAuthStatusMock,
   };
 });
 
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
-import { CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER } from "./cli-constants.js";
+import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
-  readClaudeCliCredentialsForSetupMock.mockReset();
-  readClaudeCliCredentialsForRuntimeMock.mockReset();
+  probeClaudeCliAuthStatusMock.mockReset();
 });
 
 afterAll(() => {
@@ -101,6 +96,13 @@ describe("anthropic provider replay hooks", () => {
       modelArg: "--model",
       sessionArgs: ["--session-id", "{sessionId}"],
     });
+    expect(backend.config.reliability?.watchdog?.resume).toBeUndefined();
+  });
+
+  it("declares the copied Claude CLI profile as retired", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(provider.deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
   });
 
   it("lets native session discovery be disabled without disabling Anthropic", () => {
@@ -401,6 +403,35 @@ describe("anthropic provider replay hooks", () => {
     ]) {
       expect(models[modelId]).toEqual({ agentRuntime: { id: "claude-cli" } });
     }
+  });
+
+  it("backfills Claude CLI routing from a retired provider-entry profile reference", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              apiKey: "anthropic:claude-cli",
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.agentRuntime).toEqual({
+      id: "claude-cli",
+    });
   });
 
   it("backfills raw and canonical Claude CLI policies for provider-qualified shorthand refs", async () => {
@@ -1373,62 +1404,7 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
-  it("resolves claude-cli synthetic oauth auth", async () => {
-    readClaudeCliCredentialsForRuntimeMock.mockReset();
-    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: 123,
-    });
-
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    expect(
-      provider.resolveSyntheticAuth?.({
-        provider: "claude-cli",
-      } as never),
-    ).toEqual({
-      apiKey: "access-token",
-      source: "Claude CLI native auth",
-      mode: "oauth",
-      expiresAt: 123,
-    });
-    expect(readClaudeCliCredentialsForRuntimeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves claude-cli synthetic token auth", async () => {
-    readClaudeCliCredentialsForRuntimeMock.mockReset();
-    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
-      type: "token",
-      provider: "anthropic",
-      token: "bearer-token",
-      expires: 123,
-    });
-
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    expect(
-      provider.resolveSyntheticAuth?.({
-        provider: "claude-cli",
-      } as never),
-    ).toEqual({
-      apiKey: "bearer-token",
-      source: "Claude CLI native auth",
-      mode: "token",
-      expiresAt: 123,
-    });
-  });
-
-  it("resolves claude-cli apiKeyHelper synthetic auth without exposing helper output", async () => {
-    readClaudeCliCredentialsForRuntimeMock.mockReset();
-    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
-      type: "api_key_helper",
-      provider: "anthropic",
-      helperHash: "helper-hash",
-    });
-
+  it("resolves claude-cli with a non-secret native auth marker", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     const runtimeAuth = provider.resolveSyntheticAuth?.({
@@ -1438,21 +1414,14 @@ describe("anthropic provider replay hooks", () => {
       provider: "claude-cli",
     } as never);
     for (const auth of [runtimeAuth, discoveryAuth]) {
-      expect(auth?.apiKey).toBe(CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER);
-      expect(auth?.source).toBe("Claude CLI apiKeyHelper");
-      expect(auth?.mode).toBe("api-key");
+      expect(auth?.apiKey).toBe(CLAUDE_CLI_NATIVE_AUTH_MARKER);
+      expect(auth?.source).toBe("Claude CLI native auth");
+      expect(auth?.mode).toBe("oauth");
     }
   });
 
-  it("stores a claude-cli auth profile during anthropic cli migration", async () => {
-    readClaudeCliCredentialsForSetupMock.mockReset();
-    readClaudeCliCredentialsForSetupMock.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "setup-access-token",
-      refresh: "refresh-token",
-      expires: 123,
-    });
+  it("does not copy native Claude auth during anthropic cli migration", async () => {
+    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
 
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const cliAuth = provider.auth.find((entry) => entry.id === "cli");
@@ -1465,18 +1434,7 @@ describe("anthropic provider replay hooks", () => {
       config: {},
     } as never);
 
-    expect(result?.profiles).toEqual([
-      {
-        profileId: "anthropic:claude-cli",
-        credential: {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "setup-access-token",
-          refresh: "refresh-token",
-          expires: 123,
-        },
-      },
-    ]);
+    expect(result?.profiles).toEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

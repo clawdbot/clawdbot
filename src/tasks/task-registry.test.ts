@@ -4267,6 +4267,7 @@ describe("task-registry", () => {
         "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
       ]);
       relay.dispose();
+      await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     });
   });

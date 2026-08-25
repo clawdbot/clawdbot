@@ -25,6 +25,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -374,6 +375,17 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   ];
   if (status.lastError) {
     lines.push(`Last error: ${status.lastError}`);
+  }
+  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
+  for (const [workspace, review] of Object.entries(status.collectionReview)) {
+    lines.push(
+      `Collection review ${workspace.slice(0, 8)}: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+    );
+  }
+  for (const [workspace, review] of Object.entries(status.experienceReview)) {
+    lines.push(
+      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
+    );
   }
   const keyCounts = new Map<string, number>();
   for (const skill of status.skills) {

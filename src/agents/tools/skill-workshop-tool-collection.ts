@@ -69,7 +69,7 @@ export const skillCollectionPlanSchema = Type.Optional(
   Type.Array(
     Type.Object(
       {
-        action: stringEnum(["keep", "write", "drop"] as const),
+        action: stringEnum(["write", "drop"] as const),
         name: Type.String(),
         description: Type.Optional(Type.String({ maxLength: 160 })),
         content: Type.Optional(Type.String()),
@@ -80,7 +80,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Exactly one decision for every current skill, plus optional new write decisions. Skills not created by Skill Workshop are read-only and require keep. write requires description and complete SKILL.md content; drop requires a reason.",
+        "Only the skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason. Skills not created by Skill Workshop are read-only.",
     },
   ),
 );
@@ -210,9 +210,6 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
     }
     const action = readToolStringParam(entry, "action", { required: true });
     const name = readToolStringParam(entry, "name", { required: true });
-    if (action === "keep") {
-      return { action, name };
-    }
     if (action === "drop") {
       return {
         action,
@@ -228,9 +225,9 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
         content: readToolStringParam(entry, "content", { required: true, trim: false }),
       };
     }
-    throw new ToolInputError(`collection[${index}].action must be keep, write, or drop`);
+    throw new ToolInputError(`collection[${index}].action must be write or drop`);
   });
 }
 
 export const SKILL_COLLECTION_ACTION_DESCRIPTION =
-  "read = inspect one current skill; reconcile = atomically keep, rewrite, create, or drop the whole writable skill collection.";
+  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills; unlisted skills stay.";

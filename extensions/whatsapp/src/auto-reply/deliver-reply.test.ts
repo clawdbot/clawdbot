@@ -296,6 +296,29 @@ describe("deliverWebReply", () => {
     });
   });
 
+  it.each([
+    {
+      name: "an image without alt text",
+      text: "![](https://example.com/diagram.png)",
+      expected: "![](https://example.com/diagram.png)",
+    },
+    {
+      name: "an image with visible alt text",
+      text: "![Diagram](https://example.com/diagram.png)",
+      expected: "Diagram",
+    },
+  ])("delivers $name instead of silently dropping the auto-reply", async ({ text, expected }) => {
+    const { msg, params } = createDelivery({ text });
+
+    const delivery = await deliverWebReply(params);
+
+    expect(msg.platform.reply).toHaveBeenCalledExactlyOnceWith(expected, undefined);
+    expect(delivery).toMatchObject({
+      providerAccepted: true,
+      results: [{ messageId: "reply-sent-1" }],
+    });
+  });
+
   it("retains an accepted auto-reply receipt when outbound activity bookkeeping fails", async () => {
     hoisted.recordChannelActivity.mockClear();
     const activityError = new Error("auto-reply activity bookkeeping disconnected");

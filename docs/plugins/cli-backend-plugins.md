@@ -109,11 +109,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
   <Step title="Register the backend">
     ```typescript index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 
     function buildAcmeCliBackend(): CliBackendPlugin {
       return {
@@ -156,12 +152,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           imageArg: "--image",
           imageMode: "repeat",
           imagePathScope: "workspace",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
           serialize: true,
         },
       };
@@ -188,7 +178,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
 `CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
 worked example above intentionally exercises the same command, resume, JSONL,
-model-alias, session, image, and watchdog fields as the bundled
+model-alias, session, and image fields as the bundled
 `google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
@@ -217,6 +207,10 @@ model-alias, session, image, and watchdog fields as the bundled
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
 | `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
 
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
