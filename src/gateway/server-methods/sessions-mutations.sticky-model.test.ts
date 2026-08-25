@@ -229,12 +229,8 @@ describe("sessions.patch sticky model persistence", () => {
     ).toHaveLength(0);
   });
 
-  it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
+  it("creates a write-scoped model session without persisting the configured default", async () => {
     const sessionKey = "agent:main:dm:non-admin";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-non-admin", updatedAt: 1 },
-    );
 
     const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
       "operator.write",
@@ -242,6 +238,7 @@ describe("sessions.patch sticky model persistence", () => {
 
     expect(response[0]).toBe(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      sessionId: expect.any(String),
       providerOverride: "openai",
       modelOverride: "gpt-5.6-sol",
     });

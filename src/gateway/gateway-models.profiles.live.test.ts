@@ -82,6 +82,7 @@ import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
+import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
 
 type ProviderThinkingModelCompat = {
@@ -151,6 +152,7 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_AGENT_ID = "dev";
+const GATEWAY_LIVE_OPERATOR_SCOPES = [READ_SCOPE, WRITE_SCOPE];
 const GATEWAY_LIVE_CONFIG_TEST_WORKSPACE = path.join(os.tmpdir(), "openclaw-live-config-test");
 const GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR = path.join(
   os.tmpdir(),
@@ -2820,6 +2822,63 @@ function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthPr
   };
 }
 
+function createGatewayLiveModelSession(params: {
+  agentId: string;
+  credentialAttempt: number;
+  label: string;
+  modelIndex: number;
+  modelKey: string;
+  thinkingLevel?: string;
+}) {
+  const key = `agent:${params.agentId}:${params.label}:model-${params.modelIndex + 1}:attempt-${params.credentialAttempt + 1}`;
+  return {
+    key,
+    // Session creation accepts thinking selection at write scope; patching it requires admin.
+    method: params.thinkingLevel ? ("sessions.create" as const) : ("sessions.patch" as const),
+    request: {
+      key,
+      model: params.modelKey,
+      ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
+    },
+  };
+}
+
+describe("gateway live model session policy", () => {
+  const modelSession = (credentialAttempt: number, thinkingLevel?: string) =>
+    createGatewayLiveModelSession({
+      agentId: GATEWAY_LIVE_AGENT_ID,
+      credentialAttempt,
+      label: "all-models",
+      modelIndex: 0,
+      modelKey: "openai/gpt-5.6-luna",
+      thinkingLevel,
+    });
+
+  it("requests only read and write operator scopes", () => {
+    expect(GATEWAY_LIVE_OPERATOR_SCOPES).toEqual([READ_SCOPE, WRITE_SCOPE]);
+  });
+
+  it("isolates every model credential retry in a fresh session", () => {
+    const first = modelSession(0);
+    const retry = modelSession(1);
+
+    expect(first.key).not.toBe(retry.key);
+    expect(first.request).toMatchObject({ key: first.key, model: "openai/gpt-5.6-luna" });
+    expect(retry.request).toMatchObject({ key: retry.key, model: "openai/gpt-5.6-luna" });
+  });
+
+  it("initializes explicit thinking levels without an admin-scoped session patch", () => {
+    const session = modelSession(0, "ultra");
+
+    expect(session.method).toBe("sessions.create");
+    expect(session.request).toMatchObject({
+      key: session.key,
+      model: "openai/gpt-5.6-luna",
+      thinkingLevel: "ultra",
+    });
+  });
+});
+
 async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_PROBE_TIMEOUT_MS;
   const startedAt = Date.now();
@@ -2872,6 +2931,7 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
     const client: GatewayClient | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
+      scopes: GATEWAY_LIVE_OPERATOR_SCOPES,
       requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
       connectChallengeTimeoutMs: timeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
@@ -4835,37 +4895,28 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       if (thinkingLevel !== params.thinkingLevel) {
         logProgress(`${progressLabel}: thinking ${params.thinkingLevel} -> ${thinkingLevel}`);
       }
-      // Use a separate session per model: live providers can finalize late after
-      // skip/retry paths, and a reset on a reused key does not isolate those
-      // delayed transcript writes from the next model probe.
-      const sessionKey = `agent:${agentId}:${params.label}:model-${index + 1}`;
-
       const attemptMax =
         model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
 
       for (let attempt = 0; attempt < attemptMax; attempt += 1) {
+        const session = createGatewayLiveModelSession({
+          agentId,
+          credentialAttempt: attempt,
+          label: params.label,
+          modelIndex: index,
+          modelKey,
+          ...(strictUltraProof ? { thinkingLevel } : {}),
+        });
+        const sessionKey = session.key;
         if (model.provider === "anthropic" && anthropicKeys.length > 0) {
           process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
         }
         try {
           const modelResult = await withGatewayLiveModelTimeout<"done" | "skip">(
             (async () => {
-              // Ensure session exists + override model for this run.
-              // Reset between models: avoids cross-provider transcript incompatibilities
-              // (notably OpenAI Responses requiring reasoning replay for function_call items).
               await withGatewayLiveSessionControlTimeout(
-                client.request("sessions.reset", {
-                  key: sessionKey,
-                }),
-                `${progressLabel}: sessions-reset`,
-              );
-              await withGatewayLiveSessionControlTimeout(
-                client.request("sessions.patch", {
-                  key: sessionKey,
-                  model: modelKey,
-                  ...(strictUltraProof ? { thinkingLevel } : {}),
-                }),
-                `${progressLabel}: sessions-patch`,
+                client.request(session.method, session.request),
+                `${progressLabel}: ${session.method}`,
               );
               if (strictUltraProof) {
                 await assertGatewayLiveSessionSelection({
