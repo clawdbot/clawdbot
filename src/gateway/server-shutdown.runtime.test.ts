@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   stopPlugins: vi.fn(),
   clearPluginRegistry: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
+  abortEmbeddedAgentRun: vi.fn(),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
@@ -64,6 +65,10 @@ vi.mock("../plugins/runtime.js", () => {
     prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
   };
 });
+vi.mock("../agents/embedded-agent-runner/runs.js", () => {
+  state.loaded.push("embedded-runs");
+  return { abortEmbeddedAgentRun: state.abortEmbeddedAgentRun };
+});
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
@@ -85,12 +90,14 @@ describe("gateway shutdown runtime", () => {
         "code-mode",
         "provider-transports",
         "plugin-runtime",
+        "embedded-runs",
       ].toSorted(),
     );
     expect(runtime.createGatewayCloseHandler).toBe(state.close);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
     expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
+    expect(runtime.abortEmbeddedAgentRun).toBe(state.abortEmbeddedAgentRun);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
   });
 });

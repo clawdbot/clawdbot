@@ -1236,6 +1236,61 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(false);
   });
 
+  it("cancels rootless embedded work after recovery marking on forced restart", async () => {
+    const events: string[] = [];
+    const restartRecoveryCandidates = new Map([
+      [
+        "rootless-run",
+        {
+          runId: "rootless-run",
+          lifecycleGeneration: "generation-1",
+          sessionKey: "agent:main:rootless",
+          sessionId: "rootless-session",
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        abortEmbeddedRunsForRestart: vi.fn(() => {
+          events.push("embedded-abort");
+          return true;
+        }),
+        markMainSessionsAbortedForRestart: vi.fn(async () => {
+          events.push("marker");
+        }),
+        restartRecoveryCandidates,
+      }),
+    );
+
+    await close({
+      reason: "forced gateway restart",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(events).toEqual(["marker", "embedded-abort"]);
+    expect(restartRecoveryCandidates.size).toBe(0);
+  });
+
+  it("cancels rootless embedded work when restart reply drain times out", async () => {
+    const abortEmbeddedRunsForRestart = vi.fn(() => true);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        abortEmbeddedRunsForRestart,
+        getPendingReplyCount: vi.fn(() => 1),
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restart drain timeout",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(abortEmbeddedRunsForRestart).toHaveBeenCalledOnce();
+  });
+
   it("keeps post-terminal caller work in restart drain and recovery", async () => {
     const controller = new AbortController();
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();

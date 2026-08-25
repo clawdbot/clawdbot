@@ -227,6 +227,7 @@ type RestartRunAbortParams = {
     }) => boolean;
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
+  abortEmbeddedRunsForRestart?: () => boolean;
 };
 
 /** Wait for pending replies and active runs to drain before restart shutdown. */
@@ -457,6 +458,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       aborted += 1;
     }
   }
+  params.abortEmbeddedRunsForRestart?.();
   return aborted;
 }
 
@@ -528,6 +530,7 @@ async function drainRestartPendingRepliesForShutdown(
     (params.restartRecoveryCandidates?.size ?? 0) === 0 &&
     listRestartRecoveryRuns(params.chatAbortControllers).length === 0
   ) {
+    params.abortEmbeddedRunsForRestart?.();
     return;
   }
 
@@ -847,6 +850,7 @@ export function createGatewayCloseHandler(
                 agentRunSeq: params.agentRunSeq,
                 broadcast: params.broadcast,
                 nodeSendToSession: params.nodeSendToSession,
+                abortEmbeddedRunsForRestart: params.abortEmbeddedRunsForRestart,
                 markMainSessionsAbortedForRestart: params.markMainSessionsAbortedForRestart,
                 resolveActiveSessionIdForKey: params.resolveActiveSessionIdForKey,
                 timeoutMs: drainTimeoutMs,
