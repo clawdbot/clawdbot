@@ -6,6 +6,7 @@ import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { promptSnapshot } from "./user-prompt-message.js";
 
@@ -94,4 +95,44 @@ export function buildCodexMessagesSnapshot(params: {
       message,
     }),
   );
+}
+
+export function buildCodexSteeringMessagesSnapshot(params: {
+  runParams: EmbeddedRunAttemptParams;
+  turnId: string;
+  upstreamUserText: string | undefined;
+  completedItemIds: ReadonlySet<string>;
+  assistantProjection: CodexAssistantProjection;
+  toolMessages: readonly AgentMessage[];
+}): { messages: AgentMessage[]; assistantBoundaryItemId?: string } {
+  const asyncMessages = params.assistantProjection
+    .collectAsyncMessages()
+    .filter(({ itemId }) => params.completedItemIds.has(itemId));
+  const commentaryMessages = params.assistantProjection
+    .collectCommentaryMessages()
+    .filter(({ itemId }) => params.completedItemIds.has(itemId));
+  const assistantBoundary = params.assistantProjection.createCompletedAssistantBoundaryMessage(
+    params.completedItemIds,
+    { tokenUsage: undefined, aborted: false, promptError: undefined },
+  );
+  const messages = buildCodexMessagesSnapshot({
+    runParams: params.runParams,
+    turnId: params.turnId,
+    upstreamUserText: params.upstreamUserText,
+    reasoningText: undefined,
+    planText: undefined,
+    asyncMessages,
+    commentaryMessages,
+    toolMessages: params.toolMessages,
+    lastAssistant: assistantBoundary?.message,
+    ...(assistantBoundary
+      ? { lastAssistantIdentity: `${params.turnId}:assistant:${assistantBoundary.itemId}` }
+      : {}),
+    createAssistantMirrorMessage: (title, text) =>
+      params.assistantProjection.createAssistantMirrorMessage(title, text),
+  }).filter((message) => message.role !== "user");
+  return {
+    messages,
+    ...(assistantBoundary ? { assistantBoundaryItemId: assistantBoundary.itemId } : {}),
+  };
 }

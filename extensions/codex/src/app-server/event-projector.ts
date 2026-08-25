@@ -27,7 +27,7 @@ import {
   buildCodexAttemptResult,
   type CodexAppServerToolTelemetry,
 } from "./event-projector-result.js";
-import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
+import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
@@ -168,38 +168,16 @@ export class CodexAppServerEventProjector {
   }
 
   buildSteeringTranscriptPrefix(): AgentMessage[] {
-    const asyncMessages = this.assistantProjection
-      .collectAsyncMessages()
-      .filter(({ itemId }) => this.completedItemIds.has(itemId));
-    const assistantMessageOptions = {
-      tokenUsage: undefined,
-      aborted: false,
-      promptError: undefined,
-    };
-    const commentaryMessages = this.assistantProjection
-      .collectCommentaryMessages()
-      .filter(({ itemId }) => this.completedItemIds.has(itemId));
-    const assistantBoundary = this.assistantProjection.createCompletedAssistantBoundaryMessage(
-      this.completedItemIds,
-      assistantMessageOptions,
-    );
-    this.pendingSteeringAssistantBoundaryItemId = assistantBoundary?.itemId;
-    return buildCodexMessagesSnapshot({
+    const snapshot = buildCodexSteeringMessagesSnapshot({
       runParams: this.params,
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
-      reasoningText: undefined,
-      planText: undefined,
-      asyncMessages,
-      commentaryMessages,
+      completedItemIds: this.completedItemIds,
+      assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
-      lastAssistant: assistantBoundary?.message,
-      ...(assistantBoundary
-        ? { lastAssistantIdentity: `${this.turnId}:assistant:${assistantBoundary.itemId}` }
-        : {}),
-      createAssistantMirrorMessage: (title, text) =>
-        this.assistantProjection.createAssistantMirrorMessage(title, text),
-    }).filter((message) => message.role !== "user");
+    });
+    this.pendingSteeringAssistantBoundaryItemId = snapshot.assistantBoundaryItemId;
+    return snapshot.messages;
   }
 
   markSteeringTranscriptPersisted(): void {
