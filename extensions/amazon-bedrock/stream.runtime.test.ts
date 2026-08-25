@@ -631,11 +631,25 @@ describe("Bedrock thinking request composition", () => {
       reasoning: "off" as const,
     },
     {
+      name: "native model cap with default thinking",
+      modelMaxTokens: 128_000,
+      requestedMaxTokens: undefined,
+      expected: 128_000,
+      reasoning: undefined,
+    },
+    {
       name: "fallback model cap with thinking disabled",
       modelMaxTokens: 4096,
       requestedMaxTokens: undefined,
       expected: undefined,
       reasoning: "off" as const,
+    },
+    {
+      name: "fallback model cap with default thinking",
+      modelMaxTokens: 4096,
+      requestedMaxTokens: undefined,
+      expected: undefined,
+      reasoning: undefined,
     },
     {
       name: "medium fallback model cap with thinking disabled",
@@ -668,7 +682,7 @@ describe("Bedrock thinking request composition", () => {
       }),
       context,
       {
-        reasoning: testCase.reasoning,
+        ...(testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning }),
         ...(testCase.requestedMaxTokens === undefined
           ? {}
           : { maxTokens: testCase.requestedMaxTokens }),
@@ -679,7 +693,7 @@ describe("Bedrock thinking request composition", () => {
       testCase.expected === undefined ? {} : { maxTokens: testCase.expected },
     );
     expect(input.additionalModelRequestFields).toEqual(
-      testCase.reasoning === "off"
+      testCase.reasoning !== "high"
         ? undefined
         : {
             thinking: { type: "adaptive", display: "summarized" },
