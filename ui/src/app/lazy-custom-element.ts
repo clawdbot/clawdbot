@@ -66,6 +66,7 @@ type LazyCustomElementRequest = LazyCustomElementRequestState & {
 export class LazyCustomElementRequestController {
   private current: LazyCustomElementRequest | undefined;
   private readonly preloads = new Set<string>();
+  private readonly pendingLoads = new Set<Promise<unknown>>();
   private active: OptionalCustomElement | undefined;
   private activeDismissed = false;
 
@@ -79,12 +80,19 @@ export class LazyCustomElementRequestController {
     return this.current;
   }
 
+  /** Waits for this controller's load graph, including loads started by updates. */
+  async drain(): Promise<void> {
+    while (this.pendingLoads.size > 0) {
+      await Promise.allSettled(this.pendingLoads);
+    }
+  }
+
   preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
       return;
     }
     this.preloads.add(element.tagName);
-    void ensureCustomElementDefined(element.tagName, element.loadModule)
+    const load = ensureCustomElementDefined(element.tagName, element.loadModule)
       .then(
         () => this.host.requestUpdate(),
         (error: unknown) => {
@@ -100,6 +108,7 @@ export class LazyCustomElementRequestController {
         },
       )
       .finally(() => this.preloads.delete(element.tagName));
+    this.track(load);
   }
 
   request(element: OptionalCustomElement, action?: () => void): void {
@@ -142,11 +151,12 @@ export class LazyCustomElementRequestController {
     } satisfies LazyCustomElementRequest;
     this.current = retryRequest;
     this.host.requestUpdate();
-    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+    const load = (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
       if (!reloading && this.current === retryRequest) {
         this.load(retryRequest);
       }
     });
+    this.track(load);
   }
 
   close(): void {
@@ -179,7 +189,10 @@ export class LazyCustomElementRequestController {
   }
 
   private load(request: LazyCustomElementRequest): void {
-    void ensureCustomElementDefined(request.element.tagName, request.element.loadModule).then(
+    const load = ensureCustomElementDefined(
+      request.element.tagName,
+      request.element.loadModule,
+    ).then(
       async () => {
         if (this.current !== request) {
           return;
@@ -218,6 +231,15 @@ export class LazyCustomElementRequestController {
         };
         this.host.requestUpdate();
       },
+    );
+    this.track(load);
+  }
+
+  private track(load: Promise<unknown>): void {
+    this.pendingLoads.add(load);
+    void load.then(
+      () => this.pendingLoads.delete(load),
+      () => this.pendingLoads.delete(load),
     );
   }
 }
