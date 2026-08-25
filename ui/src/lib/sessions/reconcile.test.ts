@@ -485,6 +485,31 @@ describe("reconcileSessionChanged", () => {
     expect(next.row?.category).toBe("Research");
   });
 
+  it("preserves a catalog-derived reasoning level from a session event", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      {
+        key,
+        kind: "global",
+        updatedAt: 1,
+        sessionId: "s1",
+        effectiveReasoningLevel: "on",
+      },
+    ]);
+
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      updatedAt: 2,
+      sessionId: "s1",
+      effectiveReasoningLevel: "on",
+    });
+
+    expect(next.row?.effectiveReasoningLevel).toBe("on");
+    expect(next.result?.sessions[0]?.effectiveReasoningLevel).toBe("on");
+  });
+
   it("replaces thinking metadata when the same model changes runtime", () => {
     const key = "agent:main:main";
     const result = buildResult([

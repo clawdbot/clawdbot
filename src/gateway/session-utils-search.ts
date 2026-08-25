@@ -149,6 +149,7 @@ type LoadGatewaySessionRowOptions = {
   agentId?: string;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  modelCatalog?: ModelCatalogEntry[];
   now?: number;
   transcriptUsageMaxBytes?: number;
 };
@@ -187,6 +188,7 @@ function loadGatewaySessionSnapshot(
       now,
       includeDerivedTitles: options?.includeDerivedTitles,
       includeLastMessage: options?.includeLastMessage,
+      modelCatalog: options?.modelCatalog,
       transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
       storeChildSessionsByKey,
       skipTranscriptUsageFallback: lightweight,

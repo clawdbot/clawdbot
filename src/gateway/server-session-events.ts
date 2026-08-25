@@ -4,6 +4,7 @@ import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   readTranscriptDisplayPosition,
   type TranscriptDisplayPosition,
@@ -84,6 +85,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   sessionEventSubscribers: SessionEventSubscribers;
   sessionMessageSubscribers: SessionMessageSubscribers;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  loadModelCatalog?: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
 }) {
   // Ordering is a per-transcript contract: subscribers merge each session's
   // updates independently, so lanes keyed by transcript identity keep message
@@ -143,6 +145,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionEventSubscribers: SessionEventSubscribers;
     sessionMessageSubscribers: SessionMessageSubscribers;
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+    loadModelCatalog?: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
   },
   update: InternalSessionTranscriptUpdate,
   capturedAgentScope: SessionEventAgentScope | undefined,
@@ -333,9 +336,11 @@ async function handleTranscriptUpdateBroadcast(
   }
   // Message frames must keep transcript-derived live usage (dashboard API
   // contract from #50101); the 64KB cap bounds the per-message tail read.
+  const modelCatalog = routingAgentId ? await params.loadModelCatalog?.(routingAgentId) : undefined;
   const sessionRow = loadGatewaySessionRow(sessionKey, {
     agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
+    ...(modelCatalog !== undefined ? { modelCatalog } : {}),
   });
   const activeRunState =
     sessionRow &&
@@ -413,8 +418,9 @@ export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  loadModelCatalog?: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
 }) {
-  return (event: SessionLifecycleEvent): void => {
+  return async (event: SessionLifecycleEvent): Promise<void> => {
     const connIds = params.sessionEventSubscribers.getAll();
     if (!hasSessionChangeReceivers(connIds)) {
       return;
@@ -453,7 +459,11 @@ export function createLifecycleEventBroadcastHandler(params: {
       );
       return;
     }
-    const sessionRow = loadGatewaySessionRow(event.sessionKey, { agentId: routingAgentId });
+    const modelCatalog = await params.loadModelCatalog?.(routingAgentId);
+    const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+      agentId: routingAgentId,
+      ...(modelCatalog !== undefined ? { modelCatalog } : {}),
+    });
     const activeRunState =
       sessionRow && (sessionRow.key !== "global" || routingAgentId)
         ? resolveVisibleActiveSessionRunState({

@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import {
   isAuditLedgerEnabled,
@@ -104,6 +105,14 @@ export function startGatewayEventSubscriptions(params: {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
   const runtimeConfig = getRuntimeConfig();
+  const preparedModelCatalogModulePromise = import("../agents/prepared-model-catalog.js");
+  const loadModelCatalog = async (agentId: string): Promise<ModelCatalogEntry[] | undefined> => {
+    const { getAvailablePreparedModelCatalogSnapshot } = await preparedModelCatalogModulePromise;
+    return getAvailablePreparedModelCatalogSnapshot({
+      agentId,
+      config: getRuntimeConfig(),
+    })?.entries;
+  };
   const auditEnabled = isAuditLedgerEnabled(runtimeConfig);
   const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
   const auditRecorder = createAuditEventRecorder({
@@ -299,6 +308,7 @@ export function startGatewayEventSubscriptions(params: {
           sessionEventSubscribers: params.sessionEventSubscribers,
           sessionMessageSubscribers: params.sessionMessageSubscribers,
           chatAbortControllers: params.chatAbortControllers,
+          loadModelCatalog,
         }),
     );
     return transcriptUpdateHandlerPromise;
@@ -314,6 +324,7 @@ export function startGatewayEventSubscriptions(params: {
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
           chatAbortControllers: params.chatAbortControllers,
+          loadModelCatalog,
         }),
     );
     return lifecycleEventHandlerPromise;
