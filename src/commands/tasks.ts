@@ -39,8 +39,9 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import {
+  matchesTaskStatusFilter,
   TASK_RUNTIMES,
-  TASK_STATUSES,
+  TASK_STATUS_FILTERS,
   type TaskNotifyPolicy,
   type TaskRecord,
 } from "../tasks/task-registry.types.js";
@@ -283,12 +284,12 @@ export async function tasksListCommand(
   runtime: RuntimeEnv,
 ) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
-  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
     }
-    if (statusFilter && task.status !== statusFilter) {
+    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
       return false;
     }
     return true;

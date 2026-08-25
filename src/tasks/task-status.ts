@@ -6,7 +6,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { matchesTaskStatusFilter, type TaskRecord } from "./task-registry.types.js";
 
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost", "blocked"]);
@@ -20,9 +20,7 @@ function isActiveTask(task: TaskRecord): boolean {
 }
 
 export function formatTaskStatus(task: Pick<TaskRecord, "status" | "terminalOutcome">) {
-  return task.status === "succeeded" && task.terminalOutcome === "blocked"
-    ? "blocked"
-    : task.status;
+  return matchesTaskStatusFilter(task, "blocked") ? "blocked" : task.status;
 }
 
 export function isTaskStatusIssue(task: Pick<TaskRecord, "status" | "terminalOutcome">): boolean {
