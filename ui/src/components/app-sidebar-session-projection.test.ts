@@ -111,6 +111,9 @@ describe("SidebarSessionProjection sticky membership", () => {
   });
 
   it.each([
+    // Grouping can re-emit the same section id (e.g. ungrouped) with a
+    // different row population; sticky keys must not survive the switch.
+    ["grouping", { grouping: "none" }],
     ["sort mode", { sortMode: "updated" }],
     ["status filter", { statusFilter: "all" }],
     ["agent", { agentId: "other" }],

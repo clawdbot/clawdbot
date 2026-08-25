@@ -96,7 +96,7 @@ export class SidebarSessionProjection {
   >();
   private previousInput: Pick<
     SidebarProjectionInput,
-    "sortMode" | "statusFilter" | "agentId" | "connectionIdentity" | "listSource"
+    "grouping" | "sortMode" | "statusFilter" | "agentId" | "connectionIdentity" | "listSource"
   > | null = null;
   private previousCollapsedSections = new Set<string>();
 
@@ -157,7 +157,11 @@ export class SidebarSessionProjection {
     if (
       scopeChanged ||
       (previous !== null &&
-        (previous.sortMode !== input.sortMode || previous.statusFilter !== input.statusFilter))
+        // Grouping changes can re-emit the same section id (e.g. ungrouped)
+        // with a different row population; stale sticky keys must not carry over.
+        (previous.grouping !== input.grouping ||
+          previous.sortMode !== input.sortMode ||
+          previous.statusFilter !== input.statusFilter))
     ) {
       this.resetMembership();
     }
@@ -177,6 +181,7 @@ export class SidebarSessionProjection {
       }
     }
     this.previousInput = {
+      grouping: input.grouping,
       sortMode: input.sortMode,
       statusFilter: input.statusFilter,
       agentId: input.agentId,
