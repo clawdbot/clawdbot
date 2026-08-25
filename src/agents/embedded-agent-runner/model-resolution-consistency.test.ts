@@ -70,6 +70,10 @@ vi.mock("./model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
+vi.mock("../provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
@@ -138,11 +142,6 @@ vi.mock("../runtime-plan/resolve-auth.js", () => ({
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-}));
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
-  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../provider-secret-egress.js", () => ({
