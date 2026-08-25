@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
+import * as archiveSdk from "openclaw/plugin-sdk/archive";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractLlamaServerArchive } from "./llama-server-extract.js";
 
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -107,6 +109,45 @@ describe("extractLlamaServerArchive", () => {
       extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
     ).rejects.toThrow(/preflight entry limits/u);
     expect(await fs.readdir(destDir)).toStrictEqual([]);
+  });
+
+  it("shares one deadline across tar preflight and extraction", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
+    });
+    const extractArchive = vi.spyOn(archiveSdk, "extractArchive").mockResolvedValueOnce();
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(1_123);
+
+    try {
+      await extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(extractArchive).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 10 * 60_000 - 123 }),
+    );
+  });
+
+  it("does not restore tar aliases after the shared deadline expires", async () => {
+    const root = await createTempRoot();
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
+      await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
+      const buildDir = path.join(params.destDir, "llama-build");
+      await fs.mkdir(buildDir, { recursive: true });
+      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
+      now.mockReturnValue(10 * 60_000 + 1_001);
+    });
+
+    await expect(
+      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
+    ).rejects.toThrow(/extraction timed out/u);
+    await expect(fs.lstat(path.join(destDir, "llama-build", "libllama.so"))).rejects.toThrow();
   });
 
   it("rejects a zip entry that escapes through Windows separators", async () => {

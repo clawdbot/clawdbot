@@ -15,6 +15,14 @@ const MAX_TAR_PREFLIGHT_META_ENTRY_BYTES = MEBIBYTE;
 
 type ArchiveSymlink = { entryPath: string; target: string };
 
+function remainingExtractTimeMs(deadlineMs: number): number {
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error("llama-server archive extraction timed out");
+  }
+  return remainingMs;
+}
+
 function assertSiblingLinkTarget(entryPath: string, target: string): void {
   // A target without a separator can only ever resolve inside the entry's own
   // directory, so restoring it cannot move bytes outside the extract root.
@@ -29,12 +37,13 @@ function assertSiblingLinkTarget(entryPath: string, target: string): void {
  * fs-safe rejects every archive link entry, so read the link table from the tar
  * headers and keep only same-directory aliases; anything else fails the install.
  */
-async function readTarSymlinks(archivePath: string): Promise<ArchiveSymlink[]> {
+async function readTarSymlinks(archivePath: string, deadlineMs: number): Promise<ArchiveSymlink[]> {
   const symlinks: ArchiveSymlink[] = [];
   const archiveStat = await fsp.stat(archivePath);
   if (archiveStat.size > MAX_TAR_PREFLIGHT_ARCHIVE_BYTES) {
     throw new Error("llama-server archive exceeds the preflight size limit");
   }
+  const timeoutMs = remainingExtractTimeMs(deadlineMs);
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let entryCount = 0;
@@ -74,7 +83,7 @@ async function readTarSymlinks(archivePath: string): Promise<ArchiveSymlink[]> {
     });
     const timer = setTimeout(
       () => abort(new Error("llama-server archive preflight timed out")),
-      EXTRACT_TIMEOUT_MS,
+      timeoutMs,
     );
     const finish = (error?: Error) => {
       if (settled) {
@@ -104,18 +113,26 @@ async function readTarSymlinks(archivePath: string): Promise<ArchiveSymlink[]> {
   return symlinks;
 }
 
-async function restoreArchiveSymlinks(destDir: string, symlinks: ArchiveSymlink[]): Promise<void> {
+async function restoreArchiveSymlinks(
+  destDir: string,
+  symlinks: ArchiveSymlink[],
+  deadlineMs: number,
+): Promise<void> {
+  remainingExtractTimeMs(deadlineMs);
   const destRealDir = await fsp.realpath(destDir);
+  remainingExtractTimeMs(deadlineMs);
   for (const symlink of symlinks) {
     const linkPath = path.resolve(destRealDir, symlink.entryPath);
     // Resolve the parent through realpath instead of comparing spellings: the
     // reported bypass came from lexical entry-path checks that Windows separators
     // and drive prefixes walk straight through.
     const parentRealDir = await fsp.realpath(path.dirname(linkPath));
+    remainingExtractTimeMs(deadlineMs);
     if (parentRealDir !== destRealDir && !parentRealDir.startsWith(destRealDir + path.sep)) {
       throw new Error(`unsafe link path in llama-server archive: ${symlink.entryPath}`);
     }
     await fsp.symlink(symlink.target, path.join(parentRealDir, path.basename(linkPath)));
+    remainingExtractTimeMs(deadlineMs);
   }
 }
 
@@ -138,15 +155,18 @@ export async function extractLlamaServerArchive(params: {
     });
     return;
   }
-  const symlinks = await readTarSymlinks(params.archivePath);
+  // TAR alias discovery and restoration are part of extraction, so all three
+  // phases share one deadline instead of granting each pass a fresh budget.
+  const deadlineMs = Date.now() + EXTRACT_TIMEOUT_MS;
+  const symlinks = await readTarSymlinks(params.archivePath, deadlineMs);
   await extractArchive({
     archivePath: params.archivePath,
     destDir: params.destDir,
     kind: "tar",
     tarGzip: true,
-    timeoutMs: EXTRACT_TIMEOUT_MS,
+    timeoutMs: remainingExtractTimeMs(deadlineMs),
     entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
     onFiltered: "skip-entry",
   });
-  await restoreArchiveSymlinks(params.destDir, symlinks);
+  await restoreArchiveSymlinks(params.destDir, symlinks, deadlineMs);
 }
