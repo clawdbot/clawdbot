@@ -3,7 +3,7 @@
 // Tests use it to rebuild v9-shaped databases: the v10 retirement regression
 // seeds a pre-migration file, and the pinned pre-C04 audit reader projects a
 // current database back to the v9 era it was built against.
-export const RETIRED_STATE_TABLES_V10_FIXTURE_SQL = `
+const RETIRED_STATE_TABLES_V10_FIXTURE_SQL = `
 CREATE TABLE IF NOT EXISTS agent_model_catalogs (
   catalog_key TEXT NOT NULL PRIMARY KEY,
   agent_dir TEXT NOT NULL,
