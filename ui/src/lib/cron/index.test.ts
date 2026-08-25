@@ -2148,7 +2148,7 @@ describe("cron controller", () => {
     { name: "process exit", schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
     {
       name: "event stream",
-      schedule: { kind: "stream", command: ["node", "events.mjs"], batchMs: 1_234 },
+      schedule: { kind: "stream", command: Array.of("node", "events.mjs"), batchMs: 1_234 },
     },
   ] as const)("clones the exact $name schedule while its fields remain unchanged", async (item) => {
     const request = createCronRequest("job-schedule-clone");
