@@ -27,6 +27,7 @@ const MemorySearchSchema = {
     maxResults: { type: "integer", minimum: 1 },
     minScore: { type: "number" },
     corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
+    lifecycle: { type: "string", enum: ["auto", "current", "all"] },
   },
   required: ["query"],
   additionalProperties: false,
@@ -87,7 +88,7 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   name: "memory_search",
   parameters: MemorySearchSchema,
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` restricts hits to the session corpus under the same visibility rules as session history tools. \`lifecycle=current\` prefers active governed semantic records and excludes superseded/historical records; \`auto\` applies that behavior to current/latest/now/today queries, while \`all\` preserves full lineage. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
