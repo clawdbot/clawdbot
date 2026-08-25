@@ -94,7 +94,6 @@
   "agent-scope-runtime",
   "agent-runtime",
   "simple-completion-runtime",
-  "privacy-runtime",
   "speech-core",
   "speech-settings",
   "tts-runtime",

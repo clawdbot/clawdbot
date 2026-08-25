@@ -48,12 +48,9 @@ export type PrivacyConfig = {
      */
     userMessages?: boolean;
 
-    /**
-     * Apply PII redaction to tool call outputs before they are appended to
-     * the conversation and sent upstream.
-     * Default: true.
-     */
-    toolOutputs?: boolean;
+    // toolOutputs: model-facing tool-result redaction requires intercepting
+    // the agent session's tool-result flow (not the rendering output path).
+    // Planned for implementation via the llm_intercept_input hook (#115988).
 
     /** Per-category overrides.  Keys match the PiiCategory enum strings. */
     categories?: {

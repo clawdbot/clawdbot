@@ -162,7 +162,11 @@ async function runCliAgentInternal(
   params.onExecutionStarted?.();
 
   // Privacy: drop image attachments when media blocking is enabled.
-  if (params.config?.privacy?.media?.blockAttachments && params.images?.length) {
+  if (
+    params.config?.privacy?.enabled &&
+    params.config.privacy.media?.blockAttachments &&
+    params.images?.length
+  ) {
     if (params.config.privacy.media.warnOnBlock !== false) {
       process.stderr.write(
         `[privacy] blocked ${params.images.length} image attachment(s) due to media.blockAttachments policy\n`,

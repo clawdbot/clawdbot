@@ -508,7 +508,6 @@ export const OpenClawSchemaShape = {
           enabled: z.boolean().optional(),
           systemPrompt: z.boolean().optional(),
           userMessages: z.boolean().optional(),
-          toolOutputs: z.boolean().optional(),
           categories: z
             .strictObject({
               email: z

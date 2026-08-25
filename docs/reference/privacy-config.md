@@ -26,7 +26,6 @@ privacy:
     enabled: true # Defaults to true when privacy.enabled=true
     systemPrompt: true # Redact PII in system prompt context files
     userMessages: false # Redact PII in user input (off by default)
-    toolOutputs: true # Redact PII in tool call outputs
     categories:
       email: { redact: true, placeholder: "[EMAIL]" }
       phone: { redact: true, placeholder: "[PHONE]" }
@@ -57,10 +56,3 @@ privacy:
 | Phone       | US formats with optional country code | `[PHONE]`           |
 | IPv4        | `192.168.1.1` (not followed by `/`)   | `[IPv4]`            |
 | UUID        | v1-v5 UUIDs                           | `[UUID]`            |
-
-## Session encryption
-
-AES-256-GCM session transcript encryption is available as a
-programmatic API (`encryptSessionFile` / `encryptSessionDirectory`)
-but is not yet exposed as a config-driven feature. A future
-`openclaw session encrypt` command will provide the enablement path.
