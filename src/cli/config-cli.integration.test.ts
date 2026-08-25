@@ -875,4 +875,17 @@ describe("config cli integration", () => {
       ).toBe(false);
     });
   });
+
+  describe("nesting depth limit", () => {
+    it("rejects a deeply-nested config file with a clean validation error instead of overflowing the stack", async () => {
+      // Test the parseConfigJson5 function directly with deeply nested JSON
+      const deepJson = "[".repeat(1000) + "]".repeat(1000);
+
+      const { parseConfigJson5 } = await import("../config/io.read-helpers.js");
+      const result = parseConfigJson5(deepJson);
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("nesting depth exceeds maximum");
+    });
+  });
 });

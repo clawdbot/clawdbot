@@ -29,6 +29,7 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "./nesting-limit.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
@@ -157,7 +158,12 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    // Check raw text nesting depth before parsing to prevent stack overflow
+    assertBoundedRawJsonNesting(raw);
+    const parsed = parseJsonWithJson5Fallback(raw, json5);
+    // Also check parsed structure depth
+    assertBoundedJsonNesting(parsed);
+    return { ok: true, parsed };
   } catch (err) {
     return { ok: false, error: String(err) };
   }

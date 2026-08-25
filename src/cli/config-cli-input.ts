@@ -4,6 +4,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -517,7 +518,12 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     raw = readConfigMutationFileSync(file as string, "--file");
   }
   try {
-    return JSON5.parse(raw);
+    // Check raw text nesting depth before parsing
+    assertBoundedRawJsonNesting(raw);
+    const parsed = JSON5.parse(raw);
+    // Check parsed structure depth
+    assertBoundedJsonNesting(parsed);
+    return parsed;
   } catch (err) {
     throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
   }

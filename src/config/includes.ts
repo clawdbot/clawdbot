@@ -21,6 +21,7 @@ import { isMissingPathError } from "../infra/errno.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "./nesting-limit.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
@@ -422,7 +423,12 @@ class IncludeProcessor {
 
   private parseFile(includePath: string, resolvedPath: string, raw: string): unknown {
     try {
-      return this.resolver.parseJson(raw);
+      // Check raw text nesting depth before parsing
+      assertBoundedRawJsonNesting(raw);
+      const parsed = this.resolver.parseJson(raw);
+      // Check parsed structure depth
+      assertBoundedJsonNesting(parsed);
+      return parsed;
     } catch (err) {
       throw new ConfigIncludeError(
         `Failed to parse include file: ${includePath} (resolved: ${resolvedPath})`,

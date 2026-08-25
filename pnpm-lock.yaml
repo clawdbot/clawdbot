@@ -1379,11 +1379,11 @@ importers:
         specifier: 4.13.1
         version: 4.13.1(supports-color@10.2.2)
       '@microsoft/teams.api':
-        specifier: 2.0.15
-        version: 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+        specifier: 2.0.14
+        version: 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@microsoft/teams.apps':
-        specifier: 2.0.15
-        version: 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+        specifier: 2.0.14
+        version: 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
@@ -1395,8 +1395,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@microsoft/teams.common':
-        specifier: 2.0.15
-        version: 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+        specifier: 2.0.14
+        version: 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -4010,24 +4010,24 @@ packages:
     resolution: {integrity: sha512-EWhz2pKkcPluZHAOI1yneV+JK0NO/3hdh7nABBb0x4PjyUWMeSWPTBAjtIu+BhtMYOqlaijSPZMZ0Hs/J4ZL4A==}
     engines: {node: '>=18.0.0'}
 
-  '@microsoft/teams.api@2.0.15':
-    resolution: {integrity: sha512-KEZs8C6GmWrlT/+x2YODFbyJ3UrkWCEU1SFbk4431hMp6bSgVad+WjB0ysKQWJ/mF+H9F+gAPTvgOgBGuojxmw==}
+  '@microsoft/teams.api@2.0.14':
+    resolution: {integrity: sha512-mEHBgs7yklydQWTlfGFok5i7np2WxOKS3j6aMgRH0HVfiLqenPjGm0NAWKR/Hg29n9ODtGZZeuIXNCwIYQ8syA==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.apps@2.0.15':
-    resolution: {integrity: sha512-ufWcwNACVBu7tkPVpH0LoO9A95JxQxyHJ9kjFzWY4VHdtnR+/niS1vIvDpTZ2AlPd+yWEu/94JPQMskIxThFPQ==}
+  '@microsoft/teams.apps@2.0.14':
+    resolution: {integrity: sha512-7re8a3pnAUSD5rAGlWbKQd07XtQJwyuZ4rI7EWyqBQT2iLhqUU1r4jtq3jQFpfov7xhADVV+oExCc7IbNyYuGw==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.cards@2.0.15':
-    resolution: {integrity: sha512-fmWzBHmhM3++Pl64nbbPWSi1M/sw5Usmnnsea0Wx8G127oaEdrXi7s+uegwyHa6qzssSrluQ/Th2Y2KR2B5xew==}
+  '@microsoft/teams.cards@2.0.14':
+    resolution: {integrity: sha512-qrWnjJVgMPO8vvbLEiTeBLrrRLsr4rletQnuP9fPMXTTcrNx+Dh0gYWtQAOBvpoAuFo5tTXR/waNFNUm8IZtBw==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.common@2.0.15':
-    resolution: {integrity: sha512-KXQUFXQbFIqzGAGvdCIkfw21t5G7EulAtsD+2SAaB4uPehH6deyL4+D7JmX5ElQ39F+XYtLnsgYs0HCxuoiXeQ==}
+  '@microsoft/teams.common@2.0.14':
+    resolution: {integrity: sha512-cjf3b/2sr5RqqiOaDuogJQ9fUNRZjDSh9eBEAv6NqkigNNLLjDgEgEl5lLoJsPp4usvc3drwFkx6HayuEbT7vA==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.graph@2.0.15':
-    resolution: {integrity: sha512-f0OUHEGVOZS/zRlKQQa2YqQ6BWun0yYMhjzum2fiIgz+drE/OhwZ/Z3QCgqVppvaXxThdbH9lvXA4DBczBeVng==}
+  '@microsoft/teams.graph@2.0.14':
+    resolution: {integrity: sha512-PufhROXKhsC/h6ZKuquPzvNBB1Q9lHHu//vZGfRj3yD+hgtQkEz2YzXZDYC3h0bDN4ej2KtvkDGrsovqrnU0cQ==}
     engines: {node: '>=20'}
 
   '@mistralai/mistralai@2.5.0':
@@ -11171,22 +11171,22 @@ snapshots:
       node-pty: 1.2.0-beta.14
       semver: 7.8.5
 
-  '@microsoft/teams.api@2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
+  '@microsoft/teams.api@2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:
-      '@microsoft/teams.cards': 2.0.15
-      '@microsoft/teams.common': 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@microsoft/teams.cards': 2.0.14
+      '@microsoft/teams.common': 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       jwt-decode: 4.0.0
       qs: 6.15.3
     transitivePeerDependencies:
       - debug
       - supports-color
 
-  '@microsoft/teams.apps@2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
+  '@microsoft/teams.apps@2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:
       '@azure/msal-node': 5.4.2
-      '@microsoft/teams.api': 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
-      '@microsoft/teams.common': 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
-      '@microsoft/teams.graph': 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@microsoft/teams.api': 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@microsoft/teams.common': 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@microsoft/teams.graph': 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       axios: 1.19.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       cors: 2.8.6
       express: 5.2.1(supports-color@10.2.2)
@@ -11197,18 +11197,18 @@ snapshots:
       - debug
       - supports-color
 
-  '@microsoft/teams.cards@2.0.15': {}
+  '@microsoft/teams.cards@2.0.14': {}
 
-  '@microsoft/teams.common@2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
+  '@microsoft/teams.common@2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:
       axios: 1.19.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
     transitivePeerDependencies:
       - debug
       - supports-color
 
-  '@microsoft/teams.graph@2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
+  '@microsoft/teams.graph@2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:
-      '@microsoft/teams.common': 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@microsoft/teams.common': 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       qs: 6.15.3
     transitivePeerDependencies:
       - debug
@@ -12517,7 +12517,7 @@ snapshots:
   '@types/jsonwebtoken@9.0.10':
     dependencies:
       '@types/ms': 2.1.0
-      '@types/node': 26.1.2
+      '@types/node': 26.2.0
 
   '@types/linkify-it@5.0.0': {}
 
@@ -12568,6 +12568,7 @@ snapshots:
   '@types/node@26.1.2':
     dependencies:
       undici-types: 8.3.0
+    optional: true
 
   '@types/node@26.2.0':
     dependencies:
