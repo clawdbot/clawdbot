@@ -176,11 +176,10 @@ describe("noteAuthProfileHealth", () => {
       } as OpenClawConfig,
     });
 
-    expect(
-      findings
-        .map((finding) => finding.target)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(["anthropic:custom-cli", "anthropic:static-cli"]);
+    expect(findings.map((finding) => finding.target)).toEqual([
+      "anthropic:custom-cli",
+      "anthropic:static-cli",
+    ]);
   });
 
   it("still warns once a custom Claude CLI access token is expired", async () => {
