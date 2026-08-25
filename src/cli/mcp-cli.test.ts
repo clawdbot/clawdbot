@@ -608,6 +608,59 @@ describe("mcp cli", () => {
     });
   });
 
+  it("reports ignored OAuth Authorization headers regardless of casing", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      readMcpOAuthCredentialsStatus.mockResolvedValue({ state: "authorized" });
+
+      for (const { name, header, oauth } of [
+        { name: "lowercase", header: "authorization", oauth: true },
+        { name: "titlecase", header: "Authorization", oauth: true },
+        { name: "uppercase", header: "AUTHORIZATION", oauth: true },
+        { name: "proxy", header: "Proxy-Authorization", oauth: true },
+        { name: "unrelated", header: "X-Tenant", oauth: true },
+        { name: "without-oauth", header: "AUTHORIZATION", oauth: false },
+      ]) {
+        await runMcpCommand([
+          "mcp",
+          "set",
+          name,
+          JSON.stringify({
+            url: "https://mcp.example.com/mcp",
+            headers: { [header]: "$MCP_HEADER" },
+            ...(oauth ? { auth: "oauth" } : {}),
+          }),
+        ]);
+      }
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "doctor", "--json"]);
+
+      const { servers } = JSON.parse(lastLogLine()) as {
+        servers: Array<{ name: string; issues: Array<{ message: string }> }>;
+      };
+      expect(
+        Object.fromEntries(
+          servers.map(({ name, issues }) => [
+            name,
+            issues.some(
+              ({ message }) =>
+                message === "OAuth is enabled and the static Authorization header is ignored",
+            ),
+          ]),
+        ),
+      ).toEqual({
+        lowercase: true,
+        titlecase: true,
+        uppercase: true,
+        proxy: false,
+        unrelated: false,
+        "without-oauth": false,
+      });
+    });
+  });
+
   it("bounds concurrent MCP doctor server checks", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

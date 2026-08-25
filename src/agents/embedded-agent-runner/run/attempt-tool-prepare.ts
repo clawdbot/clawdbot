@@ -109,7 +109,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
-    skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
     forceDirectTools: attempt.forceCodeModeReconciliationTools,

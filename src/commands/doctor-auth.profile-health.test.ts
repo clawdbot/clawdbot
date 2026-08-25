@@ -176,9 +176,41 @@ describe("noteAuthProfileHealth", () => {
       } as OpenClawConfig,
     });
 
-    expect(findings.map((finding) => finding.target)).toEqual([
+    expect(findings.map((finding) => finding.target).toSorted()).toEqual([
       "anthropic:custom-cli",
       "anthropic:static-cli",
+    ]);
+  });
+
+  it("still warns once a custom Claude CLI access token is expired", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:custom-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access",
+          refresh: "refresh",
+          expires: now - 60_000,
+        },
+      },
+    });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile anthropic:custom-cli is expired (0m).",
+        target: "anthropic:custom-cli",
+      }),
     ]);
   });
 
