@@ -1265,14 +1265,15 @@ describe("Slack message file intake", () => {
   });
 
   it("keeps forwarded images before their files without letting failures shift later attachments", async () => {
-    mockFetch.mockImplementation(async (input) =>
-      String(input).includes("FFAILED")
+    mockFetch.mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return url.includes("FFAILED")
         ? new Response("unavailable", { status: 500 })
         : new Response(Buffer.from("file contents"), {
             status: 200,
             headers: { "content-type": "image/png" },
-          }),
-    );
+          });
+    });
 
     const result = await resolveMessageFiles({
       direct: [file("FDIRECT")],
