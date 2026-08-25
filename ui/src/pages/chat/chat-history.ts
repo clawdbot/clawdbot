@@ -46,7 +46,6 @@ import {
   sleep,
 } from "./chat-history-retry.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
-import { captureChatConnectionOwner } from "./chat-send-queue-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -1373,7 +1372,10 @@ export async function rewindChatHistory(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = () =>
+    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
   const viewIsCurrent = () =>
     connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
   try {
@@ -1426,7 +1428,10 @@ export async function switchChatHistoryBranch(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = () =>
+    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
   const viewIsCurrent = () =>
     connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
   try {
