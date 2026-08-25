@@ -5,7 +5,6 @@ import { getRuntimeConfig } from "../config/config.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -28,12 +27,12 @@ import {
   runWorkerPlacementSessionBarrier,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
+import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./worker-environments/placement-dispatch-startup.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -42,11 +41,9 @@ import type { WorkerEnvironmentService } from "./worker-environments/service.js"
 import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
-import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
 import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
-const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
 
 const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async () => {
   const [placementSessionRuntime, { managedWorktrees }, sessionUtils] = await Promise.all([
@@ -465,60 +462,6 @@ export function createGatewayWorkerPlacementRuntime(
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
   });
-  const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
-    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
-      retainFailedOwner: (recoveryError) =>
-        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
-    });
-    for (const owner of orphanedJournals) {
-      workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
-    }
-    const pendingBySession = new Map(
-      params.placements
-        .listPendingWorkspaceResults()
-        .map((pending) => [pending.sessionId, pending] as const),
-    );
-    for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
-      try {
-        const placement = params.placements.get(owner.sessionId);
-        const pending = pendingBySession.get(owner.sessionId);
-        const ownsCurrentGeneration = placement?.generation === owner.placementGeneration;
-        const ownsDrainedPendingGeneration =
-          placement?.state === "draining" &&
-          placement.generation === owner.placementGeneration + 1 &&
-          pending?.environmentId === owner.environmentId &&
-          pending.ownerEpoch === owner.ownerEpoch &&
-          pending.placementGeneration === owner.placementGeneration;
-        if (
-          (placement?.state !== "active" && placement?.state !== "draining") ||
-          placement.environmentId !== owner.environmentId ||
-          placement.activeOwnerEpoch !== owner.ownerEpoch ||
-          (!ownsCurrentGeneration && !ownsDrainedPendingGeneration)
-        ) {
-          throw new Error(`Cloud workspace journal has no matching owner: ${owner.sessionId}`);
-        }
-        const localPath = await resolveWorkspacePath({
-          sessionId: placement.sessionId,
-          sessionKey: placement.sessionKey,
-          agentId: placement.agentId,
-        });
-        const journal = params.placements.loadWorkspaceReconciliation(owner);
-        if (!journal) {
-          continue;
-        }
-        // Recover before placement/environment reconciliation can reclaim the
-        // owner; otherwise a crashed partial apply loses its final repair path.
-        await recoverWorkerWorkspaceReconciliation({ root: localPath, journal });
-        params.placements.abortWorkspaceReconciliation(owner);
-      } catch (error) {
-        // A local edit can intentionally block rollback. Leave that journal
-        // retryable for this session without withholding every cloud worker.
-        workerPlacementLog.error(
-          `cloud workspace recovery deferred for ${owner.sessionId}: ${formatErrorMessage(error)}`,
-        );
-      }
-    }
-  };
   const startRuntime = async (hooks: {
     isClosePreludeStarted: () => boolean;
     registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
@@ -657,7 +600,10 @@ export function createGatewayWorkerPlacementRuntime(
     try {
       // Track startup reconciliation in the placement slot so a concurrent
       // close prelude drains it before uninstalling guards and stopping environments.
-      const startupRecovery = recoverPendingWorkspaceReconciliations();
+      const startupRecovery = recoverGatewayWorkerPlacementWorkspaces({
+        placements: params.placements,
+        resolveWorkspacePath,
+      });
       placementReconcile.current = startupRecovery;
       try {
         await startupRecovery;
