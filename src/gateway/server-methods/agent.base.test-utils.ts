@@ -1529,7 +1529,7 @@ describe("gateway agent handler", () => {
         });
 
         const capturedEntry = await runMainAgentAndCaptureEntry(
-          `test-idem-terminal-main-newer-transcript-${scenario.status ?? "ended-at"}`,
+          "test-idem-terminal-main-newer-transcript",
         );
 
         const call = await waitForAgentCommandCall<{ sessionId?: string }>();
