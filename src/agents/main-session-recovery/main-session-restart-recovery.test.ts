@@ -4152,9 +4152,11 @@ describe("main-session-restart-recovery", () => {
       ) => {
         accept = () => options?.onAccepted?.({ runId: "recovery-main", status: "accepted" });
         return await new Promise<never>((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
-            once: true,
-          });
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("execution-start wait aborted")),
+            { once: true },
+          );
         });
       },
     );
