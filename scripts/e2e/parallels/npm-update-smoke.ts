@@ -51,6 +51,7 @@ import {
 import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveMacosVmName, resolveUbuntuVmName } from "./parallels-vm.ts";
+import { runParallelsPrerequisiteEval } from "./provider-auth-prerequisite.mjs";
 import { expectedPackageTargetVersion, startSmokeArtifactServer } from "./smoke-common.ts";
 import { runTimedUpdateJob } from "./update-job-timeout.ts";
 
@@ -155,15 +156,29 @@ function resolveSecondsTimerMs(timeoutSeconds: number): number {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
 }
 
-const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700);
 const updateCleanupBackstopMs = 60_000;
-const updateTimeoutMs = resolveSecondsTimerMs(updateTimeoutSeconds);
-const updateWithCleanupTimeoutMs =
-  addTimerTimeoutGraceMs(updateTimeoutMs, updateCleanupBackstopMs) ?? 1;
-const freshLaneTimeoutKillGraceMs = readPositiveIntEnv(
-  "OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS",
-  2_000,
-);
+type UpdateTimeouts = { seconds: number; timeoutMs: number; withCleanupMs: number };
+let cachedUpdateTimeouts: UpdateTimeouts | undefined;
+let cachedFreshLaneTimeoutKillGraceMs: number | undefined;
+
+function resolveUpdateTimeouts(): UpdateTimeouts {
+  return (cachedUpdateTimeouts ??= (() => {
+    const seconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700);
+    const timeoutMs = resolveSecondsTimerMs(seconds);
+    return {
+      seconds,
+      timeoutMs,
+      withCleanupMs: addTimerTimeoutGraceMs(timeoutMs, updateCleanupBackstopMs) ?? 1,
+    };
+  })());
+}
+
+function resolveFreshLaneTimeoutKillGraceMs(): number {
+  return (cachedFreshLaneTimeoutKillGraceMs ??= readPositiveIntEnv(
+    "OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS",
+    2_000,
+  ));
+}
 const activeLoggedChildren = new Set<ReturnType<typeof spawn>>();
 const loggedParentSignalHandlers = new Map<NodeJS.Signals, () => void>();
 let loggedExitCleanupInstalled = false;
@@ -203,7 +218,7 @@ export function spawnLoggedCommand(
     const timeoutMs = resolveOptionalTimerMs(options.timeoutMs);
     const timeoutKillGraceMs =
       options.timeoutKillGraceMs === undefined
-        ? resolveRequiredTimerMs(freshLaneTimeoutKillGraceMs)
+        ? resolveRequiredTimerMs(resolveFreshLaneTimeoutKillGraceMs())
         : resolveRequiredTimerMs(options.timeoutKillGraceMs);
     const timeoutTimer =
       timeoutMs !== undefined
@@ -408,6 +423,7 @@ Options:
   --api-key-env <var>        Host env var name for provider API key.
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --json                     Print machine-readable JSON summary.
+  --prerequisite-check       Check provider credentials without starting smoke work. Requires --json.
   -h, --help                 Show help.
 `;
 }
@@ -626,6 +642,7 @@ export class NpmUpdateSmoke {
   private windowsVm: string;
   private linuxVm = linuxVmDefault;
   private options: NpmUpdateOptions;
+  private readonly updateTimeouts: UpdateTimeouts;
 
   private freshStatus = platformRecord("skip");
   private freshTargetStatus = platformRecord("skip");
@@ -634,6 +651,8 @@ export class NpmUpdateSmoke {
   private timings: NpmUpdateSummary["timings"] = [];
 
   constructor(options: NpmUpdateOptions) {
+    this.updateTimeouts = resolveUpdateTimeouts();
+    resolveFreshLaneTimeoutKillGraceMs();
     this.options = options;
     this.windowsVm = options.windowsVm ?? windowsVmDefault;
     this.auth = resolveProviderAuth({
@@ -1063,8 +1082,8 @@ export class NpmUpdateSmoke {
         append,
         label,
         run: ({ signal }) => fn({ append, logPath, signal }),
-        timeoutDescription: `${updateTimeoutSeconds}s plus cleanup backstop`,
-        timeoutMs: updateWithCleanupTimeoutMs,
+        timeoutDescription: `${this.updateTimeouts.seconds}s plus cleanup backstop`,
+        timeoutMs: this.updateTimeouts.withCleanupMs,
         writeLog: async () => undefined,
       });
     })().finally(() => {
@@ -1075,15 +1094,15 @@ export class NpmUpdateSmoke {
   }
 
   private async runMacosUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestMacos(this.updateScript("macos"), updateTimeoutMs, ctx);
+    await this.guestMacos(this.updateScript("macos"), this.updateTimeouts.timeoutMs, ctx);
   }
 
   private runWindowsUpdate(ctx: UpdateJobContext): Promise<void> {
-    return this.guestWindows(this.updateScript("windows"), updateTimeoutMs, ctx);
+    return this.guestWindows(this.updateScript("windows"), this.updateTimeouts.timeoutMs, ctx);
   }
 
   private async runLinuxUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestLinux(this.updateScript("linux"), updateTimeoutMs, ctx);
+    await this.guestLinux(this.updateScript("linux"), this.updateTimeouts.timeoutMs, ctx);
   }
 
   private updateScript(platform: Platform): string {
@@ -1387,7 +1406,7 @@ export class NpmUpdateSmoke {
       let timedOut = false;
       let killTimer: NodeJS.Timeout | undefined;
       let forceKillAt: number | undefined;
-      const timeoutKillGraceMs = freshLaneTimeoutKillGraceMs;
+      const timeoutKillGraceMs = resolveFreshLaneTimeoutKillGraceMs();
       const signalChild = (signal: NodeJS.Signals): void => {
         if (!child.pid) {
           return;
@@ -1701,10 +1720,17 @@ export class NpmUpdateSmoke {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const options = parseArgs(process.argv.slice(2));
-  const runSmoke = () => new NpmUpdateSmoke(options).run();
-  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
-  await runPromise.catch((error: unknown) => {
-    die(error instanceof Error ? error.message : String(error));
-  });
+  const argv = process.argv.slice(2);
+  if ((argv[0] === "--" ? argv[1] : argv[0]) === "--prerequisite-check") {
+    process.exitCode = runParallelsPrerequisiteEval(argv, process.env, {
+      write: (value) => process.stdout.write(value),
+    });
+  } else {
+    const options = parseArgs(argv);
+    const runSmoke = () => new NpmUpdateSmoke(options).run();
+    const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+    await runPromise.catch((error: unknown) => {
+      die(error instanceof Error ? error.message : String(error));
+    });
+  }
 }
