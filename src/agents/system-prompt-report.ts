@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { AgentTool } from "./runtime/index.js";
@@ -14,6 +15,13 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
 const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
+// The entry cache above is keyed on the tool object, but finalizeAgentTools
+// rebuilds every tool on every attempt, so it cannot carry a digest across
+// attempts. This layer is keyed on the exact bytes hashed, so it survives that
+// churn while staying byte-identical by construction. Bounded because tool
+// descriptions vary with runtime context and would otherwise accumulate.
+const toolSummaryHashCache = new Map<string, string>();
+const MAX_TOOL_SUMMARY_HASHES = 512;
 const toolSchemaStatsCache = new WeakMap<
   object,
   Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
@@ -82,6 +90,17 @@ function buildToolSchemaStats(
   return stats;
 }
 
+function resolveSummaryHash(summary: string): string {
+  const cached = toolSummaryHashCache.get(summary);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const hash = sha256(summary);
+  toolSummaryHashCache.set(summary, hash);
+  pruneMapToMaxSize(toolSummaryHashCache, MAX_TOOL_SUMMARY_HASHES);
+  return hash;
+}
+
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const cached = toolReportEntryCache.get(tool);
@@ -92,7 +111,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
+    const entry = { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
