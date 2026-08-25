@@ -100,6 +100,21 @@ async function runLineFlexCardCommand(
   return result.channelData.line.flexMessage;
 }
 
+function resolveLineFlexCardActions(message: {
+  contents: messagingApi.FlexContainer;
+}): messagingApi.Action[] {
+  if (message.contents.type !== "bubble") {
+    throw new Error("Expected LINE Flex action card to render a bubble");
+  }
+  const footer = expectDefined(message.contents.footer, "LINE flex-message footer");
+  return footer.contents.map((component) => {
+    if (component.type !== "button") {
+      throw new Error("Expected LINE Flex action card footer to contain buttons");
+    }
+    return component.action;
+  });
+}
+
 type LineProviderRequest = {
   path: string;
   authenticated: boolean;
@@ -531,13 +546,9 @@ describe("action label/data surrogate-safe truncation", () => {
     const message = await runLineFlexCardCommand(
       `action "Menu" "Body" --actions "${label}|${data},${label}y|${data}"`,
     );
-    const footer = message.contents.footer as {
-      contents: Array<{ action: { label: string } }>;
-    };
-
-    expect(footer.contents).toMatchObject([
-      { action: { ...expected, label } },
-      { action: { ...expected, label } },
+    expect(resolveLineFlexCardActions(message)).toMatchObject([
+      { ...expected, label },
+      { ...expected, label },
     ]);
   });
 
@@ -546,11 +557,13 @@ describe("action label/data surrogate-safe truncation", () => {
     const message = await runLineFlexCardCommand(
       `action "Menu" "Body" --actions "${label}|/status"`,
     );
-    const footer = message.contents.footer as { contents: Array<{ action: { label: string } }> };
-    const action = expectDefined(footer.contents[0], "LINE flex-message footer action").action;
+    const action = expectDefined(
+      resolveLineFlexCardActions(message)[0],
+      "LINE flex-message footer action",
+    );
 
     expect(action.label).toBe(label);
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label ?? "")).toBe(false);
   });
 
   it("/card buttons retains the template-specific 20-character action label limit", async () => {
@@ -579,9 +592,7 @@ describe("action label/data surrogate-safe truncation", () => {
   it("/card action visibly disables an oversized URI at the Flex action owner", async () => {
     const uri = `https://example.test/${"u".repeat(1_000)}`;
     const message = await runLineFlexCardCommand(`action "Menu" "Body" --actions "Open|${uri}"`);
-    const footer = message.contents.footer as { contents: Array<{ action: unknown }> };
-
-    expect(footer.contents[0]?.action).toEqual({
+    expect(resolveLineFlexCardActions(message)[0]).toEqual({
       type: "message",
       label: "Unavailable",
       text: "Link unavailable: URL exceeds LINE's limit.",
