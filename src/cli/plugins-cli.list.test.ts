@@ -195,7 +195,7 @@ describe("plugins cli list", () => {
 
       await runPluginsCommand(["plugins", "doctor", ...args]);
 
-      if (args.includes("--json")) {
+      if (args.length > 0) {
         expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
           ok: healthy,
           compatibility: [notice],
