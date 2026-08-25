@@ -1,5 +1,7 @@
 /** systemd start, stop, restart, and obsolete-unit removal. */
-import fs from "node:fs/promises";
+import fs, { constants as fsConstants } from "node:fs/promises";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -192,7 +194,8 @@ export async function uninstallLegacySystemdUnits({
 type UninstallUserSystemdGatewayUnitResult = {
   unitName: string;
   unitPath: string;
-  removed: boolean;
+  /** Archive destination, or undefined when there was no unit file to move. */
+  archivedPath: string | undefined;
   /**
    * False when systemctl could not disable/stop the unit. Deleting the unit
    * file alone does not evict an already-loaded unit, so callers must not
@@ -201,11 +204,54 @@ type UninstallUserSystemdGatewayUnitResult = {
   disabled: boolean;
 };
 
+/** Timestamped archive directory for units doctor moves out of the way. */
+function resolveSystemdUnitArchiveDir(env: GatewayServiceEnv): string {
+  const day = new Date().toISOString().slice(0, 10);
+  return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "backups", "systemd-units", day);
+}
+
 /**
- * Removes the canonical *user-scope* gateway unit, leaving any system-scope
+ * Copies to `baseTarget`, or a numbered sibling if something is already there.
+ * The archive directory is keyed by day, not by run, so a second repair the
+ * same day (or any pre-existing file at that exact path) would otherwise let
+ * `copyFile` silently replace an earlier operator backup — the exact data
+ * loss this archive-instead-of-delete path exists to prevent (#116130).
+ *
+ * `linkTarget` archives a symlinked unit as the link itself: the installer
+ * treats such links as operator layout it refuses to rewrite, so flattening one
+ * here would make the restore command we print rebuild the wrong shape.
+ */
+async function copyToUniqueArchiveTarget(
+  sourcePath: string,
+  linkTarget: string | undefined,
+  baseTarget: string,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const target = attempt === 0 ? baseTarget : `${baseTarget}.${attempt}`;
+    try {
+      // Both fail EEXIST rather than clobbering, which is what makes the
+      // numbered-sibling retry safe.
+      if (linkTarget === undefined) {
+        await fs.copyFile(sourcePath, target, fsConstants.COPYFILE_EXCL);
+      } else {
+        await fs.symlink(linkTarget, target);
+      }
+      return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Archives the canonical *user-scope* gateway unit, leaving any system-scope
  * unit untouched. Used by doctor to resolve a `dueling` installation by
- * dropping the redundant user-scope leftover (issue #79375). Removing a unit
- * under `$HOME` needs no root, unlike the system-scope unit.
+ * clearing the redundant user-scope leftover (issue #79375). The unit is moved,
+ * not unlinked, so operator edits (custom `ExecStart`, `Environment=`, limits)
+ * survive a wrong ownership guess and can be restored with `cp` (issue #116130).
+ * Touching a unit under `$HOME` needs no root, unlike the system-scope unit.
  */
 export async function uninstallUserSystemdGatewayUnit({
   env,
@@ -219,24 +265,37 @@ export async function uninstallUserSystemdGatewayUnit({
     disabled = true;
   } else {
     stdout.write(
-      `systemctl unavailable; removing unit file only: ${unitName}. A loaded unit keeps running until systemd reloads.\n`,
+      `systemctl unavailable; archiving unit file only: ${unitName}. A loaded unit keeps running until systemd reloads.\n`,
     );
   }
-  let removed = false;
-  try {
-    await fs.unlink(unitPath);
-    removed = true;
-    stdout.write(`${formatLine("Removed user-scope systemd service", unitPath)}\n`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+  const archiveTarget = path.join(resolveSystemdUnitArchiveDir(env), unitName);
+  let archivedPath: string | undefined;
+  // This probe owns the "no unit file here" verdict; every later ENOENT is a
+  // real archive failure. Sharing one catch let an ENOENT from mkdir, the copy
+  // or the unlink report the unit absent with the operator's file still there.
+  // lstat, not stat: a dangling link is a unit systemd loads, not an absence.
+  const sourceStats = await fs.lstat(unitPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") {
       throw error;
     }
+    return undefined;
+  });
+  if (sourceStats) {
+    // Archive dir first, so a missing destination cannot fail the copy; copy
+    // before unlink, so a cross-filesystem state dir or a failed write leaves
+    // the operator's unit in place.
+    await fs.mkdir(path.dirname(archiveTarget), { recursive: true, mode: 0o700 });
+    const linkTarget = sourceStats.isSymbolicLink() ? await fs.readlink(unitPath) : undefined;
+    archivedPath = await copyToUniqueArchiveTarget(unitPath, linkTarget, archiveTarget);
+    await fs.unlink(unitPath);
+    stdout.write(`${formatLine("Archived user-scope systemd service", archivedPath)}\n`);
+  } else {
     stdout.write(`User-scope systemd unit not found at ${unitPath}\n`);
   }
   // The manager keeps a deleted unit's definition loaded until it reloads, so
   // without this the unit stays startable while the detector reports it gone.
-  if (removed && disabled) {
+  if (archivedPath && disabled) {
     await reloadSystemdUserManager(env);
   }
-  return { unitName, unitPath, removed, disabled };
+  return { unitName, unitPath, archivedPath, disabled };
 }

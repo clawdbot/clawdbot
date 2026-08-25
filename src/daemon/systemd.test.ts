@@ -3017,7 +3017,7 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     execFileMock.mockReset();
   });
 
-  it("disables and removes the user-scope unit when systemctl is available", async () => {
+  it("disables and archives the user-scope unit when systemctl is available", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
       execFileMock
@@ -3038,15 +3038,22 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(true);
+      const { archivedPath } = result;
+      if (archivedPath === undefined) {
+        throw new Error("expected the unit to be archived");
+      }
       expect(result.disabled).toBe(true);
       expect(result.unitName).toBe(GATEWAY_SERVICE);
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(requireFirstWrite(write)).toContain("Removed user-scope systemd service");
+      // Operator edits must survive the repair, so the archive keeps the bytes.
+      await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(
+        "[Unit]\nDescription=OpenClaw Gateway\n",
+      );
+      expect(requireFirstWrite(write)).toContain("Archived user-scope systemd service");
     });
   });
 
-  it("reports removed:false without throwing when the unit file is already absent", async () => {
+  it("reports no archive without throwing when the unit file is already absent", async () => {
     await withUserUnitFixture(async ({ env }) => {
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -3061,12 +3068,12 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(false);
+      expect(result.archivedPath).toBeUndefined();
       expect(requireFirstWrite(write)).toContain("User-scope systemd unit not found");
     });
   });
 
-  it("removes the unit file only when systemctl is unavailable", async () => {
+  it("archives the unit file only when systemctl is unavailable", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
       execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
@@ -3076,13 +3083,123 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
-      expect(result.removed).toBe(true);
+      const { archivedPath } = result;
+      if (archivedPath === undefined) {
+        throw new Error("expected the unit to be archived");
+      }
       // File-only removal cannot evict a loaded unit, so callers must not treat
       // this as a resolved conflict.
       expect(result.disabled).toBe(false);
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      // This path archives too, so the warning must not tell the operator the
+      // bytes are gone when a recoverable copy exists.
+      await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(
+        "[Unit]\nDescription=OpenClaw Gateway\n",
+      );
       const writes = write.mock.calls.map((call) => String(call[0])).join("");
-      expect(writes).toContain("systemctl unavailable; removing unit file only");
+      expect(writes).toContain("systemctl unavailable; archiving unit file only");
+      expect(writes).not.toContain("removing unit file only");
+    });
+  });
+
+  it("archives to a numbered sibling instead of replacing an earlier archive", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
+        cb(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+      );
+
+      await fs.writeFile(unitPath, "[Unit]\nDescription=First\n", "utf8");
+      const first = await uninstallUserSystemdGatewayUnit({
+        env,
+        stdout: createWritableStreamMock().stdout,
+      });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=Second\n", "utf8");
+      const second = await uninstallUserSystemdGatewayUnit({
+        env,
+        stdout: createWritableStreamMock().stdout,
+      });
+
+      // The archive directory is keyed by day, so a same-day second repair must
+      // not overwrite the first operator backup.
+      expect(second.archivedPath).not.toBe(first.archivedPath);
+      await expect(fs.readFile(String(first.archivedPath), "utf8")).resolves.toBe(
+        "[Unit]\nDescription=First\n",
+      );
+      await expect(fs.readFile(String(second.archivedPath), "utf8")).resolves.toBe(
+        "[Unit]\nDescription=Second\n",
+      );
+    });
+  });
+
+  it("archives a symlinked unit as the link, not as its target's bytes", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
+        cb(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+      );
+
+      const operatorUnit = path.join(path.dirname(unitPath), "operator-owned.service");
+      await fs.writeFile(operatorUnit, "[Unit]\nDescription=Operator\n", "utf8");
+      await fs.symlink(operatorUnit, unitPath);
+
+      const { stdout } = createWritableStreamMock();
+      const { archivedPath } = await uninstallUserSystemdGatewayUnit({ env, stdout });
+
+      // The restore command we print is a plain copy back, so archiving the
+      // target's bytes would rebuild a regular file and silently drop the
+      // operator's chosen layout.
+      const archived = expectDefined(archivedPath);
+      expect((await fs.lstat(archived)).isSymbolicLink()).toBe(true);
+      await expect(fs.readlink(archived)).resolves.toBe(operatorUnit);
+      await expect(fs.lstat(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      // Archiving the link must not disturb what it pointed at.
+      await expect(fs.readFile(operatorUnit, "utf8")).resolves.toBe(
+        "[Unit]\nDescription=Operator\n",
+      );
+    });
+  });
+
+  it("archives a dangling symlinked unit instead of reporting it absent", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
+        cb(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+      );
+
+      const missingTarget = path.join(path.dirname(unitPath), "removed-by-operator.service");
+      await fs.symlink(missingTarget, unitPath);
+
+      const { write, stdout } = createWritableStreamMock();
+      const { archivedPath } = await uninstallUserSystemdGatewayUnit({ env, stdout });
+
+      // A dangling link is still a unit file systemd loads, and copying through
+      // it raises the same ENOENT as an absent unit — so it used to be reported
+      // as "not found" and left on disk, defeating the repair.
+      await expect(fs.readlink(expectDefined(archivedPath))).resolves.toBe(missingTarget);
+      await expect(fs.lstat(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(requireFirstWrite(write)).toContain("Archived user-scope systemd service");
+    });
+  });
+
+  it("surfaces an archive-stage ENOENT instead of calling the unit absent", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
+        cb(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+      );
+
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      vi.spyOn(fs, "copyFile").mockRejectedValue(
+        Object.assign(new Error("ENOENT: no such file or directory, copyfile"), {
+          code: "ENOENT",
+        }),
+      );
+
+      const { write, stdout } = createWritableStreamMock();
+      // Reporting this as an absent unit lets doctor tell the operator the
+      // system unit is sole manager while their file is still installed.
+      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.access(unitPath)).resolves.toBeUndefined();
+      expect(write.mock.calls.flat().join("")).not.toContain("not found");
     });
   });
 
