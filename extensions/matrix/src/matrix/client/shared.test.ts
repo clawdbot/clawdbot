@@ -866,7 +866,7 @@ describe("shared Matrix client generations", () => {
     await replacement.release({ mode: "discard" });
   });
 
-  it("aborts a first starter and waiter during forced retirement without late reuse", async () => {
+  it("joins an in-flight startup during forced retirement", async () => {
     const start = createDeferred<void>();
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
@@ -911,6 +911,60 @@ describe("shared Matrix client generations", () => {
     expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
     const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
     expect(replacement.client).toBe(replacementClient);
+    await replacement.release({ mode: "discard" });
+  });
+
+  it("bounds forced retirement while startup remains stuck and fences late cleanup", async () => {
+    vi.useFakeTimers();
+    const start = createDeferred<void>();
+    const discard = createDeferred<void>();
+    const firstClient = createMockClient("first");
+    const replacementClient = createMockClient("replacement");
+    firstClient.start.mockReturnValue(start.promise);
+    firstClient.stopWithoutPersist.mockReturnValue(discard.promise);
+    createMatrixClientMock
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(replacementClient);
+    const auth = authFor("main");
+    const lease = await acquireSharedMatrixClient({ auth, startClient: false });
+    const startup = lease.start();
+    await vi.waitFor(() => {
+      expect(firstClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    const retirementError = stopSharedClientForAccount(auth).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await expectMatrixStartupAbort(startup);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(firstClient.stopWithoutPersist).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(retirementError).resolves.toMatchObject({
+      message: "Matrix client startup did not settle within 5000ms during retirement",
+    });
+    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toMatchObject({
+      message: "Matrix client startup did not settle within 5000ms during retirement",
+    });
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+
+    start.resolve();
+    await vi.waitFor(() => {
+      expect(firstClient.stopWithoutPersist).toHaveBeenCalledTimes(1);
+    });
+    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
+    await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toMatchObject({
+      message: "Matrix client startup did not settle within 5000ms during retirement",
+    });
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+
+    discard.resolve();
+    await discard.promise;
+    await Promise.resolve();
+    const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
+    expect(replacement.client).toBe(replacementClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
     await replacement.release({ mode: "discard" });
   });
 
