@@ -81,8 +81,7 @@ export function resolveGroupListenWindowConfig(params: {
   );
   return {
     durationMs,
-    maxMs:
-      configuredMaxMs && configuredMaxMs > 0 ? Math.max(durationMs, configuredMaxMs) : durationMs,
+    maxMs: configuredMaxMs && configuredMaxMs > 0 ? configuredMaxMs : durationMs,
   };
 }
 
@@ -130,12 +129,4 @@ export function clearGroupListenWindow(params: {
   conversationId: string;
 }) {
   listenWindows.delete(resolveGroupListenWindowKey(params));
-}
-
-export function clearGroupListenWindowsForTest() {
-  listenWindows.clear();
-}
-
-export function countGroupListenWindowsForTest() {
-  return listenWindows.size;
 }

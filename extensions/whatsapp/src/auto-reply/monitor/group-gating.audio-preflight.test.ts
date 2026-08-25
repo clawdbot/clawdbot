@@ -15,9 +15,29 @@ import { resolveGroupActivationFor } from "./group-activation.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
 import {
   armGroupListenWindow,
-  clearGroupListenWindowsForTest,
-  countGroupListenWindowsForTest,
+  clearGroupListenWindow,
+  resolveGroupListenWindowState,
 } from "./group-listen-window.js";
+
+type TestWhatsAppGroupConfig = {
+  requireMention?: boolean;
+  listenAfterMentionMs?: number;
+  listenAfterMentionMaxMs?: number;
+};
+
+type TestWhatsAppConfig = {
+  channels: {
+    whatsapp: {
+      allowFrom?: string[];
+      groupPolicy: "open";
+      groups?: Record<string, TestWhatsAppGroupConfig>;
+    };
+  };
+};
+
+function testWhatsAppConfig(cfg: unknown): TestWhatsAppConfig {
+  return cfg as TestWhatsAppConfig;
+}
 
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage({
@@ -75,7 +95,20 @@ describe("applyGroupGating audio preflight mention text", () => {
   let groupHistories: Map<string, GroupHistoryEntry[]>;
 
   beforeEach(() => {
-    clearGroupListenWindowsForTest();
+    for (const sessionKey of ["agent:main:whatsapp:group:1203630", "expired", "active"]) {
+      clearGroupListenWindow({
+        agentId: "main",
+        accountId: "default",
+        sessionKey,
+        conversationId: "1203630@g.us",
+      });
+      clearGroupListenWindow({
+        agentId: "main",
+        accountId: "default",
+        sessionKey,
+        conversationId: "1203631@g.us",
+      });
+    }
     groupHistories = new Map();
     vi.useFakeTimers({ now: new Date("2026-07-18T19:00:00.000Z") });
   });
@@ -182,9 +215,7 @@ describe("applyGroupGating audio preflight mention text", () => {
   it("accepts follow-up messages during a configured listen-after-mention window", async () => {
     const first = makeGroupAudioMsg();
     const firstParams = makeParams(first, groupHistories);
-    (
-      firstParams.cfg as never as { channels: { whatsapp: { groups?: unknown } } }
-    ).channels.whatsapp.groups = {
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.groups = {
       "1203630@g.us": {
         requireMention: true,
         listenAfterMentionMs: 10 * 60 * 1000,
@@ -202,11 +233,41 @@ describe("applyGroupGating audio preflight mention text", () => {
     vi.setSystemTime(new Date("2026-07-18T19:05:00.000Z"));
     const followUp = makeGroupAudioMsg();
     const followUpParams = makeParams(followUp, groupHistories);
-    (
-      followUpParams.cfg as never as { channels: { whatsapp: { groups?: unknown } } }
-    ).channels.whatsapp.groups = (
-      firstParams.cfg as never as { channels: { whatsapp: { groups?: unknown } } }
+    testWhatsAppConfig(followUpParams.cfg).channels.whatsapp.groups = testWhatsAppConfig(
+      firstParams.cfg,
     ).channels.whatsapp.groups;
+
+    await expect(applyGroupGating(followUpParams)).resolves.toEqual({ shouldProcess: true });
+    expect(followUp.groupMention).toEqual({ wasMentioned: false, requireMention: false });
+  });
+
+  it("opens the listen-after-mention window from quoted replies to the bot", async () => {
+    const first = makeGroupAudioMsg();
+    first.quote = {
+      id: "quoted-bot-reply",
+      body: "bot said hi",
+      sender: {
+        jid: "15550000001@s.whatsapp.net",
+        e164: "+15550000001",
+      },
+    };
+    first.platform.selfJid = "15550000001@s.whatsapp.net";
+    first.platform.selfE164 = "+15550000001";
+    const firstParams = makeParams(first, groupHistories);
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.groups = {
+      "1203630@g.us": {
+        requireMention: true,
+        listenAfterMentionMs: 10 * 60 * 1000,
+      },
+    };
+
+    await expect(applyGroupGating(firstParams)).resolves.toEqual({ shouldProcess: true });
+    expect(first.groupMention).toEqual({ wasMentioned: true, requireMention: true });
+
+    vi.setSystemTime(new Date("2026-07-18T19:05:00.000Z"));
+    const followUp = makeGroupAudioMsg();
+    const followUpParams = makeParams(followUp, groupHistories);
+    followUpParams.cfg = firstParams.cfg;
 
     await expect(applyGroupGating(followUpParams)).resolves.toEqual({ shouldProcess: true });
     expect(followUp.groupMention).toEqual({ wasMentioned: false, requireMention: false });
@@ -215,9 +276,7 @@ describe("applyGroupGating audio preflight mention text", () => {
   it("stops extending the listen-after-mention window at the configured cap", async () => {
     const first = makeGroupAudioMsg();
     const firstParams = makeParams(first, groupHistories);
-    (
-      firstParams.cfg as never as { channels: { whatsapp: { groups?: unknown } } }
-    ).channels.whatsapp.groups = {
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.groups = {
       "*": {
         listenAfterMentionMs: 10 * 60 * 1000,
         listenAfterMentionMaxMs: 15 * 60 * 1000,
@@ -251,19 +310,38 @@ describe("applyGroupGating audio preflight mention text", () => {
     });
   });
 
+  it("honors a configured cap that is shorter than the base listen window", async () => {
+    const first = makeGroupAudioMsg();
+    const firstParams = makeParams(first, groupHistories);
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.groups = {
+      "*": {
+        listenAfterMentionMs: 10 * 60 * 1000,
+        listenAfterMentionMaxMs: 5 * 60 * 1000,
+      },
+    };
+
+    await applyGroupGating({
+      ...firstParams,
+      mentionText: "openclaw please summarize the thread",
+    });
+
+    vi.setSystemTime(new Date("2026-07-18T19:06:00.000Z"));
+    const expiredFollowUpParams = makeParams(makeGroupAudioMsg(), groupHistories);
+    expiredFollowUpParams.cfg = firstParams.cfg;
+    await expect(applyGroupGating(expiredFollowUpParams)).resolves.toEqual({
+      shouldProcess: false,
+    });
+  });
+
   it("does not re-open a listen-after-mention window from /activation mention", async () => {
     const first = makeGroupAudioMsg();
     const firstParams = makeParams(first, groupHistories);
-    (
-      firstParams.cfg as never as { channels: { whatsapp: { groups?: unknown } } }
-    ).channels.whatsapp.groups = {
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.groups = {
       "*": {
         listenAfterMentionMs: 10 * 60 * 1000,
       },
     };
-    (
-      firstParams.cfg as never as { channels: { whatsapp: { allowFrom?: string[] } } }
-    ).channels.whatsapp.allowFrom = ["+15550000002"];
+    testWhatsAppConfig(firstParams.cfg).channels.whatsapp.allowFrom = ["+15550000002"];
 
     await applyGroupGating({
       ...firstParams,
@@ -289,12 +367,8 @@ describe("applyGroupGating audio preflight mention text", () => {
     const command = makeGroupAudioMsg();
     command.payload.body = "/status";
     const commandParams = makeParams(command, groupHistories);
-    (
-      commandParams.cfg as never as {
-        channels: { whatsapp: { groups?: unknown; allowFrom?: string[] } };
-      }
-    ).channels.whatsapp = {
-      ...commandParams.cfg.channels.whatsapp,
+    testWhatsAppConfig(commandParams.cfg).channels.whatsapp = {
+      ...testWhatsAppConfig(commandParams.cfg).channels.whatsapp,
       allowFrom: ["+15550000002"],
       groups: {
         "*": {
@@ -332,6 +406,26 @@ describe("applyGroupGating audio preflight mention text", () => {
       nowMs: Date.parse("2026-07-18T19:00:02.000Z"),
     });
 
-    expect(countGroupListenWindowsForTest()).toBe(1);
+    expect(
+      resolveGroupListenWindowState({
+        agentId: "main",
+        accountId: "default",
+        sessionKey: "expired",
+        conversationId: "1203630@g.us",
+        nowMs: Date.parse("2026-07-18T19:00:02.000Z"),
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveGroupListenWindowState({
+        agentId: "main",
+        accountId: "default",
+        sessionKey: "active",
+        conversationId: "1203631@g.us",
+        nowMs: Date.parse("2026-07-18T19:00:02.000Z"),
+      }),
+    ).toEqual({
+      startedAtMs: Date.parse("2026-07-18T19:00:02.000Z"),
+      untilMs: Date.parse("2026-07-18T19:00:03.000Z"),
+    });
   });
 });

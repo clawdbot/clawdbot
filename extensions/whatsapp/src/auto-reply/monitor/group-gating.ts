@@ -290,7 +290,11 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
-  if (listenWindowConfig && !activationCommand.hasCommand && (wasMentioned || listenWindowActive)) {
+  if (
+    listenWindowConfig &&
+    !activationCommand.hasCommand &&
+    (mentionDecision.effectiveWasMentioned || listenWindowActive)
+  ) {
     armGroupListenWindow({
       agentId: params.agentId,
       accountId: inboundPolicy.account.accountId,
