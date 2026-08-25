@@ -575,6 +575,7 @@ export const startSubagentAnnounceCleanupFlow = (
           }
         : undefined,
     onDeliveryResult: (delivery) => {
+      const previousDropReason = entry.delivery?.lastDropReason;
       if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
         return;
@@ -597,20 +598,13 @@ export const startSubagentAnnounceCleanupFlow = (
         latestDeliveryError = undefined;
         return;
       }
-      const steerDropped =
-        delivery.reason === "steer_dropped" ||
-        Boolean(delivery.phases?.some((phase) => phase.reason === "steer_dropped"));
-      if (steerDropped) {
-        // Live-queue refusals persist as steer_dropped even when completion
-        // keeps a failed direct reason. Collapsing those to sink_unavailable
-        // erases the only durable distinction from no viable requester.
-        ensureDeliveryState(entry).lastDropReason = "steer_dropped";
-      } else if (delivery.path === "none" && delivery.disposition !== "intentional_non_delivery") {
-        ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
-      }
+      const deliveryState = ensureDeliveryState(entry);
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
-      if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {
-        ensureDeliveryState(entry).lastError = latestDeliveryError;
+      if (
+        deliveryState.lastError !== latestDeliveryError ||
+        deliveryState.lastDropReason !== previousDropReason
+      ) {
+        deliveryState.lastError = latestDeliveryError;
         params.persist(runId);
       }
     },

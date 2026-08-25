@@ -2833,7 +2833,12 @@ describe("subagent registry lifecycle hardening", () => {
 
     const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
 
-    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+    await expect(
+      completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
 
     await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe(lastDropReason));
     expect(entry.delivery?.lastError).toBe(lastError);
@@ -2841,12 +2846,41 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalledWith(entry.runId);
   });
 
-  it("persists steer_dropped after completion visible_reply_missing plus dropped steer fallback", async () => {
+  it.each([
+    {
+      name: "persists a newly failed completion",
+      previousDropReason: undefined,
+      reusePreviousError: false,
+      persistCalls: 1,
+    },
+    {
+      name: "persists a changed drop reason when the direct error is unchanged",
+      previousDropReason: "sink_unavailable" as const,
+      reusePreviousError: true,
+      persistCalls: 1,
+    },
+    {
+      name: "does not persist unchanged completion diagnostics",
+      previousDropReason: "steer_dropped" as const,
+      reusePreviousError: true,
+      persistCalls: 0,
+    },
+  ])("$name before stalled announce bookkeeping settles", async (scenario) => {
+    const lastError = "failed; visible_reply_missing; direct-primary: failed";
     const persist = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: true,
       retainAttachmentsOnKeep: true,
+      delivery: {
+        status: "pending",
+        ...(scenario.reusePreviousError ? { lastError } : {}),
+        ...(scenario.previousDropReason ? { lastDropReason: scenario.previousDropReason } : {}),
+      },
+    });
+    let releaseAnnounce!: () => void;
+    const announcePending = new Promise<void>((resolve) => {
+      releaseAnnounce = resolve;
     });
     const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
       async (announceParams) => {
@@ -2856,25 +2890,38 @@ describe("subagent registry lifecycle hardening", () => {
           direct: async () => ({
             delivered: false,
             path: "direct",
-            error: "completion agent did not produce a visible reply",
+            error: "failed",
             reason: "visible_reply_missing",
           }),
         });
+        persist.mockClear();
         announceParams.onDeliveryResult?.(delivery);
+        await announcePending;
         return "retryable" as const;
       },
     );
-
     const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
 
-    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+    try {
+      await expect(
+        completeRun(controller, entry, {
+          triggerCleanup: true,
+          terminalReply: { disposition: "visible", text: "final completion reply" },
+        }),
+      ).resolves.toBeUndefined();
+      await waitForLifecycleState(() => expect(entry.delivery?.disposition).toBe("retryable"));
+      expect(entry.delivery?.lastDropReason).toBe("steer_dropped");
+      expect(entry.delivery?.lastError).toBe(lastError);
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+      expect(persist).toHaveBeenCalledTimes(scenario.persistCalls);
+      if (scenario.persistCalls > 0) {
+        expect(persist).toHaveBeenCalledWith(entry.runId);
+      }
+    } finally {
+      releaseAnnounce();
+    }
 
-    await waitForLifecycleState(() => expect(entry.delivery?.lastDropReason).toBe("steer_dropped"));
-    expect(entry.delivery?.lastError).toBe(
-      "completion agent did not produce a visible reply; visible_reply_missing; direct-primary: completion agent did not produce a visible reply",
-    );
-    expect(entry.delivery?.status).toBe("suspended");
-    expect(persist).toHaveBeenCalledWith(entry.runId);
+    await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("suspended"));
   });
 
   it("persists identified completion delivery before stalled announce bookkeeping settles", async () => {

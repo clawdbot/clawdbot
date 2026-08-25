@@ -77,18 +77,10 @@ function mapSteerOutcomeToDeliveryResult(
       disposition: "intentional_non_delivery",
     };
   }
-  // Dropped is a live-queue refusal, not a terminal ownership loss. Marking it
-  // terminal would replace a completion direct failure with this steer result.
-  if (outcome.status === "dropped") {
-    return {
-      delivered: false,
-      path: "none",
-      reason: "steer_dropped",
-    };
-  }
   return {
     delivered: false,
     path: "none",
+    ...(outcome.status === "dropped" ? { reason: "steer_dropped" } : {}),
   };
 }
 
@@ -182,9 +174,6 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(fallbackSteer);
   }
 
-  // Dropped fallback is not terminal, so completion keeps the failed direct
-  // result and its reason. The fallback phase already records steer_dropped
-  // for registry cleanup; overwriting reason would discard the direct
-  // failure classification.
+  // Keep the direct failure authoritative; dropped fallback remains in its phase.
   return withPhases(primaryDirect);
 }
