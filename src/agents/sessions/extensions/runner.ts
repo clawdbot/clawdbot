@@ -721,12 +721,20 @@ export class ExtensionRunner {
       ctx: ExtensionContext,
       extensionPath: string,
     ) => Promise<TResult | undefined>,
-    ctx = this.createContext(),
+    ctx?: ExtensionContext,
   ): Promise<TResult | undefined> {
+    // Built on first handler rather than up front: per-delta events (message_update,
+    // tool_execution_update) reach this funnel on every stream chunk, and createContext()
+    // allocates a closure per context field. One context is still shared across every
+    // handler of a dispatch, exactly as an eagerly built one was.
+    let handlerCtx = ctx;
     for (const ext of this.extensions) {
       for (const handler of ext.handlers.get(eventType) ?? []) {
+        // Outside the try: a context-construction failure is a runner fault, not the
+        // extension's, and must not be reported against ext.path as a handler error.
+        handlerCtx ??= this.createContext();
         try {
-          const result = await invoke(handler, ctx, ext.path);
+          const result = await invoke(handler, handlerCtx, ext.path);
           if (result !== undefined) {
             return result;
           }
@@ -816,7 +824,7 @@ export class ExtensionRunner {
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    const ctx = this.createContext();
+    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
 
     for (const ext of this.extensions) {
@@ -826,6 +834,7 @@ export class ExtensionRunner {
       }
 
       for (const handler of handlers) {
+        ctx ??= this.createContext();
         const handlerResult = await handler(event, ctx);
 
         if (handlerResult) {

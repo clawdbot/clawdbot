@@ -227,3 +227,58 @@ describe("ExtensionRunner handler dispatch", () => {
     expect(laterHandler).not.toHaveBeenCalled();
   });
 });
+
+describe("ExtensionRunner context construction", () => {
+  function messageUpdateEvent() {
+    return {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
+    } as Parameters<ExtensionRunner["emit"]>[0];
+  }
+
+  it("skips building a context when no handler is registered for the event", async () => {
+    const noExtensions = buildRunner([]);
+    const noExtensionsSpy = vi.spyOn(noExtensions, "createContext");
+    await noExtensions.emit(messageUpdateEvent());
+    expect(noExtensionsSpy).not.toHaveBeenCalled();
+
+    const otherHandlersOnly = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
+    const otherHandlersSpy = vi.spyOn(otherHandlersOnly, "createContext");
+    await otherHandlersOnly.emit(messageUpdateEvent());
+    expect(otherHandlersSpy).not.toHaveBeenCalled();
+  });
+
+  it("builds one shared context for every handler of a dispatch", async () => {
+    const seen: unknown[] = [];
+    const record: TestHandler = async (_event, ctx) => {
+      seen.push(ctx);
+      return undefined;
+    };
+    const runner = buildRunner([
+      buildExtension({ message_update: [record] }, "/tmp/first.ts"),
+      buildExtension({ message_update: [record] }, "/tmp/second.ts"),
+    ]);
+    const spy = vi.spyOn(runner, "createContext");
+
+    await runner.emit(messageUpdateEvent());
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
+  });
+
+  it("skips building a context for tool_call when no handler is registered", async () => {
+    const runner = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
+    const spy = vi.spyOn(runner, "createContext");
+
+    await runner.emitToolCall({
+      type: "tool_call",
+      toolName: "custom",
+      toolCallId: "call-1",
+      input: {},
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
