@@ -24,6 +24,19 @@ afterEach(async () => {
 });
 
 describe("detectAmbientInferenceBackends", () => {
+  it("does not treat native Claude token files as ambient credentials", async () => {
+    const home = await createTempHome();
+    await writeCredential(home, ".claude/.credentials.json", {
+      claudeAiOauth: {
+        accessToken: "claude-access",
+        refreshToken: "claude-refresh",
+        expiresAt: Date.now() + 60_000,
+      },
+    });
+
+    expect(detectAmbientInferenceBackends({ HOME: home })).toEqual([]);
+  });
+
   it("returns a verified Codex candidate only for readable file credentials", async () => {
     const home = await createTempHome();
     expect(detectAmbientInferenceBackends({ HOME: home })).toEqual([]);
