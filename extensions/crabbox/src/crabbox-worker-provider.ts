@@ -454,7 +454,7 @@ async function rejectAwsProfileAfterLeaseReconciliation(
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
-): WorkerProvider {
+): WorkerProvider & { dispose: () => void } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const warn = dependencies.warn ?? (() => {});
@@ -524,6 +524,7 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    dispose: () => heartbeats.dispose(),
     listMachineOptions,
     supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
