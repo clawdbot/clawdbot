@@ -412,18 +412,18 @@ describe("buildSlackPresentationBlocks", () => {
       const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
       const presentation: MessagePresentation = { blocks: [{ type, text }] };
       const blocks = buildSlackPresentationBlocks(presentation);
-      const chunks = blocks.map((block) =>
-        block.type === "section"
-          ? block.text?.text
-          : block.type === "context"
-            ? block.elements[0]?.text
-            : undefined,
-      );
+      const chunks = blocks.flatMap((block) => {
+        if (block.type === "section" && block.text?.type === "mrkdwn") {
+          return [block.text.text];
+        }
+        const element = block.type === "context" ? block.elements[0] : undefined;
+        return element?.type === "mrkdwn" ? [element.text] : [];
+      });
 
       expect(canRenderSlackPresentation(presentation)).toBe(true);
       expect(chunks.join("")).toBe(text);
       expect(chunks).toHaveLength(2);
-      expect(chunks.every((chunk) => chunk && chunk.length <= 3_000)).toBe(true);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
       expect(
         blocks.every((block) => block.type === (type === "text" ? "section" : "context")),
       ).toBe(true);

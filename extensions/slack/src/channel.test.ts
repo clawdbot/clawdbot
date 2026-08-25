@@ -1690,16 +1690,16 @@ describe("slackPlugin outbound", () => {
         .mockResolvedValueOnce({ messageId: "m-chunk-1" })
         .mockResolvedValueOnce({ messageId: "m-chunk-2" });
       const text = "x".repeat(3_000 * 50 + 1);
-      const structured = {
-        blocks: [
-          { type, text },
-          { type: "buttons" as const, buttons: [{ label: "Continue", value: "continue" }] },
-        ],
+      const buttons = {
+        type: "buttons" as const,
+        buttons: [{ label: "Continue", value: "continue" }],
       };
+      const presentationTextBlock =
+        type === "context" ? { type: "context" as const, text } : { type: "text" as const, text };
       const payload =
         surface === "interactive"
-          ? { text: "", interactive: structured }
-          : { text: "", presentation: structured };
+          ? { text: "", interactive: { blocks: [{ type: "text" as const, text }, buttons] } }
+          : { text: "", presentation: { blocks: [presentationTextBlock, buttons] } };
 
       const result = await requireSlackSendPayload()({
         cfg,
