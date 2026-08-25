@@ -740,6 +740,7 @@ export async function runMainAgent(message: string, idempotencyKey: string) {
 }
 
 export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  mocks.agentCommand.mockClear();
   const loaded = mocks.loadSessionEntry();
   const canonicalKey = loaded?.canonicalKey ?? "agent:main:main";
   const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
