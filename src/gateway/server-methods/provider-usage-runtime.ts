@@ -3,6 +3,7 @@ import {
   ensureAuthProfileStore,
   externalCliDiscoveryForConfigStatus,
   getRuntimeAuthProfileStoreSnapshotRevision,
+  resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import {
@@ -51,6 +52,7 @@ function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
 function fingerprintProviderUsageCredentials(params: {
   cfg: OpenClawConfig;
   directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
+  providerIds: readonly UsageProviderId[];
   store: AuthProfileStore;
 }): string {
   const profiles = Object.entries(params.store.profiles)
@@ -67,14 +69,19 @@ function fingerprintProviderUsageCredentials(params: {
       provider,
       fingerprintResolvedProviderAuth({ ...resolved, mode: "api-key" }) ?? null,
     ]);
+  const selectedProfiles = params.providerIds.map((provider) => [
+    provider,
+    resolveAuthProfileOrder({ cfg: params.cfg, store: params.store, provider }),
+  ]);
   // Profile selection can switch accounts without changing the profile set.
-  // Include every non-secret selector that resolveAuthProfileOrder consults.
+  // Record its resolved order so routine bookkeeping writes do not invalidate
+  // usage while a real account-selection change still does.
   return JSON.stringify({
     profiles,
     direct,
     order: sortedRecordEntries(params.store.order),
     lastGood: sortedRecordEntries(params.store.lastGood),
-    usageStats: sortedRecordEntries(params.store.usageStats),
+    selectedProfiles,
   });
 }
 
@@ -137,7 +144,12 @@ export function getProviderUsageRuntimeSnapshot(params: {
     agentDir,
     agentId,
     configRef,
-    credentialKey: fingerprintProviderUsageCredentials({ cfg: configRef, directApiKeys, store }),
+    credentialKey: fingerprintProviderUsageCredentials({
+      cfg: configRef,
+      directApiKeys,
+      providerIds,
+      store,
+    }),
     descriptors,
     directApiKeys,
     providerIds,

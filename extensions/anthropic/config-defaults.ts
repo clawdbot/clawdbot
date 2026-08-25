@@ -15,7 +15,7 @@ import {
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_RETIRED_PROFILE_ID,
+  CLAUDE_CLI_PROFILE_ID,
 } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
@@ -95,8 +95,7 @@ function resolveAnthropicDefaultAuthMode(
 function usesRetiredClaudeCliProviderEntry(config: OpenClawConfig): boolean {
   return Object.entries(config.models?.providers ?? {}).some(
     ([provider, entry]) =>
-      normalizeProviderId(provider) === "anthropic" &&
-      entry.apiKey === CLAUDE_CLI_RETIRED_PROFILE_ID,
+      normalizeProviderId(provider) === "anthropic" && entry.apiKey === CLAUDE_CLI_PROFILE_ID,
   );
 }
 

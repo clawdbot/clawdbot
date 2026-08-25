@@ -29,6 +29,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
+  requestUpdate: () => void;
   saveDefaultModels: () => Promise<void>;
   saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
@@ -55,6 +56,8 @@ function createHarness(initialScopeId: string) {
     });
     return () => releaseAuthStatus?.();
   };
+  let usageStatus: unknown = { updatedAt: 1, providers: [] };
+  let usageStatusRejects = false;
   const request = vi.fn(async (method: string): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
@@ -76,7 +79,10 @@ function createHarness(initialScopeId: string) {
       case "config.get":
         return { config: {}, hash: "hash" };
       case "usage.status":
-        return { updatedAt: 1, providers: [] };
+        if (usageStatusRejects) {
+          throw new Error("usage.status unavailable");
+        }
+        return usageStatus;
       case "sessions.usage":
         return { aggregates: { byProvider: [] } };
       default:
@@ -94,6 +100,7 @@ function createHarness(initialScopeId: string) {
     lastError: null,
     lastErrorCode: null,
   };
+  const gatewaySource = publishableGateway(snapshot);
   let selectionListener: (() => void) | undefined;
   const agentSelection = {
     state: {
@@ -137,7 +144,7 @@ function createHarness(initialScopeId: string) {
     subscribe,
   };
   const context = {
-    gateway: { snapshot, subscribe },
+    gateway: gatewaySource.gateway,
     agents: {
       state: {
         agentsList: {
@@ -172,6 +179,16 @@ function createHarness(initialScopeId: string) {
     request,
     runtimeConfig,
     snapshot,
+    publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
+      snapshot.phase = phase;
+      gatewaySource.publish({ ...snapshot });
+    },
+    setUsageStatus: (value: unknown) => {
+      usageStatus = value;
+    },
+    failUsageStatus: () => {
+      usageStatusRejects = true;
+    },
   };
 }
 
@@ -201,6 +218,17 @@ function requestCount(request: ReturnType<typeof vi.fn>, method: string): number
   return request.mock.calls.filter(([candidate]) => candidate === method).length;
 }
 
+async function advanceUsageRetries(): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await vi.advanceTimersByTimeAsync(5_000);
+  }
+}
+
+function focusDocument(): void {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+}
+
 function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
@@ -212,7 +240,142 @@ function appendPage(context: ApplicationContext) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("ModelProvidersPage usage convergence", () => {
+  it("restarts an exhausted retry cycle on same-client reconnect", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await advanceUsageRetries();
+
+    const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
+      ([method]) => method === "usage.status",
+    ).length;
+    expect(usageCallsBeforeReconnect).toBe(4);
+
+    harness.publishPhase("offline");
+    await page.updateComplete;
+    harness.publishPhase("connected");
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.request.mock.calls.filter(([method]) => method === "usage.status").length).toBe(
+      5,
+    );
+  });
+
+  it("reports a stalled provider refresh once the retry budget is spent", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    // Nothing is visible while retries are still in flight: a converging load is
+    // not a failure and must not warn.
+    expect(page.textContent ?? "").not.toContain("did not finish loading");
+
+    await advanceUsageRetries();
+    await page.updateComplete;
+
+    // Budget spent and the payload is still incomplete. Rendering the ordinary
+    // cards with no usage and no notice is indistinguishable from a provider
+    // that simply reports none.
+    expect(page.textContent ?? "").toContain("did not finish loading");
+
+    // The notice says "Refresh to retry", so a manual refresh has to hand back a
+    // budget — otherwise the button is a dead end and nothing ever converges.
+    const callsBeforeManual = harness.request.mock.calls.filter(
+      ([method]) => method === "usage.status",
+    ).length;
+    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    await page.updateComplete;
+    await advanceUsageRetries();
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
+    ).toBeGreaterThan(callsBeforeManual + 1);
+  });
+
+  it("keeps the stalled explanation when usage.status starts rejecting", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await advanceUsageRetries();
+    await page.updateComplete;
+    expect(page.textContent ?? "").toContain("did not finish loading");
+
+    // loadModelProvidersData turns a rejected usage.status into providerUsage:
+    // null. Read as a completed load that would reset the budget and erase the
+    // notice, leaving broken usage looking exactly like absent usage.
+    harness.failUsageStatus();
+    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    await page.updateComplete;
+    await advanceUsageRetries();
+    await page.updateComplete;
+
+    expect(page.textContent ?? "").toContain("did not finish loading");
+  });
+
+  it("does not warn about a stall while disconnected", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("main");
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    // Disconnected route data carries providerUsage: null for the ordinary
+    // "nothing loaded yet" reason. Treating that as unresolved would count down
+    // the budget and warn about a stall that never happened.
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      data: EMPTY_MODEL_PROVIDERS_DATA,
+      client: null,
+      agentId: "main",
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await page.updateComplete;
+
+    expect(page.textContent ?? "").not.toContain("did not finish loading");
+  });
+
+  it("replaces a pending pre-disconnect load before it can publish", async () => {
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [] });
+    const releaseOldLoad = harness.deferNextAuthStatus();
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    harness.publishPhase("offline");
+    await page.updateComplete;
+    harness.setUsageStatus({ updatedAt: 2, providers: [] });
+    harness.publishPhase("connected");
+    await page.updateComplete;
+
+    await vi.waitFor(() =>
+      expect(
+        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
+      ).toBe(2),
+    );
+    releaseOldLoad();
+    await vi.waitFor(() =>
+      expect(page.data?.providerUsage).toMatchObject({
+        ok: true,
+        value: { updatedAt: 2 },
+      }),
+    );
+  });
 });
 
 describe("ModelProvidersPage agent scope", () => {
