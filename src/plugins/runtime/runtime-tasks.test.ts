@@ -2,6 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
@@ -159,6 +160,19 @@ describe("runtime tasks", () => {
         goal: "Cancel active task",
       }),
     );
+    const backingTask = createRunningTaskRunCore({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-task-cancel",
+      task: "Canonical child",
+      startedAt: 20,
+      deliveryStatus: "pending",
+    });
+    if (!backingTask) {
+      throw new Error("expected canonical backing task creation to succeed");
+    }
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -182,6 +196,7 @@ describe("runtime tasks", () => {
       cfg: {},
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
+      expectedRunId: "runtime-task-cancel",
     });
     expect(result.found).toBe(true);
     expect(result.cancelled).toBe(true);
@@ -368,6 +383,7 @@ describe("runtime tasks", () => {
       cfg: {},
       sessionKey: "agent:ops:acp:child",
       reason: "task-cancel",
+      expectedRunId: "ops-global-run",
     });
   });
 });
