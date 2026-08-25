@@ -40,8 +40,10 @@ const watchMock = vi.fn(() => {
   return watcher;
 });
 const pluginSkillsMocks = vi.hoisted(() => ({
-  resolvePluginSkillDirs: vi.fn((): string[] => []),
-  resolvePluginSkillDirsFromMetadata: vi.fn((): string[] => []),
+  resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
+  resolvePluginSkillRootsFromMetadata: vi.fn(
+    (): Array<{ dir: string; rejectHardlinks: boolean }> => [],
+  ),
 }));
 
 let refreshModule: typeof import("./refresh.js");
@@ -52,8 +54,8 @@ vi.mock("chokidar", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: pluginSkillsMocks.resolvePluginSkillDirs,
-  resolvePluginSkillDirsFromMetadata: pluginSkillsMocks.resolvePluginSkillDirsFromMetadata,
+  resolvePluginSkillRoots: pluginSkillsMocks.resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata: pluginSkillsMocks.resolvePluginSkillRootsFromMetadata,
 }));
 
 describe("ensureSkillsWatcher", () => {
@@ -65,8 +67,8 @@ describe("ensureSkillsWatcher", () => {
   beforeEach(() => {
     watchMock.mockClear();
     createdWatchers.length = 0;
-    pluginSkillsMocks.resolvePluginSkillDirs.mockClear();
-    pluginSkillsMocks.resolvePluginSkillDirsFromMetadata.mockClear();
+    pluginSkillsMocks.resolvePluginSkillRoots.mockClear();
+    pluginSkillsMocks.resolvePluginSkillRootsFromMetadata.mockClear();
   });
 
   afterEach(async () => {
@@ -557,9 +559,9 @@ describe("ensureSkillsWatcher", () => {
       pluginMetadataSnapshot,
     });
 
-    expect(pluginSkillsMocks.resolvePluginSkillDirs).not.toHaveBeenCalled();
-    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenCalledTimes(2);
-    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenLastCalledWith({
+    expect(pluginSkillsMocks.resolvePluginSkillRoots).not.toHaveBeenCalled();
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenCalledTimes(2);
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenLastCalledWith({
       workspaceDir: "/tmp/workspace",
       config,
       metadataSnapshot: pluginMetadataSnapshot,
@@ -699,7 +701,9 @@ describe("ensureSkillsWatcher", () => {
         "---\nname: demo\ndescription: Demo\n---\n",
       );
       const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+      vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+        { dir: pluginDir, rejectHardlinks: true },
+      ]);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
@@ -722,7 +726,9 @@ describe("ensureSkillsWatcher", () => {
     );
     try {
       const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+      vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+        { dir: pluginDir, rejectHardlinks: true },
+      ]);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
@@ -754,7 +760,9 @@ describe("ensureSkillsWatcher", () => {
         );
         await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
         const pluginSkills = await import("../loading/plugin-skills.js");
-        vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+        vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+          { dir: pluginDir, rejectHardlinks: true },
+        ]);
 
         refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 

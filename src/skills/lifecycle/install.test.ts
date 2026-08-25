@@ -24,7 +24,7 @@ vi.mock("../../process/exec.js", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
