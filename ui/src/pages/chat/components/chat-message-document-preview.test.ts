@@ -16,6 +16,7 @@ afterEach(() => {
     releaseChatMediaResourceSubscriber(subscriber);
   }
   subscribers.clear();
+  document.body.replaceChildren();
   vi.unstubAllGlobals();
 });
 
@@ -28,6 +29,31 @@ function documentAttachment(label: string, mimeType: string, url?: string): Atta
       mimeType,
       url: url ?? `https://example.com/${label}`,
     },
+  };
+}
+
+function stubPreviewIntersection(): () => Promise<void> {
+  const callbacks: IntersectionObserverCallback[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  return async () => {
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+    const callback = callbacks.shift();
+    if (!callback) {
+      throw new Error("No attachment preview is waiting for viewport intersection");
+    }
+    callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
   };
 }
 
@@ -55,7 +81,7 @@ describe("parseDelimitedPreview", () => {
   });
 
   it("bounds the rendered CSV grid separately from the parse budget", () => {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const wideCsv = Array.from({ length: 8 }, (_row, row) =>
       Array.from({ length: 24 }, (_column, column) => `${row}:${column}`).join(","),
     ).join("\n");
@@ -67,7 +93,6 @@ describe("parseDelimitedPreview", () => {
         "https://example.com/wide.csv",
         wideCsv,
         undefined,
-        undefined,
       ),
       container,
     );
@@ -78,6 +103,36 @@ describe("parseDelimitedPreview", () => {
     expect(tableWrap?.hasAttribute("data-right-truncated")).toBe(true);
     expect(tableWrap?.hasAttribute("data-bottom-truncated")).toBe(true);
     expect(container.textContent).not.toContain("Preview truncated");
+  });
+
+  it("loads a CSV preview only when its card reaches the viewport", async () => {
+    const intersectPreview = stubPreviewIntersection();
+    const fetchMock = vi.fn(async () => new Response("name,status\nalpha,ready\n"));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () =>
+      render(
+        renderAssistantAttachments(
+          [documentAttachment("rows.csv", "text/csv", "/__openclaw__/media/rows.csv")],
+          { onRequestUpdate: rerender },
+          undefined,
+          vi.fn(),
+        ),
+        container,
+      );
+    subscribers.add(rerender);
+    rerender();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
+
+    await intersectPreview();
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card__table")).not.toBeNull(),
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(container.querySelector(".chat-assistant-attachment-card__preview-load")).toBeNull();
   });
 
   it.each([
@@ -95,7 +150,8 @@ describe("parseDelimitedPreview", () => {
   it.each([
     ["preview.html", "text/html", ""],
     ["brief.pdf", "application/pdf", "allow-scripts"],
-  ])("does not load %s until the preview is requested", async (label, mimeType, sandbox) => {
+  ])("loads %s directly when its card reaches the viewport", async (label, mimeType, sandbox) => {
+    const intersectPreview = stubPreviewIntersection();
     const previewObjectUrl = `blob:document-preview-${label}`;
     const NativeUrl = URL;
     vi.stubGlobal(
@@ -109,7 +165,7 @@ describe("parseDelimitedPreview", () => {
       async () => new Response(label, { status: 200, headers: { "Content-Type": mimeType } }),
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const rerender = () =>
       render(
         renderAssistantAttachments(
@@ -123,13 +179,11 @@ describe("parseDelimitedPreview", () => {
     subscribers.add(rerender);
     rerender();
 
-    const trigger = container.querySelector<HTMLButtonElement>(
-      ".chat-assistant-attachment-card__preview-load",
-    );
     expect(container.querySelector("iframe")).toBeNull();
-    expect(trigger).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__preview-load")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
 
-    trigger?.click();
+    await intersectPreview();
 
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     const iframe = container.querySelector<HTMLIFrameElement>("iframe");
@@ -146,6 +200,7 @@ describe("parseDelimitedPreview", () => {
   });
 
   it("resets an activated frame when its resolved source changes", async () => {
+    const intersectPreview = stubPreviewIntersection();
     const NativeUrl = URL;
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
@@ -162,7 +217,7 @@ describe("parseDelimitedPreview", () => {
       "fetch",
       vi.fn(async () => new Response("preview", { status: 200 })) as unknown as typeof fetch,
     );
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     let source = "/__openclaw__/media/ticket-A/preview.html";
     const rerender = () =>
       render(
@@ -177,9 +232,7 @@ describe("parseDelimitedPreview", () => {
 
     subscribers.add(rerender);
     rerender();
-    container
-      .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__preview-load")
-      ?.click();
+    await intersectPreview();
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     const activatedFrame = container.querySelector<HTMLIFrameElement>("iframe");
     expect(activatedFrame?.getAttribute("src")).toBe("blob:ticket-A");
@@ -188,20 +241,18 @@ describe("parseDelimitedPreview", () => {
     rerender();
 
     const renewedFrame = container.querySelector<HTMLIFrameElement>("iframe");
-    const renewedTrigger = container.querySelector<HTMLButtonElement>(
-      ".chat-assistant-attachment-card__preview-load",
-    );
     expect(renewedFrame).toBeNull();
-    expect(renewedTrigger).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__preview-load")).toBeNull();
     releaseChatMediaResourceSubscriber(rerender);
     subscribers.delete(rerender);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:ticket-A");
   });
 
   it("persists a failed preview probe as a compact card", async () => {
+    const intersectPreview = stubPreviewIntersection();
     const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const attachment = documentAttachment(
       "missing.pdf",
       "application/pdf",
@@ -215,9 +266,7 @@ describe("parseDelimitedPreview", () => {
     subscribers.add(rerender);
     rerender();
 
-    container
-      .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__preview-load")
-      ?.click();
+    await intersectPreview();
 
     await vi.waitFor(() =>
       expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
@@ -229,6 +278,7 @@ describe("parseDelimitedPreview", () => {
   });
 
   it("frames a fetched object URL instead of the protected download response", async () => {
+    const intersectPreview = stubPreviewIntersection();
     const NativeUrl = URL;
     vi.stubGlobal(
       "URL",
@@ -249,7 +299,7 @@ describe("parseDelimitedPreview", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const attachment = documentAttachment(
       "preview.html",
       "text/html",
@@ -263,9 +313,7 @@ describe("parseDelimitedPreview", () => {
     subscribers.add(rerender);
     rerender();
 
-    container
-      .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__preview-load")
-      ?.click();
+    await intersectPreview();
 
     await vi.waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);

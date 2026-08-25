@@ -6,6 +6,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -25,6 +26,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @state() private metadataLoaded = false;
 
   private media: HTMLVideoElement | null = null;
+  private previewVisible = false;
+  private viewportElement: HTMLElement | null = null;
+  private stopObservingViewport: (() => void) | undefined;
   private readonly sourceController = new ChatMediaSourceController();
 
   override connectedCallback(): void {
@@ -33,6 +37,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
+    this.viewportElement = null;
     this.sourceController.cancel();
     if (this.media) {
       this.sourceController.reset(this.media);
@@ -65,9 +72,26 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     this.syncSource();
   };
 
+  private setViewportElement = (element: Element | undefined) => {
+    const viewportElement = element instanceof HTMLElement ? element : null;
+    if (this.viewportElement === viewportElement) {
+      return;
+    }
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
+    this.viewportElement = viewportElement;
+    if (!viewportElement) {
+      return;
+    }
+    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
+      this.previewVisible = true;
+      this.syncSource();
+    });
+  };
+
   private syncSource(): void {
     const media = this.media;
-    if (!media || !this.isConnected) {
+    if (!media || !this.isConnected || !this.previewVisible) {
       return;
     }
     const pending = this.sourceController.sync(
@@ -108,6 +132,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
+        ${ref(this.setViewportElement)}
         ?data-metadata-loaded=${this.metadataLoaded}
         ?data-unplayable=${this.sourceController.readiness === "unavailable"}
         ?data-openable=${Boolean(this.onExpand)}

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
+import "./chat-document-preview.ts";
 import "./chat-video-player.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
@@ -20,9 +21,8 @@ import {
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import {
   parseAttachmentDelimitedPreview,
-  renderAttachmentDocumentPreview,
+  peekDocumentPreviewText,
   resolveDocumentFramePreviewState,
-  resolveDocumentPreviewText,
   resolveDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -593,7 +593,7 @@ export function renderAssistantAttachments(
       : null;
     const previewText =
       previewKind === "table"
-        ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
+        ? peekDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes)
         : null;
     const framePreviewState =
       previewKind === "html" || previewKind === "page"
@@ -626,14 +626,13 @@ export function renderAssistantAttachments(
             visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
           })}
           ${showPreview && previewKind
-            ? renderAttachmentDocumentPreview(
-                previewKind,
-                attachment,
-                attachmentUrl,
-                previewText,
-                framePreviewState,
-                onRequestUpdate,
-              )
+            ? html`<openclaw-chat-document-preview
+                .attachment=${attachment}
+                .attachmentUrl=${attachmentUrl}
+                .previewKind=${previewKind}
+                .sizeBytes=${sizeBytes}
+                .onRequestUpdate=${onRequestUpdate}
+              ></openclaw-chat-document-preview>`
             : null}
         </div>
       `,

@@ -152,21 +152,6 @@ export function resolveDocumentFramePreviewState(
   ).value;
 }
 
-function requestDocumentFramePreview(
-  event: Event,
-  source: string,
-  sourceIdentity: string,
-  onRequestUpdate: (() => void) | undefined,
-): void {
-  event.stopPropagation();
-  const trigger = event.currentTarget;
-  if (!(trigger instanceof HTMLButtonElement)) {
-    return;
-  }
-  const resource = startDocumentFramePreview(source, sourceIdentity, onRequestUpdate);
-  notifyChatMediaResourceSubscribers(resource);
-}
-
 function startDocumentFramePreview(
   source: string,
   sourceIdentity: string,
@@ -301,7 +286,6 @@ export function renderAttachmentDocumentPreview(
   attachmentUrl: string,
   previewText: string | null | undefined,
   framePreviewState: DocumentFramePreviewState,
-  onRequestUpdate: (() => void) | undefined,
 ) {
   const frameSource = typeof framePreviewState === "object" ? framePreviewState.src : null;
   if (previewKind === "html") {
@@ -318,14 +302,9 @@ export function renderAttachmentDocumentPreview(
           ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
               ${t("chat.mediaPlayer.preparing")}
             </div>`
-          : html`<button
-              type="button"
-              class="chat-assistant-attachment-card__preview-load"
-              @click=${(event: Event) =>
-                requestDocumentFramePreview(event, attachmentUrl, attachment.url, onRequestUpdate)}
-            >
-              ${t("chat.attachments.loadPreview")}
-            </button>`}
+          : html`<div class="chat-assistant-attachment-card__preview-unavailable">
+              ${t("chat.mediaPlayer.preparing")}
+            </div>`}
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
   }
@@ -345,14 +324,9 @@ export function renderAttachmentDocumentPreview(
         ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
             ${t("chat.mediaPlayer.preparing")}
           </div>`
-        : html`<button
-            type="button"
-            class="chat-assistant-attachment-card__preview-load"
-            @click=${(event: Event) =>
-              requestDocumentFramePreview(event, previewUrl, attachment.url, onRequestUpdate)}
-          >
-            ${t("chat.attachments.loadPreview")}
-          </button>`}
+        : html`<div class="chat-assistant-attachment-card__preview-unavailable">
+            ${t("chat.mediaPlayer.preparing")}
+          </div>`}
   </div>`;
 }
 
@@ -392,6 +366,30 @@ async function readBoundedPreviewText(response: Response): Promise<string> {
   return capPreviewText(text);
 }
 
+function observeDocumentPreviewText(
+  attachmentUrl: string,
+  sourceIdentity: string,
+  onRequestUpdate: (() => void) | undefined,
+) {
+  return observeChatMediaResource<string | null>(
+    "document-preview",
+    attachmentUrl,
+    onRequestUpdate,
+    sourceIdentity,
+  );
+}
+
+export function peekDocumentPreviewText(
+  attachmentUrl: string,
+  sourceIdentity: string,
+  sizeBytes: number | undefined,
+): string | null | undefined {
+  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
+    return null;
+  }
+  return observeDocumentPreviewText(attachmentUrl, sourceIdentity, undefined).value;
+}
+
 export function resolveDocumentPreviewText(
   attachmentUrl: string,
   sourceIdentity: string,
@@ -401,12 +399,7 @@ export function resolveDocumentPreviewText(
   if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
     return null;
   }
-  const resource = observeChatMediaResource<string | null>(
-    "document-preview",
-    attachmentUrl,
-    onRequestUpdate,
-    sourceIdentity,
-  );
+  const resource = observeDocumentPreviewText(attachmentUrl, sourceIdentity, onRequestUpdate);
   if (resource.value !== undefined) {
     return resource.value;
   }

@@ -11,7 +11,18 @@ afterEach(() => {
 });
 
 describe("ChatVideoPlayer", () => {
-  it("limits passive video loading to metadata", async () => {
+  it("starts metadata loading only when the video card reaches the viewport", async () => {
+    let intersect: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersect = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
     const player = document.createElement("openclaw-chat-video-player");
     player.src = "https://example.com/clip.mp4";
     player.sourceIdentity = "media:clip-metadata";
@@ -19,7 +30,17 @@ describe("ChatVideoPlayer", () => {
     document.body.append(player);
     await player.updateComplete;
 
-    expect(player.querySelector("video")?.preload).toBe("metadata");
+    const video = player.querySelector("video");
+    expect(video?.preload).toBe("metadata");
+    expect(video?.hasAttribute("src")).toBe(false);
+
+    intersect?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+    await player.updateComplete;
+
+    expect(video?.getAttribute("src")).toBe("https://example.com/clip.mp4");
   });
 
   it("preserves a portrait attachment aspect ratio", async () => {
