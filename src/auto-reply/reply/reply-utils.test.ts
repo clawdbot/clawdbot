@@ -1467,16 +1467,17 @@ describe("createStreamingDirectiveAccumulator", () => {
     },
   );
 
-  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
-    "releases malformed directive-looking final text verbatim: %s",
-    (text) => {
-      const accumulator = createStreamingDirectiveAccumulator();
-      const first = accumulator.consume(text);
-      const final = accumulator.consume("", { final: true });
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Explain [[reply_to_current] literally.",
+    "answer ending [",
+  ])("releases malformed directive-looking final text verbatim: %s", (text) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const first = accumulator.consume(text);
+    const final = accumulator.consume("", { final: true });
 
-      expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
-    },
-  );
+    expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
+  });
 
   it.each([
     ["answer [[", "bogus]] tail", "answer [[bogus]] tail"],
@@ -1633,6 +1634,37 @@ describe("createStreamingDirectiveAccumulator", () => {
       mediaUrls: ["/tmp/final.png"],
     });
   });
+});
+
+describe("parseReplyDirectives malformed reply prefixes", () => {
+  it.each([
+    ["[[reply_to_current] Visible reply", "Visible reply"],
+    ["[[reply_to_current", ""],
+    ["[[reply_to:message-7] Visible reply", "Visible reply"],
+    ["[[reply_to:", ""],
+  ])("strips %s without treating it as reply intent", (input, text) => {
+    expect(parseReplyDirectives(input)).toMatchObject({
+      text,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+    });
+  });
+
+  it.each([
+    "Use `[[reply_to_current]` literally.",
+    ["```text", "[[reply_to_current]", "```"].join("\n"),
+    "    [[reply_to_current]",
+  ])("preserves malformed reply examples in code: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
+  });
+
+  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
+    "preserves unrelated malformed bracket text: %s",
+    (text) => {
+      expect(parseReplyDirectives(text).text).toBe(text);
+    },
+  );
 });
 
 describe("extractShortModelName", () => {

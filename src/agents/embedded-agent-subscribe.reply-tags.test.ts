@@ -111,4 +111,28 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
       expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
     }
   });
+
+  it("strips a malformed reply prefix when the stream ends", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
+    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
+    emitAssistantTextEnd({ emit });
+
+    const payload = lastReplyPayload(onPartialReply);
+    expect(payload.text).toBe("Visible reply");
+    expect(payload.replyToCurrent).toBeUndefined();
+    expect(payload.replyToTag).toBeUndefined();
+    for (const call of onPartialReply.mock.calls) {
+      expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
+    }
+  });
 });

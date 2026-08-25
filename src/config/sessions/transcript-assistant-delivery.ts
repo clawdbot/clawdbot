@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
 
 type AssistantDirectiveMessage = {
   content?: unknown;
@@ -46,12 +49,17 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       continue;
     }
     const parsed = parseInlineDirectives(block.text);
-    const tts = extractTtsDirectiveFacts(parsed.text);
-    if (!parsed.hasAudioTag && !parsed.hasReplyTag && !tts.facts) {
+    const stripped = stripInlineDirectiveTagsForDelivery(parsed.text);
+    const tts = extractTtsDirectiveFacts(stripped.text);
+    const hasDeliveryFacts = parsed.hasAudioTag || parsed.hasReplyTag || Boolean(tts.facts);
+    if (!stripped.changed && !hasDeliveryFacts) {
+      continue;
+    }
+    block.text = tts.facts ? tts.cleanedText.trim() : tts.cleanedText;
+    if (!hasDeliveryFacts) {
       continue;
     }
     facts ??= {};
-    block.text = tts.facts ? tts.cleanedText.trim() : tts.cleanedText;
     Object.assign(facts, {
       ...(parsed.audioAsVoice ? { audioAsVoice: true as const } : {}),
       ...(parsed.replyToCurrent ? { replyToCurrent: true as const } : {}),

@@ -653,6 +653,20 @@ describe("OutboundPayloadPlan projections", () => {
     );
   });
 
+  it.each([
+    ["current tag with one closing bracket", "[[reply_to_current] Visible reply"],
+    ["explicit tag with one closing bracket", "[[reply_to:message-7] Visible reply"],
+  ])("strips a malformed %s without creating reply metadata", (_name, text) => {
+    const [normalized] = normalizeReplyPayloadsForDelivery([{ text }]);
+
+    expect(normalized).toMatchObject({
+      text: "Visible reply",
+      replyToTag: false,
+    });
+    expect(normalized?.replyToId).toBeUndefined();
+    expect(normalized?.replyToCurrent).toBeUndefined();
+  });
+
   it("projects transport payloads without no-reply or reasoning entries", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
