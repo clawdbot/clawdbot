@@ -1,4 +1,5 @@
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
@@ -17,9 +18,7 @@ export async function publishSessionPatchEffects(params: {
   callerScopes: readonly string[];
   callerCanManageCron: boolean;
   category: SessionsPatchParams["category"];
-  loadModelCatalog: (
-    agentId: string,
-  ) => ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>;
+  loadModelCatalog: (agentId: string) => Promise<ModelCatalogEntry[] | undefined>;
   targets: Array<{
     entry: SessionEntry;
     target: {
@@ -51,7 +50,7 @@ export async function publishSessionPatchEffects(params: {
       sessionKey: target.canonicalKey,
       ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
       reason: "patch",
-      modelCatalog,
+      ...(modelCatalog !== undefined ? { modelCatalog } : {}),
     });
     if (target.fullPatch.archived === true) {
       archivedSessionKeys.add(target.canonicalKey);
