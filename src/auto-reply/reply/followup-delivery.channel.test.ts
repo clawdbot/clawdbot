@@ -170,7 +170,7 @@ describe("follow-up delivery channel boundary", () => {
     slack.threading = {
       resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
         threadId: null,
-        replyToId: replyToIsExplicit ? replyToId : threadId,
+        replyToId: replyToIsExplicit ? replyToId : threadId == null ? undefined : String(threadId),
       }),
     };
     setActivePluginRegistry(
