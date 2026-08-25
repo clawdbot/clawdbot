@@ -693,9 +693,9 @@ function runServiceCommand(command, args, onSpawn, deadline) {
   });
 }
 
-async function inspectSystemdService(unit) {
+async function inspectSystemdService(unit, deadline) {
   const result = await runServiceCommand("systemctl", ["--user", "show", unit,
-    "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic"]);
+    "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic"], undefined, deadline);
   if (result.code !== 0) return null;
   return Object.fromEntries(result.stdout.trim().split(/\r?\n/).map((line) => {
     const index = line.indexOf("=");
@@ -940,11 +940,19 @@ async function restoreGatewayService(reason) {
     }
     if (params.serviceRecovery?.kind === "systemd") {
       const unit = params.serviceRecovery.unit;
-      const current = await inspectSystemdService(unit);
-      if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
-        current.ActiveState !== "inactive" || current.MainPID !== "0" ||
-        current.ExecMainStartTimestampMonotonic !== parkedServiceGeneration) {
-        throw new Error("systemd service remained active or changed execution generation");
+      for (;;) {
+        const current = await inspectSystemdService(unit, params.parentExitDeadlineAt);
+        if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
+          current.ExecMainStartTimestampMonotonic !== parkedServiceGeneration ||
+          (current.MainPID !== "0" && current.MainPID !== String(params.parentPid)) ||
+          (current.ActiveState !== "deactivating" &&
+            (current.ActiveState !== "inactive" || current.MainPID !== "0")) ||
+          Date.now() >= params.parentExitDeadlineAt) {
+          throw new Error("systemd service remained active or changed execution generation");
+        }
+        if (current.ActiveState === "inactive") break;
+        // systemd observes parent exit before the same-generation stop becomes inactive.
+        await sleep(Math.min(25, Math.max(0, params.parentExitDeadlineAt - Date.now())));
       }
     }
     if (params.serviceRecovery?.kind === "launchd") {

@@ -24,8 +24,10 @@ import {
 import {
   createManagedServiceLaunchdClockPreload,
   createManagedServiceManagerFixtureScript,
+  registerManagedSystemdHandoffConvergenceTests,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryOptions,
+  type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -146,13 +148,7 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): un
 async function runManagedServiceManagerBoundary(
   kind: "systemd" | "launchd",
   options?: ManagedServiceManagerBoundaryOptions,
-): Promise<{
-  commands: string[];
-  parentSignal: NodeJS.Signals | null;
-  state: Record<string, unknown>;
-  sentinel: unknown;
-  commandTimings: ManagedServiceCommandTiming[];
-}> {
+): Promise<ManagedServiceManagerBoundaryResult> {
   const { spawn } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
@@ -239,6 +235,9 @@ async function runManagedServiceManagerBoundary(
               parentExitTimeoutMs: options.parentExitTimeoutMs,
             }),
         ...(options?.overdueCommit ? { parentExitDeadlineAt: Date.now() - 1 } : {}),
+        ...(options?.systemdHandoffDeadlineMs === undefined
+          ? {}
+          : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
         serviceRecovery: recovery,
         commandArgv: [
           process.execPath,
@@ -253,7 +252,7 @@ async function runManagedServiceManagerBoundary(
                   `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
                 ]
               : []),
-            `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");process.exit(7);`,
+            `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");process.exit(${options?.updaterExitCode ?? 7});`,
           ].join(""),
         ],
         sensitivePaths: [],
@@ -389,8 +388,10 @@ async function runManagedServiceManagerBoundary(
         parent.stdin?.end();
         const code = await completion;
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
-        expect(code, `${stderr}\n${helperLog}`).toBe(7);
-        await expect(fs.readFile(updaterPath, "utf8")).resolves.toBe("ran");
+        expect(code, `${stderr}\n${helperLog}`).toBe(
+          options?.systemdHandoffFailure ? 1 : (options?.updaterExitCode ?? 7),
+        );
+        await expect(pathExists(updaterPath)).resolves.toBe(!options?.systemdHandoffFailure);
       }
     }
     expect(readLease()).toBeNull();
@@ -675,6 +676,8 @@ describe("managed service update handoff", () => {
       },
     });
   });
+
+  registerManagedSystemdHandoffConvergenceTests(runManagedServiceManagerBoundary);
 
   itUnix.each([
     ["without a late control command", undefined],
