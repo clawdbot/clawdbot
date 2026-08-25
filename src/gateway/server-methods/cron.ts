@@ -849,7 +849,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
-    const createdActor = resolveOperatorSessionCreation(client, { allowTrustedHint: true }).actor;
+    const operatorActor = resolveOperatorSessionCreation(client, { allowTrustedHint: true }).actor;
+    // Agent-tool clients have no operator profile, but their signed scope owns one exact session.
+    // Reuse only that persisted creation fact; never accept creator data from cron params.
+    const actor =
+      operatorActor ??
+      (callerScope?.sessionKey
+        ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+            agentId: callerScope.agentId,
+          }).entry?.createdActor
+        : undefined);
+    const actorId = normalizeOptionalString(actor?.id);
+    const createdActor = actor
+      ? { type: actor.type, ...(actorId ? { id: actorId } : {}) }
+      : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
       captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
