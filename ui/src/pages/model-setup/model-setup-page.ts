@@ -393,10 +393,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (pageState.phase !== "ready") {
       return;
     }
-    const available = pageState.result.manualProviders.some(
-      (provider) => provider.id === this.manualProviderId,
-    );
-    if (!available) {
+    if (
+      !pageState.result.manualProviders.some((provider) => provider.id === this.manualProviderId)
+    ) {
       this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
     }
   }
