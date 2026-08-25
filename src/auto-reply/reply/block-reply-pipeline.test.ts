@@ -206,6 +206,18 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         { location: { latitude: 3, longitude: 4 } },
       ],
     },
+    {
+      name: "normal and round videos sharing the same media",
+      payloads: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: false },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+      expected: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+    },
   ])("preserves streamed delivery order for $name", async ({ payloads, expected }) => {
     const sent: ReplyPayload[] = [];
     const pipeline = createBlockReplyPipeline({
@@ -233,12 +245,16 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toHaveLength(expected.length);
     expect(sent).toMatchObject(expected);
     expect(pipeline.getSentMediaUrls()).toEqual(
-      expected.flatMap((payload) =>
-        "mediaUrls" in payload
-          ? payload.mediaUrls
-          : "mediaUrl" in payload
-            ? [payload.mediaUrl]
-            : [],
+      Array.from(
+        new Set(
+          expected.flatMap((payload) =>
+            "mediaUrls" in payload
+              ? payload.mediaUrls
+              : "mediaUrl" in payload
+                ? [payload.mediaUrl]
+                : [],
+          ),
+        ),
       ),
     );
   });
