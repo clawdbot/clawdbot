@@ -290,6 +290,7 @@ async function downloadSlackMediaFile(params: {
   return {
     path: saved.path,
     ...(contentType ? { contentType } : {}),
+    ...(label ? { fileName: label } : {}),
     placeholder: `[Slack file: ${formatSlackFileReference({ ...params.file, name: label })}]`,
   };
 }
@@ -462,6 +463,7 @@ export async function resolveSlackAttachmentContent(params: {
         allMedia.push({
           path: saved.path,
           contentType: saved.contentType,
+          ...(saved.fileName ? { fileName: saved.fileName } : {}),
           placeholder: `[Forwarded image: ${label}]`,
         });
       } catch {

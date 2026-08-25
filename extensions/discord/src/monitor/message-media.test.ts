@@ -154,6 +154,7 @@ function expectSinglePngDownload(params: {
     {
       path: params.expectedPath,
       contentType: "image/png",
+      fileName: params.filePathHint,
       ...(params.kind ? { kind: params.kind } : {}),
     },
   ]);

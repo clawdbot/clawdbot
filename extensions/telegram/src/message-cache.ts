@@ -720,7 +720,12 @@ export function createTelegramMessageCache(params?: {
       if (fileUniqueId !== media.fileUniqueId) {
         throw new Error(`Telegram message ${messageId} media changed during resolution`);
       }
-      const resolvedNode = { ...node, resolvedMedia: media };
+      const resolvedMedia = parseTelegramResolvedMedia(media);
+      if (!resolvedMedia) {
+        throw new Error(`Telegram message ${messageId} resolved media is invalid`);
+      }
+      // Runtime downloads carry private paths/names; cache only the existing persisted projection.
+      const resolvedNode = { ...node, resolvedMedia };
       messages.delete(key);
       messages.set(key, resolvedNode);
       await persistCachedNode({
