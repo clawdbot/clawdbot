@@ -11,7 +11,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFindingSeverity } from "../flows/health-checks.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { redactTextForSupport } from "../logging/diagnostic-support-redaction.js";
+import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { select } from "./configure.shared.js";
 import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
@@ -52,7 +52,7 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   } catch (error) {
     return {
       kind: "unavailable",
-      reason: redactTextForSupport(scrubDoctorErrorMessage(error)),
+      reason: scrubDoctorErrorMessage(error),
     };
   }
 }
@@ -78,14 +78,16 @@ export async function triageCommand(
 ): Promise<void> {
   const { collectDoctorFindings } = await import("./doctor-lint.js");
   const findings = await collectDoctorFindings(runtime);
+  const redaction = { env: process.env, stateDir: resolveStateDir() };
   const bundle = await collectTriageBundle(options.noExport === true);
-  const prompt = renderTriagePrompt({ findings, bundle });
+  const prompt = renderTriagePrompt({ findings, bundle, redaction });
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
-  const outputDir = path.join(resolveStateDir(), "logs", "support");
+  const outputDir = path.join(redaction.stateDir, "logs", "support");
   const promptPath = path.join(outputDir, `openclaw-triage-prompt-${now}-${process.pid}.md`);
   await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
   await fs.writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
 
+  // Operator-facing paths and shell commands stay real; only agent prompt content is path-redacted.
   const quotedPath = quoteShellArgument(promptPath);
   const suggestedCommands = [
     `claude "$(cat ${quotedPath})"`,
@@ -112,7 +114,8 @@ export async function triageCommand(
   const report = {
     promptPath,
     bundlePath: bundle.kind === "available" ? bundle.path : null,
-    bundleError: bundle.kind === "unavailable" ? bundle.reason : null,
+    bundleError:
+      bundle.kind === "unavailable" ? redactSupportString(bundle.reason, redaction) : null,
     findings: findingCounts,
     detectedAgents,
     suggestedCommands,
@@ -126,7 +129,7 @@ export async function triageCommand(
   if (bundle.kind === "available") {
     runtime.log(`Sanitized diagnostics: ${bundle.path}`);
   } else if (bundle.kind === "unavailable") {
-    runtime.log(`Diagnostics export unavailable: ${bundle.reason}`);
+    runtime.log(`Diagnostics export unavailable: ${report.bundleError}`);
   }
 
   if (handoff.kind === "offer") {
@@ -143,6 +146,10 @@ export async function triageCommand(
       choices.push({ value: { kind: "embedded" }, label: "OpenClaw embedded agent" });
     }
     for (const { agent, executablePath } of externalAgents) {
+      // Windows command shims need a shell, so keep them manual-only rather than offering a broken launch.
+      if (process.platform === "win32" && /\.(?:cmd|bat)$/iu.test(executablePath)) {
+        continue;
+      }
       choices.push({
         value: { kind: "external", agent, executablePath },
         label: agent === "claude" ? "Claude Code" : "Codex CLI",
@@ -173,9 +180,6 @@ export async function triageCommand(
     let exitCode: number;
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
-        // Spawn the detection-resolved path directly. On Windows a .cmd shim
-        // fails here (Node refuses shell-less .cmd spawns) and degrades to the
-        // printed manual command below — accepted over shell-quoting an 8 KiB argv.
         const child = spawn(handoff.executablePath, [prompt], { stdio: "inherit" });
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
@@ -200,7 +204,7 @@ export async function triageCommand(
   const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
   if (!inference.ok) {
-    const reason = redactTextForSupport(scrubDoctorErrorMessage(inference.error));
+    const reason = redactSupportString(scrubDoctorErrorMessage(inference.error), redaction);
     const message = `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`;
     if (options.run === true) {
       throw new Error(message);

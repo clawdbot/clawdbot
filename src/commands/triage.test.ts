@@ -97,6 +97,12 @@ async function withInteractiveTerminal(run: () => Promise<void>): Promise<void> 
 }
 
 describe("renderTriagePrompt", () => {
+  const homeDir = "/home/triage-test";
+  const redaction = {
+    env: { HOME: homeDir },
+    stateDir: `${homeDir}/.openclaw`,
+  };
+
   it("orders sanitized findings by severity and includes repair hints and bundle details", () => {
     const findings: HealthFinding[] = [
       { checkId: "core/info", severity: "info", message: "informational" },
@@ -111,14 +117,37 @@ describe("renderTriagePrompt", () => {
 
     const prompt = renderTriagePrompt({
       findings,
-      bundle: { kind: "available", path: "/tmp/openclaw-diagnostics.zip" },
+      bundle: { kind: "available", path: `${redaction.stateDir}/diagnostics.zip` },
+      redaction,
     });
 
     expect(prompt.indexOf("[error]")).toBeLessThan(prompt.indexOf("[warning]"));
     expect(prompt.indexOf("[warning]")).toBeLessThan(prompt.indexOf("[info]"));
     expect(prompt).toContain("Fix: Run `openclaw doctor --fix`.");
-    expect(prompt).toContain("Sanitized ZIP: /tmp/openclaw-diagnostics.zip");
-    expect(prompt).toContain("secrets, tokens, raw chat payloads, and raw logs are excluded");
+    expect(prompt).toContain("Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip");
+    expect(prompt).toContain("Secrets, tokens, raw chat payloads, and raw logs are excluded");
+  });
+
+  it("redacts home and state paths across finding fields and diagnostics handoffs", () => {
+    const prompt = renderTriagePrompt({
+      findings: [
+        {
+          checkId: `${homeDir}/checks/config`,
+          severity: "error",
+          message: `Config: ${redaction.stateDir}/openclaw.json\nneeds repair`,
+          fixHint: `Inspect ${homeDir}/logs/gateway.log`,
+        },
+      ],
+      bundle: { kind: "available", path: `${homeDir}/Downloads/diagnostics.zip` },
+      redaction,
+    });
+
+    expect(prompt).toContain(
+      "[error] ~/checks/config: Config: $OPENCLAW_STATE_DIR/openclaw.json needs repair",
+    );
+    expect(prompt).toContain("Fix: Inspect ~/logs/gateway.log");
+    expect(prompt).toContain("Sanitized ZIP: ~/Downloads/diagnostics.zip");
+    expect(prompt).not.toContain(homeDir);
   });
 
   it("hard-bounds multibyte findings and explicitly reports omitted findings", () => {
@@ -129,10 +158,17 @@ describe("renderTriagePrompt", () => {
       fixHint: "修".repeat(4_000),
     }));
 
-    const prompt = renderTriagePrompt({ findings, bundle: { kind: "skipped" } });
+    const prompt = renderTriagePrompt({ findings, bundle: { kind: "skipped" }, redaction });
 
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(8 * 1024);
-    expect(prompt).toContain("15 more findings omitted; run `openclaw doctor` for the full list.");
+    // Every finding is either rendered or explicitly counted as omitted, and the
+    // trailing sections survive because findings are fitted to the byte budget.
+    const rendered = prompt.match(/^- \[warning\]/gmu)?.length ?? 0;
+    expect(rendered).toBeGreaterThan(0);
+    expect(prompt).toContain(
+      `${findings.length - rendered} more findings omitted; run \`openclaw doctor\` for the full list.`,
+    );
+    expect(prompt).toContain("## Privacy");
     expect(prompt).not.toContain("\uFFFD");
     expect(prompt).toContain("...");
   });
@@ -143,11 +179,18 @@ describe("renderTriagePrompt", () => {
       text: "Diagnostics export unavailable: Gateway unreachable",
     },
     {
+      bundle: {
+        kind: "unavailable" as const,
+        reason: `Gateway config: ${redaction.stateDir}/openclaw.json`,
+      },
+      text: "Diagnostics export unavailable: Gateway config: $OPENCLAW_STATE_DIR/openclaw.json",
+    },
+    {
       bundle: { kind: "skipped" as const },
       text: "Diagnostics export skipped with `--no-export`.",
     },
   ])("explains absent diagnostics archives: $text", ({ bundle, text }) => {
-    expect(renderTriagePrompt({ findings: [], bundle })).toContain(text);
+    expect(renderTriagePrompt({ findings: [], bundle, redaction })).toContain(text);
   });
 });
 
@@ -186,6 +229,8 @@ describe("triageCommand", () => {
 
     const promptPath = runtime.writeJson.mock.calls[0]?.[0]?.promptPath as string;
     expect(runtime.writeJson).toHaveBeenCalledOnce();
+    expect(path.isAbsolute(promptPath)).toBe(true);
+    expect(promptPath.startsWith(stateDir)).toBe(true);
     expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual({
       promptPath,
       bundlePath: null,
@@ -221,7 +266,9 @@ describe("triageCommand", () => {
   it("degrades to a sanitized prompt when the Gateway cannot provide diagnostics", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
     mocks.callGatewayFromCliWithTransport.mockRejectedValue(
-      new Error(`Gateway unreachable: Authorization: Bearer ${secret}`),
+      new Error(
+        `Gateway unreachable: Config: ${stateDir}/openclaw.json; Authorization: Bearer ${secret}`,
+      ),
     );
     const runtime = createRuntime();
 
@@ -234,10 +281,12 @@ describe("triageCommand", () => {
     };
     expect(report.bundlePath).toBeNull();
     expect(report.bundleError).toContain("Gateway unreachable");
+    expect(report.bundleError).toContain("Config: $OPENCLAW_STATE_DIR/openclaw.json");
     expect(report.bundleError).not.toContain(secret);
-    expect(await fs.readFile(report.promptPath, "utf8")).toContain(
-      "Diagnostics export unavailable: Gateway unreachable",
-    );
+    const prompt = await fs.readFile(report.promptPath, "utf8");
+    expect(prompt).toContain("Diagnostics export unavailable: Gateway unreachable");
+    expect(prompt).toContain("Config: $OPENCLAW_STATE_DIR/openclaw.json");
+    expect(prompt).not.toContain(stateDir);
     expect(mocks.writeDiagnosticSupportExport).not.toHaveBeenCalled();
   });
 
@@ -256,7 +305,20 @@ describe("triageCommand", () => {
 
     await triageCommand(runtime, { json: true });
 
-    expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ bundlePath, bundleError: null });
+    const report = runtime.writeJson.mock.calls[0]?.[0] as {
+      promptPath: string;
+      bundlePath: string;
+      bundleError: null;
+      suggestedCommands: string[];
+    };
+    expect(report).toMatchObject({ bundlePath, bundleError: null });
+    expect(path.isAbsolute(report.promptPath)).toBe(true);
+    expect(path.isAbsolute(report.bundlePath)).toBe(true);
+    expect(report.suggestedCommands[0]).toContain(report.promptPath);
+    expect(report.suggestedCommands[1]).toContain(report.promptPath);
+    expect(await fs.readFile(report.promptPath, "utf8")).toContain(
+      "Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip",
+    );
     expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
       rpc: { timeout: "3000", json: true },
       probe: true,
@@ -359,6 +421,36 @@ describe("triageCommand", () => {
     ]);
     expect(mocks.verifySetupInference).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { agent: "claude", executablePath: "C:\\tools\\claude.cmd" },
+    { agent: "codex", executablePath: "C:\\tools\\codex.BAT" },
+  ])(
+    "keeps Windows $agent command shims as manual-only handoffs",
+    async ({ agent, executablePath }) => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+        binary === agent ? executablePath : undefined,
+      );
+      const runtime = createRuntime();
+
+      try {
+        await withInteractiveTerminal(async () => {
+          await triageCommand(runtime, { noExport: true });
+        });
+      } finally {
+        platform.mockRestore();
+      }
+
+      expect(mocks.select.mock.calls[0]?.[0]?.options).toEqual([
+        { value: { kind: "print" }, label: "Just print the commands" },
+      ]);
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^  ${agent} `, "u")),
+      );
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { agent: "claude", exitCode: 0 },
