@@ -1,5 +1,6 @@
 // Discord message processing coverage split by cohesive behavior.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import {
   BASE_CHANNEL_ROUTE,
   createBaseContext,
@@ -396,6 +397,7 @@ describe("processDiscordMessage session routing and room events", () => {
       baseText: "follow-up",
       threadChannel: { id: threadId, name: "child-thread" },
       threadParentId: "parent-1",
+      threadParentType: ChannelType.GuildText,
       client: { rest },
       channelConfig: { allowed: true, users: ["U2"] },
     });

@@ -354,6 +354,34 @@ describe("resolveDiscordThreadStarter", () => {
     expect(get).toHaveBeenCalledOnce();
   });
 
+  it("does not cache an unresolved parent type before forum metadata recovers", async () => {
+    const threadId = `recovering-forum-starter-${++threadIdIndex}`;
+    const get = vi.fn(async (path: string) =>
+      path === `/channels/${threadId}/messages/${threadId}`
+        ? createStarterMessage({ content: "recovered forum starter" })
+        : null,
+    );
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: threadId },
+      client,
+      accountId: "test-account",
+      parentId: "parent-1",
+      resolveTimestampMs: () => undefined,
+    };
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: undefined }),
+    ).resolves.toBeNull();
+    expect(get).not.toHaveBeenCalled();
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: ChannelType.GuildForum }),
+    ).resolves.toMatchObject({ text: "recovered forum starter" });
+    expect(get).toHaveBeenCalledOnce();
+    expect(firstRestGetPath(get)).toBe(`/channels/${threadId}/messages/${threadId}`);
+  });
+
   it("falls back to joined embed title and description when content is empty", async () => {
     const { result } = await resolveStarter({
       message: createStarterMessage({

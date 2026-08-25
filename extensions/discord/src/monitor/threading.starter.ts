@@ -112,6 +112,11 @@ export async function resolveDiscordThreadStarter(params: {
   parentType?: ChannelType;
   resolveTimestampMs: (value?: string | null) => number | undefined;
 }): Promise<DiscordThreadStarter | null> {
+  // A parent id without its type is provisional; caching the parent route could
+  // hide a later forum route after the parent metadata recovers.
+  if (params.parentType === undefined) {
+    return null;
+  }
   const cacheKey = `${params.accountId}:${params.channel.id}`;
   const now = Date.now();
   const cached = getCachedThreadStarter(cacheKey, now);
