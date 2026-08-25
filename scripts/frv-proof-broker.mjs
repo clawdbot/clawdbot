@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const BROKER_WORKFLOW = ".github/workflows/frv-proof-broker.yml";
@@ -9,13 +10,8 @@ const FIXTURE_WORKFLOW_ID = "frv-proof-fixture.yml";
 const FIXTURE_NAME = "FRV Proof Fixture";
 const FIXTURE_OPERATION = "noop";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const CORRELATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const POLL_INTERVAL_MS = 5_000;
 const POLL_LIMIT = 120;
-
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requiredString(value, label) {
   if (typeof value !== "string" || value.length === 0) {
@@ -77,17 +73,14 @@ export function validateBrokerRequest(event, env) {
   }
   const runId = requiredPositiveInteger(requiredEnv(env, "GITHUB_RUN_ID"), "GITHUB_RUN_ID");
 
-  assertExactKeys(event.inputs, ["correlation", "head_sha", "pr_number"], "workflow inputs");
+  assertExactKeys(event.inputs, ["head_sha", "pr_number"], "workflow inputs");
   const inputs = event.inputs;
   const prNumber = requiredPositiveInteger(inputs.pr_number, "pr_number");
   const headSha = requiredString(inputs.head_sha, "head_sha");
   if (!SHA_PATTERN.test(headSha)) {
     throw new Error("head_sha must be exactly 40 lowercase hex characters");
   }
-  const correlation = requiredString(inputs.correlation, "correlation");
-  if (!CORRELATION_PATTERN.test(correlation)) {
-    throw new Error("correlation must be 1-64 safe identifier characters");
-  }
+  const correlation = `frv-proof-${runId}`;
 
   return {
     actor,

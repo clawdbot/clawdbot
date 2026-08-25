@@ -12,6 +12,27 @@ const workflowSha = "a".repeat(40);
 const headSha = "b".repeat(40);
 const repository = "openclaw/openclaw";
 
+type BrokerWorkflow = {
+  concurrency: { "cancel-in-progress": boolean; group: string };
+  jobs: {
+    prove: {
+      permissions: Record<string, string>;
+      steps: Array<{ name?: string; with?: Record<string, unknown> }>;
+    };
+  };
+  on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+};
+
+type FixtureWorkflow = {
+  jobs: { fixture: { permissions: Record<string, string> } };
+  on: {
+    workflow_dispatch: {
+      inputs: { operation: { default: string; options: string[]; type: string } };
+    };
+  };
+  permissions: Record<string, string>;
+};
+
 function brokerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     GITHUB_ACTOR: "maintainer",
@@ -30,7 +51,6 @@ function brokerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 function brokerEvent(overrides: Record<string, unknown> = {}) {
   return {
     inputs: {
-      correlation: "proof-128141",
       head_sha: headSha,
       pr_number: "128141",
       ...overrides,
@@ -41,7 +61,7 @@ function brokerEvent(overrides: Record<string, unknown> = {}) {
 function fixtureRun(overrides: Record<string, unknown> = {}) {
   return {
     conclusion: "failure",
-    display_title: "FRV Proof Fixture [noop] proof-128141",
+    display_title: "FRV Proof Fixture [noop] frv-proof-12345",
     event: "workflow_dispatch",
     head_branch: "main",
     head_sha: workflowSha,
@@ -122,16 +142,16 @@ function successfulApi(
 }
 
 describe("FRV proof broker request validation", () => {
-  it("accepts only the exact three operator inputs", () => {
+  it("accepts only the exact two operator inputs", () => {
     const parsed = validateBrokerRequest(brokerEvent(), brokerEnv());
     expect(parsed).toMatchObject({
-      correlation: "proof-128141",
+      correlation: "frv-proof-12345",
       headSha,
       prNumber: 128141,
       workflowSha,
     });
     expect(() =>
-      validateBrokerRequest(brokerEvent({ workflow: "full-release-validation.yml" }), brokerEnv()),
+      validateBrokerRequest(brokerEvent({ correlation: "operator-value" }), brokerEnv()),
     ).toThrow(/keys must be exactly/u);
   });
 
@@ -145,12 +165,9 @@ describe("FRV proof broker request validation", () => {
     expect(() => validateBrokerRequest(brokerEvent(), env)).toThrow();
   });
 
-  it("rejects malformed PR, SHA, and correlation inputs", () => {
+  it("rejects malformed PR and SHA inputs", () => {
     expect(() => validateBrokerRequest(brokerEvent({ pr_number: "0" }), brokerEnv())).toThrow();
     expect(() => validateBrokerRequest(brokerEvent({ head_sha: "ABC" }), brokerEnv())).toThrow();
-    expect(() =>
-      validateBrokerRequest(brokerEvent({ correlation: "unsafe correlation" }), brokerEnv()),
-    ).toThrow();
   });
 });
 
@@ -159,7 +176,7 @@ describe("FRV proof fixture identity", () => {
     attempt: 1,
     branch: "main",
     conclusion: "failure" as const,
-    correlation: "proof-128141",
+    correlation: "frv-proof-12345",
     headSha: workflowSha,
     repository,
     runId: 777,
@@ -175,7 +192,7 @@ describe("FRV proof fixture identity", () => {
     ["workflow", { path: ".github/workflows/full-release-validation.yml" }],
     ["run", { id: 778 }],
     ["attempt", { run_attempt: 2 }],
-    ["operation", { display_title: "FRV Proof Fixture [publish] proof-128141" }],
+    ["operation", { display_title: "FRV Proof Fixture [publish] frv-proof-12345" }],
   ])("rejects the wrong %s identity", (_label, overrides) => {
     expect(() => validateFixtureRun(fixtureRun(overrides), expected)).toThrow();
   });
@@ -216,7 +233,7 @@ describe("FRV proof broker mutation boundary", () => {
     expect(calls.filter((call) => call.method !== "GET")).toEqual([
       {
         body: {
-          inputs: { correlation: "proof-128141", operation: "noop" },
+          inputs: { correlation: "frv-proof-12345", operation: "noop" },
           ref: "main",
         },
         method: "POST",
@@ -297,12 +314,11 @@ describe("FRV proof broker mutation boundary", () => {
 describe("FRV proof workflows", () => {
   const brokerSource = readFileSync(".github/workflows/frv-proof-broker.yml", "utf8");
   const fixtureSource = readFileSync(".github/workflows/frv-proof-fixture.yml", "utf8");
-  const broker = parseYaml(brokerSource) as any;
-  const fixture = parseYaml(fixtureSource) as any;
+  const broker = parseYaml(brokerSource) as BrokerWorkflow;
+  const fixture = parseYaml(fixtureSource) as FixtureWorkflow;
 
-  it("exposes only PR number, exact head, and correlation as broker inputs", () => {
+  it("exposes only PR number and exact head as broker inputs", () => {
     expect(Object.keys(broker.on.workflow_dispatch.inputs).toSorted()).toEqual([
-      "correlation",
       "head_sha",
       "pr_number",
     ]);
@@ -314,8 +330,12 @@ describe("FRV proof workflows", () => {
 
   it("never checks out PR code with the write-capable broker token", () => {
     const job = broker.jobs.prove;
-    expect(job.permissions).toEqual({ actions: "write" });
-    const checkout = job.steps.find((step: any) => step.name === "Checkout trusted main broker");
+    expect(job.permissions).toEqual({
+      actions: "write",
+      contents: "read",
+      "pull-requests": "read",
+    });
+    const checkout = job.steps.find((step) => step.name === "Checkout trusted main broker");
     expect(checkout.with).toEqual({
       "fetch-depth": 1,
       "persist-credentials": false,

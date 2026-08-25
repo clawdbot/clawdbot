@@ -1,5 +1,5 @@
 name: FRV Proof Broker
-run-name: FRV Proof Broker PR #${{ inputs.pr_number }} ${{ inputs.correlation }}
+run-name: FRV Proof Broker PR #${{ inputs.pr_number }} run ${{ github.run_id }}
 
 on:
   workflow_dispatch:
@@ -12,11 +12,6 @@ on:
         description: Exact lowercase 40-character pull request head SHA
         required: true
         type: string
-      correlation:
-        description: Unique operator correlation identifier
-        required: true
-        type: string
-
 permissions: {}
 
 concurrency:
@@ -30,6 +25,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       actions: write
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout trusted main broker
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
