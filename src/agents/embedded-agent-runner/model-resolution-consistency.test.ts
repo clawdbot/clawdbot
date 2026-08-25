@@ -140,9 +140,16 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
-}));
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>();
+  return {
+    getCurrentPluginMetadataSnapshot: (
+      ...args: Parameters<typeof actual.getCurrentPluginMetadataSnapshot>
+    ) => actual.getCurrentPluginMetadataSnapshot(...args) ?? { plugins: [] },
+    withPluginMetadataSnapshotScope: actual.withPluginMetadataSnapshotScope,
+  };
+});
 
 vi.mock("../provider-secret-egress.js", () => ({
   protectPreparedProviderRuntimeAuth: (value: unknown) => value,
