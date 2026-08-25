@@ -111,11 +111,24 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
-  await noteAuthProfileHealth({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-    allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
-  });
+  let authProfileHealthReady = true;
+  if (ctx.configResult.retiredAuthProfileCleanupPlans?.length) {
+    const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
+      await import("./doctor-health-contribution-runners.config.js");
+    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    authProfileHealthReady =
+      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+    if (authProfileHealthReady) {
+      await runRetiredAuthProfileCleanup(ctx);
+    }
+  }
+  if (authProfileHealthReady) {
+    await noteAuthProfileHealth({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
+    });
+  }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
