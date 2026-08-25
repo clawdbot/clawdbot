@@ -680,27 +680,35 @@ describe("sendMessageDiscord", () => {
     expect(body).not.toHaveProperty("flags");
   });
 
-  it("rewrites cached @username mentions to id-based mentions", async () => {
-    rememberDiscordDirectoryUser({
-      accountId: "default",
-      userId: "123456789012345678",
-      handles: ["Alice"],
-    });
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
-    postMock.mockResolvedValue({
-      id: "msg1",
-      channel_id: "789",
-    });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
-      rest,
-      token: "t",
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
-    });
-    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
-  });
+  it.each([
+    { input: "ping @Alice", expected: "ping <@123456789012345678>" },
+    { input: "Run `notify @Alice", expected: "Run `notify @Alice" },
+    { input: "literal \\` ping @Alice", expected: "literal \\` ping <@123456789012345678>" },
+    { input: "literal \\\\` inside @Alice", expected: "literal \\\\` inside @Alice" },
+  ])(
+    "rewrites cached @username mentions only outside code: $input",
+    async ({ input, expected }) => {
+      rememberDiscordDirectoryUser({
+        accountId: "default",
+        userId: "123456789012345678",
+        handles: ["Alice"],
+      });
+      const { rest, postMock, getMock } = makeDiscordRest();
+      getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+      postMock.mockResolvedValue({
+        id: "msg1",
+        channel_id: "789",
+      });
+      await sendMessageDiscord("channel:789", input, {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        accountId: "default",
+      });
+      expectRestRoute(postMock, 0, Routes.channelMessages("789"));
+      expect(requireRestBody(postMock).content).toBe(expected);
+    },
+  );
 
   it("rewrites configured @username aliases to id-based mentions", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
