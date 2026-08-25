@@ -1,5 +1,4 @@
 // Install download helpers fetch remote skill artifacts into temporary storage.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -8,11 +7,13 @@ import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isWindowsDrivePath } from "../../infra/archive-path.js";
+import { sha256File } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { root as fsRoot } from "../../infra/fs-safe.js";
+import { root as fsRoot, type Root } from "../../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { isWithinDir } from "../../infra/path-safety.js";
+import { withTempDownloadPath } from "../../infra/temp-download.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
@@ -91,66 +92,74 @@ async function downloadFile(params: {
   url: string;
   rootDir: string;
   relativePath: string;
+  pinnedRoot?: Root;
+  sha256?: string;
   timeoutMs: number;
 }): Promise<{ bytes: number }> {
   const destPath = path.resolve(params.rootDir, params.relativePath);
-  const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
-  await ensureDir(stagingDir);
-  await assertCanonicalPathWithinBase({
-    baseDir: params.rootDir,
-    candidatePath: stagingDir,
-    boundaryLabel: "skill tools directory",
-  });
-  const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    timeoutMs: Math.max(1_000, params.timeoutMs),
-  });
-  try {
-    if (!response.ok || !response.body) {
-      await cancelIgnoredResponseBody(response);
-      throw new Error(`Download failed (${response.status} ${response.statusText})`);
-    }
-    // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
-    const contentEncoding = normalizeOptionalLowercaseString(
-      response.headers.get("content-encoding"),
-    );
-    const declaredBytes =
-      !contentEncoding || contentEncoding === "identity"
-        ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
-        : undefined;
-    if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
-      await cancelIgnoredResponseBody(response);
-      throw new Error(
-        `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
-      );
-    }
-    const file = fs.createWriteStream(tempPath);
-    const body = response.body as unknown;
-    const readable = isNodeReadableStream(body)
-      ? body
-      : Readable.fromWeb(body as NodeReadableStream);
-    let downloadedBytes = 0;
-    const limitedBody = new Transform({
-      transform(chunk, encoding, callback) {
-        downloadedBytes +=
-          typeof chunk === "string" ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
-        if (downloadedBytes > MAX_SKILL_DOWNLOAD_BYTES) {
-          callback(new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`));
-          return;
-        }
-        callback(null, chunk);
-      },
+  return await withTempDownloadPath({ prefix: "skill-download" }, async (tempPath) => {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: params.url,
+      timeoutMs: Math.max(1_000, params.timeoutMs),
     });
-    await pipeline(readable, limitedBody, file);
-    const root = await fsRoot(params.rootDir);
-    await root.copyIn(params.relativePath, tempPath);
-    const stat = await fs.promises.stat(destPath);
-    return { bytes: stat.size };
-  } finally {
-    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-    await release();
-  }
+    try {
+      if (!response.ok || !response.body) {
+        await cancelIgnoredResponseBody(response);
+        throw new Error(`Download failed (${response.status} ${response.statusText})`);
+      }
+      // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
+      const contentEncoding = normalizeOptionalLowercaseString(
+        response.headers.get("content-encoding"),
+      );
+      const declaredBytes =
+        !contentEncoding || contentEncoding === "identity"
+          ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
+          : undefined;
+      if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+        await cancelIgnoredResponseBody(response);
+        throw new Error(
+          `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
+        );
+      }
+      const file = fs.createWriteStream(tempPath);
+      const body = response.body as unknown;
+      const readable = isNodeReadableStream(body)
+        ? body
+        : Readable.fromWeb(body as NodeReadableStream);
+      let downloadedBytes = 0;
+      const limitedBody = new Transform({
+        transform(chunk, encoding, callback) {
+          downloadedBytes +=
+            typeof chunk === "string" ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
+          if (downloadedBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+            callback(new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(readable, limitedBody, file);
+      if (params.sha256) {
+        const actual = await sha256File(tempPath);
+        if (actual !== params.sha256) {
+          const filename = path.basename(params.relativePath);
+          throw new Error(
+            `SHA-256 mismatch for ${filename}: expected ${params.sha256}, actual ${actual}. The download was discarded; verify the publisher checksum or update the skill manifest before retrying.`,
+          );
+        }
+      }
+      let destinationRoot = params.pinnedRoot;
+      if (!destinationRoot) {
+        await ensureDir(params.rootDir);
+        destinationRoot = await fsRoot(params.rootDir);
+      }
+      await destinationRoot.copyIn(params.relativePath, tempPath);
+      const stat = await fs.promises.stat(destPath);
+      return { bytes: stat.size };
+    } finally {
+      await release();
+    }
+  });
 }
 
 export async function installDownloadSpec(params: {
@@ -182,24 +191,22 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalRoot;
+  let canonicalRoot = root;
   let targetDir;
+  let pinnedRoot: Root | undefined;
   try {
-    await ensureDir(root);
-    await assertCanonicalPathWithinBase({
-      baseDir: root,
-      candidatePath: root,
-      boundaryLabel: "skill tools directory",
-    });
-    canonicalRoot = await fs.promises.realpath(root);
+    if (!spec.sha256) {
+      await ensureDir(root);
+      await assertCanonicalPathWithinBase({
+        baseDir: root,
+        candidatePath: root,
+        boundaryLabel: "skill tools directory",
+      });
+      canonicalRoot = await fs.promises.realpath(root);
+      pinnedRoot = await fsRoot(canonicalRoot);
+    }
 
     const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
-    await ensureDir(requestedTargetDir);
-    await assertCanonicalPathWithinBase({
-      baseDir: root,
-      candidatePath: requestedTargetDir,
-      boundaryLabel: "skill tools directory",
-    });
     const targetRelativePath = path.relative(root, requestedTargetDir);
     targetDir = path.join(canonicalRoot, targetRelativePath);
   } catch (err) {
@@ -229,6 +236,8 @@ export async function installDownloadSpec(params: {
       url,
       rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
+      pinnedRoot,
+      sha256: spec.sha256,
       timeoutMs,
     });
     downloaded = result.bytes;
