@@ -664,12 +664,44 @@ describe("formatCliCommand", () => {
     ).toBe("openclaw --container demo doctor");
   });
 
-  it("does not prepend --container for update commands", () => {
-    expect(formatCliCommand("openclaw update", { OPENCLAW_CONTAINER_HINT: "demo" })).toBe(
-      "openclaw update",
-    );
+  it.each([
+    "openclaw update",
+    "pnpm openclaw update --channel beta",
+    "npm openclaw update",
+    "bunx openclaw update",
+    "npx openclaw update",
+    "openclaw --profile work update",
+    "openclaw --profile=work update",
+    "openclaw --log-level debug update",
+    "openclaw --log-level=debug update",
+    "openclaw --dev update",
+    "openclaw --no-color update",
+    "openclaw --no-color --profile work --log-level=debug update",
+    "openclaw --profile update update",
+    "pnpm openclaw --profile work update --channel beta",
+  ])("does not prepend --container to root update: %s", (command) => {
     expect(
-      formatCliCommand("pnpm openclaw update --channel beta", { OPENCLAW_CONTAINER_HINT: "demo" }),
-    ).toBe("pnpm openclaw update --channel beta");
+      formatCliCommand(command, { OPENCLAW_CONTAINER_HINT: "demo", OPENCLAW_PROFILE: "work" }),
+    ).toBe(command);
+  });
+
+  it.each([
+    ["openclaw", "plugins update telegram"],
+    ["openclaw", "hooks update webhook"],
+    ["openclaw", "skills update summarize"],
+    ["pnpm openclaw", "plugins update telegram"],
+    ["openclaw", "--profile work plugins update telegram"],
+    ["openclaw", "--log-level=debug plugins update telegram"],
+    ["openclaw", "--profile update plugins list"],
+    ["openclaw", "--log-level update plugins list"],
+    ["openclaw", "config set action update"],
+    ["openclaw", "gateway status --name update"],
+  ])("preserves the active container for non-root update: %s %s", (prefix, command) => {
+    expect(
+      formatCliCommand(`${prefix} ${command}`, {
+        OPENCLAW_CONTAINER_HINT: "demo",
+        OPENCLAW_PROFILE: "work",
+      }),
+    ).toBe(`${prefix} --container demo ${command}`);
   });
 });
