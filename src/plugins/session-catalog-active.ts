@@ -6,6 +6,7 @@ export type ActiveSessionCatalog = {
   pluginId: string;
   id: string;
   label: string;
+  processHomeFallbackAllowed: boolean;
   list: SessionCatalogProvider["list"];
   read: SessionCatalogProvider["read"];
 };
@@ -23,6 +24,7 @@ export function listActiveSessionCatalogs(): ActiveSessionCatalog[] {
       pluginId,
       id: provider.id,
       label: provider.label,
+      processHomeFallbackAllowed: allowProcessHomeFallback,
       list: (params: Parameters<SessionCatalogProvider["list"]>[0]) =>
         provider.list({ ...params, allowProcessHomeFallback }),
       read: (params: Parameters<SessionCatalogProvider["read"]>[0]) =>

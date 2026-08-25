@@ -144,6 +144,7 @@ describe("session catalog Gateway HOME isolation", () => {
 
     await withProfile(undefined, async () => {
       const [catalog] = listActiveSessionCatalogs();
+      expect(catalog?.processHomeFallbackAllowed).toBe(true);
       await expect(catalog?.list({})).resolves.toEqual([localHost]);
       await expect(
         catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
@@ -151,6 +152,7 @@ describe("session catalog Gateway HOME isolation", () => {
     });
     await withProfile("dev", async () => {
       const [catalog] = listActiveSessionCatalogs();
+      expect(catalog?.processHomeFallbackAllowed).toBe(false);
       await expect(catalog?.list({})).resolves.toEqual([]);
       await expect(
         catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
