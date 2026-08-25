@@ -6,8 +6,9 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import stepfunPlugin from "./index.js";
 import {
   STEPFUN_DEFAULT_MODEL_REF,
@@ -45,8 +46,8 @@ describe("stepfun provider registration", () => {
       throw new Error("StepFun Standard catalog did not provide Step 3.7 Flash");
     }
 
-    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
-    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.7-flash");
+    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.7-flash");
     const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
     expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
     expect(standard35?.cost).toEqual({
@@ -159,4 +160,48 @@ describe("stepfun provider registration", () => {
       },
     ]);
   });
+
+  // Repeat non-interactive setup must not overwrite a user-pinned primary with the
+  // StepFun default; every StepFun API-key method opts into preserveExistingPrimary.
+  it.each([
+    { providerId: "stepfun", methodId: "standard-api-key-cn" },
+    { providerId: "stepfun", methodId: "standard-api-key-intl" },
+    { providerId: "stepfun-plan", methodId: "plan-api-key-cn" },
+    { providerId: "stepfun-plan", methodId: "plan-api-key-intl" },
+  ])(
+    "preserves an existing primary during non-interactive re-onboarding ($methodId)",
+    async ({ providerId, methodId }) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: stepfunPlugin,
+        id: "stepfun",
+        name: "StepFun",
+      });
+      const provider = requireRegisteredProvider(providers, providerId);
+      const method = provider.auth.find((entry) => entry.id === methodId);
+      if (!method?.runNonInteractive) {
+        throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
+      }
+
+      const result = await method.runNonInteractive({
+        authChoice: methodId,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
+            },
+          },
+        },
+        opts: {},
+        env: {},
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+        toApiKeyCredential: vi.fn(() => null),
+      } as never);
+
+      expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+        "anthropic/claude-sonnet-4-6",
+      );
+    },
+  );
 });
