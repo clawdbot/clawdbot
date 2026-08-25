@@ -608,7 +608,10 @@ export async function executeGitHubPublication(params: {
         row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
       )
         .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
-        .replace(/(?:^|\n\n)## Worked on by(?:\n(?!## )[^\n]*)*/gu, "")
+        .replace(
+          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
+          "",
+        )
         .trimEnd();
       const participantCredit = contributorCredit
         ? `\n\n## Worked on by\n\n${contributorCredit}`
