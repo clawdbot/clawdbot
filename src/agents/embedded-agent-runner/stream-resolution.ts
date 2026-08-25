@@ -4,6 +4,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
+import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
@@ -67,10 +68,6 @@ function isDefaultOpenClawStreamFnForModel(
   }
   const provider = llmRuntime.registry.getApiProvider(api as never);
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
-}
-
-function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
-  return typeof apiKey === "string" && apiKey.trim().length > 0;
 }
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {

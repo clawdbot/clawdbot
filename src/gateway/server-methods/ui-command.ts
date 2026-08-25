@@ -10,6 +10,8 @@ import {
   validateUiCommandParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestContextWithClientLookup } from "../server-request-context.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -20,6 +22,38 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
     }
 
     const commandParams = params as UiCommandParams;
+    const commandSessionKey =
+      "sessionKey" in commandParams.command
+        ? commandParams.command.sessionKey
+        : commandParams.sessionKey;
+    const requestedSession = commandSessionKey
+      ? resolveRequestedSessionAgentId(
+          context.getRuntimeConfig(),
+          commandSessionKey,
+          commandParams.agentId,
+        )
+      : undefined;
+    if (requestedSession && !requestedSession.ok) {
+      respond(false, undefined, requestedSession.error);
+      return;
+    }
+    const canonicalSessionKey =
+      commandSessionKey && requestedSession?.ok
+        ? resolveStoredSessionKeyForAgentStore({
+            cfg: context.getRuntimeConfig(),
+            agentId: requestedSession.agentId,
+            sessionKey: commandSessionKey,
+          })
+        : undefined;
+    const normalizedParams: UiCommandParams = {
+      ...commandParams,
+      ...(canonicalSessionKey ? { sessionKey: canonicalSessionKey } : {}),
+      ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),
+      command:
+        canonicalSessionKey && "sessionKey" in commandParams.command
+          ? { ...commandParams.command, sessionKey: canonicalSessionKey }
+          : commandParams.command,
+    };
     const clientContext = context as GatewayRequestContextWithClientLookup;
     // v1 intentionally fans out to every capable Control UI; session-targeted routing is out of scope.
     const connIds =
@@ -33,7 +67,7 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    context.broadcastToConnIds("ui.command", commandParams, connIds);
+    context.broadcastToConnIds("ui.command", normalizedParams, connIds);
     respond(true, { ok: true });
   },
 };

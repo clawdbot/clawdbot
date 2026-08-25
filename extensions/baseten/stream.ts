@@ -4,6 +4,7 @@ import {
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { usesBasetenChatTemplateThinking } from "./models.js";
 
 const BASETEN_DEEPSEEK_V4_MODEL_ID = "deepseek-ai/deepseek-v4-pro";
@@ -36,12 +37,7 @@ export function createBasetenThinkingWrapper(
     if (!usesBasetenChatTemplateThinking(model.id)) {
       return;
     }
-    const existing =
-      payload.chat_template_args &&
-      typeof payload.chat_template_args === "object" &&
-      !Array.isArray(payload.chat_template_args)
-        ? (payload.chat_template_args as Record<string, unknown>)
-        : {};
+    const existing = asNonArrayRecord(payload.chat_template_args);
     payload.chat_template_args = {
       ...existing,
       enable_thinking: isThinkingEnabled(ctx.thinkingLevel),

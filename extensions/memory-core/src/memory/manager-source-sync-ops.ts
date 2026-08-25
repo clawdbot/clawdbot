@@ -4,10 +4,8 @@ import {
   buildSessionEntry,
   sessionPathForSessionIdentity,
   type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  buildFileEntry,
-  listMemoryFiles,
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -15,6 +13,7 @@ import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
+  resolveMemorySourceFileEntries,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import type {
@@ -58,20 +57,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const files = await listMemoryFiles(
-      this.workspaceDir,
-      this.settings.extraPaths,
-      this.settings.multimodal,
-    );
-    const fileEntries = (
-      await runWithConcurrency(
-        files.map(
-          (file) => async () =>
-            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
-        ),
-        this.getIndexConcurrency(),
-      )
-    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+    const fileEntries = await resolveMemorySourceFileEntries({
+      workspaceDir: this.workspaceDir,
+      settings: this.settings,
+      concurrency: this.getIndexConcurrency(),
+    });
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
@@ -114,13 +104,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       const dirtyEntries: MemoryIndexEntry[] = [];
       for (const entry of fileEntries) {
         if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
+          this.advanceSyncProgress(params.progress);
           continue;
         }
         dirtyEntries.push(entry);
@@ -135,23 +119,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     } else {
       const tasks = fileEntries.map((entry) => async () => {
         if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
+          this.advanceSyncProgress(params.progress);
           return;
         }
         await this.indexFile(entry, { source: "memory" });
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
+        this.advanceSyncProgress(params.progress);
       });
       await runWithConcurrency(tasks, this.getIndexConcurrency());
     }
@@ -223,7 +195,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       needsFullReindex: params.needsFullReindex,
       files,
       targetSessionFiles: targetArchiveFiles,
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
       existingRows: targetArchiveFiles
         ? null
         : loadMemorySourceFileState({
@@ -309,6 +280,31 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }
       }
     };
+    const resolveSessionIndexEntry = async (absPath: string): Promise<MemoryIndexEntry | null> => {
+      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
+      const entry = await buildSessionEntry(
+        absPath,
+        this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
+      );
+      if (!entry) {
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
+      const existingHash = resolveMemorySourceExistingHash({
+        db: this.db,
+        source: "sessions",
+        path: entry.path,
+        existingHashes,
+      });
+      if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
+      return entry;
+    };
 
     if (params.deferIndex) {
       const pendingIndexItems = [...(params.prefixIndexItems ?? [])];
@@ -333,47 +329,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           await runWithConcurrency(
             fileBatch.map((absPath) => async (): Promise<MemoryIndexEntry | null> => {
               try {
-                if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-                  if (params.progress) {
-                    params.progress.completed += 1;
-                    params.progress.report({
-                      completed: params.progress.completed,
-                      total: params.progress.total,
-                    });
-                  }
-                  return null;
-                }
-                const entry = await buildSessionEntry(
-                  absPath,
-                  this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
-                );
-                if (!entry) {
-                  if (params.progress) {
-                    params.progress.completed += 1;
-                    params.progress.report({
-                      completed: params.progress.completed,
-                      total: params.progress.total,
-                    });
-                  }
-                  return null;
-                }
-                const existingHash = resolveMemorySourceExistingHash({
-                  db: this.db,
-                  source: "sessions",
-                  path: entry.path,
-                  existingHashes,
-                });
-                if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
-                  if (params.progress) {
-                    params.progress.completed += 1;
-                    params.progress.report({
-                      completed: params.progress.completed,
-                      total: params.progress.total,
-                    });
-                  }
-                  return null;
-                }
-                return entry;
+                return await resolveSessionIndexEntry(absPath);
               } finally {
                 await yieldAfterSessionFile();
               }
@@ -405,54 +361,12 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     const tasks = files.map((absPath) => async () => {
       try {
-        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
-          return;
-        }
-        const entry = await buildSessionEntry(
-          absPath,
-          this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
-        );
+        const entry = await resolveSessionIndexEntry(absPath);
         if (!entry) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
-          return;
-        }
-        const existingHash = resolveMemorySourceExistingHash({
-          db: this.db,
-          source: "sessions",
-          path: entry.path,
-          existingHashes,
-        });
-        if (canSkipUnchangedSessionEntry(entry, absPath, existingHash)) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
           return;
         }
         await this.indexFile(entry, { source: "sessions", content: entry.content });
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
+        this.advanceSyncProgress(params.progress);
       } finally {
         await yieldAfterSessionFile();
       }

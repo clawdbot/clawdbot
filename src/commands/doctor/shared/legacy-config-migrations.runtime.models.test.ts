@@ -48,7 +48,7 @@ describe("model compat catalog ownership migration", () => {
             baseUrl: "https://api.openai.com/v1",
             models: [
               {
-                id: "gpt-5.6",
+                id: "gpt-5.6-sol",
                 compat: {
                   supportsReasoningEffort: true,
                   supportsTemperature: true,

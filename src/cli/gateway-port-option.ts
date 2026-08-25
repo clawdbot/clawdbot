@@ -1,5 +1,5 @@
 // Shared parser for CLI flags that select a local Gateway TCP port.
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 const MAX_TCP_PORT = 65_535;
 

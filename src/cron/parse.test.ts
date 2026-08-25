@@ -220,6 +220,8 @@ describe("parseAbsoluteTimeMs", () => {
       // JavaScript Date range ends at +100,000,000 days
       const maxValid = new Date(8640000000000000).getTime();
       expect(parseAbsoluteTimeMs(maxValid.toString())).toBe(maxValid);
+      expect(parseAbsoluteTimeMs(new Date(maxValid).toISOString())).toBe(maxValid);
+      expect(parseAbsoluteTimeMs("+275760-09-13T00:00:00.001Z")).toBeNull();
     });
   });
 

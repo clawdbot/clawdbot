@@ -1,15 +1,18 @@
+import { spawnSync } from "node:child_process";
 // Codex App Server Protocol Source tests cover codex app server protocol source script behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageCodexAppServerProtocolArtifacts } from "../../scripts/lib/codex-app-server-protocol-artifacts.js";
 import {
-  buildCodexProtocolExportArgs,
+  buildCodexProtocolFixtureCommand,
   canonicalizeCodexAppServerProtocolJson,
   codexAppServerSharedDefinitionsSchema,
   compactCodexAppServerProtocolJsonSchemas,
   expandCodexAppServerProtocolJsonSchema,
   formatCodexAppServerProtocolJsonText,
+  materializeCodexProtocolPrecomputedExports,
   readCargoWorkspacePackageVersion,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
@@ -72,6 +75,30 @@ describe("Codex app-server generated artifact staging", () => {
     expect(fs.existsSync(path.join(jsonRoot, "README.md"))).toBe(false);
     expect(fs.readFileSync(path.join(sourceRoot, "index.ts"), "utf8")).toBe(rootTypeScript);
   });
+
+  it("materializes the upstream experimental precomputed export tree", async () => {
+    const root = createTempDir("openclaw-protocol-precomputed-");
+    const archivePath = path.join(root, "precomputed/app-server-exports-experimental.json.zst");
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.writeFileSync(
+      archivePath,
+      zstdCompressSync(
+        JSON.stringify({
+          typescript: { "v2/Thing.ts": "export type Thing = string;\n" },
+          json_schema: { "v2/Thing.json": '{"type":"string"}\n' },
+          internal_json_schema: {},
+        }),
+      ),
+    );
+
+    await materializeCodexProtocolPrecomputedExports(root);
+
+    expect(fs.readFileSync(path.join(root, "v2/Thing.ts"), "utf8")).toBe(
+      "export type Thing = string;\n",
+    );
+    expect(fs.readFileSync(path.join(root, "v2/Thing.json"), "utf8")).toBe('{"type":"string"}\n');
+    expect(fs.existsSync(archivePath)).toBe(false);
+  });
 });
 
 describe("codex app-server protocol source resolver", () => {
@@ -113,20 +140,73 @@ version = "9.9.9"
     );
   });
 
-  it("uses the app-server protocol export binary instead of compiling the full codex cli", () => {
-    expect(buildCodexProtocolExportArgs("/codex/codex-rs/Cargo.toml", "/tmp/protocol")).toEqual([
-      "run",
-      "--manifest-path",
-      "/codex/codex-rs/Cargo.toml",
-      "-p",
-      "codex-app-server-protocol",
-      "--bin",
-      "export",
-      "--",
-      "--out",
-      "/tmp/protocol",
-      "--experimental",
-    ]);
+  it("requires a Git repository, exact-version tag, and matching tagged commit", async () => {
+    const repoRoot = createTempDir("openclaw-protocol-version-root-");
+    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions/codex/package.json"),
+      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
+    );
+    fs.writeFileSync(
+      path.join(codexRepo, "codex-rs/Cargo.toml"),
+      '[workspace.package]\nversion = "0.149.0"\n',
+    );
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /Could not resolve Codex protocol source HEAD/,
+    );
+
+    for (const args of [
+      ["init"],
+      ["config", "user.name", "OpenClaw Test"],
+      ["config", "user.email", "test@example.invalid"],
+      ["add", "codex-rs/Cargo.toml"],
+      ["commit", "-m", "tagged source"],
+    ]) {
+      expect(spawnSync("git", args, { cwd: codexRepo }).status).toBe(0);
+    }
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /Could not resolve Codex protocol source refs\/tags\/rust-v0\.149\.0/,
+    );
+
+    expect(spawnSync("git", ["tag", "rust-v0.149.0"], { cwd: codexRepo }).status).toBe(0);
+    await expect(
+      validateCodexProtocolSourceVersion({ codexRepo, repoRoot }),
+    ).resolves.toBeUndefined();
+
+    fs.writeFileSync(path.join(codexRepo, "README.md"), "later commit\n");
+    expect(spawnSync("git", ["add", "README.md"], { cwd: codexRepo }).status).toBe(0);
+    expect(spawnSync("git", ["commit", "-m", "later source"], { cwd: codexRepo }).status).toBe(0);
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /does not match peeled rust-v0\.149\.0 commit/,
+    );
+  });
+
+  it("uses the upstream ignored fixture test with explicit schema env", () => {
+    expect(
+      buildCodexProtocolFixtureCommand("/codex/codex-rs/Cargo.toml", "/tmp/protocol", {
+        CARGO_TARGET_DIR: "/cache/codex-target",
+      }),
+    ).toEqual({
+      args: [
+        "test",
+        "--manifest-path",
+        "/codex/codex-rs/Cargo.toml",
+        "-p",
+        "codex-app-server-protocol",
+        "--lib",
+        "schema_fixtures_tests::write_schema_fixtures_from_env",
+        "--",
+        "--exact",
+        "--ignored",
+      ],
+      env: {
+        CARGO_TARGET_DIR: "/cache/codex-target",
+        CODEX_APP_SERVER_SCHEMA_ROOT: "/tmp/protocol",
+        CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL: "1",
+      },
+    });
   });
 
   it("fails before cargo protocol generation when local disk headroom is too low", () => {

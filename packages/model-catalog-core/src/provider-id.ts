@@ -1,8 +1,6 @@
 // Model Catalog Core module implements provider id behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export { normalizeLowercaseStringOrEmpty };
-
 export function normalizeProviderId(provider: string): string {
   return normalizeLowercaseStringOrEmpty(provider);
 }

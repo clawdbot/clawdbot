@@ -4,7 +4,6 @@ export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 export {
   readSessionUpdatedAt,
   resolveChannelResetConfig,
-  resolveSessionKey,
   resolveStorePath,
   updateLastRoute,
 } from "openclaw/plugin-sdk/session-store-runtime";

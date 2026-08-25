@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -152,7 +153,7 @@ describe("resolveCronJobConfigRevision", () => {
       {
         ...makeJob(),
         id: "command-empty-env",
-        schedule: { kind: "every", everyMs: Number.MAX_SAFE_INTEGER, anchorMs: 0 },
+        schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
         payload: { kind: "command", argv: ["true"], env: {}, input: "" },
         failureAlert: false,
       },

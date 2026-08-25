@@ -391,18 +391,26 @@ beforeEach(() => {
 
 describe("resolveConfiguredAcpBindingRecord", () => {
   it("resolves discord channel ACP binding from top-level typed bindings", () => {
-    const cfg = createCfgWithBindings([
-      createDiscordBinding({
-        agentId: "codex",
-        conversationId: defaultDiscordConversationId,
-        acp: { cwd: "/repo/openclaw" },
-      }),
-    ]);
+    const cfg = createCfgWithBindings(
+      [
+        createDiscordBinding({
+          agentId: "codex",
+          conversationId: defaultDiscordConversationId,
+          acp: { cwd: "/repo/openclaw" },
+        }),
+      ],
+      {
+        agents: {
+          list: [{ id: "codex", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+        },
+      },
+    );
     const resolved = resolveBindingRecord(cfg);
 
     expect(resolved?.spec.channel).toBe("discord");
     expect(resolved?.spec.conversationId).toBe(defaultDiscordConversationId);
     expect(resolved?.spec.agentId).toBe("codex");
+    expect(resolved?.spec.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved?.record.targetSessionKey).toContain("agent:codex:acp:binding:discord:default:");
     expect(resolved?.record.metadata?.source).toBe("config");
   });

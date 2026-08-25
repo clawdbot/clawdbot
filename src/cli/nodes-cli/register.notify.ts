@@ -5,10 +5,10 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -37,7 +37,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("notify", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const title = normalizeOptionalString(opts.title) ?? "";
           const body = normalizeOptionalString(opts.body) ?? "";
           if (!title && !body) {
@@ -63,7 +63,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;

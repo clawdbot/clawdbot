@@ -19,15 +19,18 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 }
 
 @Suite struct DeepLinksSecurityTests {
-    @Test func setupResultInitializerKeepsLegacySignature() {
+    @Test func setupResultInitializerDefaultsOptionalFields() {
         let result = DevicePairSetupCodeResult(
+            setupid: "setup-1",
             setupcode: "code",
             qrdataurl: nil,
             gatewayurl: "wss://gateway.example.com",
             auth: AnyCodable("token"),
-            urlsource: "config")
+            urlsource: "config",
+            expiresatms: 1_700_000_000_000)
 
         #expect(result.gatewayurls == nil)
+        #expect(result.accessdowngraded == nil)
     }
 
     @Test func dashboardDeepLinkParses() {
@@ -106,6 +109,47 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
                 password: nil))
     }
 
+    @Test func setupCodeAcceptsPairingURLWrapperWithoutLowercasingPayload() {
+        let payload = #"{"url":"wss://gateway.example:8443","bootstrapToken":"Bootstrap-AbC123"}"#
+        let code = setupCode(from: payload)
+
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode("oc-pair://\(code)") ==
+                GatewayConnectDeepLink.fromSetupCode(code))
+    }
+
+    @Test func setupCodePreservesPrimaryGatewayContextPath() {
+        let payload = #"{"url":"wss://gateway.example/openclaw-gw","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.contextPath == "/openclaw-gw")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw-gw")
+    }
+
+    @Test func setupCodeDecodesGatewayContextPathExactlyOnce() {
+        let payload = #"{"url":"wss://gateway.example/openclaw%20gateway","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.contextPath == "/openclaw%20gateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%20gateway")
+    }
+
+    @Test func setupCodePreservesEscapedGatewayPathDelimiter() {
+        let payload = #"{"url":"wss://gateway.example/openclaw%2Fgateway","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.contextPath == "/openclaw%2Fgateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%2Fgateway")
+    }
+
+    @Test func setupCodePreservesNonUTF8GatewayPathOctet() {
+        let payload = #"{"url":"wss://gateway.example/openclaw%FFgateway","bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.contextPath == "/openclaw%FFgateway")
+        #expect(link?.websocketURL?.absoluteString == "wss://gateway.example:443/openclaw%FFgateway")
+    }
+
     @Test func setupCodeAllowsPrivateLanWs() {
         let payload = #"{"url":"ws://192.168.1.20:18789","bootstrapToken":"tok"}"#
         #expect(
@@ -131,17 +175,18 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
     }
 
     @Test func setupCodeParsesOrderedGatewayFallbacks() throws {
-        let payload = #"{"url":"ws://192.168.1.20:18789","urls":["ws://192.168.1.20:18789","wss://gateway.tailnet.ts.net:8443"],"bootstrapToken":"tok"}"#
+        let payload = #"{"url":"ws://192.168.1.20:18789/lan-gw","urls":["ws://192.168.1.20:18789/lan-gw","wss://gateway.tailnet.ts.net:8443/tailnet-gw"],"bootstrapToken":"tok"}"#
         let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link?.connectionEndpoints == [
-            .init(host: "192.168.1.20", port: 18789, tls: false),
-            .init(host: "gateway.tailnet.ts.net", port: 8443, tls: true),
+            .init(host: "192.168.1.20", port: 18789, tls: false, contextPath: "/lan-gw"),
+            .init(host: "gateway.tailnet.ts.net", port: 8443, tls: true, contextPath: "/tailnet-gw"),
         ])
         #expect(try link?.selectingEndpoint(#require(link?.connectionEndpoints[1])) == .init(
             host: "gateway.tailnet.ts.net",
             port: 8443,
             tls: true,
+            contextPath: "/tailnet-gw",
             bootstrapToken: "tok",
             token: nil,
             password: nil))
@@ -154,7 +199,33 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
             GatewayConnectDeepLink.self,
             from: Data(payload.utf8))
 
+        #expect(link.contextPath == nil)
         #expect(link.fallbackEndpoints.isEmpty)
+    }
+
+    @Test func legacyEncodedFallbackEndpointDecodesWithoutContextPath() throws {
+        let payload = #"{"host":"gateway.example","port":443,"tls":true,"fallbackEndpoints":[{"host":"fallback.example","port":443,"tls":true}]}"#
+
+        let link = try JSONDecoder().decode(
+            GatewayConnectDeepLink.self,
+            from: Data(payload.utf8))
+
+        #expect(link.fallbackEndpoints == [
+            .init(host: "fallback.example", port: 443, tls: true),
+        ])
+    }
+
+    @Test func setupCodeRejectsGatewayURLMetadata() {
+        let urls = [
+            "wss://user@gateway.example/openclaw-gw",
+            "wss://gateway.example/openclaw-gw?mode=setup",
+            "wss://gateway.example/openclaw-gw#fragment",
+        ]
+
+        for url in urls {
+            let payload = #"{"url":"\#(url)","bootstrapToken":"tok"}"#
+            #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+        }
     }
 
     @Test func setupCodeDropsInsecureGatewayFallbacks() {

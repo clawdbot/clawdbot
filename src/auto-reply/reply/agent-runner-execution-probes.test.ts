@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
@@ -18,7 +19,6 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -108,6 +108,48 @@ describe("executeAgentTurn: primary probe routing", () => {
       autoFallbackPrimaryProbe: undefined,
     });
   });
+
+  it.each([
+    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
+    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
+  ])(
+    "canonicalizes a source-less $name auth profile during queued probe recheck",
+    ({ marker, expectedSource }) => {
+      const probe = {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: "google",
+        fallbackModel: "gemini-3-pro",
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+        authProfileOverride: "openai:work",
+        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
+      };
+      const run = createFollowupRun().run;
+      run.provider = probe.provider;
+      run.model = probe.model;
+      run.autoFallbackPrimaryProbe = probe;
+
+      expect(
+        resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+          run,
+          entry: sessionEntry,
+          sessionKey: "main",
+        }),
+      ).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:work",
+        authProfileIdSource: expectedSource,
+        autoFallbackPrimaryProbe: undefined,
+      });
+    },
+  );
 
   it("propagates rechecked user selections to post-run state", async () => {
     const sessionKey = "rechecked-user-selection";

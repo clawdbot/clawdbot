@@ -2,8 +2,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 
 function makeAttempt(
@@ -11,6 +12,7 @@ function makeAttempt(
 ): AgentHarnessAttemptParams {
   return {
     agentId: "agent-1",
+    hostCapabilities: createCopilotTestHostCapabilities(),
     prompt: "hello",
     runId: "run-1",
     sessionFile: "session.json",

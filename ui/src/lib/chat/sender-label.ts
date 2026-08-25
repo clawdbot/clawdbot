@@ -1,3 +1,5 @@
+import { normalizeNullableString as normalizeLabelPart } from "@openclaw/normalization-core/string-coerce";
+
 export type SenderIdentity = {
   id?: string;
   name?: string;
@@ -11,10 +13,6 @@ type SenderIdentityInput = {
   username?: unknown;
   profileAvatarUrl?: unknown;
 };
-
-function normalizeLabelPart(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 /** Formats durable sender identity without assuming ids will always be email addresses. */
 export function formatSenderLabel(sender: SenderIdentity | null | undefined): string | null {

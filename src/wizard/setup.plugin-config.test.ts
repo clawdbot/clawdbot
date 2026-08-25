@@ -9,19 +9,19 @@ import {
   setupPluginConfig,
 } from "./setup.plugin-config.js";
 
-const loadPluginManifestRegistry = vi.fn();
+const loadPluginManifestRegistryCore = vi.fn();
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
+  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => {
-    const registry = loadPluginManifestRegistry();
+    const registry = loadPluginManifestRegistryCore();
     return {
       plugins: registry.plugins,
       manifestRegistry: registry,
@@ -240,7 +240,7 @@ describe("discoverUnconfiguredPlugins", () => {
 
 describe("setupPluginConfig", () => {
   it("allows skipping plugin setup from the multiselect prompt", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           ...makeManifestPlugin("device-pairing", {
@@ -297,7 +297,7 @@ describe("setupPluginConfig", () => {
   });
 
   it("writes dotted uiHint values into nested plugin config", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           ...makeManifestPlugin(
@@ -359,7 +359,7 @@ describe("setupPluginConfig", () => {
 
   it("rejects prototype-polluting dotted uiHint paths without mutating config", async () => {
     const pollutionProbe = "openclawPluginPollutionProbe";
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           ...makeManifestPlugin("unsafe-plugin", {
@@ -395,7 +395,7 @@ describe("setupPluginConfig", () => {
   });
 
   it("coerces only JSON-compatible numeric inputs", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         makeManifestPlugin(
           "numeric-plugin",

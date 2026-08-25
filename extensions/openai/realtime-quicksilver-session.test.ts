@@ -1,3 +1,4 @@
+import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
 import { buildOpenAIQuicksilverSession } from "./realtime-quicksilver-wire.js";
@@ -15,6 +16,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+function requestTarget(url: string | URL | Request): string {
+  return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+}
+
+function requireStringBody(body: BodyInit | null | undefined): string {
+  if (typeof body !== "string") {
+    throw new Error("Expected string request body");
+  }
+  return body;
+}
+
+const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 
 describe("GPT-Live session shaping", () => {
   it("maps initial roles and normalizes voices without an id field", () => {
@@ -103,60 +117,255 @@ describe("GPT-Live session shaping", () => {
 });
 
 describe("GPT-Live offer broker", () => {
-  it("brokers GA OAuth with raw SDP and no sideband while preserving single-use tokens", async () => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      requests.push({
-        url: typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
-        init,
+  it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
+    let releaseSideband!: () => void;
+    const sidebandReady = new Promise<void>((resolve) => {
+      releaseSideband = resolve;
+    });
+    const bridge = {
+      connect: vi.fn(async () => await sidebandReady),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => true),
+    } satisfies RealtimeVoiceBridge;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = requestTarget(url);
+      if (target.endsWith("/hangup")) {
+        return new Response(null, { status: 204 });
+      }
+      expect(target).toBe("https://api.openai.com/v1/realtime/calls");
+      const form = requireStringBody(init?.body);
+      expect(form).toContain("m=audio 9 UDP/TLS/RTP/SAVPF 111");
+      expect(form).not.toContain("m=application");
+      return new Response("v=ga-answer\r\n", {
+        status: 201,
+        headers: { Location: "/v1/realtime/calls/rtc_gateway" },
       });
-      return new Response("v=ga-answer\r\n", { status: 201 });
-    }) as unknown as typeof fetch;
-    const { realtime, sockets } = createBroker({ fetchImpl });
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+    const { realtime, logger } = createBroker({ fetchImpl });
+    let terminateSideband: (() => void) | undefined;
+    const createBridge = vi.fn((params: { onTerminal: () => void }) => {
+      terminateSideband = params.onTerminal;
+      return bridge;
+    });
     try {
       const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-realtime-2.1", voice: "cedar" },
-        { type: "oauth", token: "oauth-token", accountId: "account-123" },
+        {
+          providerConfig: {},
+          model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: {
+            createBridge,
+          },
+        },
+        { type: "api-key", token: "platform-key" },
       );
-      expect(reservation).toMatchObject({
-        offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
-        model: "gpt-realtime-2.1",
-        voice: "cedar",
-      });
       if (reservation.transport !== "webrtc") {
         throw new Error("Expected WebRTC reservation");
       }
-
+      expect(reservation).not.toHaveProperty("model");
+      expect(reservation).not.toHaveProperty("voice");
+      expect(reservation.offerResponseMaxBytes).toBe(256 * 1024);
       const response = createResponseHarness();
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: "v=ga-offer\r\n" }),
+      const handling = realtime.handler(
+        createRequest({
+          token: reservation.clientSecret,
+          body: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+        }),
         response.res,
       );
-
+      await vi.waitFor(() => expect(bridge.connect).toHaveBeenCalledOnce());
+      expect(response.end).not.toHaveBeenCalled();
+      expect(createBridge).toHaveBeenCalledWith({
+        apiKey: "platform-key",
+        callId: "rtc_gateway",
+        onTerminal: expect.any(Function),
+      });
+      releaseSideband();
+      await expect(handling).resolves.toBe(true);
       expect(response.res.statusCode).toBe(201);
       expect(response.readBody()).toBe("v=ga-answer\r\n");
-      expect(sockets).toEqual([]);
-      expect(requests[0]).toMatchObject({
-        url: "https://api.openai.com/v1/realtime/calls?model=gpt-realtime-2.1",
-        init: {
-          method: "POST",
-          body: "v=ga-offer\r\n",
-          headers: expect.objectContaining({
-            Authorization: "Bearer oauth-token",
-            "chatgpt-account-id": "account-123",
-            "Content-Type": "application/sdp",
-          }),
-        },
-      });
-      expect(requests[0]?.init?.headers).not.toHaveProperty("OpenAI-Alpha");
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^OpenAI Realtime sideband offer ready \{"callCreateMs":\d+,"sidebandReadyMs":\d+,"totalOfferMs":\d+\}$/,
+        ),
+      );
 
-      const replay = createResponseHarness();
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), replay.res);
-      expect(replay.res.statusCode).toBe(401);
+      terminateSideband?.();
+      await vi.waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(([url]) =>
+            requestTarget(url).endsWith("/rtc_gateway/hangup"),
+          ),
+        ).toHaveLength(1),
+      );
+      await realtime.broker.cancelBrowserSession(reservation);
+      expect(bridge.close).toHaveBeenCalledOnce();
+      expect(
+        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_gateway/hangup")),
+      ).toHaveLength(1);
+    } finally {
+      releaseSideband();
+      await realtime.cleanup();
+    }
+  });
+
+  it.each([
+    ["error", "sideband unavailable"],
+    ["timeout", "OpenAI realtime connection timeout"],
+  ])("hangs up a GA call when sideband startup ends in %s", async (failure, message) => {
+    const bridge = {
+      connect: vi.fn(async () => {
+        throw new Error(message);
+      }),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => false),
+    } satisfies RealtimeVoiceBridge;
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      requestTarget(url).endsWith("/hangup")
+        ? new Response(null, { status: 204 })
+        : new Response("v=answer\r\n", {
+            status: 201,
+            headers: { Location: `/v1/realtime/calls/rtc_${failure}` },
+          }),
+    );
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+    const { realtime } = createBroker({ fetchImpl });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        {
+          providerConfig: {},
+          model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: {
+            createBridge: () => bridge,
+          },
+        },
+        { type: "api-key", token: "platform-key" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+      const response = createResponseHarness();
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+        response.res,
+      );
+      expect(response.res.statusCode).toBe(502);
+      expect(response.readBody()).toContain(message);
+      expect(bridge.close).toHaveBeenCalledOnce();
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          requestTarget(url).endsWith(`/rtc_${failure}/hangup`),
+        ),
+      ).toHaveLength(1);
     } finally {
       await realtime.cleanup();
     }
   });
+
+  it("hangs up when the GA answer is not delivered to the client", async () => {
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => true),
+    } satisfies RealtimeVoiceBridge;
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      requestTarget(url).endsWith("/hangup")
+        ? new Response(null, { status: 204 })
+        : new Response("v=answer\r\n", {
+            status: 201,
+            headers: { Location: "/v1/realtime/calls/rtc_delivery" },
+          }),
+    );
+    const { realtime } = createBroker({ fetchImpl: fetchMock as unknown as typeof fetch });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        {
+          providerConfig: {},
+          model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: {
+            createBridge: () => bridge,
+          },
+        },
+        { type: "api-key", token: "platform-key" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+      const response = createResponseHarness();
+      response.end.mockImplementationOnce(() => {
+        queueMicrotask(() => response.res.emit("close"));
+      });
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+        response.res,
+      );
+
+      expect(bridge.close).toHaveBeenCalledOnce();
+      expect(
+        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_delivery/hangup")),
+      ).toHaveLength(1);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it.each([
+    [
+      "active data channel",
+      `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
+      "application media",
+    ],
+    ["video", `${AUDIO_ONLY_SDP}m=video 9 UDP/TLS/RTP/SAVPF 96\r\n`, "video media"],
+    ["no active audio", "v=0\r\nm=audio 0 UDP/TLS/RTP/SAVPF 111\r\n", "active audio"],
+    ["oversized line", `${AUDIO_ONLY_SDP}a=${"x".repeat(4_097)}\r\n`, "line is too large"],
+  ])(
+    "rejects a bounded GA sideband SDP with %s before provider creation",
+    async (_name, body, message) => {
+      const fetchImpl = vi.fn();
+      const { realtime } = createBroker({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      try {
+        const reservation = await realtime.broker.createBrowserSession(
+          {
+            providerConfig: {},
+            model: "gpt-realtime-2.1",
+            gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+            gaSideband: {
+              createBridge: vi.fn(),
+            },
+          },
+          { type: "api-key", token: "platform-key" },
+        );
+        if (reservation.transport !== "webrtc") {
+          throw new Error("Expected WebRTC reservation");
+        }
+        const response = createResponseHarness();
+        await realtime.handler(
+          createRequest({ token: reservation.clientSecret, body }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(400);
+        expect(response.readBody()).toContain(message);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally {
+        await realtime.cleanup();
+      }
+    },
+  );
 
   it.each([
     {
@@ -570,6 +779,12 @@ describe("GPT-Live offer broker", () => {
       const contentType = createResponseHarness();
       await realtime.handler(createRequest({ contentType: "application/json" }), contentType.res);
       expect(contentType.res.statusCode).toBe(415);
+      const contentTypePrefix = createResponseHarness();
+      await realtime.handler(
+        createRequest({ contentType: "application/sdp+json" }),
+        contentTypePrefix.res,
+      );
+      expect(contentTypePrefix.res.statusCode).toBe(415);
 
       const reservation = await realtime.broker.createBrowserSession(
         {
@@ -591,6 +806,39 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
+  it("expires an unused Gateway-control offer and releases its owner", async () => {
+    vi.useFakeTimers();
+    const { realtime } = createBroker();
+    const onClose = vi.fn();
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        {
+          providerConfig: {},
+          model: "gpt-realtime-2.1",
+          gatewayControl: { bindBridge: vi.fn(), onClose },
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: {
+            createBridge: vi.fn(),
+          },
+        },
+        { type: "api-key", token: "platform-key" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledWith("completed");
+      const expired = createResponseHarness();
+      await realtime.handler(createRequest({ token: reservation.clientSecret }), expired.res);
+      expect(expired.res.statusCode).toBe(401);
+    } finally {
+      await realtime.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("caps pending and active sessions", async () => {
     const { realtime } = createBroker();
     const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
@@ -609,6 +857,66 @@ describe("GPT-Live offer broker", () => {
           { type: "api-key", token: "platform-key" },
         ),
       ).rejects.toThrow("Too many concurrent OpenAI GPT-Live sessions");
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("caps reservations per owning Gateway connection", async () => {
+    const { realtime } = createBroker();
+    const gaRequest = (ownerConnId: string) => ({
+      providerConfig: {},
+      model: "gpt-realtime-2.1",
+      ownerConnId,
+      gaSession: { type: "realtime" as const, model: "gpt-realtime-2.1" },
+      gaSideband: {
+        createBridge: vi.fn(),
+      },
+    });
+    try {
+      await Promise.all(
+        Array.from({ length: 2 }, () =>
+          realtime.broker.createBrowserSession(gaRequest("conn-1"), {
+            type: "api-key",
+            token: "platform-key",
+          }),
+        ),
+      );
+      await expect(
+        realtime.broker.createBrowserSession(gaRequest("conn-1"), {
+          type: "api-key",
+          token: "platform-key",
+        }),
+      ).rejects.toThrow("Too many concurrent OpenAI realtime sessions for this client");
+      await expect(
+        realtime.broker.createBrowserSession(gaRequest("conn-2"), {
+          type: "api-key",
+          token: "platform-key",
+        }),
+      ).resolves.toMatchObject({ transport: "webrtc" });
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("does not apply the GA sideband owner quota to browser-owned GA sessions", async () => {
+    const { realtime } = createBroker();
+    try {
+      await expect(
+        Promise.all(
+          Array.from({ length: 3 }, () =>
+            realtime.broker.createBrowserSession(
+              {
+                providerConfig: {},
+                model: "gpt-realtime-2.1",
+                ownerConnId: "conn-browser",
+                gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+              },
+              { type: "api-key", token: "platform-key" },
+            ),
+          ),
+        ),
+      ).resolves.toHaveLength(3);
     } finally {
       await realtime.cleanup();
     }
@@ -680,12 +988,12 @@ describe("GPT-Live offer broker", () => {
       );
       await vi.waitFor(() => expect(upstreamSignal).toBeDefined());
 
-      realtime.broker.cancelBrowserSession(reservation);
+      await realtime.broker.cancelBrowserSession(reservation);
 
       await expect(handling).resolves.toBe(true);
       expect(upstreamSignal?.aborted).toBe(true);
       expect(response.res.statusCode).toBe(502);
-      expect(response.readBody()).toContain("GPT-Live session canceled");
+      expect(response.readBody()).toContain("OpenAI realtime session canceled");
       expect(response.end).toHaveBeenCalledOnce();
       expect(sockets).toEqual([]);
     } finally {

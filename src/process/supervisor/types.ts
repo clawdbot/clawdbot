@@ -30,6 +30,7 @@ export type RunExit = {
   reason: TerminationReason;
   exitCode: number | null;
   exitSignal: NodeJS.Signals | number | null;
+  oomScoreWrapperSelected?: boolean;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -43,6 +44,8 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
+  /** The root result may settle before its independently owned descendants exit. */
+  waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop delivering output callbacks before owner teardown kills the child. */
   detachOutput?: () => void;
@@ -66,9 +69,11 @@ export type SpawnSecretInput = {
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
-  onStdout: (listener: (chunk: string) => void) => void;
-  onStderr: (listener: (chunk: string) => void) => void;
+  oomScoreWrapperSelected?: boolean;
+  onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
+  onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
+  waitForExtinction?: () => Promise<void>;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
@@ -99,10 +104,14 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+  exactEnv?: true;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  onStdoutRaw?: (chunk: Buffer) => void;
+  onStderrRaw?: (chunk: Buffer) => void;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {
@@ -110,11 +119,17 @@ type SpawnPtyInput = SpawnBaseInput & {
   ptyCommand: string;
 };
 
-export type SpawnInput = SpawnChildInput | SpawnPtyInput;
+type SpawnAnchoredShellInput = SpawnBaseInput & {
+  mode: "anchored-shell";
+  command: string;
+};
+
+export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
 export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  waitForScope?: (scopeKey: string) => Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

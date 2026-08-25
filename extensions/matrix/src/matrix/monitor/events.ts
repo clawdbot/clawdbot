@@ -5,6 +5,7 @@ import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
+import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -190,7 +191,7 @@ export function registerMatrixMonitorEvents(params: {
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
   sasNoticeRetryDelayMs?: number;
-}): void {
+}): () => void {
   const {
     cfg,
     client,
@@ -238,7 +239,7 @@ export function registerMatrixMonitorEvents(params: {
       });
   };
 
-  client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
+  const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
@@ -248,15 +249,15 @@ export function registerMatrixMonitorEvents(params: {
         await onRoomMessage(roomId, event);
       },
     );
-  });
+  };
 
-  client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
+  const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
-  });
+  };
 
-  client.on("room.decrypted_event", (roomId: string, event: MatrixRawEvent) => {
+  const onDecryptedEvent = (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
@@ -272,9 +273,9 @@ export function registerMatrixMonitorEvents(params: {
         await onRoomMessage(roomId, event);
       },
     );
-  });
+  };
 
-  client.on("room.failed_decryption", (roomId: string, event: MatrixRawEvent, error: Error) => {
+  const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
     void runMonitorTask(
       `failed decryption handler room=${roomId} id=${event.event_id ?? "unknown"}`,
       async () => {
@@ -330,15 +331,15 @@ export function registerMatrixMonitorEvents(params: {
         );
       },
     );
-  });
+  };
 
-  client.on("verification.summary", (summary) => {
+  const onVerificationSummary = (summary: MatrixVerificationSummary) => {
     void runMonitorTask("verification summary handler", async () => {
       await routeVerificationSummary(summary);
     });
-  });
+  };
 
-  client.on("room.invite", (roomId: string, event: MatrixRawEvent) => {
+  const onInvite = (roomId: string, event: MatrixRawEvent) => {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
@@ -353,15 +354,15 @@ export function registerMatrixMonitorEvents(params: {
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,
     );
-  });
+  };
 
-  client.on("room.join", (roomId: string, event: MatrixRawEvent) => {
+  const onJoin = (roomId: string, event: MatrixRawEvent) => {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     logVerboseMessage(`matrix: join room=${roomId} id=${eventId}`);
-  });
+  };
 
-  client.on("room.event", (roomId: string, event: MatrixRawEvent) => {
+  const onRoomEvent = (roomId: string, event: MatrixRawEvent) => {
     const eventType = event?.type ?? "unknown";
     if (eventType === EventType.RoomMessageEncrypted) {
       logVerboseMessage(
@@ -406,5 +407,25 @@ export function registerMatrixMonitorEvents(params: {
     }
 
     routeVerificationEvent(roomId, event);
-  });
+  };
+
+  client.on("room.message", onRoomMessageEvent);
+  client.on("room.encrypted_event", onEncryptedEvent);
+  client.on("room.decrypted_event", onDecryptedEvent);
+  client.on("room.failed_decryption", onFailedDecryption);
+  client.on("verification.summary", onVerificationSummary);
+  client.on("room.invite", onInvite);
+  client.on("room.join", onJoin);
+  client.on("room.event", onRoomEvent);
+
+  return () => {
+    client.off("room.message", onRoomMessageEvent);
+    client.off("room.encrypted_event", onEncryptedEvent);
+    client.off("room.decrypted_event", onDecryptedEvent);
+    client.off("room.failed_decryption", onFailedDecryption);
+    client.off("verification.summary", onVerificationSummary);
+    client.off("room.invite", onInvite);
+    client.off("room.join", onJoin);
+    client.off("room.event", onRoomEvent);
+  };
 }

@@ -36,7 +36,7 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
   };
 }
 
-function createHarness(request: GatewayBrowserClient["request"]) {
+function createHarness(request: GatewayBrowserClient["request"], ownerId?: string) {
   const client = { request } as GatewayBrowserClient;
   let eventListener: ((event: GatewayEventFrame) => void) | undefined;
   const sessions = createSessionCapability({
@@ -46,6 +46,7 @@ function createHarness(request: GatewayBrowserClient["request"]) {
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents(listener) {
@@ -58,7 +59,487 @@ function createHarness(request: GatewayBrowserClient["request"]) {
   return { sessions, emitEvent: (event: GatewayEventFrame) => eventListener?.(event) };
 }
 
+function installPageLifecycle() {
+  const documentEvents = new EventTarget();
+  const pageEvents = new EventTarget();
+  let visibilityState: DocumentVisibilityState = "visible";
+  Object.defineProperty(documentEvents, "visibilityState", {
+    configurable: true,
+    get: () => visibilityState,
+  });
+  vi.stubGlobal("document", documentEvents);
+  vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+  vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+  return {
+    setVisibility(next: DocumentVisibilityState) {
+      visibilityState = next;
+      documentEvents.dispatchEvent(new Event("visibilitychange"));
+    },
+    pageHide() {
+      pageEvents.dispatchEvent(new Event("pagehide"));
+    },
+    pageShow() {
+      pageEvents.dispatchEvent(new Event("pageshow"));
+    },
+  };
+}
+
 describe("event-driven session list refresh", () => {
+  it("does not admit an active message for a session absent from the canonical roster", async () => {
+    const visibleKey = "agent:main:visible";
+    const unrelatedKey = "agent:main:unrelated";
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const visible = {
+        key: visibleKey,
+        kind: "direct" as const,
+        updatedAt: 1,
+        owner: { actor: { type: "human" as const, id: "profile-self" } },
+      };
+      return sessionsResult(1, [visible]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+
+      const event = {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: unrelatedKey,
+          key: unrelatedKey,
+          kind: "direct",
+          updatedAt: 2,
+          archived: false,
+          hasActiveRun: true,
+          status: "running",
+          owner: { actor: { type: "human", id: "profile-other" } },
+          participants: [],
+          participantCount: 0,
+        },
+      } as const satisfies GatewayEventFrame;
+      emitEvent(event);
+      // Chat consumes the same event after the capability-level subscriber.
+      sessions.reconcileChanged(event.payload);
+
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
+  it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
+    vi.useFakeTimers();
+    const dashboardRows = Array.from({ length: 4 }, (_, index) => ({
+      key: `agent:main:dashboard-${index}`,
+      kind: "direct" as const,
+      boardFace: "dashboard" as const,
+      updatedAt: index + 1,
+    }));
+    const request = vi.fn(
+      async (
+        method: string,
+        params?: {
+          agentId?: string;
+          archived?: "all";
+          boardFace?: "dashboard";
+          includeDerivedTitles?: boolean;
+          includeLastMessage?: boolean;
+          limit?: number;
+          offset?: number;
+        },
+      ) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (params?.boardFace !== "dashboard") {
+          return sessionsResult(1);
+        }
+        const rows = params.agentId
+          ? [{ ...dashboardRows[0]!, key: `agent:${params.agentId}:dashboard` }]
+          : dashboardRows;
+        const offset = params.offset ?? 0;
+        const page = rows.slice(offset, offset + (params.limit ?? 50));
+        return {
+          ...sessionsResult(1, page),
+          totalCount: rows.length,
+          hasMore: offset + page.length < rows.length,
+          nextOffset: offset + page.length < rows.length ? offset + page.length : null,
+        };
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const allAgentsQuery = {
+      boardFace: "dashboard" as const,
+      archivedFilter: "all" as const,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 2,
+    };
+    const writerQuery = { ...allAgentsQuery, agentId: "writer" };
+    const stopAll = sessions.subscribeList(allAgentsQuery, () => undefined);
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
+
+    try {
+      await sessions.refreshList({ ...allAgentsQuery, force: true });
+      await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
+      await sessions.refreshList({ ...writerQuery, force: true });
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:research:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const researchDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(researchDashboardRequests).toHaveLength(1);
+      expect(researchDashboardRequests[0]?.[1]).toEqual({
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+        limit: 4,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        archived: "all",
+        boardFace: "dashboard",
+      });
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("offset");
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("agentId");
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:writer:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const writerDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(writerDashboardRequests).toHaveLength(2);
+      expect(
+        writerDashboardRequests.map(
+          ([, params]) => (params as { agentId?: string } | undefined)?.agentId ?? null,
+        ),
+      ).toEqual([null, "writer"]);
+    } finally {
+      stopAll();
+      stopWriter();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes a Sessions-style managed query after a terminal session message", async () => {
+    vi.useFakeTimers();
+    const key = "agent:main:main";
+    const calls = { canonical: 0, main: 0, research: 0 };
+    const request = vi.fn(
+      async (method: string, params?: { agentId?: string; includeUnknown?: boolean }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const lane =
+          params?.includeUnknown === true
+            ? "canonical"
+            : params?.agentId === "main"
+              ? "main"
+              : "research";
+        calls[lane] += 1;
+        const done = lane !== "research" && calls[lane] > 1;
+        const rowKey = lane === "research" ? "agent:research:other" : key;
+        return sessionsResult(calls[lane], [
+          {
+            key: rowKey,
+            kind: "direct",
+            updatedAt: calls[lane],
+            hasActiveRun: !done,
+            status: done ? "done" : "running",
+          },
+        ]);
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const mainQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: false,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+      archivedFilter: "active" as const,
+    };
+    const researchQuery = { ...mainQuery, agentId: "research" };
+    const stopMain = sessions.subscribeList(mainQuery, () => undefined);
+    const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ ...mainQuery, force: true });
+      await sessions.refreshList({ ...researchQuery, force: true });
+      expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject({
+        hasActiveRun: true,
+        status: "running",
+      });
+      request.mockClear();
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: key,
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            key,
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main", includeUnknown: false }),
+      );
+      expect(calls).toEqual({ canonical: 1, main: 2, research: 1 });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: false,
+        status: "done",
+      });
+      expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: false,
+        status: "done",
+      });
+    } finally {
+      stopMain();
+      stopResearch();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes the configured-only roster for a terminal snapshot outside its last list", async () => {
+    vi.useFakeTimers();
+    const mainRow = { key: "agent:main:main", kind: "direct" as const, updatedAt: 1 };
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(1, [mainRow]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ force: true });
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      request.mockClear();
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: {
+          agentId: "local",
+          sessionKey: "agent:local:main",
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            key: "agent:local:main",
+            kind: "direct",
+            updatedAt: 2,
+            archived: false,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
+      });
+
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an archived terminal session until the Gateway replaces the active roster", async () => {
+    vi.useFakeTimers();
+    const mainRow = { key: "agent:main:main", kind: "direct" as const, updatedAt: 1 };
+    const fallbackRow = { key: "agent:main:fallback", kind: "direct" as const, updatedAt: 2 };
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      return sessionsResult(listCalls, listCalls === 1 ? [mainRow] : [fallbackRow]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ force: true });
+      request.mockClear();
+      const visibleRosters: SessionsListResult["sessions"][] = [];
+      let previousRoster = sessions.state.result?.sessions;
+      const unsubscribe = sessions.subscribe((next) => {
+        if (next.result?.sessions !== previousRoster) {
+          previousRoster = next.result?.sessions;
+          visibleRosters.push(next.result?.sessions ?? []);
+        }
+      });
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: mainRow.key,
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            ...mainRow,
+            updatedAt: 3,
+            archived: true,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
+      });
+
+      expect(sessions.state.result?.sessions).toEqual([mainRow]);
+      expect(visibleRosters).toEqual([]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.list",
+        expect.objectContaining({ configuredAgentsOnly: true }),
+      );
+      expect(visibleRosters).toEqual([[fallbackRow]]);
+      expect(sessions.state.result?.sessions).toEqual([fallbackRow]);
+      unsubscribe();
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      filter: "ownerId",
+      query: { ownerId: "profile-ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setOwnerFilter("profile-ada"),
+    },
+    {
+      filter: "involvingMe",
+      query: { involvingMe: true },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setInvolvingMeFilter(true),
+    },
+    {
+      filter: "search",
+      query: { search: "Ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.refresh({ agentId: "main", search: "Ada", force: true }),
+    },
+  ])(
+    "refreshes the $filter-filtered primary roster after a terminal session message",
+    async ({ applyFilter, query }) => {
+      vi.useFakeTimers();
+      const key = "agent:main:main";
+      let matchesFilteredRoster = true;
+      const row = {
+        key,
+        kind: "direct" as const,
+        updatedAt: 1,
+        hasActiveRun: true,
+        status: "running" as const,
+        label: "Ada",
+        owner: { actor: { type: "human" as const, id: "profile-ada", label: "Ada" } },
+      };
+      const request = vi.fn(
+        async (
+          method: string,
+          params?: { ownerId?: string; involvingMe?: boolean; search?: string },
+        ) => {
+          if (method !== "sessions.list") {
+            throw new Error(`Unexpected request: ${method}`);
+          }
+          const filtered = Boolean(params?.ownerId || params?.involvingMe || params?.search);
+          return sessionsResult(
+            matchesFilteredRoster ? 1 : 2,
+            filtered && !matchesFilteredRoster ? [] : [row],
+          );
+        },
+      );
+      const { sessions, emitEvent } = createHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        await applyFilter(sessions);
+        expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
+        request.mockClear();
+        matchesFilteredRoster = false;
+
+        emitEvent({
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: key,
+            hasActiveRun: false,
+            status: "done",
+            session: {
+              ...row,
+              updatedAt: 2,
+              hasActiveRun: false,
+              status: "done",
+              label: "Bob",
+              owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+            },
+          },
+        });
+        expect(sessions.state.result?.sessions).toEqual([row]);
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining(query));
+        expect(sessions.state.result?.sessions).toEqual([]);
+      } finally {
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 120 }, (_, index) => ({
@@ -102,6 +583,71 @@ describe("event-driven session list refresh", () => {
     }
   });
 
+  it("retains owner and appended shared pages when an event replaces the list", async () => {
+    vi.useFakeTimers();
+    const ownerId = "profile-ada";
+    const ownerTail = {
+      key: "agent:main:owner-tail",
+      kind: "direct" as const,
+      updatedAt: 1,
+      createdActor: { type: "human" as const, id: ownerId },
+    };
+    const ownerHead = {
+      key: "agent:main:owner-head",
+      kind: "direct" as const,
+      updatedAt: 3,
+      createdActor: { type: "human" as const, id: ownerId },
+    };
+    const sharedRows = [
+      ownerHead,
+      ...Array.from({ length: 119 }, (_, index) => ({
+        key: `agent:main:shared-${index}`,
+        kind: "direct" as const,
+        updatedAt: 119 - index,
+        createdActor: { type: "human" as const, id: "profile-bob" },
+      })),
+    ];
+    const request = vi.fn(
+      async (method: string, params?: { limit?: number; offset?: number; ownerId?: string }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (params?.ownerId === ownerId) {
+          return sessionsResult(1, [ownerHead, ownerTail]);
+        }
+        const offset = params?.offset ?? 0;
+        return sessionsResult(2, sharedRows.slice(offset, offset + (params?.limit ?? 50)));
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+      ownerId,
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", limit: 60, force: true });
+      await sessions.refresh({ agentId: "main", limit: 60, offset: 60, append: true, force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(121);
+
+      emitEvent(sessionChangedEvent(sharedRows[1]!.key));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request.mock.calls).toHaveLength(5);
+      expect(request.mock.calls.map(([, params]) => params)).toEqual([
+        expect.objectContaining({ ownerId, limit: 60 }),
+        expect.objectContaining({ limit: 60 }),
+        expect.objectContaining({ limit: 60, offset: 60 }),
+        expect.objectContaining({ ownerId, limit: 60 }),
+        expect.objectContaining({ limit: 120 }),
+      ]);
+      expect(sessions.state.result?.sessions).toHaveLength(121);
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(ownerTail.key);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears a recreated session's prior deletion before the debounced refresh", async () => {
     vi.useFakeTimers();
     const key = "agent:main:recreated-thread";
@@ -122,7 +668,9 @@ describe("event-driven session list refresh", () => {
         event: "sessions.changed",
         payload: { sessionKey: key, reason: "delete" },
       });
-      expect(sessions.state.deletedSessions).toEqual([{ key, agentId: undefined }]);
+      expect(sessions.state.deletedSessions).toEqual([
+        { key, retireBeforeRevision: expect.any(Number) },
+      ]);
 
       emitEvent(sessionChangedEvent(key));
 
@@ -424,29 +972,110 @@ describe("event-driven session list refresh", () => {
     }
   });
 
-  it("flushes a pending event refresh synchronously on dispose", async () => {
+  it("defers a queued filtered refresh when the page hides during its active request", async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async (method: string) => {
+    const page = installPageLifecycle();
+    const activeRefresh = deferred<SessionsListResult>();
+    let filteredCalls = 0;
+    const request = vi.fn(async (method: string, params?: { archived?: string }) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      if (params?.archived !== "all") {
+        return sessionsResult(0);
+      }
+      filteredCalls += 1;
+      return filteredCalls === 2 ? await activeRefresh.promise : sessionsResult(filteredCalls);
     });
     const { sessions, emitEvent } = createHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
 
     try {
-      await sessions.refresh({ force: true });
-      emitEvent(sessionChangedEvent("agent:main:pending"));
-      sessions.dispose();
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
+      emitEvent(sessionChangedEvent("agent:main:first"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(filteredCalls).toBe(2);
 
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
-      expect(request).toHaveBeenCalledTimes(2);
+      emitEvent(sessionChangedEvent("agent:main:queued"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      page.setVisibility("hidden");
+      activeRefresh.resolve(sessionsResult(2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(2);
+
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(3);
     } finally {
+      activeRefresh.resolve(sessionsResult(2));
+      unsubscribe();
       sessions.dispose();
       vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("holds canonical and filtered event refreshes while hidden and catches up once", async () => {
+    vi.useFakeTimers();
+    const page = installPageLifecycle();
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(1, [{ key: "agent:main:pending", kind: "direct", updatedAt: 0 }]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
+      emitEvent(sessionChangedEvent("agent:main:pending"));
+
+      page.setVisibility("hidden");
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:pending",
+          reason: "update",
+          key: "agent:main:pending",
+          kind: "direct",
+          updatedAt: 2,
+          archived: true,
+          archivedAt: 2,
+        },
+      });
+      expect(sessions.state.result?.sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS * 2);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      page.setVisibility("visible");
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+
+      page.setVisibility("hidden");
+      page.pageHide();
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(6);
+
+      sessions.dispose();
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
+      expect(request).toHaveBeenCalledTimes(6);
+    } finally {
+      unsubscribe();
+      sessions.dispose();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 });

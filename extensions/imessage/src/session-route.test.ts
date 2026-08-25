@@ -22,4 +22,43 @@ describe("iMessage outbound session routing", () => {
 
     expect(route?.recipientSessionExact).toBe(exact);
   });
+
+  it.each([
+    ["uses auto when a bare direct target has no configured service", {}, "+15551234567", "auto"],
+    [
+      "uses the configured SMS override for a bare direct target",
+      { channels: { imessage: { service: "sms" } } },
+      "+15551234567",
+      "sms",
+    ],
+    [
+      "uses the configured iMessage override for a bare direct target",
+      { channels: { imessage: { service: "imessage" } } },
+      "+15551234567",
+      "imessage",
+    ],
+    [
+      "keeps an explicit SMS target authoritative",
+      { channels: { imessage: { service: "imessage" } } },
+      "sms:+15551234567",
+      "sms",
+    ],
+    [
+      "keeps an explicit auto target authoritative",
+      { channels: { imessage: { service: "sms" } } },
+      "auto:+15551234567",
+      "auto",
+    ],
+  ] as const)("%s", async (_label, cfg, target, expectedService) => {
+    const route = await imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg,
+      agentId: "main",
+      target,
+    });
+
+    expect(route).toMatchObject({
+      from: `${expectedService}:+15551234567`,
+      to: `${expectedService}:+15551234567`,
+    });
+  });
 });

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import { resolveStorePath } from "../../../config/sessions.js";
-import { resolveSessionTranscriptRuntimeReadTarget } from "../../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
+import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -53,10 +54,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = runInput.runParams;
+  const params = input.terminalRetryState.forceCodeModeReconciliationTools
+    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
+    : runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
+    bootstrapWorkspaceDir,
     isCanonicalWorkspace,
     agentDir,
     resolvedSessionKey,
@@ -89,6 +93,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  const effectiveModel = attachModelProviderRuntimePluginHandle(
+    runtime.effectiveModel,
+    runtime.providerRuntimeHandle,
+  );
 
   await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
@@ -115,18 +123,23 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const resolvedTranscriptTarget =
     reusableSessionTarget ??
     (resolvedSessionKey
-      ? await resolveSessionTranscriptRuntimeReadTarget({
+      ? await resolveSessionTranscriptRuntimeTarget({
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
-          storePath: resolveStorePath(params.config?.session?.store, {
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
             agentId: workspaceResolution.agentId,
           }),
         })
       : undefined);
-  const resolvedSessionTarget = resolvedTranscriptTarget
-    ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
-    : sessionPromptState.sessionTarget;
+  const resolvedSessionTarget =
+    resolvedTranscriptTarget || sessionPromptState.sessionTarget
+      ? {
+          ...sessionPromptState.sessionTarget,
+          ...resolvedTranscriptTarget,
+          ...sessionPromptState.sessionWriterFence,
+        }
+      : undefined;
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
@@ -134,8 +147,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const runtimePlan = buildAgentRuntimePlan({
     provider,
     modelId,
-    model: runtime.effectiveModel,
-    modelApi: runtime.effectiveModel.api,
+    model: effectiveModel,
+    modelApi: effectiveModel.api,
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
@@ -149,7 +162,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
   });
   const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
-    model: runtime.effectiveModel,
+    model: effectiveModel,
     modelId,
     provider,
     runtimePlan,
@@ -196,16 +209,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
+      contextEngineAgentId: runInput.contextEngineAgentId,
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
+      bootstrapWorkspaceDir,
       isCanonicalWorkspace,
       agentDir,
       preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
+      authoredContextTokenCap: runtime.authoredContextTokenCap,
       contextWindowInfo: runtime.contextWindowInfo,
       prompt,
       provider,
@@ -216,10 +232,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       agentHarnessId: runtime.agentHarness.id,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
-      model: runtime.effectiveModel,
+      model: effectiveModel,
       resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
       authStorage,
       authProfileStore: resolveRunAttemptAuthProfileStore(),

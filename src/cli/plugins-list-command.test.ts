@@ -22,17 +22,26 @@ type SnapshotPlugin = {
   agentHarnessIds?: string[];
 };
 
-function mockPluginListSnapshot(plugins: SnapshotPlugin[], config: OpenClawConfig = {}): void {
+function mockPluginListSnapshot(
+  plugins: SnapshotPlugin[],
+  config: OpenClawConfig = {},
+  scope?: {
+    workspaceDir?: string;
+    workspaceScope: "selected" | "omitted";
+    diagnostics?: Array<{ level: "warn"; code: "workspace-scope-omitted"; message: string }>;
+  },
+): void {
   vi.doMock("../config/config.js", () => ({
     getRuntimeConfig: () => config,
   }));
   vi.doMock("../plugins/status-snapshot.js", () => ({
     buildPluginRegistrySnapshotReport: () => ({
-      workspaceDir: "/workspace",
+      workspaceDir: scope?.workspaceDir ?? "/workspace",
+      workspaceScope: scope?.workspaceScope ?? "selected",
       registrySource: "config",
       registryDiagnostics: [],
       plugins,
-      diagnostics: [],
+      diagnostics: scope?.diagnostics ?? [],
     }),
   }));
 }
@@ -57,6 +66,7 @@ function mockHumanListModules(importedModules: string[] = []): void {
     return {
       theme: {
         muted: (value: string) => value,
+        warn: (value: string) => value,
       },
     };
   });
@@ -105,6 +115,7 @@ describe("runPluginsListCommand", () => {
     vi.doMock("../plugins/status-snapshot.js", () => ({
       buildPluginRegistrySnapshotReport: () => ({
         workspaceDir: "/workspace",
+        workspaceScope: "selected",
         registrySource: "config",
         registryDiagnostics: [],
         plugins: [
@@ -167,6 +178,7 @@ describe("runPluginsListCommand", () => {
     expect(writes).toEqual([
       {
         workspaceDir: "/workspace",
+        workspaceScope: "selected",
         registry: {
           source: "config",
           diagnostics: [],
@@ -246,6 +258,30 @@ describe("runPluginsListCommand", () => {
     ]);
   });
 
+  it("makes omitted workspace plugin scope visible in human output", async () => {
+    const message =
+      "Workspace plugin discovery was skipped; set agents.defaults.systemAgent.agentId.";
+    mockPluginListSnapshot(
+      [],
+      {},
+      {
+        workspaceScope: "omitted",
+        diagnostics: [{ level: "warn", code: "workspace-scope-omitted", message }],
+      },
+    );
+    mockHumanListModules();
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({}, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      `Warning: ${message}`,
+      "",
+      "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
+    ]);
+  });
+
   it("keeps empty enabled-only JSON lazy when every installed plugin is disabled", async () => {
     const importedHumanModules: string[] = [];
     mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
@@ -259,6 +295,7 @@ describe("runPluginsListCommand", () => {
     expect(writes).toEqual([
       {
         workspaceDir: "/workspace",
+        workspaceScope: "selected",
         registry: { source: "config", diagnostics: [] },
         plugins: [],
         diagnostics: [],

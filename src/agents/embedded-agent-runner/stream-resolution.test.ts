@@ -5,6 +5,7 @@ import * as providerTransportStream from "@openclaw/ai/transports";
 // Stream resolution tests cover how embedded runs choose provider, boundary,
 // native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
@@ -77,14 +78,7 @@ function useNativeStreamFn(streamFn: StreamFn): StreamFn {
   return streamSimple as StreamFn;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  // Test streams return their options/context as plain records; fail early if a
-  // route returns an unexpected shape.
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 async function expectStreamResultRecord(
   result: ReturnType<StreamFn>,

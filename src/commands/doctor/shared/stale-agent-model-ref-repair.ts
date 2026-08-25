@@ -13,6 +13,7 @@ import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
@@ -25,6 +26,7 @@ type StaleAgentModelRefRepair = {
 
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Test seam for the provider ids supplied by bundled or installed plugins. */
   pluginProviderIds?: ReadonlySet<string>;
   /** Test seam for provider ids already present in each agent's models.json. */
@@ -53,12 +55,14 @@ function collectPluginProviderIds(
   } else {
     const defaultAgentId = tryResolveDefaultAgentId(cfg);
     const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-    const snapshot = resolvePluginMetadataSnapshot({
-      config: cfg,
-      workspaceDir: workspaceDir ?? undefined,
-      env: options.env ?? process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
+    const snapshot =
+      options.pluginMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspaceDir ?? undefined,
+        env: options.env ?? process.env,
+        allowWorkspaceScopedCurrent: true,
+      });
     if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       return {
         warnings: [

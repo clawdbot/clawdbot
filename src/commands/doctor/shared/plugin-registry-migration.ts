@@ -3,16 +3,20 @@ import fs from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   extractShippedPluginInstallConfigRecords,
+  inspectShippedPluginInstallConfigRecords,
   stripShippedPluginInstallConfigRecords,
 } from "../../../config/plugin-install-config-migration.js";
+import {
+  copyPluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
-  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
-  type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
 import {
@@ -28,14 +32,19 @@ const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
 
-type PluginRegistryInstallMigrationPreflightAction = "skip-existing" | "migrate";
-
-type PluginRegistryInstallMigrationPreflight = {
-  /** Migration action selected before reading or writing registry state. */
-  action: PluginRegistryInstallMigrationPreflightAction;
-  /** Persisted plugin index path that migration will inspect or write. */
-  filePath: string;
-};
+type PluginRegistryInstallMigrationPreflight =
+  | {
+      /** Migration action selected before reading or writing registry state. */
+      action: "skip-existing";
+      /** Persisted plugin index path that migration will inspect or write. */
+      filePath: string;
+      /** Authoritative pre-repair generation used to detect a real inventory change. */
+      current: InstalledPluginIndex;
+    }
+  | {
+      action: "initialize" | "migrate";
+      filePath: string;
+    };
 
 type PluginRegistryInstallMigrationResult =
   | {
@@ -47,9 +56,20 @@ type PluginRegistryInstallMigrationResult =
       status: "migrated";
       migrated: true;
       preflight: PluginRegistryInstallMigrationPreflight;
-      inspection: InstalledPluginIndexStoreInspection;
       current: InstalledPluginIndex;
     };
+
+export class InvalidPluginInstallRecordStateError extends Error {}
+
+function invalidPersistedInstallRecordMessage(filePath: string): string {
+  return [
+    `Persisted plugin install records are invalid at ${filePath}.`,
+    "Stop the Gateway, back up this database, delete only the installed_plugin_index row with index_key='installed-plugin-index' using SQLite tooling, then rerun `openclaw doctor --fix` to rebuild it.",
+  ].join(" ");
+}
+
+const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
+  "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
 
 export type PluginRegistryInstallMigrationParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
@@ -63,6 +83,16 @@ export function preflightPluginRegistryInstallMigration(
   params: PluginRegistryInstallMigrationParams = {},
 ): PluginRegistryInstallMigrationPreflight {
   const filePath = resolveInstalledPluginIndexStorePath(params);
+  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
+  if (persistedState.status === "invalid") {
+    throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
+  }
+  const configInstallState = params.config
+    ? inspectShippedPluginInstallConfigRecords(params.config)
+    : undefined;
+  if (configInstallState?.status === "invalid") {
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
+  }
   const pathExists = params.existsSync ?? fs.existsSync;
   if (pathExists(filePath)) {
     const currentRegistry = readPersistedInstalledPluginIndexSync(params);
@@ -70,11 +100,21 @@ export function preflightPluginRegistryInstallMigration(
       return {
         action: "skip-existing",
         filePath,
+        current: currentRegistry,
       };
     }
+    // Install records without a readable index is a half-written registry, not a fresh root:
+    // report it as a migration so doctor keeps warning and rebuilds from what survived.
+    if (persistedState.status !== "missing") {
+      return { action: "migrate", filePath };
+    }
   }
+  const hasConfigInstallRecords =
+    configInstallState?.status === "valid" && Object.keys(configInstallState.records).length > 0;
+  // Only a caller that supplied config can prove nothing is left to migrate. Without config, or with
+  // retired plugins.installs records still present, stay on "migrate" so the warning is not lost.
   return {
-    action: "migrate",
+    action: params.config && !hasConfigInstallRecords ? "initialize" : "migrate",
     filePath,
   };
 }
@@ -270,19 +310,23 @@ export async function migratePluginRegistryForInstall(
   }
 
   const rawConfig = await readMigrationConfig(params);
+  if (inspectShippedPluginInstallConfigRecords(rawConfig).status === "invalid") {
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
+  }
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
   const durableInstallRecords =
     params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
-  const installRecords = {
-    ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...durableInstallRecords,
-  };
+  const installRecords = copyPluginInstallRecordMap(
+    extractShippedPluginInstallConfigRecords(rawConfig),
+  );
+  for (const [pluginId, record] of Object.entries(durableInstallRecords)) {
+    setPluginInstallRecordMapEntry(installRecords, pluginId, record);
+  }
   const migrationParams = {
     ...params,
     config,
     installRecords,
   };
-  const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
   });
@@ -302,7 +346,6 @@ export async function migratePluginRegistryForInstall(
     status: "migrated",
     migrated: true,
     preflight,
-    inspection,
     current,
   };
 }

@@ -1,10 +1,12 @@
 // Googlechat API module exposes the plugin public contract.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   MediaFetchError,
   parseMediaContentLength,
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -23,6 +25,16 @@ const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
 const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
+export class GoogleChatApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GoogleChatApiError";
+  }
+}
+
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
     return GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS;
@@ -32,29 +44,26 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
 }
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  const bytes = await readResponseWithLimit(response, GOOGLECHAT_JSON_RESPONSE_MAX_BYTES, {
+  return readProviderJsonResponse<T>(response, label, {
+    maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
-    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
   });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
 }
 
 async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
-  return (
+  const text =
     (await readResponseTextSnippet(response, {
       maxBytes: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       maxChars: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
       onIdleTimeout: ({ chunkTimeoutMs }) =>
         new Error(`${label} error response stalled after ${chunkTimeoutMs}ms`),
-    })) ?? ""
-  );
+    })) ?? "";
+  // Remote API errors can reflect the request's Authorization header. Force
+  // tool-payload redaction before the text enters any surfaced error message.
+  return redactToolPayloadText(text);
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
@@ -98,7 +107,10 @@ async function withGoogleChatResponse<T>(params: {
   try {
     if (!response.ok) {
       const text = await readGoogleChatErrorResponse(response, errorPrefix);
-      throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
+      throw new GoogleChatApiError(
+        response.status,
+        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+      );
     }
     return await handleResponse(response);
   } finally {

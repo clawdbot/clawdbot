@@ -33,8 +33,8 @@ workflow instead of relying on GStreamer packages from the user's system.
 
 ## Develop and build
 
-The companion frontend is static HTML, CSS, and JavaScript. The shared Canvas A2UI renderer is
-generated from the Canvas plugin, so install repository dependencies once before building:
+The companion frontend is static HTML, CSS, and JavaScript. Install repository dependencies once
+before building:
 
 ```bash
 pnpm install
@@ -47,24 +47,15 @@ The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/b
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
 
-On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
+On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens Model Setup, automatically checks existing credentials, and verifies a real model response before continuing. A working existing model opens the normal dashboard; newly configured AI access continues into guided onboarding. If no existing credentials work, choose a provider, sign in, or enter an API key in Model Setup. Reconnects and later app launches use the normal dashboard URL.
 
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
-## Canvas bridge
-
-The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
-
-The Canvas plugin sources remain the source of truth for the A2UI renderer. Each native build
-generates `index.html` and `a2ui.bundle.js` into its isolated build output before compiling. Run
-`node scripts/sync-native-a2ui.mjs --check` from the repository root to verify fresh bundles are
-byte-identical and every native build owner is wired.
-
 ## Quick Chat widgets
 
-Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message Canvas previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
 
 ## Installer resource
 

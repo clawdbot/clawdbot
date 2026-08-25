@@ -56,6 +56,43 @@ function createContext(params: {
 }
 
 describe("new-session route catalog target", () => {
+  it("does not apply group defaults from a retired connection", async () => {
+    const context = {
+      sessions: {
+        state: {
+          groupSettings: [
+            { name: "Client", position: 0, cwd: "/gateway-a/client", worktree: true },
+          ],
+        },
+        groupsLoad: vi.fn(async () => null),
+        groupsGeneration: vi.fn(() => 1),
+        groupsStatus: vi.fn(() => "unavailable"),
+      },
+    } as unknown as ApplicationContext;
+
+    const data = await loadNewSessionData(context, "?group=Client");
+
+    expect(data.groupStatus).toBe("unavailable");
+    expect(data.groupCwd).toBe("");
+    expect(data.groupWorktree).toBe(false);
+  });
+
+  it("marks a deleted group target missing", async () => {
+    const context = {
+      sessions: {
+        state: { groupSettings: [] },
+        groupsLoad: vi.fn(async () => []),
+        groupsGeneration: vi.fn(() => 1),
+        groupsStatus: vi.fn(() => "ready"),
+      },
+    } as unknown as ApplicationContext;
+
+    const data = await loadNewSessionData(context, "?group=Deleted");
+
+    expect(data.group).toBe("Deleted");
+    expect(data.groupStatus).toBe("missing");
+  });
+
   it("defers an unvalidated route agent before roster hydration", async () => {
     const { context, request } = createContext({
       assistantAgentId: "roboclaw",
@@ -74,7 +111,7 @@ describe("new-session route catalog target", () => {
       agentsList: {
         defaultId: "roboclaw",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "roboclaw" }],
       },
     });
@@ -104,7 +141,7 @@ describe("new-session route catalog target", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       staleRosterClient: true,
@@ -119,7 +156,7 @@ describe("new-session route catalog target", () => {
     agentsState.agentsList = {
       defaultId: "roboclaw",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "roboclaw" }, { id: "research" }],
     };
     const data = await loadNewSessionData(context, "?agent=research&catalog=claude");

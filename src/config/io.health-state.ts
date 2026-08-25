@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 
 export type ConfigHealthFingerprint = {
   hash: string;
@@ -94,7 +95,10 @@ export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): Con
         ]),
       ),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof OpenClawStateOwnershipError) {
+      throw error;
+    }
     return {};
   }
 }
@@ -139,6 +143,9 @@ export function writeConfigHealthStateToStore(
       { env: resolveConfigHealthStateEnv(deps) },
     );
   } catch (error) {
+    if (error instanceof OpenClawStateOwnershipError) {
+      throw error;
+    }
     deps.logger.warn(`Config health-state write failed: ${formatErrorMessage(error)}`);
   }
 }

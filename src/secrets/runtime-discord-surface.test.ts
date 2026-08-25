@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import "./runtime-discord.test-support.ts";
 import {
   asConfig,
@@ -77,7 +77,7 @@ describe("secrets runtime snapshot discord surface", () => {
   it.skipIf(process.platform === "win32")(
     "resolves the implicit default token when named Discord accounts are added",
     async () => {
-      await withTempDir({ prefix: "openclaw-discord-secrets-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-discord-secrets-" }, async (root) => {
         const secretsPath = path.join(root, "secrets.json");
         await fs.writeFile(
           secretsPath,

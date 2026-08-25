@@ -1,6 +1,9 @@
 /** Handles informational commands such as /help, /commands, /tools, and exports. */
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
+import {
+  resolveEffectiveToolInventory,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+} from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import {
   listSkillCommandsForAgents,
@@ -170,6 +173,14 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       hasRepliedRef: undefined,
     });
+    const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
+      cfg: params.cfg,
+      agentId,
+      agentDir: sessionBound ? undefined : params.agentDir,
+      workspaceDir: params.workspaceDir,
+      modelProvider: params.provider,
+      modelId: params.model,
+    });
     const result = resolveEffectiveToolInventory({
       cfg: params.cfg,
       agentId,
@@ -178,6 +189,8 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentDir: sessionBound ? undefined : params.agentDir,
       modelProvider: params.provider,
       modelId: params.model,
+      modelApi: runtimeModelContext.modelApi,
+      runtimeModel: runtimeModelContext.runtimeModel,
       messageProvider: params.command.channel,
       senderId: params.command.senderId,
       senderName: params.ctx.SenderName,

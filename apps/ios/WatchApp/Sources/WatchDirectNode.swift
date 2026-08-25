@@ -688,7 +688,9 @@ final class WatchDirectNode {
 
     private func deviceStatus() -> OpenClawDeviceStatusPayload {
         let device = WKInterfaceDevice.current()
+        let wasMonitoring = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
+        defer { device.isBatteryMonitoringEnabled = wasMonitoring }
         let batteryState: OpenClawBatteryState = switch device.batteryState {
         case .charging: .charging
         case .full: .full

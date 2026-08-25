@@ -36,9 +36,13 @@ export async function ensureCuratedViewerRuntimeForTests(): Promise<void> {
 
   // The curated runtime is generated output. Source tests that serve viewer
   // assets need a clean-checkout fixture before the normal build hook runs.
-  await execFileAsync(process.execPath, ["scripts/build-diffs-viewer-runtime.mjs", "curated"], {
-    cwd: repoRoot,
-  });
+  await execFileAsync(
+    process.execPath,
+    ["--import", "tsx", "scripts/build-diffs-viewer-runtime.mts", "curated"],
+    {
+      cwd: repoRoot,
+    },
+  );
 }
 
 export async function createTempDiffRoot(prefix: string): Promise<{

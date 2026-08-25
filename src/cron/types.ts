@@ -1,12 +1,18 @@
-/** Cron scheduling, delivery, diagnostics, and store data contracts. */
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
+/** Cron scheduling, delivery, diagnostics, and store data contracts. */
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
-import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import type { CronRuntimeAuthority } from "./runtime-authority.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
+export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -145,6 +151,14 @@ export type CronFailureNotificationDelivery = {
   error?: string;
 };
 
+/** Resolved delivery state recorded with a completed cron run. */
+export type CronResolvedDeliveryState = {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+  failureNotification: CronFailureNotificationDelivery;
+};
+
 /** Human-readable delivery target preview for list/detail surfaces. */
 export type CronDeliveryPreview = {
   label: string;
@@ -202,7 +216,17 @@ export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" };
 
-/** Execution result persisted on cron state, run logs, and isolated turn results. */
+/** Closed producer-authored facts allowed in operator-facing failure notifications. */
+export type CronFailureNotificationDetail =
+  | { kind: "command-exit"; exitCode: number }
+  | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
+  | {
+      kind: "script-failure";
+      source: "payload" | "trigger";
+      code: CronTriggerFailureCode;
+    };
+
+/** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -211,6 +235,8 @@ export type CronRunOutcome = {
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
+  /** Transient internal detail; never project into persisted or public cron events. */
+  failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -231,6 +257,8 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** True when this runner belongs to a later candidate in the same fallback chain. */
+  isFallback?: boolean;
   phase?: CronAgentExecutionPhase;
   provider?: string;
   model?: string;
@@ -463,7 +491,7 @@ export type CronTriggerEvaluationResult =
   | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
-/** Fully persisted cron job with spec fields and mutable run state. */
+/** Public cron job contract with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
@@ -486,10 +514,29 @@ export type CronJob = CronJobBase<
   state: CronJobState;
 };
 
+/** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
+export type CronToolsAllowProvenance = {
+  version: 1;
+  source: "final-executable-surface";
+  /** Store-private creator origin; missing legacy facts normalize to unknown. */
+  callerOrigin?: CronScheduledToolCallerOrigin;
+};
+
+/** Persisted row shape; public Gateway and wire contracts use CronJob. */
+export type CronStoredJob = CronJob & {
+  /** Immutable creator provenance stamped by the trusted cron creation seam. */
+  createdActor?: SessionCreatedActor;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Runtime-private authority omitted from public Gateway and wire contracts. */
+  runtimeAuthority?: CronRuntimeAuthority;
+  /** Authority was explicitly cleared and must be reauthorized before app reuse. */
+  runtimeAuthorityRecoveryRequired?: true;
+};
+
 /** Versioned cron store file shape. */
 export type CronStoreFile = {
   version: 1;
-  jobs: CronJob[];
+  jobs: CronStoredJob[];
 };
 
 type CronJobStateInput = Partial<
@@ -521,6 +568,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "pacing"
+    | "trigger"
   >
 > & {
   displayName?: string | null;

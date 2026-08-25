@@ -82,11 +82,43 @@ describe("MCP App UI resources", () => {
         runtime(async () => ({ contents: [] })),
       ),
     ).toBeUndefined();
-    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:main:main")).toMatchObject({
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:main:main", "main"),
+    ).toMatchObject({
       html: "<html>demo</html>",
       runtime: sessionRuntime,
+      agentId: "main",
     });
-    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main")).toBeUndefined();
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main", "other"),
+    ).toBeUndefined();
+  });
+
+  it("isolates live views by agent when bare session keys collide", async () => {
+    const sessionRuntime = runtime(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>ops</html>",
+        },
+      ],
+    }));
+    sessionRuntime.sessionKey = "global";
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      agentId: "ops",
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "global", "ops")).toBeDefined();
+    expect(
+      getMcpAppViewLeaseForSession(result?.viewId ?? "", "global", "research"),
+    ).toBeUndefined();
   });
 
   it("keeps valid Apps when optional listing metadata fails", async () => {
@@ -162,7 +194,7 @@ describe("MCP App UI resources", () => {
     releases.slice(1).forEach((entry) => entry());
   });
 
-  it("normalizes CSP metadata before retaining the view", async () => {
+  it("normalizes CSP and snapshots the session deadline before retaining the view", async () => {
     const sessionRuntime = runtime(async () => ({
       contents: [
         {
@@ -180,6 +212,10 @@ describe("MCP App UI resources", () => {
         },
       ],
     }));
+    const peekCatalog = vi.fn(() => null);
+    sessionRuntime.peekCatalog = peekCatalog;
+    sessionRuntime.getServerRequestTimeoutMs = (serverName) =>
+      serverName === "demo" ? 120_000 : undefined;
     const result = await fetchMcpAppView({
       runtime: sessionRuntime,
       serverName: "demo",
@@ -194,6 +230,8 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
+    expect(view?.requestTimeoutMs).toBe(120_000);
+    expect(peekCatalog).not.toHaveBeenCalled();
     expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 

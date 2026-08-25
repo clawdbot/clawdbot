@@ -28,7 +28,7 @@ import {
   forceNpmInstallRecordRepair,
   isInstalledRecordMissingOnDisk,
   isTrustedOfficialInstallRecordForCandidate,
-  pathsEqual,
+  installPathsEqual,
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
@@ -46,6 +46,8 @@ type RepairMissingPluginInstallsResult = {
   warnings: string[];
   /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
+  /** Successful install-record or package repairs that invalidate retained metadata. */
+  pluginInventoryChanged?: true;
   /** User-facing details for repairs explicitly deferred until post-core convergence. */
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
@@ -352,7 +354,7 @@ async function repairMissingPluginInstalls(params: {
         replacementSucceeded &&
         removalPath &&
         (!installedRecord?.installPath ||
-          !pathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
+          !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
         try {
           await rm(removalPath, { recursive: true, force: true });
@@ -386,6 +388,7 @@ async function repairMissingPluginInstalls(params: {
     // a stale snapshot.
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
+  const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
   return {
     changes,
     warnings,
@@ -398,6 +401,7 @@ async function repairMissingPluginInstalls(params: {
           ),
         }
       : {}),
+    ...(pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>

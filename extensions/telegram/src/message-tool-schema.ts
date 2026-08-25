@@ -5,8 +5,18 @@ import { Type } from "typebox";
 export function createTelegramPollExtraToolSchemas() {
   return {
     pollDurationSeconds: optionalPositiveIntegerSchema(),
-    pollAnonymous: Type.Optional(Type.Boolean()),
-    pollPublic: Type.Optional(Type.Boolean()),
+    pollAnonymous: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+      }),
+    ),
+    pollPublic: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+      }),
+    ),
   };
 }
 

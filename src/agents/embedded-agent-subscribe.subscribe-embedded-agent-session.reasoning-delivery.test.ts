@@ -150,6 +150,75 @@ type AssistantMessageWithPhase = AssistantMessage & {
 };
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it("projects commentary deltas into one cumulative keyed preamble", async () => {
+    const onAgentEvent = vi.fn();
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onAgentEvent,
+      onBlockReply,
+      onPartialReply,
+    });
+    const commentaryMessage = {
+      role: "assistant",
+      api: "openai-responses",
+      content: [
+        {
+          type: "text",
+          text: "Checking files",
+          textSignature: JSON.stringify({ v: 1, id: "item-commentary", phase: "commentary" }),
+        },
+      ],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: commentaryMessage });
+    emit({
+      type: "message_update",
+      message: commentaryMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Checking ",
+        partial: commentaryMessage,
+      },
+    });
+    emit({
+      type: "message_update",
+      message: commentaryMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "files",
+        partial: commentaryMessage,
+      },
+    });
+    await subscription.waitForPendingEvents();
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "item-commentary",
+          phase: "update",
+          progressText: "Checking",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "item-commentary",
+          phase: "update",
+          progressText: "Checking files",
+        },
+      },
+    ]);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("suppresses commentary-phase assistant messages before tool use", () => {
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();
@@ -315,6 +384,104 @@ function postedText(onBlockReply: ReturnType<typeof vi.fn>): string {
 }
 
 describe("Chat Completions pre-tool narration", () => {
+  it("withholds reasoning-associated unphased text until terminal phase resolution", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-reasoning-pending",
+      onPartialReply,
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      openclawDelivery: { textPhaseRequiresTerminal: true },
+      content: [{ type: "text", text: "Interim text." }],
+    } as unknown as AssistantMessage;
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
+    });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    const terminalMessage = {
+      ...message,
+      content: [
+        {
+          type: "text",
+          text: "Interim text.",
+          textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Final text.",
+          textSignature: JSON.stringify({ v: 1, id: "final-0", phase: "final_answer" }),
+        },
+      ],
+    } as unknown as AssistantMessage;
+    emit({
+      type: "message_update",
+      message: terminalMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Final text." },
+    });
+    emit({ type: "message_end", message: terminalMessage });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(postedText(onBlockReply)).toBe("Final text.");
+  });
+
+  it("does not deliver interrupted text when producer phase resolution ends in error", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-reasoning-error",
+      onPartialReply,
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const pendingMessage = {
+      role: "assistant",
+      api: "openai-completions",
+      openclawDelivery: { textPhaseRequiresTerminal: true },
+      content: [{ type: "text", text: "Interim text." }],
+    } as unknown as AssistantMessage;
+    emit({ type: "message_start", message: pendingMessage });
+    emit({
+      type: "message_update",
+      message: pendingMessage,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        ...pendingMessage,
+        stopReason: "error",
+        errorMessage: "synthetic interrupted stream",
+        content: [
+          {
+            type: "text",
+            text: "Interim text.",
+            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+          },
+        ],
+      },
+    });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("withholds pre-tool narration from durable text_end block replies", () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
@@ -362,10 +529,12 @@ describe("Chat Completions pre-tool narration", () => {
   it("delivers permanently unphased ordinary text in prefix-before-suffix order", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
     subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-completions-answer",
       onBlockReply,
+      onPartialReply,
       blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 4, maxChars: 200 },
     });
@@ -384,6 +553,7 @@ describe("Chat Completions pre-tool narration", () => {
     emit({ type: "message_end", message: completionsAssistant("prefix suffix") });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    expect(onPartialReply).toHaveBeenCalledWith(expect.objectContaining({ text: "prefix" }));
     expect(postedText(onBlockReply)).toContain("prefix suffix");
   });
 

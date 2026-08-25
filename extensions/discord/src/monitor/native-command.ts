@@ -15,6 +15,10 @@ import {
   type ChatCommandDefinition,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
+import type {
+  PluginCommandCatalogDecision,
+  PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -80,21 +84,28 @@ import {
   truncateDiscordCommandDescription,
 } from "./native-command.options.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
-import type { DiscordCommandArgs, DiscordConfig } from "./native-command.types.js";
+import type {
+  DiscordCommandArgs,
+  DiscordConfig,
+  DiscordDispatchReplyFromConfig,
+} from "./native-command.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
 
+const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({ kind: "non-plugin" as const });
+
 export function createDiscordNativeCommand(params: {
-  command: NativeCommandSpec;
+  command: NativeCommandSpec | PluginCommandNativeCandidate;
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
 }): Command {
   const {
     command,
@@ -104,16 +115,16 @@ export function createDiscordNativeCommand(params: {
     sessionPrefix,
     ephemeralDefault,
     threadBindings,
+    dispatchReplyFromConfig,
   } = params;
   const fallbackCommandDefinition = createNativeCommandDefinition(command);
-  const pluginCommandMatch = nativeCommandRuntime.matchPluginCommand(`/${command.name}`);
-  const commandDefinition =
-    pluginCommandMatch !== null
-      ? fallbackCommandDefinition
-      : (findCommandByNativeName(command.name, "discord", {
-          includeBundledChannelFallback: false,
-        }) ?? fallbackCommandDefinition);
-  const argDefinitions = commandDefinition.args ?? command.args;
+  const pluginCommandCandidate = "prepareDispatch" in command ? command : undefined;
+  const commandDefinition = pluginCommandCandidate
+    ? fallbackCommandDefinition
+    : (findCommandByNativeName(command.name, "discord", {
+        includeBundledChannelFallback: false,
+      }) ?? fallbackCommandDefinition);
+  const argDefinitions = commandDefinition.args ?? ("args" in command ? command.args : undefined);
   const resolveCurrentConfig = () => getRuntimeConfigSnapshot() ?? cfg;
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
@@ -125,7 +136,7 @@ export function createDiscordNativeCommand(params: {
         cfg: resolveCurrentConfig(),
         discordConfig,
         accountId,
-        skipCommandOwnerAllowFrom: pluginCommandMatch !== null,
+        skipCommandOwnerAllowFrom: pluginCommandCandidate !== undefined,
       }),
     resolveChoiceContext: async (interaction) =>
       resolveDiscordNativeChoiceContext({
@@ -181,6 +192,9 @@ export function createDiscordNativeCommand(params: {
           } satisfies DiscordCommandArgs)
         : undefined;
       const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+      const preparedPluginCommand = pluginCommandCandidate?.prepareDispatch(
+        commandArgsWithRaw?.raw,
+      );
       await dispatchDiscordCommandInteraction({
         interaction,
         prompt,
@@ -195,6 +209,8 @@ export function createDiscordNativeCommand(params: {
         preferFollowUp: true,
         threadBindings,
         responseEphemeral: ephemeralDefault,
+        dispatchReplyFromConfig,
+        pluginCommandDispatch: preparedPluginCommand ?? NON_PLUGIN_COMMAND_DISPATCH,
       });
     }
   })();
@@ -213,6 +229,8 @@ async function dispatchDiscordCommandInteraction(params: {
   threadBindings: ThreadBindingManager;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
+  pluginCommandDispatch: PluginCommandCatalogDecision;
 }): Promise<DispatchDiscordCommandInteractionResult> {
   const {
     interaction,
@@ -227,6 +245,7 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     responseEphemeral,
     suppressReplies,
+    dispatchReplyFromConfig,
   } = params;
   const cfg = getRuntimeConfigSnapshot() ?? inputConfig;
   const commandName = command.nativeName ?? command.key;
@@ -460,13 +479,12 @@ async function dispatchDiscordCommandInteraction(params: {
     }
   }
 
-  const pluginMatch = nativeCommandRuntime.matchPluginCommand(prompt);
   if (
     commandOwnerAllowFrom &&
     !commandOwnerAccessAllowed &&
     !commandsAllowFromAccess.allowed &&
     commandName !== "status" &&
-    !pluginMatch
+    params.pluginCommandDispatch.kind !== "plugin"
   ) {
     await respond("You are not authorized to use this command.", { ephemeral: true });
     return { accepted: false };
@@ -521,6 +539,7 @@ async function dispatchDiscordCommandInteraction(params: {
         accountId,
         sessionPrefix,
         threadBindings,
+        dispatchReplyFromConfig,
       },
       safeInteractionCall: safeDiscordInteractionCall,
       dispatchCommandInteraction: dispatchDiscordCommandInteraction,
@@ -545,7 +564,7 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: true };
   }
 
-  if (pluginMatch && commandName !== "status") {
+  if (params.pluginCommandDispatch.kind === "plugin" && commandName !== "status") {
     if (suppressReplies) {
       await settleDiscordInteractionWithoutVisibleReply(interaction);
       return { accepted: true };
@@ -562,9 +581,7 @@ async function dispatchDiscordCommandInteraction(params: {
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
-    const pluginReply = await nativeCommandRuntime.executePluginCommand({
-      command: pluginMatch.command,
-      args: pluginMatch.args,
+    const pluginReply = await params.pluginCommandDispatch.execute({
       senderId: sender.id,
       channel: "discord",
       channelId,
@@ -703,7 +720,7 @@ async function dispatchDiscordCommandInteraction(params: {
     return directStatusResult;
   }
 
-  await dispatchDiscordNativeAgentReply({
+  const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
     cfg,
     discordConfig,
     accountId,
@@ -715,10 +732,12 @@ async function dispatchDiscordCommandInteraction(params: {
     preferFollowUp,
     responseEphemeral,
     suppressReplies,
+    dispatchReplyFromConfig,
     log,
+    pluginCommandDispatch: params.pluginCommandDispatch,
   });
 
-  return { accepted: true, effectiveRoute };
+  return { accepted: dispatched, effectiveRoute, hiddenFinalReply };
 }
 
 export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {

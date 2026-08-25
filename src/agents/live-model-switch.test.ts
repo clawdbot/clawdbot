@@ -35,12 +35,12 @@ vi.mock("../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
-    patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+    patchSessionEntryCore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
   };
 });
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+  resolveSessionStorePathCore: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
 let mod: typeof import("./live-model-switch.js");
@@ -191,6 +191,31 @@ describe("live model switch", () => {
       sessionKey: "main",
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
+    });
+  });
+
+  it.each([
+    {
+      name: "legacy source-less user",
+      authProfileOverrideCompactionCount: undefined,
+      expectedSource: "user",
+    },
+    {
+      name: "legacy source-less automatic",
+      authProfileOverrideCompactionCount: 0,
+      expectedSource: "auto",
+    },
+  ])("projects $name auth provenance", ({ authProfileOverrideCompactionCount, expectedSource }) => {
+    expect(
+      resolvePendingSelection({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "profile-gpt",
+        authProfileOverrideCompactionCount,
+      }),
+    ).toMatchObject({
+      authProfileId: "profile-gpt",
+      authProfileIdSource: expectedSource,
     });
   });
 

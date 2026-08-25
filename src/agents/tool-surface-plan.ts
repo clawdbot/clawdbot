@@ -5,7 +5,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
-import { normalizeToolName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
@@ -23,9 +23,9 @@ type AgentToolSurfacePlanParams = {
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
-  skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
+  forceDirectTools?: boolean;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
@@ -42,25 +42,26 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     getActiveAgentRingZeroTools().length === 0 &&
     params.disableTools !== true &&
     !params.isRawModelRun &&
-    // Proposal-only workshop runs are deliberately narrow single-tool runs;
-    // code-mode indirection and tool-search catalogs are pure overhead.
-    params.skillWorkshopProposalOnly !== true &&
     params.toolsAllow?.length !== 0 &&
     // Completion-private replies must never expose catalog controls that can
     // invoke tools beyond their single directly visible message capability.
     !(
       params.forceDirectMessageTool &&
       params.toolsAllow?.length === 1 &&
-      normalizeToolName(params.toolsAllow[0] ?? "") === "message"
+      normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message"
     );
   const codeModeControlsEnabled =
     toolsAvailable &&
+    params.forceDirectTools !== true &&
     // Restart recovery continues one provider turn. Keep its original control
     // schema even when the reloaded config disables Code Mode for new turns.
     (params.forceCodeModeControls === true ||
       isCodeModeEngagedForModel(codeModeConfig, params.model));
   const toolSearchControlsEnabled =
-    toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
+    toolsAvailable &&
+    params.forceDirectTools !== true &&
+    !codeModeControlsEnabled &&
+    toolSearchConfig.enabled;
   return {
     codeModeControlsEnabled,
     toolSearchControlsEnabled,

@@ -568,12 +568,14 @@ async function resolveSynologyReplyDeliveryUserId(params: {
 async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
-}): Promise<boolean> {
+  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
+}) {
   const auth = await authorizeUserForDmWithIngress({
     accountId: params.account.accountId,
     userId: params.payload.user_id,
     dmPolicy: params.account.dmPolicy,
     allowedUserIds: params.account.allowedUserIds,
+    contextBinding: params.contextBinding,
   });
   if (!auth.senderAccess.allowed) {
     throw new SynologyIngressPermanentError(
@@ -581,7 +583,7 @@ async function authorizeClaimedSynologyWebhook(params: {
       `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
     );
   }
-  return auth.senderAccess.allowed;
+  return auth;
 }
 
 export async function processSynologyWebhookIngressEvent(params: {
@@ -601,10 +603,15 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const commandAuthorized = await authorizeClaimedSynologyWebhook({
-    account: params.account,
-    payload,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await authorizeClaimedSynologyWebhook({
+      account: params.account,
+      payload,
+      contextBinding,
+    });
+  const channelIngress = await resolveChannelIngress();
   const body = sanitizeSynologyWebhookText(payload);
   if (!body) {
     return;
@@ -621,12 +628,15 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
+      channelIngress,
+      resolveChannelIngress,
+      messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
-      commandAuthorized,
+      commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },
     params.lifecycle,

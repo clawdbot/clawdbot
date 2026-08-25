@@ -75,7 +75,7 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
         model: req.model,
         timeoutMs: req.timeoutMs,
         capability: "video",
-        outputKinds: ["gifs", "videos"],
+        outputKinds: ["images", "gifs", "videos"],
         inputImage: toComfyInputImage(req.inputImages?.[0]),
       });
 

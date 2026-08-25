@@ -4,11 +4,13 @@
  */
 import type { Command } from "commander";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
+  printBrowserJsonResult as printJsonResult,
+  resolveBrowserProfileQuery as resolveProfileQuery,
+  runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import {
@@ -36,28 +38,6 @@ type BrowserDoctorCheck = {
   detail?: string;
   warning?: boolean;
 };
-
-function resolveProfileQuery(
-  profile?: string,
-  extra?: Record<string, string | number | boolean | undefined>,
-) {
-  const query: Record<string, string | number | boolean | undefined> = {};
-  if (profile) {
-    query.profile = profile;
-  }
-  if (extra) {
-    Object.assign(query, extra);
-  }
-  return Object.keys(query).length > 0 ? query : undefined;
-}
-
-function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
-  if (!parent?.json) {
-    return false;
-  }
-  defaultRuntime.writeJson(payload);
-  return true;
-}
 
 function sanitizeTableCell(value: string): string {
   // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
@@ -122,13 +102,6 @@ async function runBrowserToggle(
   const name = status.profile ?? "openclaw";
   const headlessLabel = params.path === "/start" && status.headless ? " (headless)" : "";
   defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
-}
-
-function runBrowserCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
 }
 
 function parseTabIndex(value: string): number {
@@ -456,15 +429,11 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await callBrowserRequest<BrowserResetProfileResult>(
-          parent,
-          {
-            method: "POST",
-            path: "/reset-profile",
-            query: resolveProfileQuery(profile),
-          },
-          { timeoutMs: 20000 },
-        );
+        const result = await callBrowserRequest<BrowserResetProfileResult>(parent, {
+          method: "POST",
+          path: "/reset-profile",
+          query: resolveProfileQuery(profile),
+        });
         if (printJsonResult(parent, result)) {
           return;
         }
@@ -844,21 +813,17 @@ export function registerBrowserManageCommands(
           ) {
             throw new Error("--driver must be openclaw or existing-session");
           }
-          const result = await callBrowserRequest<BrowserCreateProfileResult>(
-            parent,
-            {
-              method: "POST",
-              path: "/profiles/create",
-              body: {
-                name: opts.name,
-                color: opts.color,
-                cdpUrl: opts.cdpUrl,
-                userDataDir: opts.userDataDir,
-                driver: opts.driver === "existing-session" ? "existing-session" : undefined,
-              },
+          const result = await callBrowserRequest<BrowserCreateProfileResult>(parent, {
+            method: "POST",
+            path: "/profiles/create",
+            body: {
+              name: opts.name,
+              color: opts.color,
+              cdpUrl: opts.cdpUrl,
+              userDataDir: opts.userDataDir,
+              driver: opts.driver === "existing-session" ? "existing-session" : undefined,
             },
-            { timeoutMs: 10_000 },
-          );
+          });
           if (printJsonResult(parent, result)) {
             return;
           }
@@ -881,14 +846,10 @@ export function registerBrowserManageCommands(
     .action(async (opts: { name: string }, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const result = await callBrowserRequest<BrowserDeleteProfileResult>(
-          parent,
-          {
-            method: "DELETE",
-            path: `/profiles/${encodeURIComponent(opts.name)}`,
-          },
-          { timeoutMs: 20_000 },
-        );
+        const result = await callBrowserRequest<BrowserDeleteProfileResult>(parent, {
+          method: "DELETE",
+          path: `/profiles/${encodeURIComponent(opts.name)}`,
+        });
         if (printJsonResult(parent, result)) {
           return;
         }

@@ -1,14 +1,12 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
-import * as providerDiscoveryModule from "./provider-discovery.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
@@ -91,25 +89,6 @@ type NormalizePluginDiscoveryResultCase = {
   expected: Record<string, unknown>;
 };
 
-describe("resolveInstalledPluginProviderContributionIds", () => {
-  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
-    const callerPaths = [
-      "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.row-sources.ts",
-    ];
-
-    for (const callerPath of callerPaths) {
-      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
-        "resolvePluginDiscoveryProviders",
-      );
-    }
-  });
-
-  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
-    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-});
-
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -130,6 +109,51 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
     },
   ] as const)("$name", ({ providers, expected }) => {
     expectGroupedProviderIds(providers, expected);
+  });
+});
+
+describe("runProviderCatalog", () => {
+  it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
+    const outcomes: Array<{
+      provider: string;
+      profileId?: string;
+      status: "ready" | "auth-rejected" | "unavailable";
+    }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async () => {
+          await Promise.resolve();
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:chatgpt",
+                status: "auth-rejected",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
   });
 });
 

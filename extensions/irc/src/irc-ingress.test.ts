@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -45,14 +46,6 @@ function startIngress(queue: IrcIngressQueue, dispatch: IrcIngressDispatch) {
   });
   ingress.start();
   return ingress;
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
 }
 
 afterEach(() => {
@@ -193,8 +186,8 @@ describe("IRC durable ingress", () => {
 
   it("waits for an in-flight admission before stop returns", async () => {
     await withQueue(async (queue) => {
-      const admissionStored = createDeferred();
-      const releaseAdmission = createDeferred();
+      const admissionStored = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
       const enqueue = queue.enqueue.bind(queue);
       queue.enqueue = async (...args) => {
         const result = await enqueue(...args);
@@ -223,8 +216,8 @@ describe("IRC durable ingress", () => {
 
   it("quiesces an active pump while paused and resumes without charging the next event", async () => {
     await withQueue(async (queue) => {
-      const dispatchStarted = createDeferred();
-      const releaseDispatch = createDeferred();
+      const dispatchStarted = createDeferred<void>();
+      const releaseDispatch = createDeferred<void>();
       const dispatch = vi.fn<IrcIngressDispatch>(async (message, lifecycle) => {
         if (message.messageId.endsWith("000000000001")) {
           dispatchStarted.resolve();
@@ -282,8 +275,8 @@ describe("IRC durable ingress", () => {
 
   it("does not create a drain when stop wins an async prune race", async () => {
     await withQueue(async (queue) => {
-      const pruneStarted = createDeferred();
-      const releasePrune = createDeferred();
+      const pruneStarted = createDeferred<void>();
+      const releasePrune = createDeferred<void>();
       const prune = queue.prune.bind(queue);
       queue.prune = async (...args) => {
         pruneStarted.resolve();

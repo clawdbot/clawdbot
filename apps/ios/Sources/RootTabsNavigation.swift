@@ -27,6 +27,7 @@ extension RootTabs {
         case dreaming
         case usage
         case cron
+        case desktop
         case terminal
         case docs
         case settings
@@ -50,6 +51,7 @@ extension RootTabs {
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")
             case .cron: String(localized: "Automations")
+            case .desktop: String(localized: "Desktop")
             case .terminal: String(localized: "Terminal")
             case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")
@@ -78,6 +80,7 @@ extension RootTabs {
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .desktop: "display"
             case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
@@ -92,7 +95,7 @@ extension RootTabs {
             case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .files,
                  .dreaming,
-                 .usage, .cron, .terminal, .settings, .docs:
+                 .usage, .cron, .desktop, .terminal, .settings, .docs:
                 nil
             }
         }
@@ -101,6 +104,10 @@ extension RootTabs {
     enum SidebarLayoutMode: Equatable {
         case drawer
         case split
+    }
+
+    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
+        windowSize ?? contentSize
     }
 
     static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
@@ -138,10 +145,6 @@ extension RootTabs {
         return max(0, min(sidebarWidth, dragOffset))
     }
 
-    static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
-        !isSidebarVisible
-    }
-
     static func visibleSettingsRoute(
         navigationPath: [SettingsRoute],
         baseRoute: SettingsRoute?) -> SettingsRoute?
@@ -157,7 +160,7 @@ extension RootTabs {
         case .split:
             true
         case .drawer:
-            self.shouldShowSidebarRevealControl(isSidebarVisible: isSidebarVisible)
+            !isSidebarVisible
         }
     }
 
@@ -234,6 +237,7 @@ extension RootTabs {
         .instances,
         .files,
         .dreaming,
+        .desktop,
         .terminal,
         .docs,
     ]

@@ -1,6 +1,7 @@
 // Coordinates an atomic, refuse-only host suspension preparation lease.
 import { randomUUID } from "node:crypto";
 import type {
+  GatewaySuspendPrepareParams,
   GatewaySuspendPrepareResult as GatewaySuspendPrepareWireResult,
   GatewaySuspendResumeResult as GatewaySuspendResumeWireResult,
   GatewaySuspendStatusResult as GatewaySuspendStatusWireResult,
@@ -16,6 +17,8 @@ import {
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
 const GATEWAY_SUSPEND_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
+
+type GatewaySuspendTerminalPolicy = NonNullable<GatewaySuspendPrepareParams["terminalPolicy"]>;
 
 type GatewaySchedulerRecoveryResult = {
   status: "recovering";
@@ -49,6 +52,7 @@ type GatewaySuspendCoordinatorEntryBase = {
 type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   kind: "held";
   requestId: string;
+  terminalPolicy: GatewaySuspendTerminalPolicy;
   suspensionId: string;
   expiresAtMs: number;
   snapshot: GatewayActiveWorkSnapshot;
@@ -218,6 +222,7 @@ function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
 /** Acquire, inspect, and either roll back immediately or hold an idle fence. */
 export function prepareGatewaySuspend(params: {
   requestId: string;
+  terminalPolicy?: GatewaySuspendTerminalPolicy;
   pauseScheduling: () => void;
   resumeScheduling: () => void;
   inspect?: Partial<GatewayActiveWorkInspectors>;
@@ -225,6 +230,10 @@ export function prepareGatewaySuspend(params: {
   createSuspensionId?: () => string;
   warn?: (message: string) => void;
 }): GatewaySuspendPrepareResult {
+  const terminalPolicy = params.terminalPolicy ?? "preserve";
+  const activeWorkOptions = {
+    ignoreTerminalSessions: terminalPolicy === "terminate",
+  };
   const nowMs = (params.nowMs ?? Date.now)();
   const current = COORDINATOR_STATE.current;
   if (current?.kind === "recovering") {
@@ -235,7 +244,7 @@ export function prepareGatewaySuspend(params: {
     return schedulerRecoveryResult();
   }
   if (existing) {
-    if (existing.requestId !== params.requestId) {
+    if (existing.requestId !== params.requestId || existing.terminalPolicy !== terminalPolicy) {
       return { status: "conflict", expiresAtMs: existing.expiresAtMs };
     }
     existing.nowMs = params.nowMs ?? Date.now;
@@ -264,7 +273,7 @@ export function prepareGatewaySuspend(params: {
     COORDINATOR_STATE.retiredForLifecycleReset = activeEntry;
   });
   if (!admission) {
-    const snapshot = createGatewayActiveWorkSnapshot(params.inspect);
+    const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
     return {
       status: "busy",
       reason: "gateway-draining",
@@ -279,7 +288,7 @@ export function prepareGatewaySuspend(params: {
   try {
     params.pauseScheduling();
     schedulingPaused = true;
-    const snapshot = createGatewayActiveWorkSnapshot(params.inspect);
+    const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
     if (!snapshot.idle) {
       const resumed = resumeSchedulingBeforeReopen({
         owner,
@@ -309,6 +318,7 @@ export function prepareGatewaySuspend(params: {
     const held = armExpiry({
       owner,
       requestId: params.requestId,
+      terminalPolicy,
       suspensionId,
       expiresAtMs,
       snapshot,

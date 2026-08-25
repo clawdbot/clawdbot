@@ -7,8 +7,82 @@ describe("extractModelDirective", () => {
     it("extracts /model with argument", () => {
       const result = extractModelDirective("/model gpt-5");
       expect(result.hasDirective).toBe(true);
+      expect(result.source).toBe("model");
       expect(result.rawModel).toBe("gpt-5");
+      expect(result.sessionOnly).toBe(false);
       expect(result.cleaned).toBe("");
+    });
+
+    it("extracts a session-only selection with -s", () => {
+      const result = extractModelDirective("/model anthropic/claude-opus-4-6 -s");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("");
+    });
+
+    it("extracts a session-only default reset with --session", () => {
+      const result = extractModelDirective("/model default --session");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("default");
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("");
+    });
+
+    it.each(["-slow", "--sessional"])(
+      "does not treat partial session option %s as session-only",
+      (option) => {
+        const result = extractModelDirective(`/model anthropic/claude-opus-4-6 ${option}`);
+        expect(result.hasDirective).toBe(true);
+        expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
+        expect(result.sessionOnly).toBe(false);
+        expect(result.cleaned).toBe(option);
+      },
+    );
+
+    it("keeps here as a model name and preserves following message text", () => {
+      const result = extractModelDirective("please /model here continue");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("here");
+      expect(result.sessionOnly).toBe(false);
+      expect(result.cleaned).toBe("please continue");
+    });
+
+    it("parses a leading -s as a model-less session option", () => {
+      const result = extractModelDirective("/model -s opus");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("opus");
+    });
+
+    it.each(["-s", "--session"])("parses model-less session option %s", (option) => {
+      const result = extractModelDirective(`/model ${option}`);
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("");
+    });
+
+    it.each(["--runtime codex", "runtime=codex", "harness=codex"])(
+      "parses model-less runtime option %s",
+      (option) => {
+        const result = extractModelDirective(`/model ${option}`);
+        expect(result.hasDirective).toBe(true);
+        expect(result.rawModel).toBeUndefined();
+        expect(result.rawRuntime).toBe("codex");
+        expect(result.sessionOnly).toBe(false);
+        expect(result.cleaned).toBe("");
+      },
+    );
+
+    it("does not consume a reserved option as a missing runtime value", () => {
+      const result = extractModelDirective("/model --runtime --session");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.rawRuntime).toBeUndefined();
+      expect(result.sessionOnly).toBe(false);
+      expect(result.cleaned).toBe("--runtime --session");
     });
 
     it("does not treat /models as a /model directive", () => {
@@ -30,12 +104,43 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
     });
 
-    it("extracts /model with a runtime override", () => {
-      const result = extractModelDirective("/model anthropic/claude-opus-4-7 --runtime claude-cli");
+    it.each([
+      "--runtime claude-cli -s",
+      "-s --runtime claude-cli",
+      "runtime= claude-cli -s",
+      "runtime=claude-cli -s",
+      "-s runtime= claude-cli",
+      "-s runtime=claude-cli",
+      "harness= claude-cli -s",
+      "harness=claude-cli -s",
+      "-s harness= claude-cli",
+      "-s harness=claude-cli",
+    ])("extracts runtime and session options from %s", (options) => {
+      const result = extractModelDirective(`/model anthropic/claude-opus-4-7 ${options}`);
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("anthropic/claude-opus-4-7");
       expect(result.rawRuntime).toBe("claude-cli");
+      expect(result.sessionOnly).toBe(true);
       expect(result.cleaned).toBe("");
+    });
+
+    it("preserves duplicate runtime and session options for validation", () => {
+      const runtime = extractModelDirective(
+        "/model openai/gpt-5.6-luna --runtime codex --runtime acp",
+      );
+      expect(runtime.rawRuntime).toBe("codex");
+      expect(runtime.cleaned).toBe("--runtime acp");
+
+      const session = extractModelDirective("/model openai/gpt-5.6-luna -s -s");
+      expect(session.sessionOnly).toBe(true);
+      expect(session.cleaned).toBe("-s");
+    });
+
+    it("keeps partial runtime option names as ordinary text", () => {
+      const result = extractModelDirective("/model openai/gpt-5.6-luna runtime-extra=codex");
+      expect(result.rawModel).toBe("openai/gpt-5.6-luna");
+      expect(result.rawRuntime).toBeUndefined();
+      expect(result.cleaned).toBe("runtime-extra=codex");
     });
 
     it("extracts /model with profile override", () => {
@@ -100,18 +205,84 @@ describe("extractModelDirective", () => {
         aliases: ["gpt", "sonnet", "opus"],
       });
       expect(result.hasDirective).toBe(true);
+      expect(result.source).toBe("alias");
       expect(result.rawModel).toBe("gpt");
+      expect(result.rawRuntime).toBeUndefined();
+      expect(result.sessionOnly).toBe(false);
       expect(result.cleaned).toBe("");
     });
 
-    it("recognizes /gpt: as model directive when alias is configured", () => {
-      const result = extractModelDirective("/gpt:", {
+    it.each(["-s", "--session"])("applies alias session scope from %s", (option) => {
+      const result = extractModelDirective(`/gpt ${option}`, {
         aliases: ["gpt", "sonnet", "opus"],
       });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("gpt");
+      expect(result.sessionOnly).toBe(true);
       expect(result.cleaned).toBe("");
     });
+
+    it.each(["--runtime codex", "runtime=codex", "harness=codex"])(
+      "applies runtime-only alias option %s",
+      (option) => {
+        const result = extractModelDirective(`/gpt ${option}`, {
+          aliases: ["gpt"],
+        });
+        expect(result.rawModel).toBe("gpt");
+        expect(result.rawRuntime).toBe("codex");
+        expect(result.sessionOnly).toBe(false);
+        expect(result.cleaned).toBe("");
+      },
+    );
+
+    it.each(["--runtime codex -s", "-s --runtime codex"])(
+      "applies runtime and session alias options from %s",
+      (options) => {
+        const result = extractModelDirective(`/gpt ${options}`, {
+          aliases: ["gpt"],
+        });
+        expect(result.rawModel).toBe("gpt");
+        expect(result.rawRuntime).toBe("codex");
+        expect(result.sessionOnly).toBe(true);
+        expect(result.cleaned).toBe("");
+      },
+    );
+
+    it("recognizes alias options after an optional colon", () => {
+      const result = extractModelDirective("/gpt: --session", {
+        aliases: ["gpt", "sonnet", "opus"],
+      });
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt");
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("");
+    });
+
+    it("preserves duplicate alias runtime and session options for validation", () => {
+      const runtime = extractModelDirective("/gpt --runtime codex --runtime acp", {
+        aliases: ["gpt"],
+      });
+      expect(runtime.rawRuntime).toBe("codex");
+      expect(runtime.cleaned).toBe("--runtime acp");
+
+      const session = extractModelDirective("/gpt -s --session", {
+        aliases: ["gpt"],
+      });
+      expect(session.sessionOnly).toBe(true);
+      expect(session.cleaned).toBe("--session");
+    });
+
+    it.each(["-slow", "--sessional"])(
+      "does not treat partial alias session option %s as session-only",
+      (option) => {
+        const result = extractModelDirective(`/gpt ${option}`, {
+          aliases: ["gpt"],
+        });
+        expect(result.rawModel).toBe("gpt");
+        expect(result.sessionOnly).toBe(false);
+        expect(result.cleaned).toBe(option);
+      },
+    );
 
     it("recognizes /sonnet as model directive", () => {
       const result = extractModelDirective("/sonnet", {
@@ -159,6 +330,16 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("haiku");
     });
 
+    it("attributes a literal /model directive when alias text follows it", () => {
+      const result = extractModelDirective("/model status /gpt", {
+        aliases: ["gpt"],
+      });
+      expect(result.hasDirective).toBe(true);
+      expect(result.source).toBe("model");
+      expect(result.rawModel).toBe("status");
+      expect(result.cleaned).toBe("/gpt");
+    });
+
     it("handles empty aliases array", () => {
       const result = extractModelDirective("/gpt", { aliases: [] });
       expect(result.hasDirective).toBe(false);
@@ -178,11 +359,13 @@ describe("extractModelDirective", () => {
     });
 
     it("handles alias with special regex characters", () => {
-      const result = extractModelDirective("/test.alias", {
+      const result = extractModelDirective("/test.alias --session", {
         aliases: ["test.alias"],
       });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("test.alias");
+      expect(result.sessionOnly).toBe(true);
+      expect(result.cleaned).toBe("");
     });
 
     it("does not match partial alias", () => {

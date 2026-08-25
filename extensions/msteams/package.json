@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "repository": {
     "type": "git",
@@ -9,21 +9,20 @@
   "type": "module",
   "dependencies": {
     "@azure/identity": "4.13.1",
-    "@microsoft/teams.api": "2.0.14",
-    "@microsoft/teams.apps": "2.0.14",
+    "@microsoft/teams.api": "2.0.15",
+    "@microsoft/teams.apps": "2.0.15",
     "express": "5.2.1",
-    "typebox": "1.3.6",
+    "typebox": "1.3.15",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@microsoft/teams.common": "2.0.14",
+    "@microsoft/teams.common": "2.0.15",
     "@openclaw/plugin-sdk": "workspace:*",
-    "jose": "6.2.4",
-    "jwks-rsa": "4.1.0",
+    "jose": "6.2.9",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -61,7 +60,9 @@
         "groupAllowFromFallbackToAllowFrom": true,
         "warnOnEmptyGroupSenderAllowlist": true
       },
-      "setup": { "fields": [] }
+      "setup": {
+        "fields": []
+      }
     },
     "install": {
       "npmSpec": "@openclaw/msteams",
@@ -69,10 +70,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2",
+      "openclawVersion": "2026.8.1",
       "runtimeFormat": "cjs"
     },
     "release": {

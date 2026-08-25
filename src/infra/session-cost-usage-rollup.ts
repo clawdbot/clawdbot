@@ -36,12 +36,8 @@ type SessionUsageLatencyAggregate = {
   sum: number;
 };
 
-type SessionUsageRollupBucket = {
+type SessionUsageRollupBucket = SessionUsageUntimestampedRollup & {
   timestampMs: number;
-  totals: CostUsageTotals;
-  messageCounts: SessionMessageCounts;
-  tools: Array<{ name: string; count: number }>;
-  models: SessionModelUsage[];
   latency: SessionUsageLatencyAggregate;
 };
 
@@ -224,10 +220,7 @@ function addMessageContribution(
 function createBucket(timestampMs: number): SessionUsageRollupBucket {
   return {
     timestampMs,
-    totals: createEmptyCostUsageTotals(),
-    messageCounts: emptyMessageCounts(),
-    tools: [],
-    models: [],
+    ...createUntimestampedRollup(),
     latency: createLatencyAggregate(),
   };
 }
@@ -237,23 +230,11 @@ export function appendSessionUsageRollupContribution(
   contribution: SessionUsageRollupContribution,
 ): void {
   const timestamp = contribution.timestamp;
-  if (timestamp === undefined) {
-    addMessageContribution(rollup.untimestamped.messageCounts, contribution);
-    for (const toolName of contribution.toolNames) {
-      incrementTool(rollup.untimestamped.tools, toolName);
-    }
-    if (contribution.usageTotals) {
-      addCostUsageTotals(rollup.untimestamped.totals, contribution.usageTotals);
-      addModelUsage(
-        rollup.untimestamped.models,
-        contribution.provider,
-        contribution.model,
-        contribution.usageTotals,
-      );
-    }
-    return;
-  }
-  const bucket = (rollup.buckets[String(timestamp)] ??= createBucket(timestamp));
+  const timedBucket =
+    timestamp === undefined
+      ? undefined
+      : (rollup.buckets[String(timestamp)] ??= createBucket(timestamp));
+  const bucket = timedBucket ?? rollup.untimestamped;
   addMessageContribution(bucket.messageCounts, contribution);
   for (const toolName of contribution.toolNames) {
     incrementTool(bucket.tools, toolName);
@@ -267,20 +248,23 @@ export function appendSessionUsageRollupContribution(
       contribution.usageTotals,
     );
   }
+  if (!timedBucket) {
+    return;
+  }
   if (contribution.role === "assistant") {
     const sourceUserTimestamp =
       contribution.durationMs === undefined ? rollup.lastUserTimestamp : undefined;
     const latencyMs =
       contribution.durationMs ??
       (sourceUserTimestamp !== undefined
-        ? Math.max(0, timestamp - sourceUserTimestamp)
+        ? Math.max(0, timedBucket.timestampMs - sourceUserTimestamp)
         : undefined);
     if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= MAX_LATENCY_MS) {
-      addLatencyValue(bucket.latency, latencyMs);
+      addLatencyValue(timedBucket.latency, latencyMs);
     }
   }
   if (contribution.role === "user") {
-    rollup.lastUserTimestamp = timestamp;
+    rollup.lastUserTimestamp = timedBucket.timestampMs;
   }
 }
 

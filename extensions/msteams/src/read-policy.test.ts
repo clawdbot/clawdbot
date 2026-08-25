@@ -45,6 +45,78 @@ beforeEach(() => {
 });
 
 describe("Microsoft Teams read policy", () => {
+  it.each([
+    { groupPolicy: undefined, allowed: false },
+    { groupPolicy: "allowlist", allowed: false },
+    { groupPolicy: "open", allowed: true },
+  ])("applies the $groupPolicy group policy to unconfigured channel targets", async (testCase) => {
+    const cfg = {
+      channels: {
+        msteams: testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {},
+      },
+    } as OpenClawConfig;
+    const target = "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2";
+    const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
+
+    if (testCase.allowed) {
+      await expect(result).resolves.toBe(target);
+    } else {
+      await expect(result).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    }
+    expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "default sender-only policy", groupPolicy: undefined, configuredRoute: false },
+    { name: "explicit sender-only allowlist", groupPolicy: "allowlist", configuredRoute: false },
+    { name: "configured team/channel route", groupPolicy: "allowlist", configuredRoute: true },
+    { name: "explicit open group policy", groupPolicy: "open", configuredRoute: false },
+  ])("recovers existing groupAllowFrom configurations with $name", async (testCase) => {
+    const teamId = "19:team@thread.tacv2";
+    const channelId = "19:roadmap@thread.tacv2";
+    const target = `11111111-1111-1111-1111-111111111111/${channelId}`;
+    const cfg = {
+      channels: {
+        msteams: {
+          groupAllowFrom: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+          ...(testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {}),
+          ...(testCase.configuredRoute
+            ? { teams: { [teamId]: { channels: { [channelId]: {} } } } }
+            : {}),
+        },
+      },
+    } as OpenClawConfig;
+
+    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
+      items: [{ id: teamId }, { id: channelId }],
+      truncated: false,
+    });
+
+    const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
+    if (testCase.configuredRoute || testCase.groupPolicy === "open") {
+      await expect(result).resolves.toBe(target);
+      return;
+    }
+
+    await expect(result).rejects.toThrow(
+      'Microsoft Teams read target is not allowed. Configure channels.msteams.teams.<team>.channels for this channel, or deliberately set channels.msteams.groupPolicy to "open".',
+    );
+    expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
+  });
+
+  it("keeps unresolved channel targets on the generic authorization error", async () => {
+    const cfg = {
+      channels: {
+        msteams: { groupAllowFrom: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"] },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      assertMSTeamsReadTargetAllowed({ cfg, ctx, target: "Product/Roadmap" }),
+    ).rejects.toThrow(/^Microsoft Teams read target is not allowed\.$/);
+    expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
+  });
+
   it("uses startup-equivalent resolved channel policy for stable action targets", async () => {
     const cfg = {
       channels: {

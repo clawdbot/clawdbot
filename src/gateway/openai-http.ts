@@ -9,13 +9,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -54,7 +57,10 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -63,13 +69,19 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  isFailedOpenAiAgentRun,
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+} from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
   toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -78,6 +90,7 @@ type OpenAiHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type OpenAiChatMessage = {
@@ -640,12 +653,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
@@ -989,13 +996,41 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
       return true;
     }
     throw err;
+  }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
+      ? { actor: { kind: "system" as const } }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
+  }
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId,
+    sessionKey,
+    requestAuth: handled.requestAuth,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
+    return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
@@ -1076,18 +1111,33 @@ export async function handleOpenAiHttpRequest(
     abortSignal: abortController.signal,
     streamParams,
   });
+  const gatewayCommandInput = opts.resolveGatewayContext
+    ? {
+        ...commandInput,
+        onAdmittedRunContext: (context: AdmittedRunContext) =>
+          bindGatewayContextResolver(context, opts.resolveGatewayContext),
+      }
+    : commandInput;
 
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
 
       if (abortController.signal.aborted) {
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (isFailedOpenAiAgentRun(result)) {
+        throw new Error("agent run failed");
+      }
       const usage = resolveChatCompletionUsage(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // `tool_choice` is an HTTP client-tool contract. The provider may still
@@ -1362,10 +1412,21 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
       resultResolved = true;
 
       if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        finishStreamWithError({ message: "internal error", type: "api_error" });
         return;
       }
 

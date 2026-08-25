@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -7,14 +6,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const OnboardingRecommendationMatchSchema = z.object({
   appLabel: z.string(),
@@ -114,40 +112,38 @@ function readOnboardingRecommendations(
   configKey: string,
   options: OpenClawStateDatabaseOptions = {},
 ): OnboardingRecommendationsRecord | null {
-  const pathname = options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
-  if (!existsSync(pathname)) {
-    return null;
-  }
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
-    if (!tableExists(database, "onboarding_recommendations")) {
-      return null;
-    }
-    const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database);
-    const row = executeSqliteQueryTakeFirstSync(
-      database,
-      db
-        .selectFrom("onboarding_recommendations")
-        .select([
-          "inventory_hash",
-          "matches_json",
-          "offered_at_ms",
-          "accepted_at_ms",
-          "updated_at_ms",
-        ])
-        .where("config_key", "=", configKey),
-    );
-    if (!row) {
-      return null;
-    }
-    return {
-      inventoryHash: row.inventory_hash,
-      matches: OnboardingRecommendationMatchesSchema.parse(JSON.parse(row.matches_json)),
-      offeredAt: row.offered_at_ms,
-      acceptedAt: row.accepted_at_ms,
-      updatedAt: row.updated_at_ms,
-    };
-  }, options);
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db: database }) => {
+      if (!tableExists(database, "onboarding_recommendations")) {
+        return null;
+      }
+      const db = getNodeSqliteKysely<OnboardingRecommendationsDatabase>(database);
+      const row = executeSqliteQueryTakeFirstSync(
+        database,
+        db
+          .selectFrom("onboarding_recommendations")
+          .select([
+            "inventory_hash",
+            "matches_json",
+            "offered_at_ms",
+            "accepted_at_ms",
+            "updated_at_ms",
+          ])
+          .where("config_key", "=", configKey),
+      );
+      if (!row) {
+        return null;
+      }
+      return {
+        inventoryHash: row.inventory_hash,
+        matches: OnboardingRecommendationMatchesSchema.parse(JSON.parse(row.matches_json)),
+        offeredAt: row.offered_at_ms,
+        acceptedAt: row.accepted_at_ms,
+        updatedAt: row.updated_at_ms,
+      };
+    }, options) ?? null
+  );
 }
 
 function writeOnboardingRecommendationsOffer(

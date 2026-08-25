@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -34,15 +35,13 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
 } from "../secrets/provider-integrations.js";
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
+import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-auth-surfaces.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -61,6 +60,8 @@ type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
+// Gateway ingress secrets must never be newly materialized into supervisor metadata.
+// Existing active file-backed values are retained separately during regeneration.
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
@@ -105,6 +106,11 @@ const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
 
 const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
   () => import("./daemon-install-auth-profiles-store.runtime.js"),
+  { cacheRejections: true },
+);
+
+const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
+  () => import("../plugins/manifest-contract-eligibility.js"),
   { cacheRejections: true },
 );
 
@@ -175,6 +181,82 @@ function collectAuthProfileServiceEnvVars(params: {
   return entries;
 }
 
+async function collectAmbientProviderApiKeyServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  authProfileEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+}): Promise<Record<string, string>> {
+  if (params.platform !== "linux") {
+    return {};
+  }
+  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
+  const ownedKeys = new Set(
+    [
+      ...Object.keys(params.durableEnvironment),
+      ...Object.keys(params.authProfileEnvironment),
+      ...Object.entries(params.existingEnvironment ?? {}).flatMap(([key, value]) =>
+        existingManagedKeys.has(key.toUpperCase()) && params.env[key]?.trim() !== value?.trim()
+          ? []
+          : [key],
+      ),
+    ].map((key) => key.toUpperCase()),
+  );
+  const candidates = new Map(
+    Object.entries(params.env).flatMap(([rawKey, rawValue]) => {
+      const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+      const value = rawValue?.trim();
+      return key &&
+        key.endsWith("_API_KEY") &&
+        !key.endsWith("_ADMIN_API_KEY") &&
+        !ownedKeys.has(key) &&
+        value &&
+        !isDangerousHostEnvVarName(key) &&
+        !isDangerousHostEnvOverrideVarName(key)
+        ? [[key, value] as const]
+        : [];
+    }),
+  );
+  if (candidates.size === 0) {
+    return {};
+  }
+  const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
+    await loadDaemonInstallProviderManifestRuntime();
+  const config = params.config ?? {};
+  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
+  return Object.fromEntries(
+    snapshot.plugins.flatMap((plugin) => {
+      if (
+        (plugin.origin !== "bundled" && plugin.trustedOfficialInstall !== true) ||
+        !isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })
+      ) {
+        return [];
+      }
+      const providers = new Set(
+        (plugin.providerAuthChoices ?? [])
+          .filter(
+            ({ method, appGuidedSecret, onboardingScopes }) =>
+              method === "api-key" &&
+              appGuidedSecret === true &&
+              (!onboardingScopes || onboardingScopes.includes("text-inference")),
+          )
+          .map(({ provider }) => provider),
+      );
+      return (plugin.setup?.providers ?? [])
+        .filter(({ id }) => providers.has(id))
+        .flatMap(({ envVars = [] }) =>
+          envVars.flatMap((name) => {
+            const key = normalizeEnvVarKey(name, { portable: true })?.toUpperCase();
+            const value = key ? candidates.get(key) : undefined;
+            return key && value ? [[key, value] as const] : [];
+          }),
+        );
+    }),
+  );
+}
+
 type ExecSecretRefPassEnvSource = {
   ref: SecretRef;
   warningTitle: "Config SecretRef" | "Auth profile" | "Plugin config SecretRef";
@@ -192,11 +274,13 @@ function collectConfigSecretRefServiceEnvSources(params: {
   if (!params.config || !params.configContainsSecretRef) {
     return { keys: [], environment };
   }
+  const gatewayAuthSurfaceStates = evaluateGatewayAuthSurfaceStates({
+    config: params.config,
+    env: params.env as NodeJS.ProcessEnv,
+    defaults: params.config.secrets?.defaults,
+  });
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInPlan) {
-      continue;
-    }
-    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
       continue;
     }
     const { ref } = resolveSecretInputRef({
@@ -220,6 +304,14 @@ function collectConfigSecretRefServiceEnvSources(params: {
         `Config SecretRef env ref "${key}" blocked by host-env security policy`,
         "Config SecretRef",
       );
+      continue;
+    }
+    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
+      const surface =
+        gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
+      if (surface?.active) {
+        keys.add(key.toUpperCase());
+      }
       continue;
     }
     keys.add(key.toUpperCase());
@@ -287,7 +379,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     }
     const execProvider = isPluginIntegrationSecretProviderConfig(provider)
       ? (() => {
-          manifestRegistry ??= loadPluginManifestRegistry({
+          manifestRegistry ??= resolveConfigWidePluginManifestRegistry({
             config: params.config,
             env: params.env,
           });
@@ -620,6 +712,14 @@ async function buildGatewayInstallEnvironment(params: {
     authStore,
     warn: params.warn,
   });
+  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    authProfileEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    platform: params.platform,
+  });
   const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(
     stateDirDotEnvEnvironment,
     [
@@ -638,6 +738,7 @@ async function buildGatewayInstallEnvironment(params: {
     valueSource: ({ normalizedKey }) =>
       readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
+  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
@@ -743,7 +844,6 @@ export async function buildGatewayInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
-    runtime: params.runtime,
     nodePath,
     wrapperPath,
   });

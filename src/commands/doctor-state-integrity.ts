@@ -3,20 +3,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
 import {
   listAgentEntries,
   resolveDefaultAgentDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
-} from "../agents/subagent-recovery-state.js";
+} from "../agents/subagents/registry/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
@@ -26,33 +33,41 @@ import {
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
-  listSessionEntriesReadOnly,
+  iterateDoctorSessionKeyBatches,
+  scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
-import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
-import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
-import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import {
+  inspectMainSessionRecoveryEntry,
+  noteMainSessionRecoveryIntegrity,
+  type MainSessionRecoveryIntegrityCandidate,
+} from "./doctor-main-session-recovery.js";
+import {
+  createPluginSessionStateDoctorScanner,
+  runPluginSessionStateDoctorRepairs,
+} from "./doctor-session-state-providers.js";
 import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
@@ -184,9 +199,9 @@ function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): stri
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
-  // agents/main/agent also owns the shipped shared legacy auth store.
-  // Keep main undeletable until named agents make auth-store ownership explicit.
-  const configuredIds = new Set<string>([LEGACY_IMPLICIT_AGENT_ID]);
+  const configuredIds = new Set<string>();
+  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
+  const sharedAuthDbPath = resolveSharedAuthStorePath();
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   if (defaultAgentId) {
     configuredIds.add(normalizeAgentId(defaultAgentId));
@@ -209,6 +224,15 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
         const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (
+          isSharedAuthStoreOwner({
+            ownership: sharedAuthOwnership,
+            agentAuthDbPath: resolveAuthProfileDatabasePath(nestedAgentDir),
+            sharedAuthDbPath,
+          })
+        ) {
           return false;
         }
         if (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
@@ -354,13 +378,7 @@ function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   );
 }
 
-function tryResolveRealPath(targetPath: string): string | null {
-  try {
-    return fs.realpathSync(targetPath);
-  } catch {
-    return null;
-  }
-}
+const tryResolveRealPath = safeRealpathSync;
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
@@ -381,12 +399,6 @@ function resolvePathThroughExistingAncestor(
     missingSegments.unshift(pathOps.basename(candidate));
     candidate = parent;
   }
-}
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
 }
 
 function escapeControlCharsForTerminal(value: string): string {
@@ -685,16 +697,14 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
-  // Prefer the resolved target path when available so symlink prefixes do not
-  // misclassify local state dirs as cloud-synced.
-  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
 
-  for (const candidate of candidates) {
-    for (const { storage, root } of roots) {
-      if (isPathUnderRoot(candidate, root)) {
-        return { path: candidate, storage };
-      }
+  for (const { storage, root } of roots) {
+    if (isPathUnderRoot(resolvedStatePath, root)) {
+      return { path: resolvedStatePath, storage };
     }
   }
 
@@ -774,11 +784,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
-}
-
 export function detectStateIntegrityHealthIssues(
   cfg: OpenClawConfig,
   params?: {
@@ -796,7 +801,9 @@ export function detectStateIntegrityHealthIssues(
   const sessionsDir = agentId
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
-  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
@@ -1069,7 +1076,9 @@ export async function noteStateIntegrity(
   const sessionsDir = agentId
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
-  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const absoluteStorePath = storePath ? path.resolve(storePath) : undefined;
   const displayStateDir = shortenHomePath(stateDir);
@@ -1081,9 +1090,6 @@ export async function noteStateIntegrity(
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = agentId
-    ? shouldSuppressOrphanTranscriptWarning(cfg, agentId)
-    : false;
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1324,37 +1330,86 @@ export async function noteStateIntegrity(
     return;
   }
 
-  const sqliteEntries = listSessionEntriesReadOnly({ agentId, storePath: absoluteStorePath });
-  const sqliteSessionKeys = new Set(sqliteEntries.map(({ sessionKey }) => sessionKey));
+  const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(absoluteStorePath, {
+    agentId,
+  }).path;
   // A successful SQLite import archives sessions.json. Its continued presence
   // is therefore the explicit signal that pre-import rows still need inspection.
   const legacyStore = existsFile(absoluteStorePath)
     ? loadLegacySessionStore(absoluteStorePath)
     : {};
-  const store: Record<string, SessionEntry> = { ...legacyStore };
-  for (const { entry, sessionKey } of sqliteEntries) {
-    store[sessionKey] = entry;
+  const legacyEntries = Object.entries(legacyStore).filter(
+    (candidate): candidate is [string, SessionEntry] =>
+      candidate[1] != null && typeof candidate[1] === "object",
+  );
+  const legacyOrder = new Map(legacyEntries.map(([sessionKey], index) => [sessionKey, index]));
+  const sqliteSessionKeys = new Set<string>();
+  const isSessionKeyOccupied = (sessionKey: string) =>
+    sqliteSessionKeys.has(sessionKey) || legacyOrder.has(sessionKey);
+  const mainKey = resolveMainSessionKey(cfg);
+  const mainRecoveryWedged: MainSessionRecoveryIntegrityCandidate[] = [];
+  const wedgedSubagentSessions: Array<{ key: string; reason: string }> = [];
+  const pluginStateScanner = createPluginSessionStateDoctorScanner({ cfg, env });
+  let mainEntry: SessionEntry | undefined;
+  let sqliteNewKeyIndex = 0;
+  const recent: Array<{ entry: SessionEntry; order: number; sessionKey: string }> = [];
+  const addRecent = (sessionKey: string, entry: SessionEntry, order: number) => {
+    recent.push({ entry, order, sessionKey });
+    recent.sort((left, right) => {
+      const leftUpdated = typeof left.entry.updatedAt === "number" ? left.entry.updatedAt : 0;
+      const rightUpdated = typeof right.entry.updatedAt === "number" ? right.entry.updatedAt : 0;
+      return rightUpdated - leftUpdated || left.order - right.order;
+    });
+    if (recent.length > 5) {
+      recent.pop();
+    }
+  };
+  const inspectMergedEntry = (sessionKey: string, entry: SessionEntry, order: number) => {
+    addRecent(sessionKey, entry, order);
+    pluginStateScanner.scanEntry(sessionKey, entry);
+    if (sessionKey === mainKey) {
+      mainEntry = entry;
+    }
+    if (isSubagentRecoveryWedgedEntry(entry)) {
+      wedgedSubagentSessions.push({
+        key: sessionKey,
+        reason: formatSubagentRecoveryWedgedReason(entry),
+      });
+    }
+  };
+  const sqliteEntryCount = scanDoctorSessionEntriesStrict(
+    { agentId, storePath: absoluteStorePath },
+    ({ entry, sessionKey }) => {
+      sqliteSessionKeys.add(sessionKey);
+      const order = legacyOrder.get(sessionKey) ?? legacyEntries.length + sqliteNewKeyIndex++;
+      inspectMergedEntry(sessionKey, entry, order);
+      const recovery = inspectMainSessionRecoveryEntry(sessionKey, entry);
+      if (recovery) {
+        mainRecoveryWedged.push(recovery);
+      }
+    },
+  );
+  let mergedEntryCount = sqliteEntryCount;
+  for (const [sessionKey, entry] of legacyEntries) {
+    if (sqliteSessionKeys.has(sessionKey)) {
+      continue;
+    }
+    inspectMergedEntry(sessionKey, entry, legacyOrder.get(sessionKey) ?? mergedEntryCount);
+    mergedEntryCount += 1;
   }
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
-  const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
-  const canonicalEntryCount = await noteMainSessionRecoveryIntegrity({
-    agentId,
+  await noteMainSessionRecoveryIntegrity({
     storePath: absoluteStorePath,
+    wedged: mainRecoveryWedged,
     warnings,
     changes,
     confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
     countLabel,
   });
-  if (entries.length > 0 || canonicalEntryCount > 0) {
-    const recent = entries
-      .slice()
-      .toSorted((a, b) => {
-        const aUpdated = typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
-        const bUpdated = typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
-        return bUpdated - aUpdated;
-      })
-      .slice(0, 5);
-    const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
+  if (mergedEntryCount > 0) {
+    const recentTranscriptCandidates = recent
+      .map(({ entry, sessionKey }) => [sessionKey, entry] as const)
+      .filter(([key]) => !isSlashRoutingSessionKey(key));
     const missing = recentTranscriptCandidates.filter(([key, entry]) => {
       if (sqliteSessionKeys.has(key)) {
         return false;
@@ -1367,23 +1422,20 @@ export async function noteStateIntegrity(
       if (parseSqliteSessionFileMarker(legacySessionFile)) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionFilePathCore(sessionId, entry, sessionPathOpts);
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
       warnings.push(
         [
           `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
-          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run --fix-missing`)}`,
-          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
+          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${sqliteStorePath}"`)}`,
+          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --dry-run --fix-missing`)}`,
+          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${sqliteStorePath}" --enforce --fix-missing`)}`,
         ].join("\n"),
       );
     }
 
-    const wedgedSubagentSessions = entries.filter(([, entry]) =>
-      isSubagentRecoveryWedgedEntry(entry),
-    );
     if (wedgedSubagentSessions.length > 0) {
       const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
       warnings.push(
@@ -1392,7 +1444,7 @@ export async function noteStateIntegrity(
           "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
           `  Examples: ${wedgedSubagentSessions
             .slice(0, 3)
-            .map(([key]) => key)
+            .map(({ key }) => key)
             .join(", ")}`,
           `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
         ].join("\n"),
@@ -1405,11 +1457,11 @@ export async function noteStateIntegrity(
         let repaired = 0;
         const repairedAt = Date.now();
         const sqliteKeys = wedgedSubagentSessions
-          .map(([key]) => key)
+          .map(({ key }) => key)
           .filter((key) => sqliteSessionKeys.has(key));
-        if (sqliteKeys.length > 0) {
+        for (const sessionKeys of iterateDoctorSessionKeyBatches(sqliteKeys)) {
           repaired += await applySessionEntryReplacements<number>({
-            sessionKeys: sqliteKeys,
+            sessionKeys,
             storePath: absoluteStorePath,
             update: (currentEntries) => {
               const replacements = currentEntries.flatMap(({ entry, sessionKey }) =>
@@ -1420,7 +1472,7 @@ export async function noteStateIntegrity(
           });
         }
         const legacyKeys = wedgedSubagentSessions
-          .map(([key]) => key)
+          .map(({ key }) => key)
           .filter((key) => !sqliteSessionKeys.has(key));
         if (legacyKeys.length > 0 && existsFile(absoluteStorePath)) {
           await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
@@ -1443,9 +1495,7 @@ export async function noteStateIntegrity(
         }
       }
 
-      const wedgedReasons = wedgedSubagentSessions.map(([, entry]) =>
-        formatSubagentRecoveryWedgedReason(entry),
-      );
+      const wedgedReasons = wedgedSubagentSessions.map(({ reason }) => reason);
       const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
       if (visibleWedgedReasons.length > 0) {
         warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
@@ -1453,18 +1503,17 @@ export async function noteStateIntegrity(
     }
 
     await runPluginSessionStateDoctorRepairs({
-      cfg,
-      store,
+      scan: pluginStateScanner.result(),
       absoluteStorePath,
       prompter,
-      env,
       warnings,
       changes,
     });
 
-    await repairHeartbeatPoisonedMainSession({
+    const heartbeatMainMoved = await repairHeartbeatPoisonedMainSession({
       cfg,
-      store,
+      mainEntry,
+      isSessionKeyOccupied,
       absoluteStorePath,
       stateDir,
       sessionPathOpts,
@@ -1477,10 +1526,10 @@ export async function noteStateIntegrity(
       warnings.push(warning);
     }
 
-    const mainKey = resolveMainSessionKey(cfg);
-    const mainEntry = store[mainKey];
-    if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
+    // SQLite-owned transcripts live in the agent DB after import.
+    // Do not require the archived legacy JSONL for those sessions.
+    if (!heartbeatMainMoved && mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
+      const transcriptPath = resolveSessionFilePathCore(
         mainEntry.sessionId,
         mainEntry,
         sessionPathOpts,
@@ -1502,16 +1551,16 @@ export async function noteStateIntegrity(
 
   // SQLite transcript ownership is repaired by the import/migration workflow.
   // Never offer generic file archival against a live canonical session store.
-  if (sqliteEntries.length === 0 && existsDir(sessionsDir)) {
+  if (sqliteEntryCount === 0 && existsDir(sessionsDir)) {
     const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
+    for (const [, entry] of legacyEntries) {
       if (!entry?.sessionId) {
         continue;
       }
       try {
         referencedTranscriptPaths.add(
           resolveComparableTranscriptPath(
-            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+            resolveSessionFilePathCore(entry.sessionId, entry, sessionPathOpts),
           ),
         );
       } catch {
@@ -1525,7 +1574,7 @@ export async function noteStateIntegrity(
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
       );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
+    if (orphanTranscriptPaths.length > 0) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
       warnings.push(

@@ -5,19 +5,19 @@
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   const allow = compileGlobPatterns({
     raw: expandToolGroups(policy.allow ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   return (name: string) => {
-    const normalized = normalizeToolName(name);
+    const normalized = normalizeToolPolicyName(name);
     if (matchesAnyGlobPattern(normalized, deny)) {
       return false;
     }

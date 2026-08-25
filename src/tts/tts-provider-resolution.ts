@@ -22,12 +22,12 @@ import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
   asProviderConfigMap,
-  hasOwnProperty,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
+  type TtsProviderPreference,
 } from "./tts-settings.js";
 import {
   resolvePrimaryVoiceProviderCandidate,
@@ -60,8 +60,11 @@ export function resolveSpeechProviderTimeoutMs(params: {
   return resolvePositiveTimeoutMs(params.provider.defaultTimeoutMs) ?? params.config.timeoutMs;
 }
 
-function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
-  return listSpeechProviders(cfg).toSorted((left, right) => {
+function sortSpeechProvidersForAutoSelection(
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+) {
+  return [...(providers ?? listSpeechProviders(cfg))].toSorted((left, right) => {
     const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) {
@@ -71,11 +74,36 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   });
 }
 
-function resolveConfiguredSpeechVoiceModelRefs(cfg: OpenClawConfig | undefined): VoiceModelRef[] {
+function canonicalizeSpeechProviderIdFromInventory(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+): string | undefined {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  if (!providers) {
+    return canonicalizeSpeechProviderId(providerId, cfg);
+  }
+  const inventoryProvider = providers.find(
+    (provider) =>
+      normalizeSpeechProviderId(provider.id) === normalized ||
+      provider.aliases?.some((alias) => normalizeSpeechProviderId(alias) === normalized),
+  );
+  // A prepared inventory can omit voice-model-only providers. Preserve the
+  // registry's public alias contract on misses instead of exposing an alias.
+  return inventoryProvider?.id ?? canonicalizeSpeechProviderId(providerId, cfg) ?? normalized;
+}
+
+function resolveConfiguredSpeechVoiceModelRefs(
+  cfg: OpenClawConfig | undefined,
+  providers?: readonly SpeechProviderPlugin[],
+): VoiceModelRef[] {
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
   return resolveSupportedVoiceModelRefs({
     config: effectiveCfg?.agents?.defaults?.voiceModel,
-    providers: sortSpeechProvidersForAutoSelection(effectiveCfg),
+    providers: sortSpeechProvidersForAutoSelection(effectiveCfg, providers),
   });
 }
 
@@ -135,10 +163,10 @@ export function resolvePersonaProviderConfig(
     return undefined;
   }
   const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-  if (hasOwnProperty(persona.providers, normalized)) {
+  if (Object.hasOwn(persona.providers, normalized)) {
     return persona.providers[normalized];
   }
-  if (hasOwnProperty(persona.providers, providerId)) {
+  if (Object.hasOwn(persona.providers, providerId)) {
     return persona.providers[providerId];
   }
   return undefined;
@@ -187,6 +215,7 @@ function resolveLazyProviderConfig(
   providerId: string,
   cfg?: OpenClawConfig,
   voiceModel?: VoiceModelRef,
+  provider?: SpeechProviderPlugin,
 ): SpeechProviderConfig {
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
@@ -198,7 +227,7 @@ function resolveLazyProviderConfig(
   const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
   const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
   const rawProviders = asProviderConfigMap(config.rawConfig?.providers);
-  const resolvedProvider = getSpeechProvider(canonical, effectiveCfg);
+  const resolvedProvider = provider ?? getSpeechProvider(canonical, effectiveCfg);
   let hasRawProviderConfig =
     Object.hasOwn(rawProviders, canonical) ||
     (rawBaseConfig ? Object.hasOwn(rawBaseConfig, canonical) : false);
@@ -274,6 +303,23 @@ export function getResolvedSpeechProviderConfig(
   return resolveLazyProviderConfig(config, canonical, effectiveCfg);
 }
 
+function getResolvedSpeechProviderConfigFromInventory(params: {
+  config: ResolvedTtsConfig;
+  provider: SpeechProviderPlugin;
+  cfg?: OpenClawConfig;
+}): SpeechProviderConfig {
+  const effectiveCfg = params.cfg
+    ? resolveTtsRuntimeConfig(params.cfg)
+    : params.config.sourceConfig;
+  return resolveLazyProviderConfig(
+    params.config,
+    params.provider.id,
+    effectiveCfg,
+    undefined,
+    params.provider,
+  );
+}
+
 export function getResolvedSpeechProviderConfigForVoiceModel(params: {
   config: ResolvedTtsConfig;
   providerId: string;
@@ -324,17 +370,75 @@ export function resolveTtsProvider(config: ResolvedTtsConfig, prefsPath: string)
   return config.provider;
 }
 
-export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
+export function resolvePreparedTtsProvider(params: {
+  config: ResolvedTtsConfig;
+  preference?: TtsProviderPreference;
+  providers: readonly SpeechProviderPlugin[];
+  configuredByProvider: ReadonlyMap<string, boolean>;
+}): TtsProvider {
+  const effectiveCfg = params.config.sourceConfig;
+  if (params.preference?.source === "prefs") {
+    return (
+      canonicalizeSpeechProviderIdFromInventory(
+        params.preference.provider,
+        effectiveCfg,
+        params.providers,
+      ) ?? params.preference.provider
+    );
+  }
+  if (params.preference?.source === "persona") {
+    const preferredProvider = params.preference.provider;
+    const inventoryProvider = params.providers.find(
+      (provider) =>
+        normalizeSpeechProviderId(provider.id) === normalizeSpeechProviderId(preferredProvider) ||
+        provider.aliases?.some(
+          (alias) =>
+            normalizeSpeechProviderId(alias) === normalizeSpeechProviderId(preferredProvider),
+        ),
+    );
+    const personaProvider = inventoryProvider ?? getSpeechProvider(preferredProvider, effectiveCfg);
+    if (personaProvider) {
+      return personaProvider.id;
+    }
+  }
+  if (params.preference?.source === "config") {
+    return (
+      normalizeConfiguredSpeechProviderId(params.preference.provider) ?? params.preference.provider
+    );
+  }
+  const configuredVoiceProvider = resolveConfiguredSpeechVoiceModelRefs(
+    effectiveCfg,
+    params.providers,
+  )[0]?.provider;
+  if (configuredVoiceProvider) {
+    return configuredVoiceProvider;
+  }
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, params.providers)) {
+    if (params.configuredByProvider.get(provider.id) === true) {
+      return provider.id;
+    }
+  }
+  return params.config.provider;
+}
+
+export function resolveTtsProviderOrder(
+  primary: TtsProvider,
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+): TtsProvider[] {
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
-  const normalizedPrimary = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
+  const normalizedPrimary =
+    canonicalizeSpeechProviderIdFromInventory(primary, effectiveCfg, providers) ?? primary;
   const ordered = new Set<TtsProvider>([normalizedPrimary]);
   for (const ref of resolveVoiceModelRefs(effectiveCfg?.agents?.defaults?.voiceModel)) {
-    const provider = canonicalizeSpeechProviderId(ref.provider, effectiveCfg) ?? ref.provider;
+    const provider =
+      canonicalizeSpeechProviderIdFromInventory(ref.provider, effectiveCfg, providers) ??
+      ref.provider;
     if (provider !== normalizedPrimary) {
       ordered.add(provider);
     }
   }
-  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, providers)) {
     const normalized = provider.id;
     if (normalized !== normalizedPrimary) {
       ordered.add(normalized);
@@ -370,19 +474,27 @@ export function resolvePrimaryTtsProviderCandidate(
 
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
-  provider: TtsProvider,
+  provider: TtsProvider | SpeechProviderPlugin,
   cfg?: OpenClawConfig,
 ): boolean {
   try {
     const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
-    const resolvedProvider = getSpeechProvider(provider, effectiveCfg);
+    const resolvedProvider =
+      typeof provider === "string" ? getSpeechProvider(provider, effectiveCfg) : provider;
     if (!resolvedProvider) {
       return false;
     }
     return (
       resolvedProvider.isConfigured({
         cfg: effectiveCfg,
-        providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, effectiveCfg),
+        providerConfig:
+          typeof provider === "string"
+            ? getResolvedSpeechProviderConfig(config, resolvedProvider.id, effectiveCfg)
+            : getResolvedSpeechProviderConfigFromInventory({
+                config,
+                provider: resolvedProvider,
+                cfg: effectiveCfg,
+              }),
         timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
       }) ?? false
     );

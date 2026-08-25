@@ -2,12 +2,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../../../test-helpers/temp-dir.js";
-import { classifyConfigPathMigrationOwnership } from "./include-migration-ownership.js";
+import {
+  classifyConfigPathMigrationOwnership,
+  classifyOtelGrpcMigrationOwnership,
+} from "./include-migration-ownership.js";
 
 describe("include migration ownership", () => {
   const configDir = path.resolve("/tmp/openclaw-config");
   const configPath = path.join(configDir, "openclaw.json");
   const diagnosticsPath = path.join(configDir, "diagnostics.json5");
+  const classifyOtelOwnership = (
+    includeProvenance: NonNullable<
+      Parameters<typeof classifyOtelGrpcMigrationOwnership>[0]["snapshot"]["includeProvenance"]
+    >,
+  ) =>
+    classifyOtelGrpcMigrationOwnership({
+      snapshot: { path: configPath, includeProvenance },
+      authoredConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+      resolvedConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+    });
 
   it("classifies direct config even when an unrelated include exists", () => {
     expect(
@@ -137,12 +150,7 @@ describe("include migration ownership", () => {
       targetPaths: [path.resolve(configDir, "..", "external-diagnostics.json5")],
     },
   ])("requires manual repair for $name ownership", ({ includeProvenance, targetPaths }) => {
-    expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: { path: configPath, includeProvenance },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
-    ).toEqual({ kind: "manual", targetPaths });
+    expect(classifyOtelOwnership(includeProvenance)).toEqual({ kind: "manual", targetPaths });
   });
 
   describe("symlinked include targets", () => {

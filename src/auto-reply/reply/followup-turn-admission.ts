@@ -49,7 +49,6 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
 
@@ -149,8 +148,8 @@ export async function admitFollowupTurn(params: {
     kind: "queued_followup",
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
+    originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
-    onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {
     return admission.reason === "active-run"
@@ -337,15 +336,17 @@ export async function admitFollowupTurn(params: {
       return generationRotated;
     };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
-    let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
+    let pendingTerminalCompactionNotice:
+      | { phase: Exclude<CompactionNoticePhase, "start">; text?: string }
+      | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
       turn.sendPolicy === "allow" &&
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
-        ? async (phase: CompactionNoticePhase) => {
+        ? async (phase: CompactionNoticePhase, text?: string) => {
             if (phase !== "start") {
-              pendingTerminalCompactionNotice = phase;
+              pendingTerminalCompactionNotice = { phase, text };
               return;
             }
             const noticeEntry = readTurnSessionEntry();
@@ -378,7 +379,6 @@ export async function admitFollowupTurn(params: {
         followupRun: turn.queued,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
-        agentCfgContextTokens: params.defaults.agentCfgContextTokens,
         sessionEntry: activeEntry,
         sessionStore,
         sessionKey: replySessionKey,
@@ -458,7 +458,8 @@ export async function admitFollowupTurn(params: {
     ) {
       await params.onCompactionNoticePayload?.(
         createCompactionNoticePayload({
-          phase: pendingTerminalCompactionNotice,
+          phase: pendingTerminalCompactionNotice.phase,
+          text: pendingTerminalCompactionNotice.text,
           currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
         }),
         turn,

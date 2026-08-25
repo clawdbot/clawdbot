@@ -41,23 +41,6 @@
         "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
           {
-            "id": "gpt-5.6",
-            "name": "GPT-5.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 1050000,
-            "contextTokens": 272000,
-            "maxTokens": 128000,
-            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 },
-            "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
-            "compat": {
-              "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
-              "supportsTemperature": false,
-              "codeMode": "preferred"
-            }
-          },
-          {
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,
@@ -112,7 +95,7 @@
             "id": "gpt-5.5",
             "name": "GPT-5.5",
             "status": "deprecated",
-            "replacedBy": "gpt-5.6",
+            "replacedBy": "gpt-5.6-sol",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -128,7 +111,7 @@
             "id": "gpt-5.5-pro",
             "name": "gpt-5.5-pro",
             "status": "deprecated",
-            "replacedBy": "gpt-5.6",
+            "replacedBy": "gpt-5.6-sol",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -261,7 +244,7 @@
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
-    "memoryEmbeddingProviders": ["openai"],
+    "embeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"],
@@ -306,7 +289,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Legacy compatibility fallback for the shared GPT-5 friendly interaction-style overlay. Prefer agents.defaults.promptOverlays.gpt5.personality. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
+        "description": "Controls the canonical OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
       }
     }
   }

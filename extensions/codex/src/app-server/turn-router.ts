@@ -1,5 +1,6 @@
 /** Keyed routing for all turn traffic on one shared Codex app-server client. */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CodexAppServerClient } from "./client.js";
 import { redactCodexEventKind } from "./event-projector-diagnostics.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "./protocol.js";
 
 const DEFAULT_PREBIND_NOTIFICATION_LIMIT = 256;
+const DEFAULT_GLOBAL_WARNING_LIMIT = 32;
 export const CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 
 export type CodexAppServerServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
@@ -75,7 +77,7 @@ type CodexNativeTurnCompletionWatch = {
   cancel: () => void;
 };
 
-type Deferred = { promise: Promise<void>; resolve: () => void };
+type Deferred = ReturnType<typeof createDeferred<void>>;
 type PendingNotification = {
   notification: CodexServerNotification;
   receivedAtMs: number;
@@ -120,6 +122,7 @@ export function getCodexAppServerTurnRouter(
 
 class ClientTurnRouter implements CodexAppServerTurnRouter {
   private readonly routes = new Map<string, Route>();
+  private readonly globalWarnings: CodexServerNotification[] = [];
   private readonly nativeTurnCompletionWatchers = new Map<
     string,
     Set<NativeTurnCompletionWatcher>
@@ -143,10 +146,14 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     const route: Route = {
       threadId,
       controller: new AbortController(),
-      ended: deferred(),
-      activated: deferred(),
+      ended: createDeferred<void>(),
+      activated: createDeferred<void>(),
       gate: "open",
-      pending: [],
+      pending: this.globalWarnings.map((notification) => ({
+        notification,
+        receivedAtMs: Date.now(),
+        scope: { threadId },
+      })),
       notificationTail: Promise.resolve(),
       completedNativeTurnIds: new Set(),
       ignoredTurnNotificationKeys: new Set(),
@@ -196,10 +203,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (this.routes.get(threadId)?.completedNativeTurnIds.delete(turnId)) {
       return { completion: Promise.resolve(true), cancel: () => {} };
     }
-    let settle!: (completed: boolean) => void;
-    const completion = new Promise<boolean>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: completion, resolve: settle } = createDeferred<boolean>();
     const watchers =
       this.nativeTurnCompletionWatchers.get(threadId) ?? new Set<NativeTurnCompletionWatcher>();
     this.nativeTurnCompletionWatchers.set(threadId, watchers);
@@ -281,7 +285,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (route.observedNativeTurn?.completed) {
       route.observedNativeTurn = undefined;
     }
-    route.binding = deferred();
+    route.binding = createDeferred<void>();
   }
 
   private async cancelTurn(route: Route): Promise<void> {
@@ -320,6 +324,24 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return undefined;
     }
     const scope = readScope(notification.params);
+    if (
+      !scope.threadId &&
+      (notification.method === "configWarning" || notification.method === "warning")
+    ) {
+      if (this.globalWarnings.length === DEFAULT_GLOBAL_WARNING_LIMIT) {
+        this.globalWarnings.shift();
+      }
+      this.globalWarnings.push(notification);
+      for (const route of this.routes.values()) {
+        this.bufferNotification(route, notification, { threadId: route.threadId }, Date.now());
+        if (route.gate === "bound") {
+          this.flushNotifications(route);
+        }
+      }
+      return Promise.all([...this.routes.values()].map((route) => route.notificationTail)).then(
+        () => undefined,
+      );
+    }
     const watchers = scope.threadId
       ? this.nativeTurnCompletionWatchers.get(scope.threadId)
       : undefined;
@@ -449,6 +471,17 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return;
     }
     for (const pending of route.pending.splice(0)) {
+      if (
+        route.gate !== "bound" &&
+        (pending.notification.method === "configWarning" ||
+          (pending.notification.method === "warning" &&
+            !readScope(pending.notification.params).threadId))
+      ) {
+        // The attempt projector does not exist until turn binding; releasing a
+        // process-wide warning during route activation would silently lose it.
+        route.pending.push(pending);
+        continue;
+      }
       if (route.gate === "bound" && pending.scope.turnId && pending.scope.turnId !== route.turnId) {
         this.warnDroppedStaleTurnNotification(route, pending.notification, pending.scope);
         continue;
@@ -587,14 +620,6 @@ async function waitForPromiseOrAbort(
   } finally {
     removeAbort?.();
   }
-}
-
-function deferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function abortReason(signal: AbortSignal): Error {

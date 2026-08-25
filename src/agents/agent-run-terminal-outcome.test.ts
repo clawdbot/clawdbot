@@ -4,6 +4,8 @@ import {
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
+  isStickyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
   normalizeAgentRunAttemptTerminal,
@@ -17,6 +19,7 @@ describe("agent run terminal outcome", () => {
     ["completed", "success"],
     ["hard_timeout", "timeout"],
     ["timed_out", "timeout"],
+    ["superseded", "cancellation"],
     ["cancelled", "cancellation"],
     ["aborted", "cancellation"],
     ["blocked", "failure"],
@@ -24,6 +27,21 @@ describe("agent run terminal outcome", () => {
     ["failed", "failure"],
   ] as const)("classifies %s as %s", (reason, classification) => {
     expect(classifyAgentRunTerminalOutcome({ reason })).toBe(classification);
+  });
+
+  it.each([
+    { label: "retryable provider failure", data: { error: "provider failed" }, definitive: false },
+    {
+      label: "exhausted provider failure",
+      data: { error: "provider failed", fallbackExhaustedFailure: true },
+      definitive: true,
+    },
+    { label: "blocked run", data: { livenessState: "blocked" }, definitive: true },
+    { label: "abandoned run", data: { livenessState: "abandoned" }, definitive: true },
+    { label: "explicit cancellation", data: { aborted: true }, definitive: true },
+    { label: "provider timeout", data: { timeoutPhase: "provider" }, definitive: true },
+  ])("recognizes whether $label is a definitive lifecycle error", ({ data, definitive }) => {
+    expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
@@ -51,6 +69,16 @@ describe("agent run terminal outcome", () => {
         data: { status: "cancelled", stopReason: "relay-closed" },
       }),
     ).toMatchObject({ reason: "cancelled", status: "error", stopReason: "relay-closed" });
+    const superseded = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: "end",
+      data: { aborted: true, status: "superseded", stopReason: "superseded" },
+    });
+    expect(superseded).toMatchObject({
+      reason: "superseded",
+      status: "error",
+      stopReason: "superseded",
+    });
+    expect(isStickyAgentRunTerminalOutcome(superseded)).toBe(true);
   });
 
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
@@ -363,6 +391,48 @@ describe("agent run terminal outcome", () => {
     expect(mergeAgentRunTerminalOutcome(timeout, cancellation)).toBe(timeout);
     expect(mergeAgentRunTerminalOutcome(cancellation, timeout)).toBe(timeout);
   });
+
+  it("keeps supersession over generic cancellation regardless of callback ordering", () => {
+    const superseded = buildAgentRunTerminalOutcome({
+      status: "error",
+      stopReason: "superseded",
+      endedAt: 200,
+    });
+    const cancellation = buildAgentRunTerminalOutcome({
+      status: "error",
+      stopReason: "rpc",
+      endedAt: 201,
+    });
+
+    expect(mergeAgentRunTerminalOutcome(superseded, cancellation)).toBe(superseded);
+    expect(mergeAgentRunTerminalOutcome(cancellation, superseded)).toBe(superseded);
+  });
+
+  it.each([
+    { supersededAt: 190, expected: "superseded" },
+    { supersededAt: 200, expected: "hard_timeout" },
+    { supersededAt: 210, expected: "hard_timeout" },
+  ] as const)(
+    "keeps the first hard terminal between timeout and supersession at $supersededAt",
+    ({ supersededAt, expected }) => {
+      const timeout = buildAgentRunTerminalOutcome({
+        status: "timeout",
+        timeoutPhase: "provider",
+        endedAt: 200,
+      });
+      const superseded = buildAgentRunTerminalOutcome({
+        status: "error",
+        stopReason: "superseded",
+        endedAt: supersededAt,
+      });
+      for (const [current, incoming] of [
+        [timeout, superseded],
+        [superseded, timeout],
+      ] as const) {
+        expect(mergeAgentRunTerminalOutcome(current, incoming).reason).toBe(expected);
+      }
+    },
+  );
 });
 
 describe("agent run attempt terminal", () => {

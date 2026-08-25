@@ -1,4 +1,6 @@
 // Feishu tests cover the shared outbound delivery path.
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
@@ -7,6 +9,8 @@ import {
   resetGlobalHookRunner,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
@@ -19,13 +23,46 @@ vi.mock("./media.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  editMessageFeishu: vi.fn(),
+  getMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
   sendMarkdownCardFeishu: vi.fn(),
   sendMessageFeishu: sendMessageFeishuMock,
   sendStructuredCardFeishu: vi.fn(),
 }));
 
+import { feishuPlugin } from "./channel.js";
+import { feishuChannelRuntime } from "./channel.runtime.js";
 import { feishuOutbound } from "./outbound.js";
+
+type DeliveryQueueRow = {
+  status: string;
+  recovery_state: string | null;
+  platform_send_started_at: number | null;
+};
+
+const completionRetention = {
+  idPrefix: "feishu-direct-",
+  maxAgeMs: 60_000,
+  maxEntries: 10,
+} as const;
+
+function readDeliveryQueueRow(stateDir: string, id: string): DeliveryQueueRow | undefined {
+  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    return database
+      .prepare(
+        `SELECT status, recovery_state, platform_send_started_at
+           FROM delivery_queue_entries
+          WHERE queue_name = 'outbound-prepared-v1' AND id = ?`,
+      )
+      .get(id) as DeliveryQueueRow | undefined;
+  } finally {
+    database.close();
+  }
+}
 
 describe("Feishu outbound shared delivery", () => {
   beforeEach(() => {
@@ -118,5 +155,111 @@ describe("Feishu outbound shared delivery", () => {
     expect(textChunks.every((chunk) => Array.from(chunk).length <= 4000)).toBe(true);
     expect(deliveredText).toContain("account-0-");
     expect(deliveredText).toContain("account-399-");
+  });
+
+  it("replays a queued direct message after Feishu runtime availability is restored", async () => {
+    const originalSendText = feishuChannelRuntime.feishuOutbound.sendText;
+    if (!originalSendText) {
+      throw new Error("Expected Feishu runtime sendText");
+    }
+    const deliveryIntentId = "feishu-direct-runtime-availability";
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+    );
+    feishuChannelRuntime.feishuOutbound.sendText = undefined;
+
+    try {
+      await withStateDirEnv("openclaw-feishu-runtime-availability-", async ({ stateDir }) => {
+        const initial = await sendDurableMessageBatch({
+          cfg: {},
+          channel: "feishu",
+          to: "chat_1",
+          accountId: "default",
+          durability: "required",
+          deliveryIntentId,
+          completionRetention,
+          maxRetries: 2,
+          payloads: [{ text: "retry after runtime restoration" }],
+        });
+
+        expect(initial.status).toBe("failed");
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)).toMatchObject({
+          status: "pending",
+          recovery_state: null,
+          platform_send_started_at: null,
+        });
+
+        feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+        await drainPendingDeliveries({
+          drainKey: "feishu:default",
+          logLabel: "Feishu runtime availability recovery",
+          cfg: {},
+          stateDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (entry) => ({
+            match: entry.channel === "feishu",
+            bypassBackoff: true,
+          }),
+        });
+
+        expect(sendMessageFeishuMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "chat_1",
+            text: "retry after runtime restoration",
+          }),
+        );
+        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.status).toBe("completed");
+      });
+    } finally {
+      feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+    }
+  });
+
+  it("does not replay a Feishu provider call after dispatch may have begun", async () => {
+    const deliveryIntentId = "feishu-direct-ambiguous-provider-result";
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("Feishu provider result was lost"));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+    );
+
+    await withStateDirEnv("openclaw-feishu-ambiguous-provider-", async ({ stateDir }) => {
+      const initial = await sendDurableMessageBatch({
+        cfg: {},
+        channel: "feishu",
+        to: "chat_1",
+        accountId: "default",
+        durability: "required",
+        deliveryIntentId,
+        completionRetention,
+        maxRetries: 2,
+        payloads: [{ text: "do not replay an ambiguous provider call" }],
+      });
+
+      expect(initial.status).toBe("failed");
+      expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+      expect(readDeliveryQueueRow(stateDir, deliveryIntentId)).toMatchObject({
+        status: "pending",
+        recovery_state: "send_attempt_started",
+      });
+      expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.platform_send_started_at).toEqual(
+        expect.any(Number),
+      );
+
+      await drainPendingDeliveries({
+        drainKey: "feishu:default",
+        logLabel: "Feishu ambiguous provider recovery",
+        cfg: {},
+        stateDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        selectEntry: (entry) => ({
+          match: entry.channel === "feishu",
+          bypassBackoff: true,
+        }),
+      });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    });
   });
 });

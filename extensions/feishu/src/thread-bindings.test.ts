@@ -1,19 +1,27 @@
 // Feishu tests cover thread bindings plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing, createFeishuThreadBindingManager } from "./thread-bindings.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl } from "./thread-bindings.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-describe("Feishu thread bindings", () => {
-  beforeEach(() => {
-    testing.resetFeishuThreadBindingsForTests();
-  });
+type FeishuThreadBindingManager = ReturnType<typeof createFeishuThreadBindingManagerImpl>;
+let trackedManager: FeishuThreadBindingManager | null = null;
 
+function createFeishuThreadBindingManager(
+  params: Parameters<typeof createFeishuThreadBindingManagerImpl>[0],
+): FeishuThreadBindingManager {
+  trackedManager = createFeishuThreadBindingManagerImpl(params);
+  return trackedManager;
+}
+
+describe("Feishu thread bindings", () => {
   afterEach(() => {
+    trackedManager?.stop();
+    trackedManager = null;
     vi.restoreAllMocks();
   });
 
@@ -35,7 +43,10 @@ describe("Feishu thread bindings", () => {
 
   it("binds and resolves a Feishu topic conversation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    createFeishuThreadBindingManager({
+      cfg: { ...baseCfg, agents: { list: [{ id: "main" }, { id: "codex" }] } },
+      accountId: "default",
+    });
 
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
@@ -48,7 +59,6 @@ describe("Feishu thread bindings", () => {
       },
       placement: "current",
       metadata: {
-        agentId: "codex",
         label: "codex-main",
       },
     });

@@ -214,6 +214,25 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=0");
   });
 
+  it("persists and forwards signal-specific OTLP protocol overrides", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const protocolEnv = {
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/protobuf",
+    };
+
+    const result = runDockerSetup(activeSandbox, protocolEnv);
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    for (const [key, value] of Object.entries(protocolEnv)) {
+      expect(envFile).toContain(`${key}=${value}`);
+      expect(compose).toContain(`${key}: \${${key}:-}`);
+    }
+  });
+
   it("normalizes legacy OPENCLAW_DOCKER_APT_PACKAGES into OPENCLAW_IMAGE_APT_PACKAGES", async () => {
     const activeSandbox = requireSandbox(sandbox);
     await resetDockerLog(activeSandbox);
@@ -959,7 +978,6 @@ describe("scripts/docker/setup.sh", () => {
     const argLine = dockerfile
       .split("\n")
       .find((line) => line.startsWith("ARG OPENCLAW_IMAGE_APT_PACKAGES"));
-    expect(argLine).toBeDefined();
     // Must be bare `ARG OPENCLAW_IMAGE_APT_PACKAGES` with no default assignment
     expect(argLine).toBe("ARG OPENCLAW_IMAGE_APT_PACKAGES");
   });

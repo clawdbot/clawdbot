@@ -6,9 +6,9 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
@@ -43,7 +43,7 @@ import { publishRuntimeSecretsStateTransition } from "./server-startup-config.js
 export function isRuntimeSecretsPreparationCurrent(
   preparation: CurrentRuntimeSecretsPreparation,
 ): boolean {
-  return getActiveSecretsRuntimeSnapshotRevision() === preparation.expectedRevision;
+  return getActiveSecretsRuntimeSnapshotRevisionState() === preparation.expectedRevision;
 }
 
 async function activateSecretsRuntimeSnapshotIfCurrent(
@@ -124,8 +124,8 @@ export function createManagedReloadSecretHandlers(options: {
         throw new GatewayConfigReloadSupersededError();
       }
       const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
-      const previousSecretsSnapshot = getActiveSecretsRuntimeSnapshot();
-      const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+      const previousSecretsSnapshot = getActiveSecretsRuntimeSnapshotState();
+      const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
       const previousRuntimeMetadata = getRuntimeConfigSnapshotMetadata();
       const nextSecretsSourceConfig = prepareRuntimeCandidate(
         nextConfig,
@@ -158,7 +158,7 @@ export function createManagedReloadSecretHandlers(options: {
         ) {
           continue;
         }
-        const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
         const rollbackPublishedSource = async () => {
           if (
             !restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
@@ -246,7 +246,7 @@ export function createManagedReloadSecretHandlers(options: {
       if (!activated) {
         continue;
       }
-      const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
+      const committedSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
       const rollbackPublishedSource = async () => {
         if (
           !(await restoreSecretsRuntimeSnapshotIfCurrent(
@@ -334,8 +334,8 @@ export function createManagedReloadSecretHandlers(options: {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      const previousSnapshot = getActiveSecretsRuntimeSnapshot();
-      const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+      const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
+      const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
       const previousGenerationOwnership = captureSharedGatewaySessionGenerationOwnership(
         params.sharedGatewaySessionGenerationState,
       );
@@ -361,7 +361,7 @@ export function createManagedReloadSecretHandlers(options: {
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      if (getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision) {
+      if (getActiveSecretsRuntimeSnapshotRevisionState() !== previousSnapshotRevision) {
         continue;
       }
       const nextSharedGatewaySessionGeneration =
@@ -416,7 +416,7 @@ export function createManagedReloadSecretHandlers(options: {
             };
             const publishRuntime = async () => {
               runtimeSecretsPublished = true;
-              publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+              publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
               // Claim the generation at the snapshot activation edge, but keep
               // `required` until the runtime commit succeeds.
               claimGenerationOwnership();
@@ -461,9 +461,9 @@ export function createManagedReloadSecretHandlers(options: {
                     );
                   } else if (
                     publishedSnapshotRevision !== null &&
-                    getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
+                    getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision
                   ) {
-                    clearSecretsRuntimeSnapshot();
+                    clearSecretsRuntimeSnapshotState();
                     snapshotRestored = true;
                     if (generationOwnership) {
                       generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
@@ -572,9 +572,9 @@ export function createManagedReloadSecretHandlers(options: {
           } else if (
             publishedSnapshotRevision !== null &&
             generationOwnership &&
-            getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
+            getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision
           ) {
-            clearSecretsRuntimeSnapshot();
+            clearSecretsRuntimeSnapshotState();
             snapshotRestored = true;
             generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
               params.sharedGatewaySessionGenerationState,

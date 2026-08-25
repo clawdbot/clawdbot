@@ -1,7 +1,10 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -31,6 +34,7 @@ import {
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
+  placementContextMocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -70,8 +74,6 @@ export const automaticDirectReplyConfig = {
 } as const satisfies OpenClawConfig;
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
-
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
 
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
@@ -288,26 +290,49 @@ export function firstRouteReplyCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
+export function installThreadingTestPlugin(params: {
+  defaultAccountId?: string;
+  id: string;
+  resolveReplyToMode?: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+}) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: params.id,
-        source: "test",
-        plugin: {
-          ...plugin,
-          config: defaultAccountId
-            ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
-            : plugin.config,
-          threading: {
-            resolveReplyToMode: () => "all",
-          },
+  const registry = createTestRegistry([
+    {
+      pluginId: params.id,
+      source: "test",
+      plugin: {
+        ...plugin,
+        config: defaultAccountId
+          ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
+          : plugin.config,
+        threading: {
+          resolveReplyToMode: params.resolveReplyToMode ?? (() => "all"),
         },
       },
-    ]),
-  );
+    },
+  ]);
+  setActivePluginRegistry(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+}
+
+export function installCaptionedVoiceTestPlugin(id: string) {
+  const plugin = createChannelTestPluginBase({
+    id,
+    capabilities: {
+      chatTypes: ["direct"],
+      tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
+    },
+  });
+  const registry = createTestRegistry([
+    {
+      pluginId: id,
+      source: "test",
+      plugin,
+    },
+  ]);
+  setActivePluginRegistry(registry);
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
 }
 
 export function requireToolResultHandler(
@@ -350,11 +375,8 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 
 export const globalBeforeAll0 = async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
-  await import("./dispatch-acp-tts.runtime.js");
-  await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
@@ -484,12 +506,6 @@ export const describe0BeforeEach0 = () => {
   diagnosticMocks.logMessageProcessed.mockClear();
   diagnosticMocks.logSessionStateChange.mockClear();
   diagnosticMocks.markDiagnosticSessionProgress.mockClear();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
-  diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
-    status: "skipped",
-    action: "keep_lane",
-    reason: "active_reply_work",
-  });
   diagnosticMocks.logMessageDispatchStarted.mockClear();
   diagnosticMocks.logMessageDispatchCompleted.mockClear();
   hookMocks.runner.hasHooks.mockClear();
@@ -547,8 +563,8 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStore.mockReturnValue({});
   sessionStoreMocks.readSessionEntry.mockReset();
   sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveStorePath.mockReset();
-  sessionStoreMocks.resolveStorePath.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset();
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
   sessionStoreMocks.resolveSessionStoreEntry.mockReset();
   sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
     (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
@@ -598,12 +614,23 @@ export const describe1BeforeEach0 = () => {
 };
 
 export const describe2BeforeEach0 = () => {
+  // This suite swaps global registries between cases; keep each request on a live
+  // snapshot so later retirement cannot invalidate the dispatch under test.
+  const activeRegistry = getActivePluginRegistry();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+    activeRegistry ? { ...activeRegistry } : createTestRegistry([]),
+  );
   resetInboundDedupe();
   // Same routeReply reset as the sibling suite setups: queued once-values and
   // persistent overrides must not leak between tests.
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
+  placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementContextMocks.resolveSessionWorkerPlacementContext
+    .mockReset()
+    .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();

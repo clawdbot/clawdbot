@@ -1,7 +1,8 @@
-// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   isDefaultInstallIdentity: vi.fn(() => true),
+  isContainerEnvironment: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   needsNodeRuntimeMigration: vi.fn(() => false),
@@ -93,8 +95,13 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
+    gatewayPathMissing: "gateway-path-missing",
+    gatewayPathMissingDirs: "gateway-path-missing-dirs",
+    gatewayPathNonMinimal: "gateway-path-nonminimal",
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayTokenDrift: "gateway-token-drift",
+    gatewayTokenEmbedded: "gateway-token-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
@@ -123,6 +130,10 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/windows-port-pids.js", () => ({
   readWindowsProcessArgsSync: mocks.readWindowsProcessArgsSync,
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -308,12 +319,7 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls[index];
@@ -616,11 +622,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
-    mocks.readCommand.mockResolvedValue({
+    mockProcessPlatform("linux");
+    const managedDefinition = {
       programArguments: gatewayProgramArguments,
-      environment: {
-        TAVILY_API_KEY: "old-inline-value",
-      },
+      environment: { OPENCLAW_WRAPPER: "/managed-wrapper", TAVILY_API_KEY: "managed" },
+      environmentValueSources: { TAVILY_API_KEY: "file" as const },
+    };
+    mocks.readCommand.mockResolvedValue({
+      ...managedDefinition,
+      environment: { OPENCLAW_WRAPPER: "/operator-wrapper", TAVILY_API_KEY: "old-inline-value" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER"] } },
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
@@ -636,6 +648,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           code: "gateway-managed-env-embedded",
           message: "Gateway service embeds managed environment values that should load at runtime.",
           detail: "inline keys: TAVILY_API_KEY",
+          environmentKeys: ["TAVILY_API_KEY"],
           level: "recommended",
         },
       ],
@@ -649,14 +662,28 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "expectedManagedServiceEnvKeys",
       new Set(["TAVILY_API_KEY"]),
     );
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingEnvironment: managedDefinition.environment,
+        existingEnvironmentValueSources: managedDefinition.environmentValueSources,
+      }),
+    );
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs gateway services whose pinned port differs from current config", async () => {
+  it("repairs managed port drift even when an operator overrides the working directory", async () => {
+    mockProcessPlatform("linux");
     mocks.resolveGatewayPort.mockReturnValue(18888);
-    mocks.readCommand.mockResolvedValue({
+    const managedDefinition = {
       programArguments: gatewayProgramArguments,
+      workingDirectory: "/opt/managed-openclaw",
       environment: {},
+    };
+    mocks.readCommand.mockResolvedValue({
+      ...managedDefinition,
+      workingDirectory: "/opt/operator-openclaw",
+      managedDefinition,
+      managedOverrides: { launcher: "working-directory" },
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: ["/usr/bin/node", "/usr/local/bin/openclaw", "gateway", "--port", "18888"],
@@ -684,6 +711,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "install options",
     );
     expect(installOptions.programArguments).toContain("18888");
+    expectNoNoteContaining("operator-owned systemd drop-in", "Gateway service config");
   });
 
   it("repairs gateway services with embedded proxy environment values", async () => {
@@ -706,6 +734,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           code: "gateway-proxy-env-embedded",
           message: "Gateway service embeds proxy environment values that should not be persisted.",
           detail: "inline keys: HTTP_PROXY, HTTPS_PROXY",
+          environmentKeys: ["HTTP_PROXY", "HTTPS_PROXY"],
           level: "recommended",
         },
       ],
@@ -789,6 +818,114 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "relative entrypoint",
+      "dist/index.js",
+      "/opt/openclaw",
+      { launcher: "working-directory" },
+      undefined,
+    ],
+    [
+      "harmless environment with a managed token issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { keys: ["NODE_COMPILE_CACHE"] } },
+      "gateway-token-mismatch",
+    ],
+    [
+      "an operator-owned managed key with a different embedded managed key",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { keys: ["MANAGED_A"] } },
+      "gateway-managed-env-embedded",
+    ],
+    [
+      "a file reset with an inline token issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetFiles: true } },
+      "gateway-token-mismatch",
+    ],
+    [
+      "a file reset with an inline PATH issue",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetFiles: true } },
+      "gateway-path-missing",
+    ],
+    [
+      "a reset-only proxy removal",
+      "/usr/local/bin/openclaw",
+      undefined,
+      { environment: { resetInline: true } },
+      "gateway-proxy-env-embedded",
+    ],
+  ] as const)(
+    "does not attribute unrelated repair issues to %s",
+    async (_, entrypoint, directory, overrides, issue) => {
+      mockProcessPlatform("linux");
+      const embeddedManagedIssue = issue === "gateway-managed-env-embedded";
+      const managedDefinition = {
+        ...createGatewayCommand(entrypoint),
+        environment: embeddedManagedIssue
+          ? { MANAGED_B: "embedded-base-value" }
+          : issue === "gateway-proxy-env-embedded"
+            ? { HTTPS_PROXY: "http://proxy.local" }
+            : issue === "gateway-path-missing"
+              ? { PATH: "/managed/bin" }
+              : issue
+                ? { OPENCLAW_GATEWAY_TOKEN: "stale-token" }
+                : {},
+      };
+      mocks.readCommand.mockResolvedValue({
+        ...managedDefinition,
+        workingDirectory: directory,
+        environment:
+          "environment" in overrides && "keys" in overrides.environment
+            ? {
+                ...managedDefinition.environment,
+                [overrides.environment.keys[0]]: "operator-owned",
+              }
+            : managedDefinition.environment,
+        managedDefinition,
+        managedOverrides: overrides,
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: !issue,
+        issues: issue
+          ? [
+              {
+                code: issue,
+                message: "repair",
+                level: "recommended",
+                environmentKeys: embeddedManagedIssue
+                  ? ["MANAGED_B"]
+                  : issue === "gateway-proxy-env-embedded"
+                    ? ["HTTPS_PROXY"]
+                    : undefined,
+              },
+            ]
+          : [],
+      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...createGatewayCommand(directory ? path.join(directory, entrypoint) : entrypoint),
+        ...(embeddedManagedIssue
+          ? { environment: { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "MANAGED_A,MANAGED_B" } }
+          : {}),
+        environmentValueSources: {
+          PATH: "inline",
+          OPENCLAW_GATEWAY_TOKEN: "inline",
+        },
+      });
+
+      await runRepair({ gateway: { auth: { token: "configured-token" } } });
+
+      expectNoNoteContaining("operator-owned systemd drop-in", "Gateway service config");
+      expect(mocks.install).toHaveBeenCalledTimes(issue ? 1 : 0);
+    },
+  );
+
   it("keeps wrapper-managed gateway services aligned during entrypoint drift checks", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
     mocks.readCommand.mockResolvedValue({
@@ -853,6 +990,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readCommand.mockResolvedValue({
       ...createGatewayCommand("/opt/old-openclaw/dist/index.js"),
       sourcePath: "/etc/systemd/system/custom-gateway.service",
+      managedDefinition: createGatewayCommand("/opt/new-openclaw/dist/index.js"),
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: true,
@@ -875,6 +1013,69 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["command", { launcher: "command" as const }, "gateway-port-mismatch"],
+    ["directory", { launcher: "working-directory" as const }, "gateway-entrypoint-mismatch"],
+    ["environment", { environment: { keys: ["tavily_api_key"] } }, "gateway-managed-env-embedded"],
+    ["lowercase proxy", { environment: { keys: ["https_proxy"] } }, "gateway-proxy-env-embedded"],
+    ["file-backed token reset", { environment: { resetFiles: true } }, "gateway-token-mismatch"],
+    [
+      "file-backed managed reset",
+      { environment: { resetFiles: true } },
+      "gateway-managed-env-embedded",
+    ],
+    ["future inline PATH reset", { environment: { resetInline: true } }, "gateway-path-missing"],
+  ])(
+    "does not rewrite a stopped service controlled by a %s drop-in",
+    async (_, overrides, issue) => {
+      mockProcessPlatform("linux");
+      const fileReset = "environment" in overrides && "resetFiles" in overrides.environment;
+      const managedDefinition = {
+        ...createGatewayCommand("/usr/local/bin/openclaw"),
+        environment: { TAVILY_API_KEY: "same-value", https_proxy: "http://proxy.local" },
+      };
+      mocks.readCommand.mockResolvedValue({
+        ...managedDefinition,
+        sourcePath: "/home/test/.config/systemd/user/custom-gateway.service",
+        managedDefinition,
+        managedOverrides: overrides,
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: false,
+        issues: [
+          {
+            code: issue,
+            message: "repair",
+            level: "recommended",
+            environmentKeys:
+              issue === "gateway-proxy-env-embedded" ? ["https_proxy"] : ["TAVILY_API_KEY"],
+          },
+        ],
+      });
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...managedDefinition,
+        environment: {
+          PATH: "/usr/bin",
+          OPENCLAW_GATEWAY_TOKEN: "future-managed-token",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        },
+        environmentValueSources: {
+          PATH: "inline",
+          OPENCLAW_GATEWAY_TOKEN: fileReset ? "file" : "inline",
+          tavily_api_key: fileReset ? "file" : "inline",
+        },
+      });
+
+      await runRepair({ gateway: {} });
+
+      expectNoteContaining("operator-owned systemd drop-in", "Gateway service config");
+      expectNoteContaining("systemctl --user cat custom-gateway.service", "Gateway service config");
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.stage).not.toHaveBeenCalled();
+    },
+  );
 
   it("repairs entrypoint drift when the systemd unit is stopped", async () => {
     mockProcessPlatform("linux");
@@ -1051,12 +1252,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("falls back to embedded service token when config and env tokens are missing", async () => {
+    mockProcessPlatform("linux");
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
       },
       async () => {
         setupGatewayTokenRepairScenario();
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: { OPENCLAW_GATEWAY_TOKEN: "stale-token" },
+        });
 
         const cfg: OpenClawConfig = {
           gateway: {},
@@ -1135,7 +1341,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
       },
     });
@@ -1143,8 +1348,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1152,16 +1357,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
 
     expectNoteContaining(
-      "Gateway service was installed by an older OpenClaw version.",
+      "Gateway service entrypoint differs from the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -1182,16 +1385,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "0";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1199,9 +1400,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1221,15 +1420,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: {
         OPENCLAW_GATEWAY_TOKEN: "stale-token",
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
       },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1279,14 +1477,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readWindowsProcessArgsSync.mockReturnValue(args);
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.25" },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1294,7 +1492,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.26" },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1328,7 +1526,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1344,9 +1541,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
         mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue({
@@ -1427,7 +1622,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1443,9 +1637,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1473,16 +1665,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1490,9 +1680,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "stopped" });
 
@@ -1695,6 +1883,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 describe("maybeScanExtraGatewayServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.isContainerEnvironment.mockReturnValue(false);
     mocks.findExtraGatewayServices.mockResolvedValue([]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
@@ -1794,6 +1983,15 @@ describe("maybeScanExtraGatewayServices", () => {
     await detectExtraGatewayServiceIssues({ deep: true });
 
     expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
+  });
+
+  it("skips structured host-service discovery in externally managed containers", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await expect(detectExtraGatewayServiceIssues({ deep: true })).resolves.toEqual([]);
+
+    expect(mocks.findExtraGatewayServices).not.toHaveBeenCalled();
+    expect(mocks.isSystemdUnitActive).not.toHaveBeenCalled();
   });
 
   it("maps intentional extra gateway services to informational structured findings", () => {

@@ -4,6 +4,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  readClaudeCliFallbackSeed: vi.fn(),
+}));
+
+vi.mock("../cli-runner/log.js", () => ({
+  cliBackendLog: { warn: vi.fn() },
+}));
+
+vi.mock("../../gateway/cli-session-history.js", () => ({
+  readClaudeCliFallbackSeed: mocks.readClaudeCliFallbackSeed,
+}));
+
 import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -41,16 +54,6 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(`[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`);
   });
 
-  it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: false,
-      }),
-    ).toBe(originalBody);
-  });
-
   it("preserves original body for fallback retry when sessionHasHistory is undefined", () => {
     expect(
       resolveFallbackRetryPrompt({
@@ -73,16 +76,6 @@ describe("resolveFallbackRetryPrompt", () => {
       resolveFallbackRetryPrompt({
         body: originalBody,
         isFallbackRetry: false,
-        sessionHasHistory: false,
-      }),
-    ).toBe(originalBody);
-  });
-
-  it("preserves original body on fallback retry without history", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
         sessionHasHistory: false,
       }),
     ).toBe(originalBody);
@@ -244,68 +237,60 @@ describe("formatClaudeCliFallbackPrelude", () => {
 });
 
 describe("buildClaudeCliFallbackContextPrelude", () => {
+  beforeEach(() => {
+    mocks.readClaudeCliFallbackSeed.mockReset();
+  });
+
   it("returns empty string when no sessionId is provided", () => {
     expect(buildClaudeCliFallbackContextPrelude({ cliSessionId: undefined })).toBe("");
     expect(buildClaudeCliFallbackContextPrelude({ cliSessionId: "  " })).toBe("");
+    expect(mocks.readClaudeCliFallbackSeed).not.toHaveBeenCalled();
   });
 
-  it("returns empty string when the Claude session file does not exist", async () => {
-    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-prelude-"));
-    try {
-      expect(
-        buildClaudeCliFallbackContextPrelude({
-          cliSessionId: "missing-session",
-          homeDir: tmpHome,
-        }),
-      ).toBe("");
-    } finally {
-      await fs.rm(tmpHome, { recursive: true, force: true });
-    }
+  it("returns empty string when the Claude session loader finds no seed", () => {
+    mocks.readClaudeCliFallbackSeed.mockReturnValue(undefined);
+
+    expect(
+      buildClaudeCliFallbackContextPrelude({
+        cliSessionId: "missing-session",
+        homeDir: "/tmp/test-home",
+      }),
+    ).toBe("");
+    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
+      cliSessionId: "missing-session",
+      homeDir: "/tmp/test-home",
+    });
   });
 
-  it("reads a real Claude JSONL fixture and emits a labeled prelude end-to-end", async () => {
-    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-prelude-"));
-    const sessionId = "e2e-session";
-    const projectsDir = path.join(tmpHome, ".claude", "projects", "demo");
-    try {
-      // Use Claude's JSONL shape directly so parser and formatter behavior stay
-      // aligned with real CLI transcripts rather than synthetic message arrays.
-      await fs.mkdir(projectsDir, { recursive: true });
-      const lines = [
+  it("formats the Claude session loader seed into a labeled fallback prelude", () => {
+    mocks.readClaudeCliFallbackSeed.mockReturnValue({
+      recentTurns: [
         {
-          type: "user",
-          uuid: "u1",
-          message: { role: "user", content: "prior question about deploys" },
+          role: "user",
+          content: "prior question about deploys",
         },
         {
-          type: "assistant",
-          uuid: "a1",
-          message: {
-            role: "assistant",
-            model: "claude-sonnet-4-6",
-            content: [
-              { type: "text", text: "prior answer about blue-green" },
-              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } },
-            ],
-          },
+          role: "assistant",
+          content: [
+            { type: "text", text: "prior answer about blue-green" },
+            { type: "toolcall", name: "Bash" },
+          ],
         },
-      ];
-      await fs.writeFile(
-        path.join(projectsDir, `${sessionId}.jsonl`),
-        `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-        "utf-8",
-      );
-      const prelude = buildClaudeCliFallbackContextPrelude({
-        cliSessionId: sessionId,
-        homeDir: tmpHome,
-      });
-      expect(prelude).toContain("## Prior session context (from claude-cli)");
-      expect(prelude).toContain("user: prior question about deploys");
-      expect(prelude).toContain("assistant: prior answer about blue-green");
-      expect(prelude).toContain("(tool call: Bash)");
-    } finally {
-      await fs.rm(tmpHome, { recursive: true, force: true });
-    }
+      ],
+    });
+
+    const prelude = buildClaudeCliFallbackContextPrelude({
+      cliSessionId: " e2e-session ",
+      homeDir: "/tmp/test-home",
+    });
+    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
+      cliSessionId: "e2e-session",
+      homeDir: "/tmp/test-home",
+    });
+    expect(prelude).toContain("## Prior session context (from claude-cli)");
+    expect(prelude).toContain("user: prior question about deploys");
+    expect(prelude).toContain("assistant: prior answer about blue-green");
+    expect(prelude).toContain("(tool call: Bash)");
   });
 });
 
@@ -504,26 +489,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
   }
 
   const GRACE_MS = 250;
-
-  it("returns false when the Claude project transcript is missing or empty", async () => {
-    const workspaceDir = await makeWorkspace();
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "missing-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-
-    await writeClaudeProjectFile(workspaceDir, "empty-session", "");
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "empty-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-  });
 
   it("returns true when the Claude project transcript has an assistant message", async () => {
     const workspaceDir = await makeWorkspace();

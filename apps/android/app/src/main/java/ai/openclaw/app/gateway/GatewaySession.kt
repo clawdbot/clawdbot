@@ -214,7 +214,7 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
-  val methods: Set<String> = emptySet(),
+  val methods: Set<String>? = null,
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -229,6 +229,7 @@ private data class SelectedConnectAuth(
   val authDeviceToken: String?,
   val authPassword: String?,
   val signatureToken: String?,
+  val storedToken: String?,
   val storedScopes: List<String>,
   val authSource: GatewayConnectAuthSource,
   val attemptedDeviceTokenRetry: Boolean,
@@ -1362,7 +1363,7 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth)
       connectDeferred.complete(connected)
     }
 
@@ -1423,7 +1424,7 @@ class GatewaySession(
     private fun parseConnectSuccess(
       res: RpcResponse,
       deviceId: String,
-      authSource: GatewayConnectAuthSource,
+      selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
@@ -1440,7 +1441,6 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
-          .orEmpty()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -1451,9 +1451,15 @@ class GatewaySession(
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+        // Hello scopes describe this socket. Reissuing the same stored token must not narrow its
+        // reusable grant metadata, while a rotated token starts with the live approved scopes.
+        val sameStoredTokenRecord =
+          deviceToken.trim() == selectedAuth.storedToken &&
+            authRole.trim().equals(options.role.trim(), ignoreCase = true)
+        val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
+        persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
       }
-      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+      if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
@@ -1973,11 +1979,8 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
     val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = endpoint.port, suffix = suffix)
   }
 
   private fun buildCanvasUrl(
@@ -2042,6 +2045,7 @@ class GatewaySession(
       authDeviceToken = authDeviceToken,
       authPassword = explicitPassword,
       signatureToken = authToken ?: authBootstrapToken,
+      storedToken = storedToken,
       storedScopes = storedScopes,
       authSource = authSource,
       attemptedDeviceTokenRetry = shouldUseDeviceRetryToken,
@@ -2167,9 +2171,11 @@ internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
   useTls: Boolean,
+  contextPath: String = "",
 ): String {
   val scheme = if (useTls) "wss" else "ws"
-  return "$scheme://${formatGatewayAuthority(host, port)}"
+  val path = normalizeGatewayContextPath(contextPath)
+  return "$scheme://${formatGatewayAuthority(host, port)}$path"
 }
 
 /** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
@@ -2178,7 +2184,15 @@ internal fun buildGatewayWebSocketUpgradeRequest(
   tls: GatewayTlsParams?,
   customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
 ): Request {
-  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  val request =
+    Request.Builder().url(
+      buildGatewayWebSocketUrl(
+        endpoint.host,
+        endpoint.port,
+        tls != null,
+        endpoint.contextPath,
+      ),
+    )
   if (tls == null) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens

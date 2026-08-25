@@ -13,6 +13,7 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
+import { abortable } from "./abortable.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
@@ -184,20 +185,6 @@ function hasConfiguredLocalProviderSignal(params: {
   );
 }
 
-function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
-  const rawModelId = model?.id;
-  if (typeof rawModelId !== "string") {
-    return false;
-  }
-
-  const provider = model?.provider?.trim().toLowerCase();
-  if (provider && !provider.startsWith("ollama")) {
-    return false;
-  }
-
-  return isCloudModelRef(rawModelId);
-}
-
 type RuntimeModelLocality = {
   isLocalRuntimeModel: boolean;
   isExplicitLocalHostnameRuntimeModel: boolean;
@@ -220,7 +207,7 @@ function resolveRuntimeModelLocality(params?: {
       isSelfHostedHostnameRuntimeModel: false,
     };
   }
-  const notCloudModel = !isOllamaCloudModel(params?.model);
+  const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
     isLocalRuntimeModel: isLocalProviderBaseUrl(baseUrl) && notCloudModel,
     isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostnameBaseUrl(baseUrl) && notCloudModel,
@@ -261,7 +248,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -377,7 +364,7 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
   const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
+    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
   const timeoutBounds = [
     // Unlimited run budget bounds total cost, not first-token liveness. Omit
     // the sentinel from bounds so provider-class defaults still apply.
@@ -451,6 +438,8 @@ export function streamWithIdleTimeout(
     const cleanupSourceSignal = () => {
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
+    const withSourceAbort = <T>(promise: Promise<T>) =>
+      sourceSignal ? abortable(sourceSignal, promise) : promise;
     const wrappedOptions = {
       ...options,
       signal: streamAbortController.signal,
@@ -549,7 +538,11 @@ export function streamWithIdleTimeout(
                   firstArmPending = true;
                   armTimer();
                 });
-                const result = await Promise.race([streamIterator.next(), timeoutPromise]);
+                // Providers may ignore their mirrored abort signal, so caller
+                // cancellation must also settle this exact iterator wait.
+                const result = await withSourceAbort(
+                  Promise.race([streamIterator.next(), timeoutPromise]),
+                );
 
                 if (result.done) {
                   cleanupIterator();
@@ -591,12 +584,13 @@ export function streamWithIdleTimeout(
 
       // Some providers return a pending Promise before the stream object exists;
       // protect that creation phase with the same idle watchdog.
-      return Promise.race([
-        Promise.resolve(maybeStream),
-        createTimeoutPromise((timer) => {
-          streamPromiseTimer = timer;
-        }),
-      ]).then(
+      const timeoutPromise = createTimeoutPromise((timer) => {
+        streamPromiseTimer = timer;
+      });
+      const streamPromise = withSourceAbort(
+        Promise.race([Promise.resolve(maybeStream), timeoutPromise]),
+      );
+      return streamPromise.then(
         (stream) => {
           clearStreamPromiseTimer();
           return wrapStream(stream);

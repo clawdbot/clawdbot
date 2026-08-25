@@ -12,10 +12,9 @@ function loadCompactRuntime() {
 }
 
 /** Loads the compaction runtime on demand and forwards the direct compaction call. */
-export async function compactEmbeddedAgentSessionDirect(
+export async function compactEmbeddedAgentSessionOnDemand(
   params: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const { compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectLocal } =
-    await loadCompactRuntime();
-  return compactEmbeddedAgentSessionDirectLocal(params);
+  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
+  return compactEmbeddedAgentSessionDirect(params);
 }

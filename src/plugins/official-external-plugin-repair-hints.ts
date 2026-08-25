@@ -21,6 +21,10 @@ export type OfficialExternalPluginRepairHint = {
   repairHint: string;
 };
 
+type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepairHint & {
+  channelId: string;
+};
+
 /** Resolves install/doctor commands for an official external plugin or channel id. */
 export function resolveOfficialExternalPluginRepairHint(
   pluginIdOrChannelId: string,
@@ -54,33 +58,61 @@ export function resolveOfficialExternalPluginRepairHint(
   };
 }
 
-/** Resolves a repair hint only when a missing configured channel is blocked by no plugin owner. */
-export function resolveMissingOfficialExternalChannelPluginRepairHint(params: {
+type MissingOfficialExternalChannelPluginRepairHintParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  channelId: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  /** Prepared manifest facts. Callers resolving many channels must pass these, or
-   * presence policy rebuilds the whole manifest registry once per channel. */
+  /** Prepared manifest facts avoid rebuilding the registry for this resolution. */
   manifestRecords?: readonly PluginManifestRecord[];
-}): OfficialExternalPluginRepairHint | null {
-  const hint = resolveOfficialExternalPluginRepairHint(params.channelId);
-  if (!hint?.channelId || hint.channelId !== params.channelId) {
-    return null;
+};
+
+/** Resolves repair hints for missing configured channels with one presence-policy pass. */
+export function resolveMissingOfficialExternalChannelPluginRepairHints(
+  params: MissingOfficialExternalChannelPluginRepairHintParams & {
+    channelIds: readonly string[];
+  },
+): MissingOfficialExternalChannelPluginRepairHint[] {
+  if (params.channelIds.length === 0) {
+    return [];
   }
-  const policy = resolveConfiguredChannelPresencePolicy({
-    config: params.config,
-    activationSourceConfig: params.activationSourceConfig,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includePersistedAuthState: false,
-    manifestRecords: params.manifestRecords,
-  }).find((entry) => entry.channelId === hint.channelId);
-  if (!policy || policy.effective) {
-    return null;
-  }
-  return policy.blockedReasons.length === 1 && policy.blockedReasons[0] === "no-channel-owner"
-    ? hint
-    : null;
+  const policiesByChannelId = new Map(
+    resolveConfiguredChannelPresencePolicy({
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      includePersistedAuthState: false,
+      manifestRecords: params.manifestRecords,
+    }).map((entry) => [entry.channelId, entry]),
+  );
+  return params.channelIds.flatMap((channelId) => {
+    const hint = resolveOfficialExternalPluginRepairHint(channelId);
+    if (!hint?.channelId || hint.channelId !== channelId) {
+      return [];
+    }
+    const policy = policiesByChannelId.get(hint.channelId);
+    return policy &&
+      !policy.effective &&
+      policy.blockedReasons.length === 1 &&
+      policy.blockedReasons[0] === "no-channel-owner"
+      ? [{ ...hint, channelId: hint.channelId }]
+      : [];
+  });
+}
+
+/** Resolves a repair hint only when a missing configured channel is blocked by no plugin owner. */
+export function resolveMissingOfficialExternalChannelPluginRepairHint(
+  params: MissingOfficialExternalChannelPluginRepairHintParams & { channelId: string },
+): MissingOfficialExternalChannelPluginRepairHint | null {
+  return (
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      channelIds: [params.channelId],
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      manifestRecords: params.manifestRecords,
+    })[0] ?? null
+  );
 }

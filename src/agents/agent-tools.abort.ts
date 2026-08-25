@@ -6,6 +6,10 @@ import { createAbortError } from "../infra/abort-signal.js";
  */
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 
 function throwAbortError(): never {
   throw createAbortError("Aborted");
@@ -20,7 +24,7 @@ function throwAbortError(): never {
  * Tool settlements pass through untouched to preserve tool error semantics,
  * including non-Error rejections.
  */
-function raceWithAbortSignal<T>(
+export function raceWithAbortSignal<T>(
   promise: Promise<T>,
   signal: AbortSignal,
   yieldRunSignal?: AbortSignal,
@@ -88,5 +92,47 @@ export function wrapToolWithAbortSignal(
       );
     },
   };
-  return copyAgentToolMetadata(tool, wrappedTool);
+  copyAgentToolMetadata(tool, wrappedTool);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrappedTool, async (params) => {
+      const combinedSignal = params.signal
+        ? AbortSignal.any([params.signal, abortSignal])
+        : abortSignal;
+      if (combinedSignal.aborted) {
+        throwAbortError();
+      }
+      const yieldRunSignal = tool.name === "sessions_yield" ? abortSignal : undefined;
+      const sourcePreparation = sourcePreparer({ ...params, signal: combinedSignal });
+      let prepared;
+      try {
+        prepared = await raceWithAbortSignal(sourcePreparation, combinedSignal, yieldRunSignal);
+      } catch (error) {
+        void sourcePreparation.then(
+          (latePreparation) => latePreparation.dispose(),
+          () => undefined,
+        );
+        throw error;
+      }
+      if (prepared.kind === "immediate") {
+        return prepared;
+      }
+      return {
+        kind: "ready",
+        args: prepared.args,
+        execute: (onImplementationStart) => {
+          if (combinedSignal.aborted) {
+            throwAbortError();
+          }
+          return raceWithAbortSignal(
+            prepared.execute(onImplementationStart),
+            combinedSignal,
+            yieldRunSignal,
+          );
+        },
+        dispose: prepared.dispose,
+      };
+    });
+  }
+  return wrappedTool;
 }

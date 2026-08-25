@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import {
@@ -23,34 +23,35 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+} from "./subagents/registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
+  activateSubagentRegistry,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "./subagent-test-fixtures.test-helpers.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
   const sessionKey = String(payload.sessionKey);
   const sessionId = String(payload.expectedExistingSessionId);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
+  const scope = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
   const admission = consumeSessionWorkAdmissionHandoff({
     handoffId: String(payload.internalRuntimeHandoffId),
     scope,
@@ -73,10 +74,15 @@ async function acceptRecoveryDispatch(payload: Record<string, unknown>) {
 
 const dispatchAgent = vi.fn(acceptRecoveryDispatch);
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  abortAgent: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-  waitForAgent: vi.fn(),
+  waitForAgent: vi.fn(async () => ({
+    status: "pending",
+  })) as GatewayRecoveryRuntime["waitForAgent"],
   sendRecoveryNotice: vi.fn(),
 };
+const activateGatewayRuntime = () =>
+  activateSubagentRegistry(() => ({ recoveryRuntime: gatewayRuntime }) as never);
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -114,10 +120,10 @@ describe("subagent orphan recovery — faithful restart path", () => {
     // external side effects) are recorded so completeSubagentRun runs in-process.
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
+    activateGatewayRuntime();
     dispatchAgent.mockReset();
     dispatchAgent.mockImplementation(acceptRecoveryDispatch);
   });
@@ -255,8 +261,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     let strictWriteCount = 0;
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;
@@ -353,6 +358,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     acceptedAdmission?.release();
     rotateAgentEventLifecycleGeneration();
     initSubagentRegistry();
+    activateGatewayRuntime();
     const restored = subagentRuns.get(runId);
     expect(restored?.execution.restartRecovery).toMatchObject({
       sessionMarker: `sess-lost-acceptance:${now}`,
@@ -407,8 +413,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     let strictWriteCount = 0;
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;
@@ -455,11 +460,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       callGateway,
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
     initSubagentRegistry();
+    activateGatewayRuntime();
     await Promise.resolve();
     expect(
       callGatewayRequests.mock.calls.some(
@@ -527,11 +532,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
     rotateAgentEventLifecycleGeneration();
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
     initSubagentRegistry();
+    activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 
@@ -560,6 +565,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
     initSubagentRegistry();
+    activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 
@@ -602,8 +608,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     let strictWriteCount = 0;
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
-      getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;

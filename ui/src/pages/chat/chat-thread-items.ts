@@ -1,23 +1,19 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type {
-  ChatItem,
-  ChatQueueItem,
-  NormalizedMessage,
-  ToolCard,
-} from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
-  normalizeMessage,
   stripMessageDisplayMetadataText,
+  normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -63,24 +59,12 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
-export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
-  if (!asRecord(message)) {
-    return null;
-  }
-  try {
-    return normalizeMessage(message);
-  } catch {
-    return null;
-  }
-}
-
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  if (!normalizedQuery) {
-    return true;
-  }
-  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
-  return text.includes(normalizedQuery);
+  return (
+    !normalizedQuery ||
+    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
+  );
 }
 
 export function turnHasMatchingAssistant(
@@ -202,18 +186,16 @@ export function findNearestAssistantMessageIndex(
   let currentTurnEnd = maximumIndex;
   for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
-    if (item?.kind !== "message") {
+    if (!item || !chatItemStartsUserTurn(item)) {
       continue;
     }
-    const normalized = safeNormalizeMessage(item.message);
-    if (!normalized || normalizeRoleForGrouping(normalized.role).toLowerCase() !== "user") {
-      continue;
-    }
-    if (
-      toolTimestamp != null &&
-      normalized.timestamp != null &&
-      normalized.timestamp > toolTimestamp
-    ) {
+    const boundaryTimestamp =
+      item.kind === "notice"
+        ? item.timestamp
+        : item.kind === "message"
+          ? (safeNormalizeMessage(item.message)?.timestamp ?? null)
+          : null;
+    if (toolTimestamp != null && boundaryTimestamp != null && boundaryTimestamp > toolTimestamp) {
       currentTurnEnd = index;
       break;
     }
@@ -314,6 +296,22 @@ export function resolveToolBlockId(
 
 export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+export function readPendingSendFailure(message: unknown): {
+  error?: string;
+  id: string;
+} | null {
+  const metadata = asRecord(asRecord(message)?.["__openclaw"]);
+  const state = metadata?.state;
+  const id = metadata?.id;
+  if (metadata?.kind !== "pending-send" || state !== "failed" || typeof id !== "string") {
+    return null;
+  }
+  return {
+    id,
+    ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
+  };
 }
 
 function readChatThreadMessageIdentity(message: unknown) {
@@ -554,15 +552,15 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-
 export function hasRenderableNormalizedMessage(message: unknown): boolean {
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
     return false;
   }
   const role = normalizeRoleForGrouping(normalized.role);
-  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
+  const label = role === "assistant" && normalized.senderLabel?.trim();
+  const media = role === "user" && readTranscriptMediaEntries(message).length;
+  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
 }
 
 export function sanitizeStreamText(text: string): string {
@@ -571,31 +569,24 @@ export function sanitizeStreamText(text: string): string {
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
-  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
-  if (content.length === 0) {
-    return null;
-  }
-  return {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: {
-      kind: "pending-send",
+  const runId = item.sendRunId ?? item.pendingRunId;
+  return buildLocalUserMessage({
+    text: item.text,
+    attachments: item.attachments,
+    createdAt: item.createdAt,
+    ...(runId ? { runId } : {}),
+    replyToId: item.replyToId,
+    sender: item.sender,
+    pending: {
       id: item.id,
       state: item.sendState,
-      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
-      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
-      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
-      ...(item.sender?.profileAvatarUrl
-        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
-        : {}),
+      error: item.sendError,
     },
-  };
+  });
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {
-  const timestamp = asRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+  return asFiniteNumber(asRecord(message)?.timestamp) ?? null;
 }
 
 function chatItemTimestamp(item: ChatItem): number | null {
@@ -610,7 +601,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "question":
       return item.startedAt;
     case "reading-indicator":
-    case "plan":
       return null;
   }
   return null;

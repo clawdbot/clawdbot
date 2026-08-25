@@ -1,6 +1,8 @@
 // Source-reply suppression after message-tool delivery.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { recordEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import {
   createSubscribedSessionHarness,
   createStubSessionHarness,
@@ -8,6 +10,13 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+
+const retryingCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
+  }) as const;
 
 function createBlockReplyHarness(
   blockReplyBreak: "message_end" | "text_end",
@@ -22,7 +31,24 @@ function createBlockReplyHarness(
 ) {
   // Harness exposes both emitted block replies and subscription state so tests
   // can distinguish suppression from missing delivery tracking.
-  const { session, emit } = createStubSessionHarness();
+  const { session, emit: rawEmit } = createStubSessionHarness();
+  const sessionManager = {};
+  Object.assign(session, { sessionManager });
+  const emit = (evt: unknown) => {
+    const event = asOptionalRecord(evt);
+    const details = asOptionalRecord(asOptionalRecord(event?.result)?.details);
+    if (
+      event?.type === "tool_execution_end" &&
+      event.toolName === "message" &&
+      typeof event.toolCallId === "string" &&
+      details?.messageDelivery !== undefined
+    ) {
+      recordEmbeddedToolReceipt(sessionManager, event.toolCallId, {
+        messageDelivery: details.messageDelivery,
+      });
+    }
+    rawEmit(evt);
+  };
   const onBlockReply = vi.fn();
   const onPartialReply = vi.fn();
   const onAgentEvent = vi.fn();
@@ -71,8 +97,37 @@ async function emitMessageToolLifecycle(params: {
     toolName: "message",
     toolCallId: params.toolCallId,
     isError: false,
-    result: params.result,
+    result: attachCoreMessageDeliveryFact(params.result),
   });
+}
+
+function attachCoreMessageDeliveryFact(result: unknown): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+  const record = result as Record<string, unknown>;
+  const details =
+    record.details && typeof record.details === "object" && !Array.isArray(record.details)
+      ? (record.details as Record<string, unknown>)
+      : undefined;
+  const deliveryStatus = details?.deliveryStatus;
+  const status =
+    deliveryStatus === "sent"
+      ? "settled"
+      : deliveryStatus === "dry_run"
+        ? "dryRun"
+        : deliveryStatus === "suppressed"
+          ? "suppressed"
+          : undefined;
+  return status && details
+    ? {
+        ...record,
+        details: {
+          ...details,
+          messageDelivery: { status, partialDelivery: false, createdThreadIds: [] },
+        },
+      }
+    : result;
 }
 
 function emitAssistantMessageEnd(
@@ -221,7 +276,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       to: null,
       result: { details: { deliveryStatus: "sent" } },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     await Promise.resolve();
     emitAssistantMessageEnd(emit, "Done after compaction.");
     await Promise.resolve();
@@ -247,7 +302,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         },
       },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     await Promise.resolve();
 
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
@@ -305,6 +360,36 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
 
     expect(onReasoningStream).not.toHaveBeenCalled();
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+  });
+
+  it("does not expose a reasoning boundary after message-tool-only delivery", async () => {
+    const onReasoningStream = vi.fn();
+    const onReasoningEnd = vi.fn();
+    const { emit } = createBlockReplyHarness("message_end", {
+      sourceReplyDeliveryMode: "message_tool_only",
+      reasoningMode: "stream",
+      onReasoningEnd,
+      onReasoningStream,
+    });
+
+    emit({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }] },
+      assistantMessageEvent: { type: "thinking_delta", delta: "private" },
+    });
+    expect(onReasoningStream).toHaveBeenCalledTimes(1);
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-after-reasoning",
+      message: "Starting the requested work.",
+      to: null,
+      result: { details: { deliveryStatus: "sent" } },
+    });
+    emitAssistantMessageEnd(emit, "Private final output.");
+    await Promise.resolve();
+
     expect(onReasoningEnd).not.toHaveBeenCalled();
   });
 
@@ -407,7 +492,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       emit,
       toolCallId: "tool-message-final",
       message: "Final answer sent through the message tool.",
-      result: { details: { deliveryStatus: "sent" } },
+      result: { details: { status: "sent" } },
     });
     onToolResult.mockClear();
 

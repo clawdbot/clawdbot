@@ -38,9 +38,9 @@ import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
   resolveToolErrorDiagnostic,
-  shouldEmitLoopWarning,
   unwrapErrorCause,
 } from "./agent-tools.before-tool-call.diagnostics.js";
+import { consumeBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
 import type {
   BeforeToolCallPolicyDiagnosticState,
   HookContext,
@@ -48,9 +48,11 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import {
   getCodeModeExecBeforeHookMetadataForToolKind,
-  normalizeCodeModeExecBeforeHookParamsForToolKind,
+  reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
@@ -80,7 +82,7 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
     agentId: voiceRun?.agentId,
     voiceSessionId: voiceRun?.voiceSessionId,
     runId: args.ctx?.runId,
-    toolName: normalizeToolName(args.toolName || "tool"),
+    toolName: normalizeToolPolicyName(args.toolName || "tool"),
     toolParams: args.params,
     ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
   });
@@ -96,34 +98,14 @@ export async function runBeforeToolCallHook(args: {
   signal?: AbortSignal;
   approvalMode?: "request" | "report" | "deny" | "defer";
 }): Promise<HookOutcome> {
-  const toolName = normalizeToolName(args.toolName || "tool");
+  const toolName = normalizeToolPolicyName(args.toolName || "tool");
   const params = args.params;
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
   try {
     if (args.ctx?.sessionKey) {
-      const {
-        markDiagnosticArgumentChurnObservation,
-        getDiagnosticSessionState,
-        logToolLoopAction,
-        detectToolCallLoop,
-        recordToolCall,
-      } = await loadBeforeToolCallRuntime();
-      const sessionState = getDiagnosticSessionState({
-        sessionKey: args.ctx.sessionKey,
-        sessionId: args.ctx.sessionId,
-      });
-
-      const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
-      const loopResult = detectToolCallLoop(
-        sessionState,
-        toolName,
-        params,
-        args.ctx.loopDetection,
-        loopScope,
-      );
-
       if (args.ctx.loopDetection?.enabled === true) {
+        const { markDiagnosticArgumentChurnObservation } = await loadBeforeToolCallRuntime();
         // Each concurrent policy/approval wait owns a token. Releasing one call
         // must not expose the churn clock while a sibling is still pending.
         const policyWaitToken = Symbol("before-tool-call-policy-wait");
@@ -143,56 +125,23 @@ export async function runBeforeToolCallHook(args: {
             policyWait: "exit",
           });
       }
-
-      if (loopResult.stuck) {
-        if (loopResult.level === "critical") {
-          log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
-          logToolLoopAction({
-            sessionKey: args.ctx.sessionKey,
-            sessionId: args.ctx.sessionId,
-            toolName,
-            level: "critical",
-            action: "block",
-            detector: loopResult.detector,
-            count: loopResult.count,
-            message: loopResult.message,
-            pairedToolName: loopResult.pairedToolName,
-          });
+      const batchAdmitted =
+        args.toolCallId !== undefined &&
+        consumeBatchAdmittedToolCall(args.toolCallId, args.ctx.runId);
+      if (!batchAdmitted) {
+        const intervention = await admitSingleToolCallLoop(
+          { toolName, params, toolCallId: args.toolCallId },
+          args.ctx,
+        );
+        if (intervention) {
           return {
             blocked: true,
             kind: "veto",
             deniedReason: "tool-loop",
-            reason: loopResult.message,
+            reason: intervention.reason,
             params,
           };
         }
-        const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
-        const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
-        if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
-          logToolLoopAction({
-            sessionKey: args.ctx.sessionKey,
-            sessionId: args.ctx.sessionId,
-            toolName,
-            level: "warning",
-            action: "warn",
-            detector: loopResult.detector,
-            count: loopResult.count,
-            message: loopResult.message,
-            pairedToolName: loopResult.pairedToolName,
-          });
-        }
-      }
-
-      if (args.ctx.loopDetection?.enabled === true) {
-        recordToolCall(
-          sessionState,
-          toolName,
-          params,
-          args.toolCallId,
-          args.ctx.loopDetection,
-          loopScope,
-        );
       }
     }
 
@@ -258,6 +207,9 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
     });
     const toolContext = buildToolContext(toolIdentity);
+    // Policies form a mutation chain. Reconcile each decision against the prior
+    // alias pair so an explicit blank rewrite remains fail-closed.
+    let trustedPolicyParams = normalizedParams;
     const trustedPolicyResult = shouldRunTrustedPolicies
       ? await runTrustedToolPolicies(
           {
@@ -276,13 +228,16 @@ export async function runBeforeToolCallHook(args: {
             ...(args.ctx?.config ? { config: args.ctx.config } : {}),
             deriveEvent: deriveToolEventParams,
             normalizeEvent(eventValue) {
-              const normalizedEventParams = normalizeCodeModeExecBeforeHookParamsForToolKind({
-                toolKind: eventValue.toolKind,
-                params: eventValue.params,
+              const normalizedEventParams = reconcileCodeModeExecBeforeHookParams({
+                owner: { toolKind: eventValue.toolKind },
+                originalParams: trustedPolicyParams,
+                hookParams: trustedPolicyParams,
+                adjustedParams: eventValue.params,
               });
               if (!isPlainObject(normalizedEventParams)) {
                 return undefined;
               }
+              trustedPolicyParams = normalizedEventParams;
               const normalizedEventIdentity = getCodeModeExecBeforeHookMetadataForToolKind({
                 toolKind: eventValue.toolKind,
                 params: normalizedEventParams,
@@ -329,11 +284,7 @@ export async function runBeforeToolCallHook(args: {
         trustedApprovalResolution = approvalOutcome.approvalResolution;
       }
     }
-    const rawPolicyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
-    const policyAdjustedParams = normalizeCodeModeExecBeforeHookParamsForToolKind({
-      toolKind: args.toolKind,
-      params: rawPolicyAdjustedParams,
-    });
+    const policyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
     const policyAdjustedToolIdentity =
       getCodeModeExecBeforeHookMetadataForToolKind({
         toolKind: args.toolKind,
@@ -366,6 +317,14 @@ export async function runBeforeToolCallHook(args: {
       return allowed;
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
+    const callerIdentity = getGatewayToolCallerIdentity();
+    const receipt =
+      callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
+        ? {
+            token: callerIdentity.executionIdentityToken,
+            assertAuthority: callerIdentity.receiptAuthority,
+          }
+        : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
@@ -378,6 +337,7 @@ export async function runBeforeToolCallHook(args: {
           : {}),
       },
       policyAdjustedToolContext,
+      receipt,
     );
 
     if (hookResult?.block) {
@@ -415,7 +375,12 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
-      finalParams = mergeParamsWithApprovalOverrides(finalParams, hookResult.params);
+      finalParams = reconcileCodeModeExecBeforeHookParams({
+        owner: { toolKind: args.toolKind },
+        originalParams: policyAdjustedParams,
+        hookParams: policyAdjustedParams,
+        adjustedParams: mergeParamsWithApprovalOverrides(finalParams, hookResult.params),
+      });
     }
     const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
       toolName,

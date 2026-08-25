@@ -1,4 +1,5 @@
 // Telegram tests cover format plugin behavior.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
@@ -127,6 +128,31 @@ describe("markdownToTelegramHtml", () => {
 
     expect(html).toBe("<pre><code>| Name | Age |\n| Ada  | 37  |</code></pre>\n\n");
     expect(html).not.toContain("&lt;table");
+  });
+
+  it("aligns Unicode cells in raw HTML table fallbacks", () => {
+    const input = [
+      "<table><tr><th>Name</th><th>Mark</th><th>Note</th></tr>",
+      '<tr><td colspan="2">小明</td><td>✅</td></tr>',
+      "<tr><td>cafe\u0301</td><td>👨‍👩‍👧</td><td>©️</td></tr>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+    const grid = html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1];
+    expect(grid).toBeDefined();
+    const widths = grid?.split("\n").map((line) => stringWidth(line)) ?? [];
+    expect(new Set(widths).size).toBe(1);
+  });
+
+  it("does not allocate a table cell for zero-width spaces", () => {
+    const html = renderTelegramHtmlText(
+      "<table><tr><td>A\u200BB</td></tr><tr><td>AB</td></tr></table>",
+      { textMode: "html" },
+    );
+    const [withInvisible, reference] =
+      html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]?.split("\n") ?? [];
+    expect(withInvisible?.replace("\u200B", "")).toBe(reference);
   });
 
   it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
@@ -388,6 +414,24 @@ describe("markdownToTelegramHtml", () => {
         "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
       ),
     ).toBe("Name | Age\nAlice | 30");
+  });
+
+  it.each([
+    ["malformed suffix", "colspan=2x", "Alice | 30"],
+    ["plus sign", "colspan=+2", "Alice | 30"],
+    ["minus sign", "colspan=-2", "Alice | 30"],
+    ["decimal", "colspan=2.5", "Alice | 30"],
+    ["exponent", "colspan=2e1", "Alice | 30"],
+    ["hexadecimal", "colspan=0x10", "Alice | 30"],
+    ["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"],
+    ["unquoted decimal", "colspan=2", "Alice |  | 30"],
+    ["single-quoted decimal", "colspan='2'", "Alice |  | 30"],
+    ["double-quoted decimal", 'colspan="2"', "Alice |  | 30"],
+    ["whitespace-padded decimal", 'colspan=" 2 "', "Alice |  | 30"],
+  ])("parses only complete decimal fallback colspans: %s", (_label, attrs, expected) => {
+    expect(
+      telegramHtmlToPlainTextFallback(`<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`),
+    ).toBe(expected);
   });
 
   it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {

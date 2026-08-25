@@ -7,6 +7,7 @@ import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand, testApi } from "./backup-verify.js";
@@ -241,6 +242,44 @@ describe("backupVerifyCommand", () => {
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    {
+      name: "missing archive",
+      prepare: async (tempDir: string) => path.join(tempDir, "missing.tar.gz"),
+      detail:
+        "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
+    },
+    {
+      name: "directory",
+      prepare: async (tempDir: string) => tempDir,
+      detail:
+        "Archive must be a regular file. Choose a backup archive created by `openclaw backup create` and try again.",
+    },
+    {
+      name: "non-tar garbage",
+      prepare: async (tempDir: string) => {
+        const archivePath = path.join(tempDir, "garbage.tar.gz");
+        await fs.writeFile(archivePath, "garbage", "utf8");
+        return archivePath;
+      },
+      detail:
+        "Archive is not a valid OpenClaw backup. Unrecognized archive format. Choose another archive or create a new one with `openclaw backup create`.",
+    },
+  ])("reports an actionable failure for $name", async ({ prepare, detail }) => {
+    const tempDir = tempDirs.make("openclaw-backup-verify-input-");
+    const archivePath = await prepare(tempDir);
+    const runtime = createBackupVerifyRuntime();
+
+    await runCommandWithRuntime(runtime, async () => {
+      await backupVerifyCommand(runtime, { archive: archivePath });
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Backup archive verification failed: ${archivePath}. ${detail}`,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("verifies SQLite integrity and the canonical shared-state role", async () => {
@@ -837,6 +876,11 @@ describe("backupVerifyCommand", () => {
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite`,
           },
           {
+            fileName: "reindex-lock.sqlite-wal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite-wal`,
+          },
+          {
             fileName: "reindex-tmp",
             contents: invalidSqlite,
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.tmp-${transientId}`,
@@ -928,7 +972,7 @@ describe("backupVerifyCommand", () => {
       async (archivePath) => {
         const runtime = createBackupVerifyRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /^Backup manifest is not valid JSON\.$/u,
+          `Backup archive verification failed: ${archivePath}. Backup manifest is not valid JSON.`,
         );
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.not.toThrow(
           /position|Unexpected|Expected|SyntaxError/u,

@@ -29,10 +29,15 @@ function requestBodyTooLargeError(limit) {
   });
 }
 
+/** @param {unknown} error @returns {error is Error & { code: "ETOOBIG" }} */
 export function isRequestBodyTooLargeError(error) {
-  return error instanceof Error && error.code === "ETOOBIG";
+  return error instanceof Error && "code" in error && error.code === "ETOOBIG";
 }
 
+/**
+ * @param {NodeJS.ReadableStream} req
+ * @param {{ requestLogBodyMaxBytes?: number; requestMaxBytes: number }} [limits]
+ */
 export function readBody(req, limits = readMockOpenAiHttpLimits()) {
   const { requestMaxBytes } = limits;
   return new Promise((resolve, reject) => {
@@ -69,6 +74,11 @@ export function readBody(req, limits = readMockOpenAiHttpLimits()) {
   });
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} bodyText
+ * @param {{ requestLogBodyMaxBytes: number; requestMaxBytes?: number }} [limits]
+ */
 export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHttpLimits()) {
   const { requestLogBodyMaxBytes } = limits;
   const byteLength = Buffer.byteLength(bodyText, "utf8");

@@ -31,6 +31,10 @@ vi.mock("./doctor-browser.js", () => ({
     changes: [],
     warnings: [],
   }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -88,7 +92,7 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 }));
 
 vi.mock("./doctor-plugin-registry.js", () => ({
-  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => config),
+  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({
@@ -112,10 +116,6 @@ vi.mock("./doctor-install-policy.js", () => ({
   noteInstallPolicyHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-session-locks.js", () => ({
-  noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-session-transcripts.js", () => ({
   noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
 }));
@@ -129,6 +129,7 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
   noteWorkspaceBackupTip: vi.fn(),
 }));

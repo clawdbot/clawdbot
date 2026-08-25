@@ -1,27 +1,15 @@
 // Fetches and normalizes MiniMax provider usage records.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
-  fetchJson,
-  parseFiniteNumber,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson, parseFiniteNumber } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
-};
-
-type MinimaxUsageResponse = {
-  base_resp?: MinimaxBaseResp;
-  data?: Record<string, unknown>;
-  [key: string]: unknown;
 };
 
 type FetchMinimaxUsageOptions = {
@@ -529,9 +517,10 @@ export async function fetchMinimaxUsage(
   fetchFn: typeof fetch,
   options?: FetchMinimaxUsageOptions,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    resolveMinimaxUsageUrl(options?.baseUrl),
-    {
+  const parsed = await fetchUsageJson({
+    provider: "minimax",
+    url: resolveMinimaxUsageUrl(options?.baseUrl),
+    init: {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -541,19 +530,12 @@ export async function fetchMinimaxUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await discardUsageResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "minimax",
-      status: res.status,
-    });
+    malformedResponseError: "Invalid JSON",
+  });
+  if (!parsed.ok) {
+    return parsed.snapshot;
   }
-
-  const data = await readProviderJsonResponse<MinimaxUsageResponse>(res, "minimax usage").catch(
-    () => null,
-  );
+  const data = parsed.data;
   if (!isRecord(data)) {
     return {
       provider: "minimax",
@@ -563,7 +545,7 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
+  const baseResp = isRecord(data.base_resp) ? (data.base_resp as MinimaxBaseResp) : undefined;
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",

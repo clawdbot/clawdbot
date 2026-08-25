@@ -10,16 +10,16 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as videoGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
-import * as videoGenerateBackground from "./video-generate-background.js";
 import { createVideoGenerateTool as createVideoGenerateToolImpl } from "./video-generate-tool.js";
 import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
 
@@ -363,7 +363,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     vi.unstubAllEnvs();
   });
 
@@ -420,24 +420,6 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("hides reference-audio params when the configured video provider does not declare audio inputs", () => {
-    const properties = toolParameterProperties(
-      createVideoGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "openai/sora-2" },
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(properties.audioRef).toBeUndefined();
-    expect(properties.audioRefs).toBeUndefined();
-    expect(properties.audioRoles).toBeUndefined();
-  });
-
-  it("hides reference-audio params for known video provider aliases without audio input support", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: asConfig({
@@ -893,7 +875,6 @@ describe("createVideoGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(attachments[0]?.url).toBe(signedUrl);
     expect(attachments[0]?.mimeType).toBe("video/mp4\nMEDIA:/tmp/mime-private.png\u2028\u202e");
     expect((details.media as { mediaUrls: string[] }).mediaUrls).toEqual([signedUrl]);
@@ -921,7 +902,6 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual([signedUrl]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("rolls back earlier video saves after sequential persistence fails", async () => {
@@ -1641,7 +1621,7 @@ describe("createVideoGenerateTool", () => {
     });
   });
 
-  it("rejects image-to-video when the provider disables that mode", async () => {
+  it("defers disabled primary modes to the fallback-aware runtime", async () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
       {
         id: "video-plugin",
@@ -1657,7 +1637,7 @@ describe("createVideoGenerateTool", () => {
         }),
       },
     ]);
-    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+    const generateSpy = mockSavedVideoResult();
 
     const tool = createVideoGenerateTool({
       config: asConfig({
@@ -1672,13 +1652,64 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster timelapse",
-        image: "data:image/png;base64,cG5n",
+    await tool.execute("call-1", {
+      prompt: "lobster timelapse",
+      image: "data:image/png;base64,cG5n",
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(1);
+  });
+
+  it("defers model-specific reference limits to runtime overlays", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "video-plugin",
+        defaultModel: "r2v",
+        models: ["r2v"],
+        capabilities: {
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+          },
+        },
+        catalogByModel: {
+          r2v: {
+            modes: ["imageToVideo"],
+            capabilities: {
+              imageToVideo: {
+                enabled: true,
+                maxInputImages: 5,
+              },
+            },
+          },
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/r2v" },
+          },
+        },
       }),
-    ).rejects.toThrow("video-plugin does not support image-to-video reference inputs.");
-    expect(generateSpy).not.toHaveBeenCalled();
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-r2v", {
+      prompt: "animate both references",
+      images: ["data:image/png;base64,cG5n", "data:image/png;base64,cG5nMg=="],
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(2);
   });
 
   it("warns when optional provider overrides are ignored", async () => {

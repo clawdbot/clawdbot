@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushTestResult } from "../../packages/gateway-protocol/src/index.js";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, runtime } from "./program.test-mocks.js";
+import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -12,7 +12,7 @@ describe("cli program (nodes push)", () => {
   let previousExitCode: NodeJS.Process["exitCode"];
 
   function mockPushResult(result: PushTestResult) {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return createIosNodeListResponse();

@@ -4,11 +4,11 @@ import { t } from "../i18n/index.ts";
 export type SessionGlyphContent = TemplateResult | typeof nothing;
 
 /**
- * The sidebar's leading slot. Every row kind (owner avatar, page icon,
- * attention glyph) renders its own artwork here and carries run state as a ring
- * around it, so the run indicator never migrates to the row's trailing edge.
- * Circular content already fits the ring; arbitrary square icons and thumbnails
- * scale down so their corners stay inside it.
+ * Persistent artwork in the sidebar's leading slot (owner avatar, page icon,
+ * attention glyph). Callers can carry run state as a ring when that surface
+ * owns activity in the leading slot. Circular content already fits the ring;
+ * arbitrary square icons and thumbnails scale down so their corners stay
+ * inside it.
  */
 export function renderSessionGlyph(options: {
   content: SessionGlyphContent;

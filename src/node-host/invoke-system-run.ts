@@ -47,7 +47,12 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import {
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  normalizeSystemRunApprovalPlan,
+  revalidateApprovedMutableFileOperand,
+  resolveMutableFileOperandSnapshotSync,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
@@ -61,8 +66,6 @@ import {
 import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
@@ -155,8 +158,6 @@ const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
-const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval state could not be persisted";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;

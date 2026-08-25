@@ -12,7 +12,7 @@ import {
 } from "./embedding-provider.js";
 
 function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: string): string[] {
-  const excludedHeaders = ["authorization"];
+  const excludedHeaders = ["authorization", "x-api-key"];
   if (providerId !== "openai") {
     return excludedHeaders;
   }

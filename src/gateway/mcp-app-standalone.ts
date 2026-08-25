@@ -1,10 +1,12 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import {
   classifyMcpAppStandalonePath,
   MCP_APP_STANDALONE_PATH,
@@ -19,6 +21,7 @@ import {
 } from "./mcp-app-operations.js";
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
+const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
 const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
 const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
 const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
@@ -208,13 +211,24 @@ function supportsStandaloneToolOperations(
   return view.allowedAppToolNames !== undefined && view.readOnly !== true;
 }
 
-function sendText(res: ServerResponse, statusCode: number, body: string): void {
+function sendJsonRepresentation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void {
+  const serialized = JSON.stringify(body);
   res.statusCode = statusCode;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Length", String(Buffer.byteLength(serialized)));
+  res.end(req.method === "HEAD" ? undefined : serialized);
 }
 
-function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
+function runStandaloneMcpAppHost(config: {
+  protocolVersion: string;
+  viewPath: string;
+  initialLoadTimeoutMs: number;
+}): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -257,6 +271,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    operationTimeoutMs?: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -269,10 +284,16 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
 
-  const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  const asStandaloneRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
+  const errorMessage = (error: unknown, timeoutMessage: string) =>
+    asStandaloneRecord(error)?.name === "TimeoutError"
+      ? timeoutMessage
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const fail = (message: string) => {
     frame?.remove();
     frame = undefined;
@@ -330,6 +351,10 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
+      signal:
+        payload?.operationTimeoutMs != null
+          ? AbortSignal.timeout(payload.operationTimeoutMs)
+          : undefined,
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -363,23 +388,23 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     }
     initialized = true;
     notify("ui/notifications/tool-input", {
-      arguments: asRecord(payload.toolInput) ?? {},
+      arguments: asStandaloneRecord(payload.toolInput) ?? {},
     });
     notify("ui/notifications/tool-result", payload.toolResult);
   };
   const isValidInitialize = (params: unknown) => {
-    const record = asRecord(params);
-    const appInfo = asRecord(record?.appInfo);
+    const record = asStandaloneRecord(params);
+    const appInfo = asStandaloneRecord(record?.appInfo);
     return (
       typeof record?.protocolVersion === "string" &&
       typeof appInfo?.name === "string" &&
       typeof appInfo?.version === "string" &&
-      asRecord(record?.appCapabilities) !== undefined
+      asStandaloneRecord(record?.appCapabilities) !== undefined
     );
   };
 
   browser.addEventListener("message", (event) => {
-    const message = asRecord(event.data) as JsonRpcMessage | undefined;
+    const message = asStandaloneRecord(event.data) as JsonRpcMessage | undefined;
     if (
       event.source !== frame?.contentWindow ||
       event.origin !== sandboxOrigin ||
@@ -436,7 +461,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       return;
     }
     if (message.method === "ui/notifications/size-changed") {
-      const height = asRecord(message.params)?.height;
+      const height = asStandaloneRecord(message.params)?.height;
       if (frame && typeof height === "number" && Number.isFinite(height)) {
         frame.style.height = `${Math.min(1200, Math.max(160, Math.round(height)))}px`;
       }
@@ -475,7 +500,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
         reject(
           message.id as JsonRpcId,
           -32000,
-          error instanceof Error ? error.message : "MCP App operation failed",
+          errorMessage(error, "MCP App operation timed out; try again"),
         ),
       );
   });
@@ -492,6 +517,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
+    signal: AbortSignal.timeout(config.initialLoadTimeoutMs),
   })
     .then(async (response) => {
       if (!response.ok) {
@@ -508,14 +534,18 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       frame.src = sandboxUrl.href;
       host?.replaceChildren(frame);
     })
-    .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+    .catch((error: unknown) =>
+      fail(errorMessage(error, "MCP App view timed out; reload to try again")),
+    );
 }
 
 function standaloneHostHtml(): { html: string; scriptHash: string } {
-  const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
+  const serializedConfig = JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
-  })});`;
+    initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
+  });
+  const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
     html: `<!doctype html>
@@ -571,20 +601,20 @@ export async function handleMcpAppStandaloneHttpRequest(
     req.method !== "HEAD" &&
     !(url.pathname === MCP_APP_STANDALONE_VIEW_PATH && req.method === "POST")
   ) {
-    sendText(res, 404, "Not Found");
+    respondPlainText(res, 404, "Not Found");
     return true;
   }
 
   const gatewayPort = options.gatewayPort ?? req.socket.localPort;
   if (!gatewayPort) {
-    sendText(res, 503, "MCP App host unavailable");
+    respondPlainText(res, 503, "MCP App host unavailable");
     return true;
   }
   let sandboxPort: number;
   try {
     sandboxPort = resolveMcpAppSandboxPort(gatewayPort, options.sandboxPort);
   } catch {
-    sendText(res, 503, "MCP App host unavailable");
+    respondPlainText(res, 503, "MCP App host unavailable");
     return true;
   }
 
@@ -600,6 +630,7 @@ export async function handleMcpAppStandaloneHttpRequest(
     const shell = standaloneHostHtml();
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Length", String(Buffer.byteLength(shell.html)));
     res.setHeader(
       "Content-Security-Policy",
       `default-src 'none'; script-src 'sha256-${shell.scriptHash}'; style-src 'unsafe-inline'; connect-src 'self'; frame-src ${frameOrigin}; base-uri 'none'; form-action 'none'; object-src 'none'`,
@@ -617,7 +648,7 @@ export async function handleMcpAppStandaloneHttpRequest(
   const active = ticket ? resolveTicketActiveView(ticket, nowMs, secret) : undefined;
   if (!active) {
     res.setHeader("WWW-Authenticate", "MCP-App");
-    sendText(res, 401, "Unauthorized");
+    respondPlainText(res, 401, "Unauthorized");
     return true;
   }
   if (req.method === "POST") {
@@ -656,29 +687,28 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        req.method === "HEAD"
-          ? undefined
-          : JSON.stringify({
-              sandboxUrl: buildMcpAppSandboxPath(view.csp),
-              sandboxPort,
-              ...(options.sandboxOrigin
-                ? { sandboxOrigin: new URL(options.sandboxOrigin).origin }
-                : {}),
-              html: view.html,
-              ...(view.csp ? { csp: view.csp } : {}),
-              toolInput: view.toolInput,
-              toolResult: view.toolResult,
-              serverTools: supportsStandaloneToolOperations(view),
-              serverResources: runtime.readResource !== undefined,
-            }),
-      );
+      sendJsonRepresentation(req, res, 200, {
+        sandboxUrl: buildMcpAppSandboxPath(view.csp),
+        sandboxPort,
+        ...(options.sandboxOrigin ? { sandboxOrigin: new URL(options.sandboxOrigin).origin } : {}),
+        html: view.html,
+        ...(view.csp ? { csp: view.csp } : {}),
+        toolInput: view.toolInput,
+        toolResult: view.toolResult,
+        serverTools: supportsStandaloneToolOperations(view),
+        serverResources: runtime.readResource !== undefined,
+        ...(view.requestTimeoutMs !== undefined
+          ? {
+              // Keep the browser's outer deadline behind the SDK request
+              // so a valid near-deadline response can reach the App.
+              operationTimeoutMs: addTimerTimeoutGraceMs(view.requestTimeoutMs),
+            }
+          : {}),
+      });
       return true;
     });
   } catch (error) {
-    sendJson(res, 429, { ok: false, error: formatErrorMessage(error) });
+    sendJsonRepresentation(req, res, 429, { ok: false, error: formatErrorMessage(error) });
     return true;
   }
 }

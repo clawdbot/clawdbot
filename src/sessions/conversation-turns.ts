@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -54,11 +55,6 @@ const pendingTurns = resolveGlobalSingleton(
     }
   },
 );
-function normalize(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
-}
-
 function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
 }
@@ -73,11 +69,11 @@ export function registerPendingConversationTurn(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): PendingConversationTurnHandle {
-  const agentId = normalize(params.agentId);
+  const agentId = normalizeOptionalString(params.agentId);
   if (!agentId) {
     throw new Error("conversation turn requires an agent id");
   }
-  const id = normalize(params.id) ?? crypto.randomUUID();
+  const id = normalizeOptionalString(params.id) ?? crypto.randomUUID();
   const key = pendingTurnKey(agentId, id);
   if (pendingTurns.has(key)) {
     throw new Error(`conversation turn already pending for ${agentId}: ${id}`);
@@ -128,7 +124,7 @@ export function registerPendingConversationTurn(params: {
     id,
     conversationRef: params.conversationRef,
     sessionId: params.sessionId,
-    threadId: normalize(params.threadId),
+    threadId: normalizeOptionalString(params.threadId),
     createdAt,
     correlationReady,
     markCorrelationReady,
@@ -149,7 +145,7 @@ export function registerPendingConversationTurn(params: {
       if (pendingTurns.get(key) !== pending) {
         return;
       }
-      pending.outboundMessageId = normalize(messageId);
+      pending.outboundMessageId = normalizeOptionalString(messageId);
       if (!pending.outboundMessageId) {
         pending.settle(undefined);
       }
@@ -171,8 +167,8 @@ export function registerPendingConversationTurn(params: {
 
 /** Cancels one Gateway-owned turn so a late reply follows ordinary inbound dispatch. */
 export function cancelPendingConversationTurn(params: { agentId: string; id: string }): boolean {
-  const agentId = normalize(params.agentId);
-  const id = normalize(params.id);
+  const agentId = normalizeOptionalString(params.agentId);
+  const id = normalizeOptionalString(params.id);
   const pending = agentId && id ? pendingTurns.get(pendingTurnKey(agentId, id)) : undefined;
   if (!pending) {
     return false;
@@ -193,13 +189,13 @@ export async function claimPendingConversationTurnReply(params: {
   text: string;
   timestamp?: number;
 }): Promise<ConversationTurnReplyClaim | undefined> {
-  const replyToId = normalize(params.replyToId);
+  const replyToId = normalizeOptionalString(params.replyToId);
   if (!replyToId) {
     return undefined;
   }
-  const threadId = normalize(params.threadId);
-  const parentConversationRef = normalize(params.parentConversationRef);
-  const agentId = normalize(params.agentId);
+  const threadId = normalizeOptionalString(params.threadId);
+  const parentConversationRef = normalizeOptionalString(params.parentConversationRef);
+  const agentId = normalizeOptionalString(params.agentId);
   if (!agentId) {
     return undefined;
   }

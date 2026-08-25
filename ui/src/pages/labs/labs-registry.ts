@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
@@ -75,8 +76,8 @@ export const LAB_FEATURES = [
       if (typeof raw === "boolean") {
         return raw;
       }
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        return (raw as Record<string, unknown>).enabled !== false;
+      if (isRecord(raw)) {
+        return raw.enabled !== false;
       }
       return true;
     },
@@ -115,10 +116,10 @@ export const LAB_FEATURES = [
       if (typeof raw === "boolean") {
         return raw;
       }
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      if (!isRecord(raw)) {
         return false;
       }
-      const node = raw as Record<string, unknown>;
+      const node = raw;
       return typeof node.enabled === "boolean"
         ? node.enabled
         : Object.keys(node).some((key) => key !== "enabled");
@@ -161,6 +162,20 @@ export const LAB_FEATURES = [
     restartHint: null,
   },
   {
+    id: "cliAgents",
+    title: () => t("labsPage.cliAgents.title"),
+    description: () => t("labsPage.cliAgents.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#gateway",
+    configPath: ["gateway", "cliAgents", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    restartHint: null,
+  },
+  {
     id: "auditMessages",
     title: () => t("labsPage.auditMessages.title"),
     description: () => t("labsPage.auditMessages.description"),
@@ -179,15 +194,45 @@ export const LAB_FEATURES = [
     // the recorder, so this outlives the reload plan's `logging: none` rule.
     restartHint: () => t("labsPage.restartRequired"),
   },
+  {
+    id: "hostDesktop",
+    title: () => t("labsPage.hostDesktop.title"),
+    description: () => t("labsPage.hostDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
+    configPath: ["desktop", "host", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
+  {
+    id: "workerDesktop",
+    title: () => t("labsPage.workerDesktop.title"),
+    description: () => t("labsPage.workerDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
+    configPath: ["cloudWorkers", "desktop"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
 ] as const satisfies readonly LabFeature[];
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
   let current: unknown = config;
   for (const segment of path) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current)) {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[segment];
+    current = current[segment];
   }
   return current;
 }
@@ -197,10 +242,10 @@ function defaultModelRef(config: Record<string, unknown>): string | undefined {
   if (typeof model === "string") {
     return model;
   }
-  if (!model || typeof model !== "object" || Array.isArray(model)) {
+  if (!isRecord(model)) {
     return undefined;
   }
-  const primary = (model as Record<string, unknown>).primary;
+  const primary = model.primary;
   return typeof primary === "string" ? primary : undefined;
 }
 
@@ -229,10 +274,10 @@ function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   if (key === "enabled" && typeof parent === "boolean") {
     return parent;
   }
-  if (!parent || typeof parent !== "object" || Array.isArray(parent) || !key) {
+  if (!isRecord(parent) || !key) {
     return false;
   }
-  return feature.activeValues.includes((parent as Record<string, unknown>)[key] as LabFeatureValue);
+  return feature.activeValues.includes(parent[key] as LabFeatureValue);
 }
 
 function labFeatureOverridePath(
@@ -257,12 +302,7 @@ function labFeatureOverridePath(
   ) {
     return parentPath;
   }
-  if (
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent) &&
-    Object.hasOwn(parent, key)
-  ) {
+  if (isRecord(parent) && Object.hasOwn(parent, key)) {
     return feature.configPath;
   }
   return null;
@@ -285,13 +325,7 @@ export function resolveLabFeatureState(
   let defaultParent = parent;
   if (overridePath?.length === parentPath.length) {
     defaultParent = undefined;
-  } else if (
-    overridePath &&
-    key &&
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent)
-  ) {
+  } else if (overridePath && key && isRecord(parent)) {
     defaultParent = { ...(parent as Record<string, unknown>) };
     delete (defaultParent as Record<string, unknown>)[key];
   }

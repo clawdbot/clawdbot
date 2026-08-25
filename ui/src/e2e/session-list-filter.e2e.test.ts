@@ -1,35 +1,21 @@
 // Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { afterEach, expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI session-list event scope",
+});
+
+async function openSessionFilters(page: Page) {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+}
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
-let browser: Browser;
 let page: Page | undefined;
-let server: ControlUiE2eServer | undefined;
-
-describeControlUiE2e("Control UI session-list event scope", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await page
       ?.context()
@@ -38,15 +24,10 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     page = undefined;
   });
 
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
-
   it("refetches instead of showing a row excluded by configured-agent filtering", async () => {
     const visibleLabel = "Visible configured session";
     const hiddenLabel = "Hidden unconfigured session";
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -69,7 +50,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
     await visibleRow.waitFor({ timeout: 10_000 });
     // Arm the deferred response before sampling requests; startup may still finish in between.
@@ -90,6 +71,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       kind: "direct",
       label: hiddenLabel,
       updatedAt: 2,
+      archived: false,
     });
 
     await expect
@@ -114,6 +96,96 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
 
+  it("keeps the Sessions page query stable when the startup roster completes", async () => {
+    const visibleLabel = "Visible page-owned session";
+    const pageQueryParams = {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 50,
+    };
+    const visibleResponse = {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:page-owned",
+          kind: "direct",
+          label: visibleLabel,
+          updatedAt: 1,
+        },
+      ],
+      ts: 1,
+    };
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      deferredMethods: ["sessions.list"],
+      sessionKey: "agent:main:main",
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: pageQueryParams, response: visibleResponse },
+            {
+              response: {
+                count: 0,
+                defaults: visibleResponse.defaults,
+                path: "",
+                sessions: [],
+                ts: 1,
+              },
+            },
+          ],
+        },
+      },
+    });
+    const exactPageQueries = async () =>
+      (await gateway.getRequests("sessions.list")).filter((request) => {
+        const params = request.params;
+        if (!params || typeof params !== "object" || Array.isArray(params)) {
+          return false;
+        }
+        const record = params as Record<string, unknown>;
+        const entries = Object.entries(pageQueryParams);
+        return (
+          Object.keys(record).length === entries.length &&
+          entries.every(([key, value]) => record[key] === value)
+        );
+      });
+
+    await currentPage.goto(`${suite.server.baseUrl}sessions`);
+    const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
+    await visibleRow.waitFor({ timeout: 10_000 });
+
+    const startupAndPageRequests = await gateway.getRequests("sessions.list");
+    expect(startupAndPageRequests[0]?.params).toEqual({
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeGlobal: true,
+      includeLastMessage: true,
+      includeUnknown: true,
+      limit: 50,
+    });
+    expect
+      .soft((await exactPageQueries()).map((request) => request.params))
+      .toEqual([pageQueryParams]);
+
+    await gateway.resolveDeferred("sessions.list", visibleResponse);
+    await visibleRow.waitFor();
+
+    const stabilityDeadline = Date.now() + 500;
+    do {
+      expect(await exactPageQueries()).toHaveLength(1);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    } while (Date.now() < stabilityDeadline);
+  });
+
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {
     const sessionKey = "agent:main:older-stored";
     const sessionLabel = "Older stored session";
@@ -131,7 +203,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       ],
       ts: 1,
     };
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -155,7 +227,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     const sidebarRow = currentPage.locator(
       `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
     );
@@ -168,7 +240,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     expect(sidebarParams).toMatchObject({ limit: 50 });
     expect(sidebarParams).not.toHaveProperty("activeMinutes");
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     const sessionsPage = currentPage.locator("openclaw-sessions-page");
     await sessionsPage.getByText(sessionLabel, { exact: true }).waitFor({ timeout: 10_000 });
     const initialPageRequests = await gateway.getRequests("sessions.list");
@@ -179,6 +251,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     expect(initialPageParams).toMatchObject({ limit: 50 });
     expect(initialPageParams).not.toHaveProperty("activeMinutes");
 
+    await openSessionFilters(currentPage);
     const activeMinutes = sessionsPage.getByLabel("Updated within");
     const limit = sessionsPage.getByLabel("Limit");
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
@@ -211,7 +284,7 @@ describeControlUiE2e("Control UI session-list event scope", () => {
   });
 
   it("omits noncanonical numeric filters from sessions.list requests", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -227,8 +300,9 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       },
     });
 
-    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     await gateway.waitForRequest("sessions.list");
+    await openSessionFilters(currentPage);
     const activeMinutes = currentPage.getByLabel("Updated within");
     const limit = currentPage.getByLabel("Limit");
     const cases = [

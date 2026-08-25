@@ -25,6 +25,18 @@ Startup is serialized per configured provider and command/argument/env set, so c
 
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
 
+## Managed llama.cpp
+
+The official llama.cpp provider generates this shape automatically. Its guided
+setup installs a pinned, verified `llama-server`, writes an absolute command and
+router preset, selects a free loopback port, and stores the resulting `baseUrl`
+and `localService` config. Chat and local embeddings lease the same managed
+router through the normal OpenAI-compatible transports.
+
+Do not copy a generated command path between machines. Run llama.cpp setup on
+each Gateway host so OpenClaw selects and verifies the matching platform build.
+See [llama.cpp Provider](/plugins/llama-cpp).
+
 ## Config shape
 
 ```json5

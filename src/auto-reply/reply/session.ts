@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
@@ -19,7 +20,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -34,7 +35,11 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  resolveProfileParticipantIdFromSessionCreation,
+  type SessionCreatedActor,
+} from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -45,7 +50,9 @@ import {
 } from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
+  type InternalSessionEntry,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -79,8 +86,9 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import {
+  recordSessionCreated,
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
@@ -90,6 +98,7 @@ import {
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext,
@@ -104,8 +113,7 @@ import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
-  resolveLastChannelRaw,
-  resolveLastToRaw,
+  resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import {
   createReplySessionEntryHandle,
@@ -317,7 +325,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }
@@ -377,7 +385,7 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
   return {
     thinkingLevel: entry.thinkingLevel,
@@ -392,10 +400,14 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     displayName: entry.displayName,
+    // Notice debt survives rollover: erasing it here would recreate the
+    // silent ambiguous-loss outcome the debt exists to prevent.
+    pendingDeliveryNotice: entry.pendingDeliveryNotice,
     spawnedBy: entry.spawnedBy,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     spawnedCwd: entry.spawnedCwd,
     parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
     forkSource: entry.forkSource,
     createdVia: entry.createdVia,
@@ -740,6 +752,7 @@ async function initSessionStateAttemptLocked(
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
+      agentId,
     });
   }
 
@@ -810,17 +823,9 @@ async function initSessionStateAttemptLocked(
   const baseDeliveryContext = deliveryContextFromSession(baseEntry);
   const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
   const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
-  const lastChannelRaw = isSystemEvent
-    ? baseDeliveryContext?.channel
-    : resolveLastChannelRaw({
-        originatingChannelRaw,
-        persistedLastChannel: baseDeliveryContext?.channel,
-        sessionKey,
-        isInterSession,
-      });
-  const lastToRaw = isSystemEvent
-    ? baseDeliveryContext?.to
-    : resolveLastToRaw({
+  const deliveryRoute = isSystemEvent
+    ? { channel: baseDeliveryContext?.channel, to: baseDeliveryContext?.to }
+    : resolveSessionDeliveryRoute({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
@@ -829,6 +834,7 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         isInterSession,
       });
+  const { channel: lastChannelRaw, to: lastToRaw } = deliveryRoute;
   const lastAccountIdRaw = isSystemEvent
     ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
@@ -837,14 +843,14 @@ async function initSessionStateAttemptLocked(
         accountIdRaw: ctx.AccountId,
         persistedLastAccountId: baseDeliveryContext?.accountId,
       });
-  // Only fall back to persisted threadId for thread sessions. Non-thread
-  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
+  // Internal turns share the established external route and must not erase its
+  // thread. External non-thread turns still clear stale thread routing.
+  const preservePersistedThread = isThread || isInternalMessageChannel(originatingChannelRaw);
   const lastThreadIdRaw = isSystemEvent
     ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseDeliveryContext?.threadId : undefined));
+      (preservePersistedThread ? baseDeliveryContext?.threadId : undefined));
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
@@ -952,12 +958,14 @@ async function initSessionStateAttemptLocked(
     // inherit history without a fresh count, so keep those explicitly unknown.
     sessionEntry.totalTokens = 0;
     sessionEntry.totalTokensFresh = true;
+    sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.cacheRead = undefined;
     sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
+    sessionEntry.contextTokensSource = undefined;
     sessionEntry.contextBudgetStatus = undefined;
     sessionEntry.goal = undefined;
     // Skills snapshots are prompt/runtime caches. Do not preserve a stale
@@ -1017,6 +1025,11 @@ async function initSessionStateAttemptLocked(
       }
     },
     previousEntry: previousSessionEntry,
+    ...(!isSystemEvent &&
+    sessionCtxForState.InboundAccessAuthorized === true &&
+    sessionCtxForState.ConversationRouteContextObserved === true
+      ? { routeContext: conversationRouteContextFromMsgContext(sessionCtxForState) ?? null }
+      : {}),
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
     sessionKey,
@@ -1033,6 +1046,35 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (!isSystemEvent && !isInterSession) {
+    const creation = ctx.SessionCreation;
+    const creationActor = creation?.actor;
+    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
+    const senderId = normalizeOptionalString(ctx.SenderId);
+    const participant:
+      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
+      | undefined = profileParticipantId
+      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
+      : creationActor?.type === "agent" && creationActor.id
+        ? {
+            actor: { ...creationActor, id: creationActor.id },
+            source: "agent",
+          }
+        : senderId
+          ? { actor: { type: "human", id: senderId }, source: "channel" }
+          : undefined;
+    if (participant) {
+      recordSessionParticipantBestEffort({
+        actor: participant.actor,
+        agentId,
+        sessionKey,
+        source: participant.source,
+        storePath,
+        promptedAt: now,
+        onError: (error) => log.warn("failed to record session participant", { error }),
+      });
+    }
+  }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,
     sessionKey,
@@ -1048,7 +1090,7 @@ async function initSessionStateAttemptLocked(
       sessionKey,
       agentId,
       entry: sessionEntry,
-      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+      mainKey,
     });
   }
   const sessionStore = committed.sessionStoreView;
@@ -1094,7 +1136,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
@@ -1130,7 +1177,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1160,7 +1207,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

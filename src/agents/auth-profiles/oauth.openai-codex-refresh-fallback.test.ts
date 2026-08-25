@@ -9,7 +9,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
@@ -18,14 +21,12 @@ import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
 } from "./oauth-test-utils.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resolveApiKeyForProvider: typeof import("../model-auth.js").resolveApiKeyForProvider;
+let resolveApiKeyForProviderCore: typeof import("../model-auth.js").resolveApiKeyForProviderCore;
 let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableAuthForProvider;
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
 type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
@@ -58,7 +59,6 @@ const {
 }));
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -88,6 +88,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
 }));
@@ -162,7 +163,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-    ({ hasAvailableAuthForProvider, resolveApiKeyForProvider } = await import("../model-auth.js"));
+    ({ hasAvailableAuthForProvider, resolveApiKeyForProviderCore } =
+      await import("../model-auth.js"));
     ({ markAuthProfileSuccess } = await import("./profiles.js"));
   });
 
@@ -228,6 +230,60 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never refreshes a retired Claude CLI token as a legacy-profile fallback", async () => {
+    const legacyProfileId = "anthropic:default";
+    const retiredProfileId = "anthropic:claude-cli";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [legacyProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-default-access",
+            refresh: "expired-default-refresh",
+            expires: Date.now() - 60_000,
+          },
+          [retiredProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "copied-native-access",
+            refresh: "copied-native-refresh",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    refreshProviderOAuthCredentialWithPluginMock
+      .mockRejectedValueOnce(new Error("initial refresh failed"))
+      .mockResolvedValueOnce({
+        type: "oauth",
+        provider: "anthropic",
+        access: "refreshed-copied-native-access",
+        refresh: "refreshed-copied-native-refresh",
+        expires: Date.now() + 60 * 60_000,
+      });
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: {
+          auth: {
+            profiles: {
+              [legacyProfileId]: { provider: "anthropic", mode: "oauth" },
+              [retiredProfileId]: { provider: "anthropic", mode: "oauth" },
+            },
+          },
+        },
+        store: ensureAuthProfileStore(agentDir),
+        profileId: legacyProfileId,
+        agentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
@@ -686,7 +742,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         store: ensureAuthProfileStore(agentDir),
         profileId,
@@ -779,7 +835,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     );
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         agentDir,
       }),
@@ -811,7 +867,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-responses",
         agentDir,
@@ -833,7 +889,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     );
 
     await expect(
-      resolveApiKeyForProvider({
+      resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-responses",
         profileId,
@@ -1030,6 +1086,35 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the OAuth diagnosis when stale lastGood cleanup fails", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      {
+        ...createExpiredOauthStore({ profileId, provider: "openai" }),
+        lastGood: { openai: profileId },
+      },
+      agentDir,
+    );
+    const store = ensureAuthProfileStore(agentDir);
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveAuthProfileDatabasePath(agentDir),
+    }).db.exec("ALTER TABLE auth_profile_state DROP COLUMN updated_at");
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      );
+    });
+
+    const failure = await resolveApiKeyForProfile({ store, profileId, agentDir }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+    expect(String(failure)).toContain("refresh_token_reused");
+    expect(String(failure)).not.toContain("no column named updated_at");
+  });
+
   it("clears stale lastGood before selecting an alternate Codex OAuth profile", async () => {
     const staleProfileId = "openai:default";
     const healthyProfileId = "openai:user@example.test";
@@ -1112,7 +1197,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       );
     });
 
-    const resolved = await resolveApiKeyForProvider({
+    const resolved = await resolveApiKeyForProviderCore({
       provider: "openai",
       store: ensureAuthProfileStore(agentDir),
       agentDir,

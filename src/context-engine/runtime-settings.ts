@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { ContextEngineHostSupport } from "./host-compat.js";
 import type {
@@ -24,10 +25,6 @@ const RUNTIME_REASON_PATTERNS: Array<[ContextEngineRuntimeReasonCode, RegExp]> =
   ["runtime_unavailable", /runtime/iu],
   ["provider_unavailable", /provider|primary|unavailable/iu],
 ];
-
-function normalizeNullableNumber(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
 
 function normalizeReasonCode(value: OptionalString): ContextEngineRuntimeReasonCode | null {
   const normalized = normalizeNullableString(value);
@@ -95,8 +92,8 @@ export function buildContextEngineRuntimeSettings(params: {
       label: normalizeNullableString(params.contextEngineHost.label),
     },
     limits: {
-      promptTokenBudget: normalizeNullableNumber(params.promptTokenBudget),
-      maxOutputTokens: normalizeNullableNumber(params.maxOutputTokens),
+      promptTokenBudget: asFiniteNumber(params.promptTokenBudget) ?? null,
+      maxOutputTokens: asFiniteNumber(params.maxOutputTokens) ?? null,
     },
     diagnostics: {
       fallbackReason,

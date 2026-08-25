@@ -225,6 +225,7 @@ internal fun SidebarSessionRow(
 ) {
   val sessionStateDescription =
     when {
+      session.status == "queued" -> nativeString("Queued")
       session.hasActiveRun == true -> nativeString("Working")
       session.unread == true -> nativeString("Needs attention")
       selected -> nativeString("Selected")
@@ -258,7 +259,7 @@ internal fun SidebarSessionRow(
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = sessionSourceLabel(session.key),
+        text = sidebarSessionSubtitle(session, sessionStateDescription),
         style = ClawTheme.type.caption.copy(fontSize = 11.sp),
         color = palette.muted,
         maxLines = 1,
@@ -309,3 +310,15 @@ private fun SidebarRowSurface(
     content = content,
   )
 }
+
+internal fun sidebarSessionSubtitle(
+  session: ChatSessionEntry,
+  activeRunLabel: String?,
+  nowMs: Long = System.currentTimeMillis(),
+): String =
+  sessionListSubtitle(
+    session = session,
+    fallback =
+      if (session.hasActiveRun == true) checkNotNull(activeRunLabel) else sessionSourceLabel(session.key),
+    nowMs = nowMs,
+  )

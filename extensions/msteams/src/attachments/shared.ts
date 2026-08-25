@@ -165,16 +165,20 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
  * than directly.
  */
 function isGraphSharedLinkUrl(url: string): boolean {
-  let host: string;
+  let parsed: URL;
   try {
-    host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
+    parsed = new URL(url);
   } catch {
     return false;
   }
-  if (!host) {
+  const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
+  if (parsed.protocol !== "https:" || !host) {
     return false;
   }
-  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
+  // Only HTTPS URLs on a DNS label boundary may select the authenticated Graph path.
+  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some(
+    (suffix) => host === suffix || host.endsWith(suffix.startsWith(".") ? suffix : `.${suffix}`),
+  );
 }
 
 /**
@@ -677,6 +681,10 @@ async function safeFetch(params: {
   }
 
   if (!hasDispatcher) {
+    const lookupFn: LookupFn = async (hostname) => {
+      const resolved = await resolveFn(hostname);
+      return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
+    };
     const guarded = await fetchWithSsrFGuard({
       url: currentUrl,
       fetchImpl: resolveGuardedFetchImpl({
@@ -690,7 +698,7 @@ async function safeFetch(params: {
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
       policy: resolveMediaSsrfPolicy(params.allowHosts),
-      lookupFn: resolveFn as LookupFn,
+      lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
         resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",

@@ -2,13 +2,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  isRecord,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -134,19 +139,12 @@ export type ChatGptRollbackResult = {
   alreadyRolledBack: boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
 function isMissingConversationPageError(error: unknown): boolean {
-  return asRecord(error)?.code === "ENOENT";
+  return asNullableRecord(error)?.code === "ENOENT";
 }
 
 async function readExistingConversationPage(absolutePath: string): Promise<string> {
@@ -186,30 +184,13 @@ async function loadConversations(exportInputPath: string): Promise<{
   const { exportPath, conversationsPath } = resolveConversationSourcePath(exportInputPath);
   const raw = await fs.readFile(conversationsPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
-  if (Array.isArray(parsed)) {
-    return {
-      exportPath,
-      conversationsPath,
-      conversations: parsed.filter(
-        (entry): entry is Record<string, unknown> => asRecord(entry) !== null,
-      ),
-    };
+  const conversations = Array.isArray(parsed)
+    ? parsed
+    : Object.values(asNullableRecord(parsed) ?? {}).find(Array.isArray);
+  if (!conversations) {
+    throw new Error(`Unrecognized ChatGPT conversations export format: ${conversationsPath}`);
   }
-  const record = asRecord(parsed);
-  if (record) {
-    for (const value of Object.values(record)) {
-      if (Array.isArray(value)) {
-        return {
-          exportPath,
-          conversationsPath,
-          conversations: value.filter(
-            (entry): entry is Record<string, unknown> => asRecord(entry) !== null,
-          ),
-        };
-      }
-    }
-  }
-  throw new Error(`Unrecognized ChatGPT conversations export format: ${conversationsPath}`);
+  return { exportPath, conversationsPath, conversations: conversations.filter(isRecord) };
 }
 
 function isoFromUnix(raw: unknown): string | undefined {
@@ -249,7 +230,7 @@ function cleanMessageText(value: string): string {
 }
 
 function extractMessageText(message: Record<string, unknown>): string {
-  const content = asRecord(message.content);
+  const content = asNullableRecord(message.content);
   if (content) {
     const parts = content.parts;
     if (Array.isArray(parts)) {
@@ -262,7 +243,7 @@ function extractMessageText(message: Record<string, unknown>): string {
           }
           continue;
         }
-        const partRecord = asRecord(part);
+        const partRecord = asNullableRecord(part);
         if (partRecord && typeof partRecord.text === "string" && partRecord.text.trim()) {
           collected.push(partRecord.text.trim());
         }
@@ -277,7 +258,7 @@ function extractMessageText(message: Record<string, unknown>): string {
 }
 
 function activeBranchMessages(conversation: Record<string, unknown>): ChatGptMessage[] {
-  const mapping = asRecord(conversation.mapping);
+  const mapping = asNullableRecord(conversation.mapping);
   if (!mapping) {
     return [];
   }
@@ -287,13 +268,13 @@ function activeBranchMessages(conversation: Record<string, unknown>): ChatGptMes
   const chain: ChatGptMessage[] = [];
   while (currentNode && !seen.has(currentNode)) {
     seen.add(currentNode);
-    const node = asRecord(mapping[currentNode]);
+    const node = asNullableRecord(mapping[currentNode]);
     if (!node) {
       break;
     }
-    const message = asRecord(node.message);
+    const message = asNullableRecord(node.message);
     if (message) {
-      const author = asRecord(message.author);
+      const author = asNullableRecord(message.author);
       const role = typeof author?.role === "string" ? author.role : "unknown";
       const text = extractMessageText(message);
       if (text) {
@@ -849,9 +830,15 @@ async function importChatGptConversationsUnlocked(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      const compile = await compileMemoryWikiVault(params.config);
-      indexUpdatedFiles = compile.updatedFiles;
       await writeImportRunRecord(params.config.vault.path, importRunRecord);
+      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+          { cause: error },
+        );
+      });
+      indexUpdatedFiles = compile.updatedFiles;
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
         timestamp: nowIso,
@@ -924,8 +911,7 @@ function resolveContainedImportPath(root: string, relativePath: string, label: s
   }
   const resolvedRoot = path.resolve(root);
   const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  const relative = path.relative(resolvedRoot, resolvedPath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInside(resolvedRoot, resolvedPath)) {
     throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
   }
   return resolvedPath;

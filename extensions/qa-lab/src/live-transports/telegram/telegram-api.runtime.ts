@@ -8,6 +8,11 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
@@ -29,7 +34,25 @@ type TelegramApiEnvelope<T> = {
   ok: boolean;
   result?: T;
   description?: string;
+  error_code?: number;
+  parameters?: unknown;
 };
+
+export class TelegramQaApiError extends Error {
+  override readonly name = "TelegramQaApiError";
+  readonly ok = false;
+
+  constructor(
+    readonly method: string,
+    readonly error_code: number,
+    readonly description: string,
+    readonly parameters: unknown,
+    readonly status: number,
+    options?: { cause?: unknown },
+  ) {
+    super(`${method} failed (${error_code}): ${description}`, options);
+  }
+}
 
 type TelegramReplyMarkup = {
   inline_keyboard?: Array<Array<{ text?: string }>>;
@@ -91,6 +114,12 @@ type TelegramGatewayClient = {
 };
 
 const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
+const TELEGRAM_QA_POLL_RETRY_BACKOFF: BackoffPolicy = {
+  initialMs: 250,
+  maxMs: 2_000,
+  factor: 2,
+  jitter: 0,
+};
 const TELEGRAM_QA_ENV_FIELDS = [
   { field: "groupId", envKey: "OPENCLAW_QA_TELEGRAM_GROUP_ID" },
   { field: "driverToken", envKey: "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN" },
@@ -301,7 +330,6 @@ export function buildTelegramQaConfig(
             enabled: true,
             botToken: params.sutToken,
             dmPolicy: "disabled",
-            replyToMode: "first",
             groups: {
               [params.groupId]: {
                 groupPolicy: "allowlist",
@@ -336,14 +364,42 @@ export async function callTelegramApi<T>(
     capture: false,
   });
   try {
-    const payload = await readProviderJsonResponse<TelegramApiEnvelope<T>>(
-      response,
-      `qa-lab-telegram-live.${method}`,
-    );
-    if (!response.ok || !payload.ok || payload.result === undefined) {
-      throw new Error(
-        payload.description?.trim() || `${method} failed with status ${response.status}`,
+    let payload: TelegramApiEnvelope<T>;
+    try {
+      const parsed = await readProviderJsonResponse<unknown>(
+        response,
+        `qa-lab-telegram-live.${method}`,
       );
+      if (!isRecord(parsed)) {
+        throw new Error(`qa-lab-telegram-live.${method}: malformed JSON response`);
+      }
+      payload = parsed as TelegramApiEnvelope<T>;
+    } catch (error) {
+      if (!response.ok) {
+        throw new TelegramQaApiError(
+          method,
+          response.status,
+          `${method} failed with status ${response.status}`,
+          undefined,
+          response.status,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (!response.ok || !payload.ok) {
+      const description =
+        payload.description?.trim() || `${method} failed with status ${response.status}`;
+      throw new TelegramQaApiError(
+        method,
+        typeof payload.error_code === "number" ? payload.error_code : response.status,
+        description,
+        payload.parameters,
+        response.status,
+      );
+    }
+    if (payload.result === undefined) {
+      throw new Error(`${method} returned no result`);
     }
     return payload.result;
   } finally {
@@ -352,6 +408,12 @@ export async function callTelegramApi<T>(
 }
 
 export function isRecoverableTelegramQaPollError(error: unknown): boolean {
+  if (error && typeof error === "object" && "error_code" in error) {
+    const errorCode = (error as { error_code?: unknown }).error_code;
+    if (typeof errorCode === "number") {
+      return errorCode === 429 || errorCode >= 500;
+    }
+  }
   const message = formatErrorMessage(error).toLowerCase();
   return [
     "fetch failed",
@@ -366,8 +428,31 @@ export function isRecoverableTelegramQaPollError(error: unknown): boolean {
   ].some((fragment) => message.includes(fragment));
 }
 
-export async function waitForTelegramPollRetryDelay(remainingMs = 250) {
-  await sleep(Math.min(250, Math.max(100, remainingMs)));
+function readTelegramQaRetryAfterMs(error: unknown) {
+  if (!(error instanceof TelegramQaApiError) || error.error_code !== 429) {
+    return undefined;
+  }
+  const retryAfter = isRecord(error.parameters) ? error.parameters.retry_after : undefined;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
+    ? retryAfter * 1_000
+    : undefined;
+}
+
+function resolveTelegramPollRetryDelayMs(error: unknown, attempt: number) {
+  return (
+    readTelegramQaRetryAfterMs(error) ??
+    computeBackoff(TELEGRAM_QA_POLL_RETRY_BACKOFF, Math.max(1, attempt))
+  );
+}
+
+export async function waitForTelegramPollRetryDelay(
+  error: unknown,
+  attempt: number,
+  abortSignal: AbortSignal,
+) {
+  await sleepWithAbort(resolveTelegramPollRetryDelayMs(error, attempt), abortSignal, {
+    ref: false,
+  });
 }
 
 export async function flushTelegramUpdates(token: string) {

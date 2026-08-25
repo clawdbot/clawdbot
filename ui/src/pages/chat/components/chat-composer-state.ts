@@ -1,26 +1,18 @@
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import {
+  adjustTextareaHeight,
+  disconnectComposerPopoverAnchorObserver,
+} from "./chat-composer-dom.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
+import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
+import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
   return {
-    slashMenuOpen: false,
-    slashMenuItems: [],
-    slashMenuIndex: 0,
-    slashMenuMode: "command",
-    slashMenuCommand: null,
-    slashMenuArgItems: [],
-    slashMenuExpanded: false,
-    slashCommandRefreshPending: false,
-    skillMenuOpen: false,
-    skillMenuItems: [],
-    skillMenuIndex: 0,
-    skillMenuTarget: null,
-    skillCommandRefreshPending: false,
-    skillCommandRefreshGeneration: 0,
-    skillCommandRefreshTargetStart: null,
+    ...createSlashMenuState(),
+    ...createSkillMenuState(),
     composerComposing: false,
     composingDraft: null,
     composerInputIntentKey: null,
@@ -30,15 +22,18 @@ function createChatComposerState(): ChatComposerState {
     gatewayQuestionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
+    composerInput: null,
     composerTextarea: null,
     microphonePickerOpen: false,
     microphonePickerLoading: false,
     microphoneDevices: [],
-    microphoneWarning: null,
+    microphoneIssue: null,
+    microphoneDeviceWatch: null,
     microphoneDiscoveryRequest: 0,
     capabilityMenuOpen: false,
     capabilityMenuView: "root",
     textareaRef: null,
+    composerInputRef: null,
     dictation: null,
     dictationDraftKey: null,
     dictationSelection: null,
@@ -144,16 +139,33 @@ export function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
+/** Drops the devicechange subscription so a closed picker stops refreshing. */
+export function releaseMicrophoneDeviceWatch(state: ChatComposerState) {
+  state.microphoneDeviceWatch?.();
+  state.microphoneDeviceWatch = null;
+}
+
 export function resetChatComposerState(paneId?: string) {
   if (paneId) {
     // Goal elapsed timers are keyed by element and cleaned up when their
     // element leaves the DOM, so a per-pane reset does not need to touch them.
-    composerStates.get(paneId)?.dictation?.dispose();
+    const paneState = composerStates.get(paneId);
+    paneState?.dictation?.dispose();
+    if (paneState) {
+      if (paneState.composerInput) {
+        disconnectComposerPopoverAnchorObserver(paneState.composerInput);
+      }
+      releaseMicrophoneDeviceWatch(paneState);
+    }
     composerStates.delete(paneId);
     return;
   }
   for (const state of composerStates.values()) {
     state.dictation?.dispose();
+    if (state.composerInput) {
+      disconnectComposerPopoverAnchorObserver(state.composerInput);
+    }
+    releaseMicrophoneDeviceWatch(state);
   }
   composerStates.clear();
   clearGoalElapsedTimers();

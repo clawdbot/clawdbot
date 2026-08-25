@@ -1,7 +1,7 @@
 // Draft stream loop tests cover incremental draft updates while channel replies stream.
 import { setImmediate as nextMacrotask } from "node:timers/promises";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 const flushMicrotasks = async () => {
@@ -258,6 +258,75 @@ describe("createDraftStreamLoop", () => {
 
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(1, "hello");
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
+  });
+
+  it("preserves concurrent update text when sendOrEditStreamMessage returns false", async () => {
+    let deliver!: (() => void) | undefined;
+    const deliverPromise = new Promise<void>((resolve) => {
+      deliver = resolve;
+    });
+    const capturedArgs: string[] = [];
+
+    const sendOrEditStreamMessage = vi
+      .fn<(text: string) => Promise<boolean>>()
+      .mockImplementationOnce(async (text: string) => {
+        capturedArgs.push(text);
+        await deliverPromise;
+        return false;
+      })
+      .mockImplementationOnce(async (text: string) => {
+        capturedArgs.push(text);
+        return true;
+      });
+
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("initial");
+    await flushMicrotasks();
+
+    loop.update("concurrent");
+    deliver!();
+    await loop.flush();
+
+    expect(capturedArgs[1]).toBe("concurrent");
+  });
+
+  it("preserves generic pending updates when consecutive sends return false", async () => {
+    type Update = { text: string; blocks: string[] };
+    const initial = { text: "initial", blocks: ["initial-blocks"] };
+    const latest = { text: "latest", blocks: ["latest-blocks"] };
+    let releaseFirst: (() => void) | undefined;
+    const firstSend = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const sendOrEditStreamMessage = vi
+      .fn<(update: Update) => Promise<boolean>>()
+      .mockImplementationOnce(async () => {
+        await firstSend;
+        return false;
+      })
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const loop = createDraftStreamLoop<Update>({
+      throttleMs: 0,
+      isStopped: () => false,
+      emptyValue: { text: "", blocks: [] },
+      isEmpty: (update) => !update.text,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update(initial);
+    await flushMicrotasks();
+    loop.update(latest);
+    releaseFirst?.();
+    await loop.flush();
+    await loop.flush();
+
+    expect(sendOrEditStreamMessage.mock.calls).toEqual([[initial], [latest], [latest]]);
   });
 
   it("keeps generic payload fields atomic while newer updates queue", async () => {

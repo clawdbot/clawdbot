@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { applyClawMcpUpdate } from "./mcp-update.js";
+import { applyClawMcpUpdate as applyClawMcpUpdateRaw } from "./mcp-update.js";
 import {
   CLAW_MCP_REF_SCHEMA_VERSION,
   digestClawMcpServer,
@@ -23,8 +23,18 @@ const remote: ClawMcpServer = {
   auth: "oauth",
 };
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let leaseEnv: NodeJS.ProcessEnv;
+
+beforeEach(() => {
+  leaseEnv = { OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-mcp-update-"), "state") };
+});
+afterEach(() => closeOpenClawStateDatabaseForTest());
+
+function applyClawMcpUpdate(...args: Parameters<typeof applyClawMcpUpdateRaw>) {
+  const [updatePlan, targetManifest, options] = args;
+  return applyClawMcpUpdateRaw(updatePlan, targetManifest, { env: leaseEnv, ...options });
+}
 
 function ref(name: string, server: ClawMcpServer): PersistedClawMcpServerRef {
   return {
@@ -66,6 +76,7 @@ function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
     },
     actions,
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],
   };
@@ -156,7 +167,11 @@ describe("applyClawMcpUpdate", () => {
       createOnly: true,
       recordIndependentOwner: false,
     });
-    expect(unsetServer).toHaveBeenCalledWith({ name: "legacy", expectedServer: legacy });
+    expect(unsetServer).toHaveBeenCalledWith({
+      name: "legacy",
+      expectedServer: legacy,
+      recordIndependentOwner: false,
+    });
 
     await execution.rollback();
 
@@ -169,6 +184,7 @@ describe("applyClawMcpUpdate", () => {
     expect(unsetServer).toHaveBeenNthCalledWith(2, {
       name: "remote",
       expectedServer: remote,
+      recordIndependentOwner: false,
     });
     expect(setServer).toHaveBeenNthCalledWith(4, {
       name: "docs",
@@ -283,6 +299,10 @@ describe("applyClawMcpUpdate", () => {
   });
 
   it("does not compensate a config write rejected before mutation", async () => {
+    const root = tempDirs.make("openclaw-mcp-update-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+    const previous = ref("docs", oldDocs);
+    upsertClawMcpServerRef(previous, stateOptions);
     const setServer = vi.fn(async () => ({ ok: false as const, path: "config", error: "changed" }));
     const unsetServer = vi.fn();
 
@@ -300,16 +320,183 @@ describe("applyClawMcpUpdate", () => {
         ]),
         manifest(),
         {
+          ...stateOptions,
           config: { mcp: { servers: { docs: oldDocs } } },
           sourceMcpServers: { docs: oldDocs },
-          readRefs: () => [ref("docs", oldDocs)],
           setServer,
           unsetServer,
-          upsertRef: vi.fn(),
         },
       ),
     ).rejects.toThrow("changed");
     expect(setServer).toHaveBeenCalledTimes(1);
+    expect(unsetServer).not.toHaveBeenCalled();
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
+  });
+
+  it("deletes pending ownership when an added server write is rejected", async () => {
+    const root = tempDirs.make("openclaw-mcp-add-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "remote",
+            action: "add",
+            target: "mcp.servers.remote",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          ...stateOptions,
+          config: {},
+          sourceMcpServers: {},
+          setServer: vi.fn(async () => ({
+            ok: false as const,
+            path: "config",
+            error: "changed",
+          })),
+        },
+      ),
+    ).rejects.toThrow("changed");
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([]);
+  });
+
+  it("restores complete ownership when a removal write is rejected", async () => {
+    const root = tempDirs.make("openclaw-mcp-remove-rejected-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+    const previous = ref("legacy", legacy);
+    upsertClawMcpServerRef(previous, stateOptions);
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "legacy",
+            action: "remove",
+            target: "mcp.servers.legacy",
+            blocked: false,
+            reason: "removed",
+          },
+        ]),
+        manifest(),
+        {
+          ...stateOptions,
+          config: { mcp: { servers: { legacy } } },
+          sourceMcpServers: { legacy },
+          unsetServer: vi.fn(async () => ({
+            ok: false as const,
+            path: "config",
+            error: "changed",
+          })),
+        },
+      ),
+    ).rejects.toThrow("changed");
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
+  });
+
+  it("reports partial failure when rejected-write provenance cannot be restored", async () => {
+    const previous = ref("docs", oldDocs);
+    const upsertRef = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("state unavailable");
+      });
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "docs",
+            action: "change",
+            target: "mcp.servers.docs",
+            blocked: false,
+            reason: "changed",
+          },
+        ]),
+        manifest(),
+        {
+          config: { mcp: { servers: { docs: oldDocs } } },
+          sourceMcpServers: { docs: oldDocs },
+          readRefs: () => [previous],
+          setServer: vi.fn().mockResolvedValue({ ok: false, path: "config", error: "changed" }),
+          upsertRef,
+        },
+      ),
+    ).rejects.toMatchObject({ partial: true });
+  });
+
+  it("retains current config when another owner appears before rollback", async () => {
+    const unsetServer = vi.fn();
+    const execution = await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "remote",
+          action: "add",
+          target: "mcp.servers.remote",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      manifest(),
+      {
+        config: {},
+        sourceMcpServers: {},
+        readRefs: () => [],
+        readRefsByName: () => [{ ...ref("remote", remote), agentId: "analyst" }],
+        setServer: vi.fn().mockResolvedValue({
+          ok: true,
+          path: "config",
+          config: {},
+          mcpServers: { remote },
+        }),
+        unsetServer,
+        upsertRef: vi.fn(),
+      },
+    );
+
+    await expect(execution.rollback()).rejects.toThrow("gained another owner");
+    expect(unsetServer).not.toHaveBeenCalled();
+  });
+
+  it("retains current config when the updated server is independently adopted", async () => {
+    const unsetServer = vi.fn();
+    const execution = await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "remote",
+          action: "add",
+          target: "mcp.servers.remote",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      manifest(),
+      {
+        config: {},
+        sourceMcpServers: {},
+        readRefs: () => [],
+        readRefsByName: () => [{ ...ref("remote", remote), independentOwner: true }],
+        setServer: vi.fn().mockResolvedValue({
+          ok: true,
+          path: "config",
+          config: {},
+          mcpServers: { remote },
+        }),
+        unsetServer,
+        upsertRef: vi.fn(),
+      },
+    );
+
+    await expect(execution.rollback()).rejects.toThrow("gained another owner");
     expect(unsetServer).not.toHaveBeenCalled();
   });
 

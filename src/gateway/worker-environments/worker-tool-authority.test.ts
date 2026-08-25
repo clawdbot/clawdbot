@@ -18,22 +18,71 @@ function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlace
   } as SessionPlacementTurnParams;
 }
 
-function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
+function authority(
+  overrides: Partial<SessionPlacementTurnParams> = {},
+  githubPublicationAvailable = false,
+) {
   return resolveWorkerToolAuthority({
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
+    githubPublicationAvailable,
   }).allowedToolNames;
 }
 
 describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
-    expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    expect(authority()).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
+  });
+
+  it("adds the optional browser surface only when the launcher makes it available", () => {
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-test" },
+        turn: turn(),
+        availableOptionalToolNames: ["browser"],
+      }).allowedToolNames,
+    ).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "browser",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-test" },
+        turn: turn({ toolsAllow: ["browser"] }),
+        availableOptionalToolNames: ["browser"],
+      }).allowedToolNames,
+    ).toEqual(["browser"]);
+    expect(authority({ toolsAllow: ["browser"] })).toEqual([]);
   });
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
     expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
     expect(authority({ toolsAllow: [] })).toEqual([]);
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
+    expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);
+    expect(authority({ toolsAllow: ["github_publish"] })).toEqual([]);
+    expect(authority({ toolsAllow: ["github_publish"] }, true)).toEqual(["github_publish"]);
+  });
+
+  it("adds publication only when the Gateway prepared its capability", () => {
+    expect(authority()).not.toContain("github_publish");
+    expect(authority({}, true)).toContain("github_publish");
   });
 
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {

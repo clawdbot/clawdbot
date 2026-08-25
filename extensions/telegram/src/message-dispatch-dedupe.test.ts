@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createChannelReplayGuard,
   type ChannelReplayClaimHandle,
@@ -105,14 +106,6 @@ function createTestClaim(params: {
     commit: async (options) => await (params.commit ?? (async () => true))(params.key, options),
     release: (options) => (params.release ?? (() => {}))(params.key, options),
   };
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -249,9 +242,9 @@ describe("Telegram message dispatch replay guard", () => {
 
   it("commits replay keys serially before starting the next write", async () => {
     const events: string[] = [];
-    const firstGate = createDeferred();
-    const secondGate = createDeferred();
-    const secondStarted = createDeferred();
+    const firstGate = createDeferred<void>();
+    const secondGate = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
     const guard = createTestReplayGuard();
     const claims = ["first", "second", "third"].map((key) =>
       createTestClaim({

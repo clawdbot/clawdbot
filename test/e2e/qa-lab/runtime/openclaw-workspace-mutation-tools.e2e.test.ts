@@ -24,8 +24,7 @@ function textOf(result: Awaited<ReturnType<AnyAgentTool["execute"]>>): string {
 }
 
 test("OpenClaw applies and edits exact workspace bytes while rejecting escapes", async () => {
-  // Resolve once so macOS /var and /private/var aliases cannot skew workspace checks.
-  const root = await fs.realpath(tempDirs.make("openclaw-workspace-mutation-"));
+  const root = tempDirs.make("openclaw-workspace-mutation-");
   const workspace = path.join(root, "workspace");
   const sentinel = path.join(root, "outside-sentinel");
   await fs.mkdir(workspace);

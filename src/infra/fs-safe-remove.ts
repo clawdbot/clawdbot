@@ -3,6 +3,7 @@ import "./fs-safe-defaults.js";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
+import { isMissingPathError } from "./errors.js";
 
 async function listDirectoryEntries(root: Root, relativePath: string) {
   return await root.list(relativePath, { withFileTypes: true });
@@ -18,12 +19,7 @@ function compareDirectoryEntryNames(left: DirectoryEntry, right: DirectoryEntry)
 }
 
 function isNotFoundError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return (
-    code === "not-found" ||
-    code === "ENOENT" ||
-    findPathAliasFilesystemCause(error)?.code === "ENOENT"
-  );
+  return isMissingPathError(error) || isMissingPathError(findPathAliasFilesystemCause(error));
 }
 
 function findPathAliasFilesystemCause(error: unknown): NodeJS.ErrnoException | undefined {

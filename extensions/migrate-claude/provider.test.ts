@@ -3,18 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { redactMigrationPlan } from "openclaw/plugin-sdk/migration";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHomePath } from "./helpers.js";
 import { buildMemoryItems } from "./memory.js";
 import { buildClaudeMigrationProvider } from "./provider.js";
 import { CLAUDE_AUTO_MEMORY_MAX_FILES, type ClaudeSource, discoverClaudeSource } from "./source.js";
-import {
-  cleanupTempRoots,
-  makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
-  writeFile,
-} from "./test/provider-helpers.js";
+import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function planItemById(
   items: readonly { id: string; kind?: string; action?: string }[],
@@ -28,9 +29,16 @@ function planItemById(
 }
 
 describe("Claude migration provider", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-claude-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("registers a Claude migration provider", () => {
@@ -54,7 +62,7 @@ describe("Claude migration provider", () => {
   });
 
   it("rejects missing Claude sources before planning", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "missing");
     const provider = buildClaudeMigrationProvider();
 
@@ -66,7 +74,7 @@ describe("Claude migration provider", () => {
   });
 
   it("plans and imports only Claude Code auto-memory into the selected agent", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const defaultWorkspace = path.join(root, "workspace-main");
     const targetWorkspace = path.join(root, "workspace-research");
@@ -118,7 +126,7 @@ describe("Claude migration provider", () => {
   });
 
   it("discovers a user-configured Claude Code auto-memory directory", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const customMemory = path.join(root, "custom-memory");
     await writeFile(
@@ -142,7 +150,7 @@ describe("Claude migration provider", () => {
   });
 
   it("honors CLAUDE_CONFIG_DIR for a relocated Claude home", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const relocatedHome = path.join(root, "relocated-claude");
     const memoryDir = path.join(relocatedHome, "projects", "-tmp-project", "memory");
     await writeFile(path.join(memoryDir, "MEMORY.md"), "# Relocated memory\n");
@@ -156,7 +164,7 @@ describe("Claude migration provider", () => {
   });
 
   it("treats an explicit repo root with a top-level projects/ dir as a project, not a home", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const projectRoot = path.join(root, "my-monorepo");
     await writeFile(path.join(projectRoot, "projects", "svc-a", "readme.md"), "# svc\n");
     await writeFile(path.join(projectRoot, "settings.json"), "{}\n");
@@ -170,7 +178,7 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "reports an unreadable configured Claude Code auto-memory directory",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const customMemory = path.join(root, "custom-memory");
       await writeFile(
@@ -201,7 +209,7 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "reports an inaccessible configured Claude Code auto-memory directory",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const lockedParent = path.join(root, "locked-parent");
       const customMemory = path.join(lockedParent, "custom-memory");
@@ -233,7 +241,7 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "reports an unreadable standard Claude Code projects directory",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const projects = path.join(source, "projects");
       await fs.mkdir(projects, { recursive: true });
@@ -258,7 +266,7 @@ describe("Claude migration provider", () => {
   );
 
   it("rejects relative Claude Code auto-memory settings", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     await writeFile(
       path.join(source, "settings.json"),
@@ -279,7 +287,7 @@ describe("Claude migration provider", () => {
   });
 
   it('rejects bare "~" as a Claude Code auto-memory directory', async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     await writeFile(
       path.join(source, "settings.json"),
@@ -300,7 +308,7 @@ describe("Claude migration provider", () => {
   });
 
   it("rejects Claude Code auto-memory that contains the import destination", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const workspaceDir = path.join(root, "workspace");
     const customMemory = path.join(workspaceDir, "memory");
@@ -326,7 +334,7 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked import destination that resolves into Claude Code memory",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const memoryDir = path.join(source, "projects", "-tmp-linked", "memory");
       const workspaceDir = path.join(root, "workspace");
@@ -351,7 +359,7 @@ describe("Claude migration provider", () => {
   it.runIf(process.platform !== "win32")(
     "marks a dangling Claude Code memory destination symlink as a conflict",
     async () => {
-      const root = await makeTempRoot();
+      const root = testWorkspace.dir;
       const source = path.join(root, ".claude");
       const workspaceDir = path.join(root, "workspace");
       await writeFile(
@@ -384,7 +392,7 @@ describe("Claude migration provider", () => {
   );
 
   it("fails planning when a discovered Claude Code memory directory cannot be read", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const missingMemory = path.join(root, "missing-memory");
     await writeFile(missingMemory, "not a directory\n");
     const source: ClaudeSource = {
@@ -414,7 +422,7 @@ describe("Claude migration provider", () => {
   });
 
   it("rejects oversized Claude Code auto-memory instead of returning a partial plan", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, ".claude");
     const memoryDir = path.join(source, "projects", "-tmp-large", "memory");
     await fs.mkdir(memoryDir, { recursive: true });
@@ -438,7 +446,7 @@ describe("Claude migration provider", () => {
   });
 
   it("plans project memory, MCP servers, commands, skills, and manual review items", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "project");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(source, "CLAUDE.md"), "# Project instructions\n");
@@ -490,7 +498,7 @@ describe("Claude migration provider", () => {
   });
 
   it("applies project imports without reading global Claude state", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "project");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");

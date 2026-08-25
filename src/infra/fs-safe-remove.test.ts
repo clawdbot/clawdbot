@@ -69,7 +69,8 @@ describe("removePathWithinRoot", () => {
         relativePath: "nested",
         force: true,
       }),
-      /ENOTEMPTY|EEXIST|EPERM/,
+      // fs-safe 0.5.2 reports the documented typed remove codes instead of raw errnos.
+      "not-empty",
     );
     await expect(fs.readFile(childPath, "utf8")).resolves.toBe("hello");
   });

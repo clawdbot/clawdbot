@@ -14,7 +14,7 @@ type ProjectionBudget = {
 };
 
 export function readCompactionPlanningOmittedChars(message: AgentMessage): number {
-  const value = (message as unknown as Record<string, unknown>)[OMITTED_CHARS_FIELD];
+  const value = Reflect.get(message, OMITTED_CHARS_FIELD);
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
@@ -204,11 +204,10 @@ function projectStringFields(
   fields: readonly string[],
   budget: ProjectionBudget,
 ): AgentMessage {
-  const record = message as unknown as Record<string, unknown>;
   let omittedChars = readCompactionPlanningOmittedChars(message);
-  let next: Record<string, unknown> | undefined;
+  let next: AgentMessage | undefined;
   for (const field of fields) {
-    const value = record[field];
+    const value = Reflect.get(message, field);
     if (typeof value !== "string") {
       continue;
     }
@@ -216,13 +215,11 @@ function projectStringFields(
     if (!projected) {
       continue;
     }
-    next ??= { ...record };
-    next[field] = projected.text;
+    next ??= { ...message };
+    Reflect.set(next, field, projected.text);
     omittedChars += projected.omittedChars;
   }
-  return next
-    ? ({ ...next, [OMITTED_CHARS_FIELD]: omittedChars } as unknown as AgentMessage)
-    : message;
+  return next ? Object.assign(next, { [OMITTED_CHARS_FIELD]: omittedChars }) : message;
 }
 
 function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentMessage {
@@ -268,11 +265,10 @@ function projectMessage(message: AgentMessage, budget: ProjectionBudget): AgentM
   if (!changed) {
     return source;
   }
-  return {
-    ...(source as unknown as Record<string, unknown>),
+  return Object.assign({}, source, {
     content: projectedContent,
     [OMITTED_CHARS_FIELD]: readCompactionPlanningOmittedChars(source) + omittedChars,
-  } as unknown as AgentMessage;
+  });
 }
 
 export function projectCompactionPlanningMessages(messages: AgentMessage[]): AgentMessage[] {

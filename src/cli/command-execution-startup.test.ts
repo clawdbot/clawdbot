@@ -56,7 +56,7 @@ describe("command-execution-startup", () => {
       commandPath: ["status"],
       startupPolicy: {
         suppressDoctorStdout: true,
-        hideBanner: false,
+        hideBanner: true,
         skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },

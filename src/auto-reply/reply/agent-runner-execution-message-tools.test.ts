@@ -6,6 +6,7 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
@@ -70,16 +71,21 @@ describe("executeAgentTurn: message tool progress", () => {
         },
       });
       await params.onAgentEvent?.({
-        stream: "assistant",
+        stream: "item",
         data: {
-          phase: "commentary",
+          kind: "preamble",
+          phase: "update",
           itemId: "commentary-1",
-          text: "This must stay suppressed.",
+          progressText: "This must stay suppressed.",
         },
       });
       releaseItemEvent?.();
       await itemEventPromise;
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        didDeliverSourceReplyViaMessageTool: true,
+        meta: {},
+      };
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -121,6 +127,41 @@ describe("executeAgentTurn: message tool progress", () => {
     );
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "tool_delivered",
+        runStatus: "completed",
+      }),
+    );
+  });
+
+  it("records mute when a message-tool-only run completes without a send", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
+    );
+  });
+
+  it("classifies a failed message-tool-only run separately from omission", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { error: { message: "provider crashed" } },
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "mute", runStatus: "errored" }),
+    );
   });
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {

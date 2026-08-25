@@ -2,9 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  buildReferenceInputCapabilityFailure,
+  buildVideoGenerationCapabilityFailure,
   resolveProviderWithModelCapabilities,
 } from "./capability-overlays.js";
+import {
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  DASHSCOPE_WAN_VIDEO_MODELS,
+} from "./dashscope-compatible.js";
 import type { VideoGenerationProvider, VideoGenerationProviderCapabilities } from "./types.js";
 
 async function resolveCapabilitiesWithOverlay(
@@ -156,7 +161,7 @@ describe("video-generation capability overlays", () => {
     });
 
     expect(
-      buildReferenceInputCapabilityFailure({
+      buildVideoGenerationCapabilityFailure({
         providerId: "openrouter",
         model: "minimax/hailuo-2.3",
         provider: activeProvider,
@@ -166,4 +171,50 @@ describe("video-generation capability overlays", () => {
       }),
     ).toMatch(/supports at most 1 reference image\(s\), 2 requested/);
   });
+
+  it.each(DASHSCOPE_WAN_VIDEO_MODELS)(
+    "enforces bundled Wan catalog modes before provider I/O for %s",
+    async (model) => {
+      const provider: VideoGenerationProvider = {
+        id: "qwen",
+        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+        resolveModelCapabilities: ({ model: selectedModel }) =>
+          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[selectedModel]?.capabilities,
+        async generateVideo() {
+          throw new Error("should not be called");
+        },
+      };
+      const activeProvider = await resolveProviderWithModelCapabilities({
+        provider,
+        providerId: "qwen",
+        model,
+        cfg: {} as OpenClawConfig,
+        log: { debug: vi.fn() },
+      });
+      const declaredModes = DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.modes ?? [];
+      const requests = [
+        { mode: "generate", inputImageCount: 0, inputVideoCount: 0 },
+        { mode: "imageToVideo", inputImageCount: 1, inputVideoCount: 0 },
+        { mode: "videoToVideo", inputImageCount: 0, inputVideoCount: 1 },
+      ] as const;
+
+      for (const request of requests) {
+        const failure = buildVideoGenerationCapabilityFailure({
+          providerId: "qwen",
+          model,
+          provider: activeProvider,
+          inputImageCount: request.inputImageCount,
+          inputVideoCount: request.inputVideoCount,
+          inputAudioCount: 0,
+        });
+
+        if (declaredModes.includes(request.mode)) {
+          expect(failure, `${model}:${request.mode}`).toBeUndefined();
+        } else {
+          expect(failure, `${model}:${request.mode}`).toMatch(/does not support/u);
+        }
+      }
+    },
+  );
 });

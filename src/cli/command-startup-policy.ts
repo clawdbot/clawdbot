@@ -35,11 +35,13 @@ export function resolveCliStartupPolicy(params: {
       ? commandPolicy.configGuard({ argv: params.argv ?? [], commandPath: params.commandPath })
       : commandPolicy.configGuard;
   const env = params.env ?? process.env;
+  const hideBanner = params.jsonOutputMode || commandPolicy.hideBanner;
   return {
     suppressDoctorStdout,
-    hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
+    hideBanner: hideBanner || isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER),
     skipConfigGuard:
       configGuard === "skip" || (configGuard === "when-suppressed" && suppressDoctorStdout),
+    ...(configGuard === "validate" ? { validateConfigOnly: true } : {}),
     loadPlugins: shouldLoadPlugins({
       argv: params.argv,
       commandPath: params.commandPath,

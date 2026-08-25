@@ -19,7 +19,7 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
-import { createMeetingNodeHost } from "./node-host.js";
+import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.js";
 
 const TEST_UUID = "00000000-0000-4000-8000-000000000001";
 // Mirrors the node-host's private retention limits.
@@ -90,7 +90,7 @@ function createProcess(params: {
   return proc;
 }
 
-function createHost() {
+function createHost(overrides: Partial<MeetingNodeHostOptions> = {}) {
   return createMeetingNodeHost({
     agentMode: "agent",
     assertAudioAvailable: vi.fn(),
@@ -109,6 +109,7 @@ function createHost() {
     normalizeMeetingKey: (url) => url,
     normalizeUrl: (input) => (typeof input === "string" ? input : "https://meeting.test"),
     talkBackModes: new Set(["bidi"]),
+    ...overrides,
   });
 }
 
@@ -146,6 +147,122 @@ function invokeBridge(
 ): Promise<Record<string, unknown>> {
   return invokeHost(bridge.host, { action, bridgeId: bridge.bridgeId, ...params });
 }
+
+describe("meeting node host audio backend", () => {
+  beforeEach(() => {
+    cryptoMocks.randomUUID.mockReturnValue(TEST_UUID);
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("prepares the node-local backend and uses its generated command pair", async () => {
+    const inputProcess = createProcess({ stdout: new EventEmitter() });
+    const outputProcess = createProcess({ stdin: createStdin(true) });
+    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+    const prepareAudio = vi.fn(async () => ({
+      backend: "pipewire-pulse" as const,
+      deviceLabel: "OpenClaw Meeting Audio",
+      inputCommand: ["parec", "--node-default"],
+      outputCommand: ["pacat", "--node-default"],
+    }));
+    const host = createHost({ prepareAudio });
+
+    const started = await invokeHost(host, {
+      action: "start",
+      url: "https://meeting.test/linux",
+      mode: "bidi",
+      launch: false,
+      audioBackend: "auto",
+      audioBufferBytes: 2_048,
+      audioFormat: "g711-ulaw-8khz",
+      audioInputCommand: ["trusted-capture"],
+      audioOutputCommand: ["trusted-playback"],
+    });
+
+    expect(prepareAudio).toHaveBeenCalledWith(
+      {
+        backend: "auto",
+        bufferBytes: 2_048,
+        format: "g711-ulaw-8khz",
+        inputCommand: ["trusted-capture"],
+        outputCommand: ["trusted-playback"],
+        bargeInInputCommand: undefined,
+      },
+      10_000,
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(1, "pacat", ["--node-default"], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(2, "parec", ["--node-default"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(started).toMatchObject({
+      audioBackend: "pipewire-pulse",
+      audioDeviceLabel: "OpenClaw Meeting Audio",
+      audioBridge: { type: "node-command-pair" },
+    });
+    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+  });
+
+  it("provisions audio before preserving the configured external bridge path", async () => {
+    const events: string[] = [];
+    const prepareAudio = vi.fn(async () => {
+      events.push("prepare");
+      return {
+        backend: "pipewire-pulse" as const,
+        deviceLabel: "OpenClaw Meeting Audio",
+        inputCommand: ["parec"],
+        outputCommand: ["pacat"],
+      };
+    });
+    childProcessMocks.spawnSync.mockImplementation(() => {
+      events.push("bridge");
+      return { error: undefined, signal: null, status: 0, stderr: "", stdout: "" };
+    });
+    const host = createHost({ prepareAudio });
+
+    const started = await invokeHost(host, {
+      action: "start",
+      url: "https://meeting.test/external",
+      mode: "bidi",
+      launch: false,
+      audioBridgeCommand: ["trusted-bridge", "start"],
+    });
+
+    expect(events).toEqual(["prepare", "bridge"]);
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+    expect(started).toMatchObject({
+      audioBackend: "pipewire-pulse",
+      audioBridge: { type: "external-command" },
+    });
+  });
+
+  it("returns the concrete backend from setup without starting bridge processes", async () => {
+    const prepareAudio = vi.fn(async () => ({
+      backend: "pipewire-pulse" as const,
+      deviceLabel: "OpenClaw Meeting Audio",
+      inputCommand: ["parec"],
+      outputCommand: ["pacat"],
+    }));
+    const host = createHost({ prepareAudio });
+
+    await expect(
+      invokeHost(host, {
+        action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      audioBackend: "pipewire-pulse",
+      audioDeviceLabel: "OpenClaw Meeting Audio",
+    });
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
+});
 
 describe("meeting node host audio output", () => {
   beforeEach(() => {

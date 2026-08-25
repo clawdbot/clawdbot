@@ -12,16 +12,16 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolDenylist = ReturnType<typeof compileGlobPatterns>;
 
 function normalizeToolDenylist(list?: string[]): ToolDenylist {
-  return compileGlobPatterns({ raw: list, normalize: normalizeToolName });
+  return compileGlobPatterns({ raw: list, normalize: normalizeToolPolicyName });
 }
 
 function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
 }
 
@@ -29,7 +29,7 @@ function denylistBlocksMcpServerNamespace(params: {
   safeServerName: string;
   denylist: ToolDenylist;
 }): boolean {
-  const serverPrefix = normalizeToolName(params.safeServerName + TOOL_NAME_SEPARATOR);
+  const serverPrefix = normalizeToolPolicyName(params.safeServerName + TOOL_NAME_SEPARATOR);
   if (!serverPrefix) {
     return false;
   }
@@ -117,7 +117,7 @@ function collectAvailableManifestToolNames(params: {
         env: params.env,
       }),
     )
-    .map(normalizeToolName)
+    .map(normalizeToolPolicyName)
     .filter(Boolean);
 }
 

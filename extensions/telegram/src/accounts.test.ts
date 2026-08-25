@@ -151,7 +151,7 @@ describe("resolveTelegramAccount", () => {
 
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
     const cfg = {
-      agents: { list: [{ id: "primary", default: true }] },
+      agents: { entries: { primary: { default: true } } },
       channels: {
         telegram: {
           botToken: "tok-default",
@@ -666,22 +666,34 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
+  it("inherits channel-level groups to secondary account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "dev",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
+  it("inherits channel-level groups to default account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("keeps an explicit empty account groups map isolated in multi-account setup", () => {
+    const cfg = createMultiAccountGroupsConfig();
+    if (!cfg.channels?.telegram?.accounts?.dev) {
+      throw new Error("expected dev Telegram account");
+    }
+    cfg.channels.telegram.accounts.dev.groups = {};
+
+    const resolved = resolveTelegramAccount({ cfg, accountId: "dev" });
+
+    expect(resolved.config.groups).toEqual({});
   });
 
   it("uses account-level groups even in multi-account setup", () => {

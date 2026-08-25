@@ -5,6 +5,7 @@ import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -309,11 +310,9 @@ function cachedCompressedControlUiHtml(
 }
 
 export function respondControlUiNotAcceptable(res: ServerResponse) {
-  res.statusCode = 406;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Vary", "Accept-Encoding");
-  res.end("Not Acceptable");
+  respondPlainText(res, 406, "Not Acceptable");
 }
 
 export async function sendControlUiHtmlBody(

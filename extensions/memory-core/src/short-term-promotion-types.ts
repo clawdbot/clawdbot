@@ -128,10 +128,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-dangling"
     | "recall-store-over-limit"
     | "recall-lock-stale"
-    | "recall-lock-unreadable"
-    | "qmd-index-missing"
-    | "qmd-index-empty"
-    | "qmd-collections-empty";
+    | "recall-lock-unreadable";
   message: string;
   fixable: boolean;
 };
@@ -149,13 +146,6 @@ export type ShortTermAuditSummary = {
   invalidEntryCount: number;
   danglingEntryCount?: number;
   issues: ShortTermAuditIssue[];
-  qmd?:
-    | {
-        dbPath?: string;
-        collections?: number;
-        dbBytes?: number;
-      }
-    | undefined;
 };
 
 export type RepairShortTermPromotionArtifactsResult = {
@@ -223,6 +213,10 @@ export type ApplyShortTermPromotionsResult = {
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
+  rejectedCandidates: Array<{
+    candidate: PromotionCandidate;
+    reason: string;
+  }>;
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;
   /** Dates of the compacted promotion sections, oldest first. */

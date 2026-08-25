@@ -18,7 +18,6 @@ import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/prov
 
 // Shared media-generation runtime helpers for provider fallback, request
 // timeout normalization, model selection, and capability value normalization.
-export type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 type ParsedProviderModelRef = {

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   deleteRegistryWorktree,
@@ -15,12 +15,7 @@ import {
   getRegistryWorktreeProvisionedState,
   listRegistryWorktrees,
 } from "./registry.js";
-import {
-  IDLE_GC_MS,
-  ManagedWorktreeService,
-  resolveWorktreeCleanupLimits,
-  SNAPSHOT_RETENTION_MS,
-} from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -103,12 +98,6 @@ describe("ManagedWorktreeService", () => {
     });
   }
 
-  const materializeRunOwnedFixture = (
-    name: string,
-    ownerKind: "session" | "workboard",
-    ownerId?: string,
-  ) => materializeDownstreamFixture(name, { ownerKind, ownerId });
-
   beforeAll(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
@@ -157,6 +146,21 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
+  });
+
+  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "read-only-list",
+      baseRef: "HEAD",
+    });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+
+    expect(await service.list()).toEqual([]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -341,9 +345,9 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
       expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
       expect(await service.list()).toEqual([]);
-      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual(
+        [],
+      );
     },
   );
 
@@ -403,26 +407,6 @@ describe("ManagedWorktreeService", () => {
     const created = await service.create({ repoRoot: repo, name: "offline" });
     expect(created.baseRef).toBe("HEAD");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
-  it("keeps registry operations anchored to the primary checkout", async () => {
-    const linked = path.join(root, "linked-source");
-    await git(repo, "worktree", "add", "-b", "linked-source", linked, "HEAD");
-    const linkedRoot = await fs.realpath(linked);
-    const created = await service.create({
-      repoRoot: linkedRoot,
-      name: "linked-task",
-      baseRef: "HEAD",
-    });
-    expect(created.repoRoot).toBe(repo);
-    await git(repo, "worktree", "remove", "--force", linkedRoot);
-
-    await service.acquire(created.id);
-    await service.release(created.id);
-    await service.remove({ id: created.id, reason: "linked-source-removed" });
-    const restored = await service.restore({ id: created.id });
-
-    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
   });
 
   it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {
@@ -878,266 +862,4 @@ describe("ManagedWorktreeService", () => {
       );
     },
   );
-
-  it("exempts manual worktrees and garbage collects idle run-owned worktrees", async () => {
-    const manual = await materializeDownstreamFixture("manual-idle");
-    const created = await materializeRunOwnedFixture("idle-dead", "workboard");
-    await git(repo, "worktree", "lock", "--reason", "openclaw pid=999999", created.path);
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-    expect(result.removed).toEqual([created.id]);
-    expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
-    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
-    expect(await fs.stat(manual.path)).toBeTruthy();
-  });
-
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
-  });
-
-  it("uses owner activity to protect only active idle session worktrees", async () => {
-    const active = await materializeRunOwnedFixture(
-      "active-session",
-      "session",
-      "agent:main:active",
-    );
-    const inactive = await materializeRunOwnedFixture(
-      "inactive-session",
-      "session",
-      "agent:main:inactive",
-    );
-    now += IDLE_GC_MS + 1;
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ shouldProtectOwner });
-
-    expect(result.removed).toEqual([inactive.id]);
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:active");
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:inactive");
-    expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
-  });
-
-  it("protects foreign locks during idle garbage collection", async () => {
-    const created = await materializeRunOwnedFixture("foreign-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", "other-tool", created.path);
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([]);
-    expect(await fs.stat(created.path)).toBeTruthy();
-  });
-
-  it("continues garbage collection after one worktree cannot be snapshotted", async () => {
-    const removable = await materializeRunOwnedFixture("removable", "workboard");
-    now += 1;
-    const nestedRecord = await materializeRunOwnedFixture("nested-idle", "workboard");
-    await initializeRepository(nestedRecord.path, gitTemplate, "nested");
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-
-    expect(result.removed).toEqual([removable.id]);
-    expect(getRegistryWorktree(env, nestedRecord.id)?.removedAt).toBeUndefined();
-    await expect(fs.stat(removable.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeRepository(root, gitTemplate, "other-repo");
-    const removable = await materializeDownstreamFixture("other-removable", {
-      repoRoot: otherRepo,
-      ownerKind: "session",
-    });
-    now += 1;
-    const broken = await materializeDownstreamFixture("missing-control", {
-      ownerKind: "session",
-    });
-    await fs.rename(repo, path.join(root, "moved-repo"));
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-
-    expect(result.removed).toEqual([removable.id]);
-    expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
-  });
-
-  it("deletes unregistered orphan debris but preserves git-listed worktrees", async () => {
-    const debris = path.join(env.OPENCLAW_STATE_DIR!, "worktrees", "orphan-fingerprint", "debris");
-    await fs.mkdir(debris, { recursive: true });
-    await fs.writeFile(path.join(debris, "file"), "debris");
-    const foreign = path.join(env.OPENCLAW_STATE_DIR!, "worktrees", "foreign-fingerprint", "live");
-    await fs.mkdir(path.dirname(foreign), { recursive: true });
-    await git(repo, "worktree", "add", "--detach", foreign, "HEAD");
-
-    const result = await service.gc();
-    expect(result.orphansDeleted).toBe(1);
-    await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await fs.stat(foreign)).toBeTruthy();
-    await git(repo, "worktree", "remove", "--force", foreign);
-  });
-
-  it("evicts the least recently active run-owned worktrees over the count limit", async () => {
-    const manual = await materializeDownstreamFixture("manual-kept");
-    const oldest = await materializeRunOwnedFixture("count-oldest", "session", "agent:main:oldest");
-    now += 1;
-    const middle = await materializeRunOwnedFixture("count-middle", "workboard", "card-middle");
-    now += 1;
-    const newest = await materializeRunOwnedFixture("count-newest", "session", "agent:main:newest");
-
-    const result = await service.gc({ limits: { maxCount: 2 } });
-
-    expect(result.removed).toEqual([oldest.id, middle.id]);
-    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
-    await expect(fs.stat(oldest.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("skips active owners during count-limit eviction", async () => {
-    const activeOldest = await materializeRunOwnedFixture(
-      "limit-active",
-      "session",
-      "agent:main:active",
-    );
-    now += 1;
-    const idle = await materializeRunOwnedFixture("limit-idle", "session", "agent:main:idle");
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ limits: { maxCount: 1 }, shouldProtectOwner });
-
-    expect(result.removed).toEqual([idle.id]);
-    expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();
-  });
-
-  it("evicts oldest worktrees until total size fits the size limit", async () => {
-    const oldest = await materializeRunOwnedFixture(
-      "size-oldest",
-      "session",
-      "agent:main:size-old",
-    );
-    await fs.writeFile(path.join(oldest.path, "blob.bin"), Buffer.alloc(10_000));
-    now += 1;
-    const newest = await materializeRunOwnedFixture(
-      "size-newest",
-      "session",
-      "agent:main:size-new",
-    );
-
-    const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
-
-    expect(result.removed).toEqual([oldest.id]);
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
-  });
-
-  it("keeps unmeasurable worktrees out of size accounting instead of counting zero", async () => {
-    if (process.getuid?.() === 0) {
-      return; // chmod-based EACCES cannot be simulated as root
-    }
-    const unreadable = await materializeRunOwnedFixture(
-      "size-unreadable",
-      "session",
-      "agent:main:size-unreadable",
-    );
-    await fs.writeFile(path.join(unreadable.path, "blob.bin"), Buffer.alloc(10_000));
-    const locked = path.join(unreadable.path, "locked");
-    await fs.mkdir(locked);
-    await fs.chmod(locked, 0o000);
-    try {
-      const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
-      // The failed measurement excludes the record from the size total, so the
-      // limit pass does not evict against a bogus zero-byte reading.
-      expect(result.removed).toEqual([]);
-      expect(getRegistryWorktree(env, unreadable.id)?.removedAt).toBeUndefined();
-    } finally {
-      await fs.chmod(locked, 0o755);
-    }
-  });
-
-  it("counts a competing removal instead of evicting an extra worktree", async () => {
-    const oldest = await materializeRunOwnedFixture(
-      "race-oldest",
-      "session",
-      "agent:main:race-old",
-    );
-    now += 1;
-    const middle = await materializeRunOwnedFixture(
-      "race-middle",
-      "session",
-      "agent:main:race-mid",
-    );
-    now += 1;
-    const newest = await materializeRunOwnedFixture(
-      "race-newest",
-      "session",
-      "agent:main:race-new",
-    );
-    const realRemove = service.remove.bind(service);
-    const removeSpy = vi
-      .spyOn(service, "remove")
-      .mockImplementationOnce(async (params: Parameters<typeof realRemove>[0]) => {
-        // Simulate a concurrent cleanup winning the removal claim first.
-        await realRemove({ ...params, reason: "concurrent-gc" });
-        throw new Error("removal already claimed");
-      });
-
-    const result = await service.gc({ limits: { maxCount: 2 } });
-
-    // The stale-count correction stops the pass at two live worktrees instead
-    // of evicting middle as well.
-    expect(result.removed).toEqual([]);
-    expect(getRegistryWorktree(env, oldest.id)?.removedAt).toBeDefined();
-    expect(getRegistryWorktree(env, middle.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    removeSpy.mockRestore();
-  });
-
-  it("leaves everything in place when limits are not exceeded", async () => {
-    const created = await materializeRunOwnedFixture("under-limit", "session", "agent:main:under");
-
-    const result = await service.gc({
-      limits: { maxCount: 5, maxTotalSizeBytes: 1024 ** 3 },
-    });
-
-    expect(result.removed).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  });
-
-  it("uses the fixed no-limit cleanup policy", () => {
-    expect(resolveWorktreeCleanupLimits()).toEqual({});
-  });
-
-  it("prunes expired snapshot refs and registry rows", async () => {
-    const created = await materializeDownstreamFixture("expired");
-    const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
-
-    const result = await service.gc();
-    expect(result.snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
-    await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
-  });
 });

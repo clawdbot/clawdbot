@@ -7,7 +7,7 @@ import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 
 type BenchmarkCaseId =
   | "tool-create"
@@ -156,8 +156,11 @@ function parsePositiveInteger(flag: string, fallback: number, args: string[]): n
     return fallback;
   }
   const raw = args[index + 1];
+  if (!/^\d+$/u.test(raw ?? "")) {
+    throw new CliArgumentError(`${flag} must be a positive integer`);
+  }
   const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new CliArgumentError(`${flag} must be a positive integer`);
   }
   return value;
@@ -169,8 +172,11 @@ function parseNonNegativeInteger(flag: string, fallback: number, args: string[])
     return fallback;
   }
   const raw = args[index + 1];
+  if (!/^\d+$/u.test(raw ?? "")) {
+    throw new CliArgumentError(`${flag} must be a non-negative integer`);
+  }
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new CliArgumentError(`${flag} must be a non-negative integer`);
   }
   return value;

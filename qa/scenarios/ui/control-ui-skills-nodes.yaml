@@ -21,7 +21,7 @@ scenario:
   codeRefs:
     - ui/src/e2e/operator-admin.e2e.test.ts
     - ui/src/pages/skills/skills-page.ts
-    - ui/src/pages/nodes/nodes-page.ts
+    - ui/src/pages/devices/devices-page.ts
   execution:
     kind: playwright
     path: ui/src/e2e/operator-admin.e2e.test.ts

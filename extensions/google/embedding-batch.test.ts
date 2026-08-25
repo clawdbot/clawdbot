@@ -80,6 +80,18 @@ function makeGeminiClient(
   };
 }
 
+function makeGeminiEmbedding2Client(
+  outputDimensionality: number,
+  baseUrl = "https://generativelanguage.googleapis.com/v1beta",
+): GeminiEmbeddingClient {
+  return {
+    ...makeGeminiClient(baseUrl),
+    model: "gemini-embedding-2",
+    modelPath: "models/gemini-embedding-2",
+    outputDimensionality,
+  };
+}
+
 type GeminiBatchRequest = Parameters<typeof runGeminiEmbeddingBatches>[0]["requests"][number];
 
 function batchRequest(customId: string, text: string): GeminiBatchRequest {
@@ -207,6 +219,22 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
+  it("rejects async batch embeddings that do not match the requested dimensions", async () => {
+    stubBatchFetch((stage) => {
+      if (stage !== "download") {
+        return undefined;
+      }
+      return new Response(
+        JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0, 0] } } }),
+        { status: 200 },
+      );
+    });
+
+    await expect(runBatch(singleRequest(), makeGeminiEmbedding2Client(768))).rejects.toThrow(
+      "gemini embeddings failed: expected 768 dimensions, received 3",
+    );
+  });
+
   it("stops before polling status after the batch timeout expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

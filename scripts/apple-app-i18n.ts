@@ -1,35 +1,11 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-// Keep this script independent from the translation client loaded by native-app-i18n.
-// Artifact locale assertions below make drift fail instead of silently dropping a language.
-export const APPLE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
-const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
+const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
@@ -166,7 +142,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
     "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "Text(verbatim: value)",
   ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
@@ -433,10 +408,8 @@ type Catalog = {
 
 type NativeSourceEntry = {
   id: string;
-  kind: string;
-  line: number;
-  path: string;
   source: string;
+  sites: Array<{ kind: string; path: string }>;
   surface: string;
 };
 
@@ -446,8 +419,8 @@ type NativeSourceArtifact = {
 };
 
 type NativeTranslationArtifact = {
-  entries: Array<{ id: string; source: string; translated: string }>;
   locale: string;
+  translations: Record<string, string>;
   version: number;
 };
 
@@ -534,20 +507,19 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  source: string,
+  _source: string,
 ): string[] {
-  return (
-    artifact?.entries
-      .filter((entry) => entry.id === sourceId && entry.source === source)
-      .map((entry) => entry.translated) ?? []
-  );
+  const translated = artifact?.translations[sourceId];
+  return typeof translated === "string" ? [translated] : [];
 }
 
 function infoPlistSourceIds(nativeSource: NativeSourceArtifact): Map<string, string> {
   return new Map(
-    nativeSource.entries
-      .filter((entry) => entry.kind === "plist-string")
-      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
+    nativeSource.entries.flatMap((entry) =>
+      entry.sites
+        .filter((site) => site.kind === "plist-string")
+        .map((site) => [[site.path, entry.source].join("\u0000"), entry.id] as const),
+    ),
   );
 }
 
@@ -587,8 +559,11 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
 function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -597,8 +572,11 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
 function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -658,28 +636,20 @@ function buildAppleCatalog(
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
     compareCodeUnits,
   );
-  const sourceSet = new Set(sources);
-  const appleIdsBySource = new Map<string, Set<string>>();
-  for (const [entry, source] of catalogEntries) {
-    const ids = appleIdsBySource.get(source) ?? new Set<string>();
-    ids.add(entry.id);
-    appleIdsBySource.set(source, ids);
-  }
+  const catalogIds = new Set(catalogEntries.map(([entry]) => entry.id));
   const existingStrings = existingCatalog.strings ?? {};
+  const nativeEntryById = new Map(nativeSource.entries.map((entry) => [entry.id, entry]));
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
-      for (const entry of artifact.entries) {
+      for (const [id, translated] of Object.entries(artifact.translations)) {
+        const entry = nativeEntryById.get(id);
+        if (!entry || !catalogIds.has(id)) {
+          continue;
+        }
         const source = appleCatalogValue(entry.source);
-        if (!sourceSet.has(source)) {
-          continue;
-        }
-        const appleIds = appleIdsBySource.get(source);
-        if (appleIds && !appleIds.has(entry.id)) {
-          continue;
-        }
         const values = bySource.get(source) ?? [];
-        values.push(appleCatalogValue(entry.translated));
+        values.push(appleCatalogValue(translated));
         bySource.set(source, values);
       }
       return [artifact.locale, bySource] as const;
@@ -789,7 +759,7 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
 }
 
 async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
-  const expectedFiles = APPLE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
+  const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
   const actualFiles = (
     await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
       withFileTypes: true,
@@ -804,7 +774,7 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
     );
   }
   return Promise.all(
-    APPLE_I18N_LOCALES.map(async (locale) => {
+    NATIVE_I18N_LOCALES.map(async (locale) => {
       const artifact = JSON.parse(
         await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
       ) as NativeTranslationArtifact;
@@ -882,7 +852,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
     const sourceEntries = parseInfoPlistStrings(
       await readFile(path.join(ROOT, target.sourcePath), "utf8"),
     );
-    for (const locale of APPLE_I18N_LOCALES) {
+    for (const locale of NATIVE_I18N_LOCALES) {
       const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
       const outputPath = path.join(
         ROOT,
@@ -1013,7 +983,7 @@ export async function checkAppleAppI18n() {
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
       `macosTranslationContradictions=${macosBuild.contradictions.length}`,
-      `locales=${APPLE_I18N_LOCALES.join(",")}`,
+      `locales=${NATIVE_I18N_LOCALES.join(",")}`,
       "\n",
     ].join(" "),
   );

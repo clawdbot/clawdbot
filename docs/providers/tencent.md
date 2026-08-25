@@ -38,7 +38,7 @@ openclaw onboard --auth-choice tokenhub-api-key
 ```
 
 ```bash TokenHub direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice tokenhub-api-key \
   --tokenhub-api-key "$TOKENHUB_API_KEY"
 ```
@@ -48,7 +48,7 @@ openclaw onboard --auth-choice tokenplan-api-key
 ```
 
 ```bash TokenPlan direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice tokenplan-api-key \
   --tokenplan-api-key "$TOKENPLAN_API_KEY"
 ```

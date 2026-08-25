@@ -205,7 +205,7 @@ describe("dashboardCommand bind selection", () => {
       tlsEnabled: false,
     });
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
     );
   });
 

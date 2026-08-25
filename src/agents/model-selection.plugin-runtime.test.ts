@@ -32,6 +32,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => [],
+  loadProviderScopedThinkingCatalog: async () => [],
   loadPreparedModelCatalog: async () => [],
   loadPreparedModelCatalogSnapshot: loadPreparedModelCatalogSnapshotMock,
 }));

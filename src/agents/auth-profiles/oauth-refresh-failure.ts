@@ -7,6 +7,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
  * commands without trusting raw provider text.
  */
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import type { AuthProfileFailureReason } from "./types.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -237,4 +238,33 @@ export function buildOAuthRefreshFailureLoginCommand(
           : `openclaw models auth login --provider ${sanitizedProvider}`,
       )
     : formatCliCommand("openclaw models auth login");
+}
+
+/** Build operator guidance for an active profile cooldown or disable window. */
+export function buildAuthProfileUnusableHint(params: {
+  kind: "cooldown" | "disabled";
+  reason?: AuthProfileFailureReason;
+  provider: string;
+  profileId: string;
+}): string {
+  if (
+    params.reason === "auth" ||
+    params.reason === "auth_permanent" ||
+    params.reason === "session_expired"
+  ) {
+    if (params.provider === "google-gemini-cli") {
+      // The legacy runtime has no auth method of its own. Recovery creates a
+      // supported Google API-key profile and then selects it for that runtime.
+      const command = formatCliCommand("openclaw models auth login --provider google");
+      return `Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}, then select that Google profile for the Gemini CLI runtime.`;
+    }
+    const command = buildOAuthRefreshFailureLoginCommand(params.provider, {
+      profileId: params.profileId,
+    });
+    return `Re-authenticate with ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}.`;
+  }
+  if (params.kind === "disabled" && params.reason === "billing") {
+    return "Top up credits (provider billing) or switch provider.";
+  }
+  return "Wait for cooldown or switch provider.";
 }

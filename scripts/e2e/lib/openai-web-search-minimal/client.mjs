@@ -162,23 +162,9 @@ async function main() {
     return;
   }
   if (!result.ok) {
-    throw toLintErrorObject(result.error, "Non-Error thrown");
+    throw /** @type {Error} */ (result.error);
   }
   validateSuccessResult(result);
-}
-
-function toLintErrorObject(value, fallbackMessage) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
@@ -194,7 +180,6 @@ export const testing = {
   DEFAULT_GATEWAY_SCHEMA_ERROR,
   DEFAULT_RAW_SCHEMA_ERROR,
   SUCCESS_MARKER,
-  extractSuccessReplyTexts,
   resolveGatewayPort,
   validateSuccessResult,
   validateRejectResult,

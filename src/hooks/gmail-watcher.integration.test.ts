@@ -122,14 +122,11 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
 
     console.log("calling stopGmailWatcher...");
     await stopGmailWatcher();
-    await new Promise<void>((r) => {
-      setTimeout(r, 400);
-    });
+
+    await expect.poll(() => alive(gogPid!), { interval: 25, timeout: 1_500 }).toBe(false);
+    await expect.poll(() => alive(helperPid!), { interval: 25, timeout: 1_500 }).toBe(false);
 
     console.log(`gog alive after stop: ${alive(gogPid)}`);
     console.log(`credential-helper alive after stop: ${alive(helperPid)}`);
-
-    expect(alive(gogPid)).toBe(false);
-    expect(alive(helperPid)).toBe(false); // descendant must also be gone
   }, 15_000);
 });

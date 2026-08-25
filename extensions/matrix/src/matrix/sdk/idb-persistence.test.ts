@@ -166,4 +166,21 @@ describe("Matrix IndexedDB persistence", () => {
       }),
     ).resolves.toEqual([{ key: "room-1", value: { session: "abc123" } }]);
   });
+
+  it("strictly propagates final IndexedDB persistence failures", async () => {
+    const cause = new Error("indexeddb unavailable");
+    const databasesSpy = vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
+
+    try {
+      await expect(
+        persistIdbToDisk({
+          snapshotPath: path.join(tmpDir, "crypto-idb-snapshot.json"),
+          databasePrefix: DATABASE_PREFIX,
+          strict: true,
+        }),
+      ).rejects.toBe(cause);
+    } finally {
+      databasesSpy.mockRestore();
+    }
+  });
 });

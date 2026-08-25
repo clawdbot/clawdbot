@@ -132,7 +132,6 @@ flow:
               ref: config.completionText
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
-          saveAs: outbound
         - call: fs.readFile
           saveAs: artifact
           args:
@@ -184,39 +183,62 @@ flow:
             expr: "writeResultRequest.toolOutputCallId === writeRequest.plannedToolCallId && writeResultRequest.toolOutputStructuredError !== true && /successfully (?:wrote|created|updated|replaced)/i.test(String(writeResultRequest.toolOutput ?? '')) && !writeResultRequest.plannedToolName"
             message:
               expr: "`request 4 did not consume the successful write result before terminal generation: ${JSON.stringify(writeResultRequest)}`"
+        - call: waitForCondition
+          saveAs: durableCompletionLifecycle
+          args:
+            - lambda:
+                expr: |-
+                  (() => {
+                    const snapshot = state.getSnapshot();
+                    const visible = snapshot.messages.filter((message) => message.accountId === transport.accountId && message.direction === "outbound" && !message.deleted && message.conversation.id === config.conversationId && message.conversation.kind === "direct" && message.text.includes(config.completionText));
+                    if (visible.length !== 1) return undefined;
+                    const candidate = visible[0];
+                    const events = snapshot.events.filter((event) => event.cursor > busCursorBefore && "message" in event && event.message.accountId === transport.accountId && event.message.direction === "outbound" && event.message.conversation.id === config.conversationId && event.message.conversation.kind === "direct" && event.message.text.includes(config.completionText));
+                    const finalSent = events.find((event) => event.kind === "outbound-message" && event.message.id === candidate.id);
+                    if (!finalSent) return undefined;
+                    const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);
+                    if (!previewRetired) return undefined;
+                    const previewSent = events.find((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
+                    return previewSent ? { message: candidate, previewId: previewRetired.message.id, finalId: candidate.id, previewSentCursor: previewSent.cursor, previewDeletedCursor: previewRetired.cursor, finalSentCursor: finalSent.cursor } : undefined;
+                  })()
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - set: durableCompletion
+          value:
+            expr: durableCompletionLifecycle.message
         - set: allBusEvents
           value:
-            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId)"
+            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.accountId === transport.accountId && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId && event.message.conversation.kind === 'direct')"
         - set: busEvents
           value:
             expr: "allBusEvents.filter((event) => event.kind === 'outbound-message' || event.kind === 'message-edited')"
         - set: completionEvents
           value:
             expr: "busEvents.filter((event) => event.message.text.includes(config.completionText))"
-        - set: finalCompletionEvent
-          value:
-            expr: "completionEvents.findLast((event) => event.message.id === outbound.id)"
         - set: completionMessages
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.text.includes(config.completionText) && !message.deleted)"
+            expr: "state.getSnapshot().messages.filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'direct' && message.text.includes(config.completionText) && !message.deleted)"
         - assert:
-            expr: "completionMessages.length === 1 && completionMessages[0].id === outbound.id"
+            # Tool-backed finals replace their streamed preview; prove sent -> deleted -> final ordering first.
+            expr: "completionMessages.length === 1 && completionMessages[0].id === durableCompletion.id"
             message:
               expr: "`expected exactly one durable completion reply: ${JSON.stringify(completionMessages)}`"
+        - set: finalCompletionEvent
+          value:
+            expr: "completionEvents.findLast((event) => event.message.id === durableCompletion.id)"
         - assert:
             expr: "completionEvents.length >= 1 && finalCompletionEvent && completionEvents.every((event) => artifactStat.mtimeMs <= (event.message.editedAt ?? event.message.timestamp))"
             message:
               expr: "`completion appeared before the write-backed terminal request: artifactMtime=${artifactStat.mtimeMs} events=${JSON.stringify(completionEvents)}`"
         - assert:
-            expr: "completionEvents.filter((event) => event.message.id !== outbound.id).every((event) => allBusEvents.some((candidate) => candidate.kind === 'message-deleted' && candidate.cursor > event.cursor && candidate.message.id === event.message.id))"
+            expr: "completionEvents.filter((event) => event.message.id !== durableCompletion.id).every((event) => allBusEvents.some((candidate) => candidate.kind === 'message-deleted' && candidate.cursor > event.cursor && candidate.message.id === event.message.id))"
             message:
               expr: "`a transient completion preview remained durable: ${JSON.stringify(allBusEvents)}`"
         - assert:
-            expr: "outbound.replyToId === inbound.id && outbound.text.includes(config.artifactFile) && outbound.text.includes(config.completionMarker)"
+            expr: "durableCompletion.replyToId === inbound.id && durableCompletion.text.includes(config.artifactFile) && durableCompletion.text.includes(config.completionMarker)"
             message:
-              expr: "`durable completion did not cite the artifact and marker: ${JSON.stringify(outbound)}`"
+              expr: "`durable completion did not cite the artifact and marker: ${JSON.stringify(durableCompletion)}`"
         - assert:
             expr: "artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)"
             message:
               expr: "`artifact postdated the durable completion reply: artifactMtime=${artifactStat.mtimeMs} replyTimestamp=${finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp}`"
-      detailsExpr: "`read:${firstReadRequest.plannedToolCallId} -> read:${secondReadRequest.plannedToolCallId} -> write:${writeRequest.plannedToolCallId} -> result:${writeResultRequest.toolOutputCallId}; artifactBeforeReply=${artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)}; durableCompletions=${completionMessages.length}`"
+      detailsExpr: "`read:${firstReadRequest.plannedToolCallId} -> read:${secondReadRequest.plannedToolCallId} -> write:${writeRequest.plannedToolCallId} -> result:${writeResultRequest.toolOutputCallId}; artifactBeforeReply=${artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)}; durableCompletions=${completionMessages.length}; lifecycle=${JSON.stringify({ previewId: durableCompletionLifecycle.previewId, previewSentCursor: durableCompletionLifecycle.previewSentCursor, previewDeletedCursor: durableCompletionLifecycle.previewDeletedCursor, finalId: durableCompletionLifecycle.finalId, finalSentCursor: durableCompletionLifecycle.finalSentCursor })}`"

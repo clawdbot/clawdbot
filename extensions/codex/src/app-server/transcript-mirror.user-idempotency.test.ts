@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  readSessionTranscriptEvents,
+  type TranscriptEntryAnchor,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -27,6 +30,7 @@ const transcriptRace = vi.hoisted(() => ({
   competingMessage: undefined as unknown,
   lookups: [] as Array<string | undefined>,
   publish: vi.fn(),
+  userAnchor: undefined as TranscriptEntryAnchor | undefined,
 }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
@@ -65,7 +69,13 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
           },
           appendMessageWithMessageSequence: async (options) => {
             transcriptRace.lookups.push(options.idempotencyLookup);
-            return await locked.appendMessageWithMessageSequence(options);
+            const result = await locked.appendMessageWithMessageSequence(options);
+            const appended = result.result;
+            const message = appended?.message as AgentMessage | undefined;
+            if (appended && message?.role === "user") {
+              transcriptRace.userAnchor = appended.anchor;
+            }
+            return result;
           },
         };
         return await run(intercepted);
@@ -78,6 +88,7 @@ afterEach(() => {
   transcriptRace.competingMessage = undefined;
   transcriptRace.lookups.length = 0;
   transcriptRace.publish.mockReset();
+  transcriptRace.userAnchor = undefined;
 });
 
 it("adopts a competing indexed user without duplicating writes or slowing assistant mirrors", async () => {
@@ -150,13 +161,19 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
       idempotencyScope: "codex-app-server:thread-1",
     });
 
-    const messages = (await readSessionTranscriptEvents(target))
-      .filter((event): event is { type: "message"; message: AgentMessage } => {
+    const messageEvents = (await readSessionTranscriptEvents(target)).filter(
+      (event): event is { id: string; type: "message"; message: AgentMessage } => {
         return Boolean(
-          event && typeof event === "object" && "type" in event && event.type === "message",
+          event &&
+          typeof event === "object" &&
+          "id" in event &&
+          typeof event.id === "string" &&
+          "type" in event &&
+          event.type === "message",
         );
-      })
-      .map((event) => event.message);
+      },
+    );
+    const messages = messageEvents.map((event) => event.message);
 
     expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
@@ -171,6 +188,12 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
         }),
       }),
     ]);
+    expect(result.userMessageReceipts).toHaveLength(1);
+    expect(result.userMessageReceipts[0]?.message).toBe(result.userMessagesPresent[0]);
+    expect(result.userMessageReceipts[0]?.anchor).toBe(transcriptRace.userAnchor);
+    expect(result.userMessageReceipts[0]?.anchor.entryId).toBe(
+      messageEvents.find((event) => event.message.role === "user")?.id,
+    );
     expect(result.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
     expect(transcriptRace.lookups).toEqual(["scan", "scan"]);
     expect(transcriptRace.publish).toHaveBeenCalledTimes(1);

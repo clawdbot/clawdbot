@@ -105,14 +105,16 @@ async function startGatewayHarness(params: {
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
   const abort = new AbortController();
+  const buildContext = vi.fn((contextParams) => contextParams as never);
+  const channelRuntime = { inbound: { buildContext } } as never;
+  const startContext = createStartAccountContext({
+    account: params.account,
+    cfg: params.cfg,
+    abortSignal: abort.signal,
+  });
+  startContext.channelRuntime = channelRuntime;
 
-  const task = startNostrGatewayAccount(
-    createStartAccountContext({
-      account: params.account,
-      cfg: params.cfg,
-      abortSignal: abort.signal,
-    }),
-  );
+  const task = startNostrGatewayAccount(startContext);
   await vi.waitFor(() => {
     expect(mocks.startNostrBus).toHaveBeenCalledTimes(1);
   });
@@ -123,7 +125,7 @@ async function startGatewayHarness(params: {
     },
   };
 
-  return { harness, bus, cleanup };
+  return { harness, bus, channelRuntime, cleanup };
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
@@ -175,7 +177,7 @@ describe("nostr inbound gateway path", () => {
         await params.deliver({ text: "***" });
       },
     );
-    const { cleanup } = await startGatewayHarness({
+    const { channelRuntime, cleanup } = await startGatewayHarness({
       account: buildResolvedNostrAccount({
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
@@ -223,6 +225,7 @@ describe("nostr inbound gateway path", () => {
         timestamp: 1_710_000_000_000,
         commandAuthorized: true,
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+        channelRuntime,
       }),
     );
     expect(sendReply).toHaveBeenCalledWith("Table: docs (https://example.com)");

@@ -3,15 +3,20 @@
  * Updates profile order, last-good state, usage stats, and provider profile
  * records through locked or immediate store writes.
  */
-import {
-  findNormalizedProviderKey,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  getRuntimeLocalProfileIds,
+  removeRuntimeExternalProfileReferences,
+  setRuntimeExternalCliProfileIds,
+  setRuntimeLocalProfileIds,
+} from "./runtime-external-profile-references.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   resolvePersistedAuthProfileOwnerAgentDir,
@@ -24,23 +29,46 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
-export { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
+export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
-// Auth profile order/lastGood keys may be stored as aliases. Resolve through
-// auth provider normalization before updating per-provider state.
-function findProviderAuthStateKey(
-  entries: Record<string, unknown> | undefined,
-  providerKey: string,
-): string | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  const normalizedProviderKey = resolveProviderIdForAuth(providerKey);
-  return Object.keys(entries).find(
-    (key) => resolveProviderIdForAuth(key) === normalizedProviderKey,
+function listProviderAuthStateEntries<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+): Array<[string, T]> {
+  const canonicalProvider = resolveProviderIdForAuth(provider);
+  return Object.entries(entries ?? {})
+    .filter(([key]) => resolveProviderIdForAuth(key) === canonicalProvider)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+}
+
+function readProviderAuthState<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+): T | undefined {
+  const canonicalProvider = resolveProviderIdForAuth(provider);
+  const matches = listProviderAuthStateEntries(entries, canonicalProvider);
+  return (
+    matches.find(([key]) => normalizeProviderId(key) === canonicalProvider)?.[1] ?? matches[0]?.[1]
   );
+}
+
+function replaceProviderAuthState<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+  value?: T,
+): Record<string, T> | undefined {
+  const canonicalProvider = resolveProviderIdForAuth(provider);
+  const next = Object.fromEntries(
+    Object.entries(entries ?? {}).filter(
+      ([key]) => resolveProviderIdForAuth(key) !== canonicalProvider,
+    ),
+  ) as Record<string, T>;
+  if (value !== undefined) {
+    next[canonicalProvider] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 // Successful auth clears transient failure/cooldown/disable state while keeping
@@ -58,6 +86,7 @@ function resetSuccessfulUsageStats(
     blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     disabledUntil: undefined,
     disabledReason: undefined,
@@ -81,26 +110,31 @@ export async function setAuthProfileOrder(params: {
   provider: string;
   order?: string[] | null;
 }): Promise<AuthProfileStore | null> {
-  const providerKey = normalizeProviderId(params.provider);
+  const providerKey = resolveProviderIdForAuth(params.provider);
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    // Preserve requested IDs that the agent inherits (not owns) so the local
+    // save path does not prune them from the order. Without this, a secondary
+    // agent's `models auth order set --agent` accepts an inherited profile ID
+    // (validated against the merged store) but drops it while persisting, so
+    // `order get` falls back to the inherited main order — the CLI reports a
+    // switch that never happened (issue #119233). Mirrors the adjacent
+    // promoteAuthProfileInOrder preservation contract; the clear-order path
+    // (deduped.length === 0) must not preserve anything.
+    ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
-      store.order = store.order ?? {};
       if (deduped.length === 0) {
-        if (!store.order[providerKey]) {
+        if (listProviderAuthStateEntries(store.order, providerKey).length === 0) {
           return false;
         }
-        delete store.order[providerKey];
-        if (Object.keys(store.order).length === 0) {
-          store.order = undefined;
-        }
+        store.order = replaceProviderAuthState(store.order, providerKey);
         return true;
       }
-      store.order[providerKey] = deduped;
+      store.order = replaceProviderAuthState(store.order, providerKey, deduped);
       return true;
     },
   });
@@ -125,11 +159,8 @@ export async function promoteAuthProfileInOrder(params: {
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
-      const orderKey =
-        findProviderAuthStateKey(store.order, providerKey) ??
-        findNormalizedProviderKey(store.order, providerKey) ??
-        normalizeProviderId(providerKey);
-      const existing = store.order?.[orderKey];
+      const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
+      const existing = readProviderAuthState(store.order, providerKey);
       if (!existing || existing.length === 0) {
         if (!params.createIfMissing) {
           return false;
@@ -143,7 +174,7 @@ export async function promoteAuthProfileInOrder(params: {
           params.profileId,
           ...providerProfiles.filter((profileId) => profileId !== params.profileId),
         ]);
-        store.order = { ...store.order, [orderKey]: next };
+        store.order = replaceProviderAuthState(store.order, providerKey, next);
         return true;
       }
       const next = dedupeProfileIds([
@@ -152,11 +183,13 @@ export async function promoteAuthProfileInOrder(params: {
       ]);
       if (
         next.length === existing.length &&
-        next.every((profileId, idx) => profileId === existing[idx])
+        next.every((profileId, idx) => profileId === existing[idx]) &&
+        matchingOrderEntries.length === 1 &&
+        matchingOrderEntries[0]?.[0] === providerKey
       ) {
         return false;
       }
-      store.order = { ...store.order, [orderKey]: next };
+      store.order = replaceProviderAuthState(store.order, providerKey, next);
       return true;
     },
   });
@@ -173,17 +206,24 @@ export function upsertAuthProfile(params: {
   store.profiles[params.profileId] = credential;
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
+    sharedStoreWrite: true,
     syncExternalCli: false,
   });
 }
 
-/** Removes all auth profiles and related state for a provider. */
+/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
 export async function removeProviderAuthProfilesWithLock(params: {
   provider: string;
   agentDir?: string;
+  profileIds?: readonly string[];
 }): Promise<AuthProfileStore | null> {
+  if (params.profileIds) {
+    return await removeAuthProfilesWithLock({
+      agentDir: params.agentDir,
+      profileIds: params.profileIds,
+    });
+  }
   const providerKey = resolveProviderIdForAuth(params.provider);
-  const storeOrderKey = normalizeProviderId(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
@@ -199,19 +239,13 @@ export async function removeProviderAuthProfilesWithLock(params: {
           changed = true;
         }
       }
-      if (store.order?.[storeOrderKey]) {
-        delete store.order[storeOrderKey];
+      if (listProviderAuthStateEntries(store.order, providerKey).length > 0) {
+        store.order = replaceProviderAuthState(store.order, providerKey);
         changed = true;
-        if (Object.keys(store.order).length === 0) {
-          store.order = undefined;
-        }
       }
-      if (store.lastGood?.[providerKey]) {
-        delete store.lastGood[providerKey];
+      if (listProviderAuthStateEntries(store.lastGood, providerKey).length > 0) {
+        store.lastGood = replaceProviderAuthState(store.lastGood, providerKey);
         changed = true;
-        if (Object.keys(store.lastGood).length === 0) {
-          store.lastGood = undefined;
-        }
       }
       if (store.usageStats && Object.keys(store.usageStats).length === 0) {
         store.usageStats = undefined;
@@ -230,45 +264,22 @@ export async function removeAuthProfilesWithLock(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (store.profiles[profileId]) {
-          delete store.profiles[profileId];
-          changed = true;
-        }
-        if (store.usageStats?.[profileId]) {
-          delete store.usageStats[profileId];
-          changed = true;
-        }
+      const next = removeRuntimeExternalProfileReferences({ store, profileIds });
+      if (isDeepStrictEqual(store, next)) {
+        return false;
       }
-      for (const [provider, order] of Object.entries(store.order ?? {})) {
-        const next = order.filter((profileId) => !profileIds.has(profileId));
-        if (next.length === order.length) {
-          continue;
-        }
-        changed = true;
-        if (next.length > 0) {
-          store.order![provider] = next;
-        } else {
-          delete store.order![provider];
-        }
-      }
-      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
-        if (profileIds.has(profileId)) {
-          delete store.lastGood![provider];
-          changed = true;
-        }
-      }
-      if (store.order && Object.keys(store.order).length === 0) {
-        store.order = undefined;
-      }
-      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
-        store.lastGood = undefined;
-      }
-      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
-        store.usageStats = undefined;
-      }
-      return changed;
+      Object.assign(store, {
+        profiles: next.profiles,
+        order: next.order,
+        lastGood: next.lastGood,
+        usageStats: next.usageStats,
+        runtimePersistedProfileIds: next.runtimePersistedProfileIds,
+        runtimeExternalProfileIds: next.runtimeExternalProfileIds,
+        runtimeExternalProfileIdsAuthoritative: next.runtimeExternalProfileIdsAuthoritative,
+      });
+      setRuntimeLocalProfileIds(store, getRuntimeLocalProfileIds(next));
+      setRuntimeExternalCliProfileIds(store, getRuntimeExternalCliProfileIds(next));
+      return true;
     },
   });
 }
@@ -279,7 +290,7 @@ export async function removeAuthProfilesWithLock(params: {
  * store lets the profile reappear on the next status read and auth warmup.
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
-  agentDir: string;
+  agentDir?: string;
   profileIds: readonly string[];
 }): Promise<boolean> {
   const profilesByOwner = new Map<string | undefined, Set<string>>([
@@ -316,14 +327,11 @@ export async function clearLastGoodProfileWithLock(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      const lastGoodKey = findProviderAuthStateKey(store.lastGood, providerKey);
-      if (!lastGoodKey || store.lastGood?.[lastGoodKey] !== params.profileId) {
+      const matches = listProviderAuthStateEntries(store.lastGood, providerKey);
+      if (!matches.some(([, profileId]) => profileId === params.profileId)) {
         return false;
       }
-      delete store.lastGood[lastGoodKey];
-      if (Object.keys(store.lastGood).length === 0) {
-        store.lastGood = undefined;
-      }
+      store.lastGood = replaceProviderAuthState(store.lastGood, providerKey);
       return true;
     },
   });
@@ -346,7 +354,7 @@ export async function markAuthProfileSuccess(params: {
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
-      freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
+      freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
       updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed);
       return true;
     },

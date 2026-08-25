@@ -10,8 +10,6 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
 } from "../components/command-palette-contract.ts";
 import {
-  BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -19,13 +17,26 @@ import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
-import "./app-host.ts";
+import {
+  createLazyElementSpec,
+  resetAppHostTestGlobals,
+  type ShellKeyboardState,
+  type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
+} from "./app-host.test-support.ts";
+import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import "./app-host.ts";
+import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import {
+  persistLazyShellAction,
+  readLazyShellAction,
+  SHELL_APPROVALS_OPEN_EVENT,
+} from "./lazy-shell-action.ts";
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -61,11 +72,6 @@ type ShellInitializationState = {
   ) => void;
 };
 
-type ShellGatewaySynchronizationState = {
-  outboxStoreImport: { load: () => Promise<unknown> };
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
-};
-
 type I18nRecoveryWiring = {
   localeLoadRecovery?: {
     isUnrecoverableError: (error: unknown) => boolean;
@@ -78,26 +84,19 @@ type ShellServerPreferencesState = {
   reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
-type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
+type ShellLifecycle = Pick<ShellChromeEventState, "connectedCallback" | "disconnectedCallback">;
 
-type ShellLazySurfaceState = ShellKeyboardState & {
-  browserPanelElement: TestOptionalCustomElement;
-  commandPaletteElement: TestOptionalCustomElement;
-  custodianPanelElement: TestOptionalCustomElement;
-  handleDeferredBrowserToggle: (event: Event) => void;
-  handleDeferredCustodianToggle: (event: Event) => void;
-  handleDeferredTerminalToggle: (event: Event) => void;
-  terminalPanelElement: TestOptionalCustomElement;
-};
+type ShellLazySurfaceState = ShellKeyboardState &
+  ShellLifecycle & {
+    commandPaletteElement: TestOptionalCustomElement;
+    lazyCustomElements: LazyCustomElementRequestController;
+    openPalette: () => void;
+    restorePendingLazyAction: () => void;
+  };
 
-type ShellApprovalLazyState = {
-  approvalOverlay?: { show: () => void };
-  execApprovalElement: TestOptionalCustomElement;
-  openApprovals: () => void;
+type ShellLazyLifecycleState = {
+  resetForContextEpoch: () => void;
+  resetForDocumentDisconnect: () => void;
 };
 
 type ShellUiCommandState = ShellKeyboardState & {
@@ -157,20 +156,6 @@ function createRosterRefreshContext(params: {
   };
 }
 
-let lazyElementSequence = 0;
-
-function createLazyElementSpec(label: string): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    },
-  };
-}
-
 type ShellChromeEventState = {
   runtime: { context: ApplicationContext };
   navDrawerOpen: boolean;
@@ -202,6 +187,35 @@ type ShellSettingsSearchLoadState = {
   };
   handleSettingsSearchQueryChange: (query: string) => Promise<void>;
 };
+
+function configureLazyPaletteShell(
+  element: TestOptionalCustomElement,
+  openPalette: () => void,
+): ShellLazySurfaceState {
+  const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
+  shell.commandPaletteElement = element;
+  Object.defineProperty(shell, "updateComplete", {
+    configurable: true,
+    get: () => Promise.resolve(true),
+  });
+  Object.defineProperty(shell, "commandPalette", {
+    configurable: true,
+    get: () =>
+      customElements.get(element.tagName)
+        ? { isOpen: false, openPalette, togglePalette: vi.fn() }
+        : undefined,
+  });
+  return shell;
+}
+
+async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promise<void>) {
+  shell.connectedCallback();
+  try {
+    await run();
+  } finally {
+    shell.disconnectedCallback();
+  }
+}
 
 afterEach(() => {
   resetAppHostTestGlobals();
@@ -240,7 +254,7 @@ type ShellSessionNavigationState = {
   routeState: { routeId?: RouteId };
   navigate: (routeId: RouteId) => void;
   handleCommandPaletteSlashCommand: (command: string) => void;
-  replaceChatWithCurrentSession: () => void;
+  replaceChatWithCurrentSession: () => boolean;
 };
 
 function committedRouterState(
@@ -305,6 +319,20 @@ describe("OpenClaw app lifecycle", () => {
 });
 
 describe("OpenClaw shell source initialization", () => {
+  it("preserves reload intent on disconnect but clears it on context replacement", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    persistLazyShellAction({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellLazyLifecycleState;
+
+    shell.resetForDocumentDisconnect();
+    expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+
+    shell.resetForContextEpoch();
+    expect(readLazyShellAction()).toBeNull();
+  });
+
   it("delegates repeated locale import failures to guarded stale-chunk recovery", () => {
     const scheduleReload = vi.mocked(scheduleStaleChunkReload);
     scheduleReload.mockClear();
@@ -322,10 +350,27 @@ describe("OpenClaw shell source initialization", () => {
 
   it("retries a pending locale once when the Gateway becomes connected", () => {
     const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellGatewaySynchronizationState;
-    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    // Owner-direct: the shared jsdom lane can retain a sibling graph's
+    // openclaw-app-shell class bound to a different i18n instance; constructing
+    // the owner keeps the spy and the callee in the current module graph.
+    const host = {
+      activeSessionKey: "",
+      agentRosterRefreshTimer: null,
+      agentsListClient: null,
+      agentsListSource: null,
+      context: undefined,
+      criticalNoticeRuntime: null,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: vi.fn(async () => undefined) },
+      previousGatewayPhase: null,
+      routeState: {},
+      runtimeConfigClient: null,
+      runtimeConfigSource: null,
+      sessionKeyClient: null,
+      sidebarWorkboardRuntime: null,
+      syncSidebarWorkboard: vi.fn(),
+    } as unknown as ShellGatewayHost;
+    const owner = new ShellGatewayOwner(host);
     const reconnecting = {
       client: null,
       phase: "reconnecting",
@@ -337,10 +382,10 @@ describe("OpenClaw shell source initialization", () => {
       sessionKey: "",
     } as ApplicationGatewaySnapshot;
 
-    shell.synchronizeGateway(reconnecting);
-    shell.synchronizeGateway(connected);
-    shell.synchronizeGateway({ ...connected });
-    shell.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway(reconnecting);
+    owner.synchronizeGateway(connected);
+    owner.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway({ ...connected });
 
     expect(retryPendingLocale).toHaveBeenCalledOnce();
     retryPendingLocale.mockRestore();
@@ -494,11 +539,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
@@ -829,30 +874,26 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       value: { isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
-    shell.handleShellNavDrawerToggle(
-      new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
-    );
-    shell.openPalette();
+    const handlePaletteOpen = () => openPalette();
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
+    try {
+      shell.handleShellNavDrawerToggle(
+        new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
+      );
+      shell.openPalette();
 
-    expect(shell.navDrawerOpen).toBe(true);
-    expect(openPalette).toHaveBeenCalledOnce();
+      expect(shell.navDrawerOpen).toBe(true);
+      expect(openPalette).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
+    }
   });
 
-  it("loads and toggles the command palette on its first shortcut", async () => {
+  it("normalizes an unloaded palette toggle shortcut to open", async () => {
     const element = createLazyElementSpec("command palette");
-    const togglePalette = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.commandPaletteElement = element;
-    Object.defineProperty(shell, "updateComplete", {
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "commandPalette", {
-      configurable: true,
-      get: () =>
-        customElements.get(element.tagName)
-          ? { isOpen: false, openPalette: vi.fn(), togglePalette }
-          : undefined,
-    });
+    const openPalette = vi.fn();
+    const shell = configureLazyPaletteShell(element, openPalette);
+    stubRenderedWhenDefined(shell);
     const event = new KeyboardEvent("keydown", {
       key: "л",
       code: "KeyK",
@@ -863,87 +904,44 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.handleDocumentKeydown(event);
 
     expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() => expect(togglePalette).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
   });
 
-  it("delivers first panel toggles after their lazy modules load", async () => {
-    const terminalElement = createLazyElementSpec("terminal panel");
-    const browserElement = createLazyElementSpec("browser panel");
-    const custodianElement = createLazyElementSpec("custodian panel");
-    const terminalToggle = vi.fn();
-    const browserToggle = vi.fn();
-    const custodianToggle = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.terminalPanelElement = terminalElement;
-    shell.browserPanelElement = browserElement;
-    shell.custodianPanelElement = custodianElement;
-    shell.runtime = {
-      context: {
-        gateway: {
-          snapshot: {
-            phase: "connected",
-            hello: {
-              auth: { role: "operator", scopes: ["operator.admin"] },
-              features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },
-            },
-          },
-        },
-        config: { current: { terminalEnabled: true } },
-      } as unknown as ApplicationContext,
-    };
-    Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
-      get: () => Promise.resolve(true),
+  it("clears a rejected command palette action on Close", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const element = createLazyElementSpec("cancelled command palette", {
+      firstError: new Error("command palette chunk unavailable"),
     });
-    Object.defineProperty(shell, "querySelector", {
-      configurable: true,
-      value: (selector: string) => {
-        if (selector === terminalElement.tagName) {
-          return { handleToggleRequest: terminalToggle };
-        }
-        if (selector === browserElement.tagName) {
-          return { handleToggleRequest: browserToggle };
-        }
-        if (selector === custodianElement.tagName) {
-          return { handleToggleRequest: custodianToggle };
-        }
-        return null;
-      },
-    });
-    const terminalEvent = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-      detail: { dock: "right", open: true },
-    });
-    const browserEvent = new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT);
-    const custodianEvent = new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT);
+    const openPalette = vi.fn();
+    const shell = configureLazyPaletteShell(element, openPalette);
 
-    shell.handleDeferredTerminalToggle(terminalEvent);
-    shell.handleDeferredBrowserToggle(browserEvent);
-    shell.handleDeferredCustodianToggle(custodianEvent);
+    await withConnectedShell(shell, async () => {
+      shell.openPalette();
+      await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
+      shell.lazyCustomElements.close();
 
-    await vi.waitFor(() => {
-      expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
-      expect(browserToggle).toHaveBeenCalledWith(browserEvent);
-      expect(custodianToggle).toHaveBeenCalledWith(custodianEvent);
+      expect(readLazyShellAction()).toBeNull();
+      const replacement = configureLazyPaletteShell(element, openPalette);
+      replacement.restorePendingLazyAction();
+      await Promise.resolve();
+      expect(openPalette).not.toHaveBeenCalled();
     });
   });
 
-  it("opens approvals after the modal module loads on demand", async () => {
-    const element = createLazyElementSpec("exec approval modal");
-    const show = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellApprovalLazyState;
-    shell.execApprovalElement = element;
-    Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "approvalOverlay", {
-      configurable: true,
-      get: () => (customElements.get(element.tagName) ? { show } : undefined),
-    });
+  it("does not clear an unrelated pending action from an already-loaded palette", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    persistLazyShellAction({ eventType: SHELL_APPROVALS_OPEN_EVENT });
+    const element = createLazyElementSpec("loaded command palette");
+    customElements.define(element.tagName, class extends HTMLElement {});
+    const openPalette = vi.fn();
+    const shell = configureLazyPaletteShell(element, openPalette);
 
-    shell.openApprovals();
+    await withConnectedShell(shell, () => {
+      shell.openPalette();
 
-    await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
+      expect(openPalette).toHaveBeenCalledOnce();
+      expect(readLazyShellAction()).toEqual({ eventType: SHELL_APPROVALS_OPEN_EVENT });
+    });
   });
 
   it("routes UI commands to navigation, panels, and chat fallback", () => {

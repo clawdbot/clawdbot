@@ -15,12 +15,13 @@ import {
   ackComponentInteraction,
   ensureAgentComponentInteractionAllowed,
   parseAgentComponentData,
+  replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
   resolveInteractionContextWithDmAuth,
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
 } from "./agent-components-helpers.js";
-import { enqueueSystemEvent } from "./agent-components.deps.runtime.js";
+import { enqueueRoutedSystemEvent } from "./agent-components.deps.runtime.js";
 
 type AgentSystemControlParams = {
   ctx: AgentComponentContext;
@@ -39,14 +40,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const parsed = parseAgentComponentData(params.data);
   if (!parsed) {
     logError(`${params.label}: failed to parse component data`);
-    try {
-      await params.interaction.reply({
-        content: params.invalidReply,
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, params.invalidReply);
     return;
   }
 
@@ -102,9 +96,10 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const eventText = params.formatEventText({ componentId, username, userId });
   logDebug(`${params.label}: enqueuing event for channel ${channelId}: ${eventText}`);
 
-  enqueueSystemEvent(eventText, {
-    sessionKey: route.sessionKey,
-    contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}`,
+  enqueueRoutedSystemEvent(eventText, route, {
+    // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
+    // deduplicating gateway replays of that same occurrence.
+    contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,
   });
 
   await ackComponentInteraction({

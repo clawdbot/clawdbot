@@ -2,6 +2,7 @@
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../../src/logging/redact.js";
+import { parsePermissiveBooleanToken } from "./arg-utils.mts";
 
 export { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
@@ -50,15 +51,13 @@ export function parseBooleanEnv(params: {
   name: string;
   raw: string | undefined;
 }): boolean {
-  const raw = params.raw?.trim().toLowerCase();
+  const raw = params.raw?.trim();
   if (!raw) {
     return params.fallback;
   }
-  if (["1", "true", "yes", "on"].includes(raw)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(raw)) {
-    return false;
+  const parsed = parsePermissiveBooleanToken(raw);
+  if (parsed !== undefined) {
+    return parsed;
   }
   throw new Error(
     `${params.name} must be one of 1,0,true,false,yes,no,on,off; got ${JSON.stringify(params.raw)}`,

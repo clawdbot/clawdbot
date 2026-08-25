@@ -1,22 +1,15 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectEnvVarNames,
   isCountedSourcePath,
   main,
-  parseBudget,
-} from "../../scripts/check-env-var-count.mjs";
+} from "../../scripts/check-env-var-count.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("check-env-var-count", () => {
   it("counts production source and excludes tests and QA Lab", () => {
@@ -28,8 +21,7 @@ describe("check-env-var-count", () => {
   });
 
   it("collects each distinct name once", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-");
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(
       path.join(root, "src/runtime.ts"),
@@ -43,15 +35,8 @@ describe("check-env-var-count", () => {
     expect(collectEnvVarNames(root)).toEqual([]);
   });
 
-  it("parses exactly one integer budget", () => {
-    expect(parseBudget("# count\n42\n")).toBe(42);
-    expect(() => parseBudget("42\n43\n")).toThrow();
-    expect(() => parseBudget("many\n")).toThrow();
-  });
-
   it("reads staged source from the index", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-staged-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-staged-");
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const sourcePath = path.join(root, "src/runtime.ts");
     fs.writeFileSync(sourcePath, "process.env.OPENCLAW_STAGED;\n");
@@ -64,8 +49,7 @@ describe("check-env-var-count", () => {
   });
 
   it("fails closed when the base ref cannot be resolved", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-base-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-base-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "0\n");
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
@@ -73,9 +57,41 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "missing"], root)).toThrow(/Could not resolve/u);
   });
 
+  it("still checks the budget when the base shares no reachable ancestor", () => {
+    // Shallow clones and grafted agent checkouts resolve origin/main but truncate the
+    // history behind it, which used to fail the whole changed-file gate.
+    const root = tempDirs.make("openclaw-env-count-shallow-");
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", ...args],
+        { cwd: root, stdio: "ignore" },
+      );
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONLY;\n");
+    git("init");
+    git("add", ".");
+    git("commit", "-m", "detached base");
+    // Name the base explicitly; init.defaultBranch varies by environment.
+    git("branch", "-M", "severed-base");
+    git("checkout", "--orphan", "severed");
+    git("add", ".");
+    git("commit", "-m", "severed history");
+
+    expect(() => main(["--base", "severed-base"], root)).not.toThrow();
+
+    // The absolute budget check must still run without a baseline.
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    expect(() => main(["--base", "severed-base"], root)).toThrow(/exceeds budget/u);
+  });
+
   it("compares against the fork budget when the base branch later shrinks", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-fork-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-fork-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
@@ -114,8 +130,7 @@ describe("check-env-var-count", () => {
   });
 
   it("rejects growth above the budget", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-grow-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-grow-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
@@ -134,9 +149,31 @@ describe("check-env-var-count", () => {
     expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget|over budget/u);
   });
 
+  it.each([
+    [501, 502],
+    [502, 503],
+  ])("rejects the retired temporary %i to %i budget increase", (baseBudget, nextBudget) => {
+    const root = tempDirs.make("openclaw-env-count-retired-grow-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const names = Array.from({ length: nextBudget + 1 }, (_, index) => `OPENCLAW_TEST_${index}`);
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${baseBudget}\n`);
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, baseBudget).join("\n"));
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, nextBudget).join("\n"));
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget}\n`);
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
+  });
+
   it("passes when the count exactly matches the budget", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-exact-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-exact-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
@@ -153,8 +190,7 @@ describe("check-env-var-count", () => {
   });
 
   it("rejects stale headroom after the count shrinks", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-count-tight-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-env-count-tight-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");

@@ -153,7 +153,7 @@ run_logged_print_heartbeat() {
   trap 'cleanup_heartbeat_command 130' INT
   trap 'cleanup_heartbeat_command 143' TERM
   trap 'cleanup_heartbeat_command 129' HUP
-  "$@" >"$log_file" 2>&1 &
+  "$@" <&0 >"$log_file" 2>&1 &
   command_pid=$!
   local started_at="$SECONDS"
   local next_heartbeat=$interval_seconds

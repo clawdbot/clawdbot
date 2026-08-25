@@ -18,9 +18,10 @@ import {
   writeOfficialChannelCatalog,
   writeOfficialChannelDocsIndex,
   writeOfficialChannelCatalogSource,
-} from "../scripts/write-official-channel-catalog.mjs";
+} from "../scripts/write-official-channel-catalog.mts";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -348,6 +349,32 @@ describe("buildOfficialChannelCatalog", () => {
           "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w==",
       },
     });
+    expect(
+      summarizeCatalogEntry(
+        findCatalogEntry(entries, (entry) => entry.name === "@tencent-connect/openclaw-qqbot"),
+      ),
+    ).toMatchObject({
+      name: "@tencent-connect/openclaw-qqbot",
+      source: "external",
+      plugin: {
+        id: "openclaw-qqbot",
+        label: "QQ Bot",
+      },
+      contracts: {
+        tools: ["qqbot_platform_api", "qqbot_remind"],
+      },
+      channel: {
+        id: "qqbot",
+        docsPath: "/channels/qqbot",
+        approvalFlags: ["native"],
+      },
+      install: {
+        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        defaultChoice: "npm",
+        expectedIntegrity:
+          "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+      },
+    });
     expect(entries.some((entry) => entry.openclaw?.channel?.id === "local-only")).toBe(false);
   });
 
@@ -487,6 +514,7 @@ describe("buildOfficialChannelCatalog", () => {
     });
     expect(entries.find((entry) => entry.id === "wecom")?.docsPath).toBe("/channels/wecom");
     expect(entries.find((entry) => entry.id === "yuanbao")?.docsPath).toBe("/channels/yuanbao");
+    expect(entries.find((entry) => entry.id === "qqbot")?.source).toBe("official");
   });
 
   it("uses the canonical channel docs route when a manifest omits docsPath", () => {
@@ -668,7 +696,7 @@ describe("buildOfficialChannelCatalog", () => {
     );
   });
 
-  it("keeps third-party official external catalog npm sources exactly pinned", () => {
+  it("keeps third-party official external catalog npm sources pinned unless they track latest", () => {
     const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-policy-");
     const entries = buildOfficialChannelCatalog({ repoRoot }).entries.filter(
       (entry) => entry.source === "external" && !entry.name?.startsWith("@openclaw/"),

@@ -1,6 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
@@ -53,7 +53,7 @@ export function emitSessionAutoResetHook(params: {
     storePath:
       params.storePath ??
       marker?.storePath ??
-      resolveStorePath(params.cfg.session?.store, { agentId }),
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     sessionEntry: {
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,

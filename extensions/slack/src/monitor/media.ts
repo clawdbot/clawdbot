@@ -1,41 +1,22 @@
 // Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap, { pMapSkip } from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-export type { SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
+import { isGovSlackClient } from "./slack-client-kind.js";
 import { logVerbose } from "./thread.runtime.js";
-export {
-  resetSlackThreadStarterCacheForTest,
-  resolveSlackThreadHistory,
-  resolveSlackThreadStarter,
-} from "./thread.js";
-
-function isGovSlackClient(client?: SlackWebClient): boolean {
-  if (!client?.slackApiUrl) {
-    return false;
-  }
-  try {
-    const apiUrl = new URL(client.slackApiUrl);
-    return (
-      apiUrl.protocol === "https:" &&
-      !apiUrl.port &&
-      normalizeHostname(apiUrl.hostname) === "slack-gov.com"
-    );
-  } catch {
-    return false;
-  }
-}
+export type { SlackMediaResult } from "./media-types.js";
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {
   const normalized = normalizeHostname(hostname);
@@ -232,6 +213,7 @@ const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
 async function fetchFreshSlackFileUrl(params: {
   file: SlackFile;
   client?: SlackWebClient;
+  isRefreshedFileAllowed?: (file: SlackFile) => boolean;
 }): Promise<string | null> {
   if (!params.file.id || !params.client) {
     return null;
@@ -239,6 +221,10 @@ async function fetchFreshSlackFileUrl(params: {
   try {
     const info = await params.client.files.info({ file: params.file.id });
     const freshFile = info.file as SlackFile | undefined;
+    if (freshFile && params.isRefreshedFileAllowed?.(freshFile) === false) {
+      logVerbose(`slack: refreshed file metadata rejected for file id=${params.file.id}`);
+      return null;
+    }
     const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
     if (freshUrl) {
       logVerbose(`slack: refreshed file URL via files.info for file id=${params.file.id}`);
@@ -305,6 +291,7 @@ async function downloadSlackMediaFile(params: {
   return {
     path: saved.path,
     ...(contentType ? { contentType } : {}),
+    ...(label ? { fileName: label } : {}),
     placeholder: `[Slack file: ${formatSlackFileReference({ ...params.file, name: label })}]`,
   };
 }
@@ -340,6 +327,7 @@ function resolveForwardedAttachmentImageUrl(
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   client?: SlackWebClient;
+  isRefreshedFileAllowed?: (file: SlackFile) => boolean;
   token: string;
   maxBytes: number;
   readIdleTimeoutMs?: number;
@@ -351,10 +339,15 @@ export async function resolveSlackMedia(params: {
   const files = params.files ?? [];
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
+  const refreshFileUrl = (file: SlackFile) =>
+    fetchFreshSlackFileUrl({
+      file,
+      client: params.client,
+      isRefreshedFileAllowed: params.isRefreshedFileAllowed,
+    });
 
-  const resolved = await pMap(
-    limitedFiles,
-    async (file): Promise<SlackMediaResult | typeof pMapSkip> => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
       // Audio preflight keys the original event file object so admission can
       // reuse that exact download without turning this into a persistent cache.
       const preloaded = params.preloadedMedia?.get(file);
@@ -362,9 +355,9 @@ export async function resolveSlackMedia(params: {
         return preloaded;
       }
       const eventUrl = file.url_private_download ?? file.url_private;
-      const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
+      const url = eventUrl ?? (await refreshFileUrl(file));
       if (!url) {
-        return pMapSkip;
+        return null;
       }
       const result = await downloadSlackMediaFile({
         file,
@@ -377,12 +370,12 @@ export async function resolveSlackMedia(params: {
         govSlack,
       }).catch(() => null);
       if (result || !eventUrl) {
-        return result ?? pMapSkip;
+        return result;
       }
 
-      const freshUrl = await fetchFreshSlackFileUrl({ file, client: params.client });
+      const freshUrl = await refreshFileUrl(file);
       if (!freshUrl) {
-        return pMapSkip;
+        return null;
       }
       const retryResult = await downloadSlackMediaFile({
         file,
@@ -394,16 +387,20 @@ export async function resolveSlackMedia(params: {
         abortSignal: params.abortSignal,
         govSlack,
       }).catch(() => null);
-      return retryResult ?? pMapSkip;
-    },
-    { concurrency: MAX_SLACK_MEDIA_CONCURRENCY, stopOnError: true },
-  );
+      return retryResult;
+    }),
+    limit: MAX_SLACK_MEDIA_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  const resolved = results.filter((result): result is SlackMediaResult => result !== null);
 
   return resolved.length > 0 ? resolved : null;
 }
 
 /** Extracts text and media from forwarded-message attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
+  files?: SlackFile[];
   attachments?: SlackAttachment[];
   client?: SlackWebClient;
   token: string;
@@ -411,21 +408,72 @@ export async function resolveSlackAttachmentContent(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
-  const attachments = params.attachments;
-  if (!attachments || attachments.length === 0) {
-    return null;
-  }
-
-  const forwardedAttachments = attachments
+  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
+}): Promise<{
+  text: string;
+  media: SlackMediaResult[];
+  files?: SlackFile[];
+  unavailableImageCount: number;
+} | null> {
+  const forwardedAttachments = (params.attachments ?? [])
     .filter((attachment) => isForwardedSlackAttachment(attachment))
     .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
-  if (forwardedAttachments.length === 0) {
+  const candidates = [
+    ...(params.files ?? []),
+    ...forwardedAttachments.flatMap((attachment) => attachment.files ?? []),
+  ];
+  if (forwardedAttachments.length === 0 && candidates.length === 0) {
     return null;
   }
 
+  const fileIds = new Set<string>();
+  const allFiles = candidates
+    .filter((file) => {
+      const fileId = normalizeOptionalString(file.id);
+      if (!fileId) {
+        return true;
+      }
+      if (fileIds.has(fileId)) {
+        return false;
+      }
+      fileIds.add(fileId);
+      return true;
+    })
+    .slice(0, MAX_SLACK_MEDIA_FILES)
+    .map((file) => {
+      const fileId = normalizeOptionalString(file.id);
+      if (
+        !fileId ||
+        params.preloadedMedia?.has(file) ||
+        file.url_private_download ||
+        file.url_private
+      ) {
+        return file;
+      }
+      const downloadable = candidates.find(
+        (candidate) =>
+          normalizeOptionalString(candidate.id) === fileId &&
+          (candidate.url_private_download || candidate.url_private),
+      );
+      return downloadable ? Object.assign({}, file, downloadable) : file;
+    });
+  const pendingFiles = new Map<SlackFile | string, SlackFile>(
+    allFiles.map((file) => [normalizeOptionalString(file.id) ?? file, file]),
+  );
+  const resolveFiles = (files?: SlackFile[]) =>
+    resolveSlackMedia({
+      ...params,
+      files: files?.flatMap((file) => {
+        const key = normalizeOptionalString(file.id) ?? file;
+        const selected = pendingFiles.get(key);
+        pendingFiles.delete(key);
+        return selected ? [selected] : [];
+      }),
+    });
+  const directMediaPromise = resolveFiles(params.files);
   const textBlocks: string[] = [];
-  const allMedia: SlackMediaResult[] = [];
+  const attachmentMedia: SlackMediaResult[] = [];
+  let unavailableImageCount = 0;
   const govSlack = isGovSlackClient(params.client);
 
   for (const att of forwardedAttachments) {
@@ -458,35 +506,33 @@ export async function resolveSlackAttachmentContent(params: {
           abortSignal: params.abortSignal,
         });
         const label = saved.fileName ?? "forwarded image";
-        allMedia.push({
+        attachmentMedia.push({
           path: saved.path,
           contentType: saved.contentType,
+          ...(saved.fileName ? { fileName: saved.fileName } : {}),
           placeholder: `[Forwarded image: ${label}]`,
         });
       } catch {
-        // Skip images that fail to download
+        unavailableImageCount += 1;
       }
     }
-
-    if (att.files && att.files.length > 0) {
-      const fileMedia = await resolveSlackMedia({
-        files: att.files,
-        client: params.client,
-        token: params.token,
-        maxBytes: params.maxBytes,
-        readIdleTimeoutMs: params.readIdleTimeoutMs,
-        totalTimeoutMs: params.totalTimeoutMs,
-        abortSignal: params.abortSignal,
-      });
-      if (fileMedia) {
-        allMedia.push(...fileMedia);
-      }
-    }
+    attachmentMedia.push(...((await resolveFiles(att.files)) ?? []));
   }
 
+  const allMedia = [...((await directMediaPromise) ?? []), ...attachmentMedia];
   const combinedText = textBlocks.join("\n\n");
-  if (!combinedText && allMedia.length === 0) {
+  if (
+    !combinedText &&
+    allMedia.length === 0 &&
+    allFiles.length === 0 &&
+    unavailableImageCount === 0
+  ) {
     return null;
   }
-  return { text: combinedText, media: allMedia };
+  return {
+    text: combinedText,
+    media: allMedia,
+    unavailableImageCount,
+    ...(allFiles.length > 0 ? { files: allFiles } : {}),
+  };
 }

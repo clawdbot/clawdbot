@@ -51,9 +51,14 @@ describe("RetrySupervisor", () => {
       });
       const retry = supervisor.next();
       const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
-      supervisor.cancel(new Error("stop"));
+      const reason = new Error("stop");
+      supervisor.cancel(reason);
 
-      await expect(wait).rejects.toMatchObject({ message: "aborted" });
+      await expect(wait).rejects.toMatchObject({
+        name: "AbortError",
+        message: "aborted",
+        cause: reason,
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -69,7 +74,7 @@ describe("RetrySupervisor", () => {
 
       expect(timer?.hasRef()).toBe(false);
       controller.abort();
-      await expect(sleeper).rejects.toMatchObject({ message: "aborted" });
+      await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     } finally {
       controller.abort();
       setTimeoutSpy.mockRestore();

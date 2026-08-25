@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { getRuntimeConfig } from "../../config/config.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import {
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
@@ -31,7 +31,7 @@ export function resolvePluginRuntimeRecordByEntryBaseNames(
   entryBaseNames: string[],
   onMissing?: () => never,
 ): PluginRuntimeRecord | null {
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = loadPluginManifestRegistryCore({
     config: readPluginBoundaryConfigSafely(),
   });
   const matches = manifestRegistry.plugins.filter((plugin) => {

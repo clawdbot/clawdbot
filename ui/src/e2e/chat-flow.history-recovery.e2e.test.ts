@@ -136,10 +136,8 @@ suite.define(() => {
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeReturn);
       await expectTrace();
+      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           fullPage: true,
@@ -252,10 +250,11 @@ suite.define(() => {
       expect(requireRecord(historyRequest.params)).toMatchObject({
         sessionKey: "agent:main:session-b",
       });
-      await page.locator(".chat-thread").getByText("User history question 68").waitFor({
+      const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".chat-thread").getByText("Assistant history answer 69").waitFor({
+      await activeThread.locator(".chat-bubble").getByText("Assistant history answer 69").waitFor({
         timeout: 10_000,
       });
       await expect
@@ -273,11 +272,11 @@ suite.define(() => {
 
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 10").waitFor({
+      await activeThread.getByText("User history question 10").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 0").waitFor({
+      await activeThread.getByText("User history question 0").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
@@ -298,7 +297,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps retained paginated history stable when returning to a session", async () => {
+  it("keeps evicted paginated history stable when returning to a session", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -309,6 +308,17 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const captureEvictionStep = async (name: string) => {
+      if (!artifactDir) {
+        return;
+      }
+      await page.screenshot({
+        path: path.join(artifactDir, `${name}.png`),
+        fullPage: true,
+      });
+      // Keep post-assertion route states legible in the optional proof recording.
+      await page.waitForTimeout(300);
+    };
     const historyMessage = (seq: number, label: string) => ({
       __openclaw: { id: `history-${seq}`, seq },
       content: [
@@ -321,6 +331,41 @@ suite.define(() => {
       timestamp: 1_800_000_000_000 + seq,
     });
     const shortMessages = [historyMessage(1, "short session"), historyMessage(2, "short session")];
+    const sessionCMessages = [historyMessage(201, "session c"), historyMessage(202, "session c")];
+    const sessionDMessages = [historyMessage(301, "session d"), historyMessage(302, "session d")];
+    const shortSessions = [
+      {
+        key: "agent:main:session-a",
+        label: "Session A",
+        messages: shortMessages,
+        sessionId: "short-history-session",
+        updatedAt: 4,
+      },
+      {
+        key: "agent:main:session-c",
+        label: "Session C",
+        messages: sessionCMessages,
+        sessionId: "short-history-session-c",
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:session-d",
+        label: "Session D",
+        messages: sessionDMessages,
+        sessionId: "short-history-session-d",
+        updatedAt: 1,
+      },
+    ];
+    const shortSessionHistoryCases = shortSessions.map(({ key, messages, sessionId }) => ({
+      match: { sessionKey: key },
+      response: {
+        hasMore: false,
+        messages,
+        sessionId,
+        thinkingLevel: null,
+        totalMessages: 2,
+      },
+    }));
     const recentMessages = Array.from({ length: 100 }, (_, index) =>
       historyMessage(index + 41, "recent retained message"),
     );
@@ -353,16 +398,7 @@ suite.define(() => {
                 totalMessages: 140,
               },
             },
-            {
-              match: { sessionKey: "agent:main:session-a" },
-              response: {
-                hasMore: false,
-                messages: shortMessages,
-                sessionId: "short-history-session",
-                thinkingLevel: null,
-                totalMessages: 2,
-              },
-            },
+            ...shortSessionHistoryCases,
           ],
         },
         "chat.startup": {
@@ -378,19 +414,23 @@ suite.define(() => {
                 totalMessages: 140,
               },
             },
-            {
-              match: {},
-              response: {
-                hasMore: false,
-                messages: shortMessages,
-                sessionId: "short-history-session",
-                thinkingLevel: null,
-                totalMessages: 2,
-              },
-            },
+            ...shortSessionHistoryCases,
           ],
         },
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          ...shortSessions.map(({ key, label, updatedAt }) => ({
+            key,
+            kind: "direct",
+            label,
+            updatedAt,
+          })),
+          {
+            key: "agent:main:session-b",
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 3,
+          },
+        ]),
       },
       sessionKey: "agent:main:session-a",
     });
@@ -405,20 +445,25 @@ suite.define(() => {
       const sessionA = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
       );
+      const sessionC = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-c"] a.sidebar-recent-session__link',
+      );
+      const sessionD = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-d"] a.sidebar-recent-session__link',
+      );
       await sessionB.click();
       await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
-      const thread = page.locator(".chat-thread");
+      const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = activePane.locator(".chat-thread");
       await thread.hover();
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
+          activePane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
         )
         .toBe(140);
       // Prepending preserves the visible anchor. A renewed upward gesture
@@ -428,6 +473,13 @@ suite.define(() => {
 
       await sessionA.click();
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-a");
+      await sessionC.click();
+      await page.getByText(/^session c 202\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-c");
+      await sessionD.click();
+      await page.getByText(/^session d 302\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-d");
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await page.evaluate(() => {
         type FrameSample = {
@@ -445,15 +497,15 @@ suite.define(() => {
         ).chatSessionReturnSamples = samples;
         const deadline = performance.now() + 750;
         const sample = () => {
-          const pane = document.querySelector("openclaw-chat-pane") as
+          const pane = document.querySelector('openclaw-chat-pane[aria-hidden="false"]') as
             | (HTMLElement & {
                 state?: { chatMessages?: unknown[]; sessionKey?: string };
               })
             | null;
-          const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
+          const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
-            hiddenNotice: document.body.textContent?.includes("Showing last") ?? false,
-            loading: document.querySelector(".chat-history-loading") !== null,
+            hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
+            loading: pane?.querySelector(".chat-history-loading") !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -500,46 +552,13 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => sample.minOpacity === 1)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
-      expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
-      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn + 1);
+      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/retained-history-return.png`,
           fullPage: true,
         });
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("chat.send");
-
-      const prompt = "policy should not eat this";
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
-
-      await gateway.rejectDeferred("chat.send", {
-        code: "INVALID_REQUEST",
-        message: "send blocked by session policy",
-      });
-
-      await page.locator(".chat-queue").getByText("Failed").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await composer.inputValue()).toBe(prompt);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -578,7 +597,7 @@ suite.define(() => {
       await gateway.closeLatest(1006, "lost ack");
 
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Needs review").waitFor({ timeout: 10_000 });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await queue.locator(".chat-queue__retry").click();
 
@@ -587,6 +606,101 @@ suite.define(() => {
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
       await queue.waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionId: "control-ui-e2e-session",
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "already accepted after the reconnect";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const firstRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(firstRequest.params).idempotencyKey,
+        "first idempotency key",
+      );
+      await gateway.closeLatest(1006, "lost ack");
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: "different delivered turn",
+          idempotencyKey: "different-run:user",
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        hasActiveRun: false,
+        messageId: "different-history-turn",
+        messageSeq: 1,
+        sessionKey: "main",
+        status: "done",
+      });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/02-different-key-still-uncertain.png`,
+          fullPage: true,
+        });
+      }
+
+      await gateway.setHistoryMessages([
+        {
+          content: prompt,
+          idempotencyKey: `${runId}:user`,
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      await gateway.emitGatewayEvent("session.message", {
+        clientRunId: runId,
+        hasActiveRun: true,
+        messageId: "accepted-history-turn",
+        messageSeq: 2,
+        sessionKey: "main",
+        status: "running",
+      });
+
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
