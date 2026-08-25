@@ -14,8 +14,9 @@ import type {
   ThinkingCatalogEntry,
   VerboseLevel,
 } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { TypingController } from "./typing.js";
 
 /** Normalized command metadata derived from an inbound message. */
@@ -66,7 +67,7 @@ export type HandleCommandsParams = {
   storePath?: string;
   sessionScope?: SessionScope;
   workspaceDir: string;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   /** Catalog snapshot prepared by model selection for status rendering. */
   thinkingCatalog?: ThinkingCatalogEntry[];

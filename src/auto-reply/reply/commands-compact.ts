@@ -287,7 +287,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (failure) {
     return failure;
   }
-  const result = await runtime.compactEmbeddedAgentSession({
+  const replyOperation = params.opts?.replyOperation;
+  replyOperation?.setPhase("preflight_compacting");
+  const compaction = runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
     contextEngineAgentId: sessionAgentId,
     sessionId,
@@ -342,6 +344,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       senderIsOwner: params.command.senderIsOwner,
     }),
   });
+  const result = await compaction.finally(() => replyOperation?.setPhase("running"));
   failure = authorityFailure();
   if (failure) {
     return failure;

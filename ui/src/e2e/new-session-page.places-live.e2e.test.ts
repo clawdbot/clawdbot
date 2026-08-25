@@ -71,13 +71,26 @@ suite.define(() => {
     }
   });
 
-  it("disables cloud profiles whose execution mode does not match the selected runtime", async () => {
+  it("keeps an explicitly selected cloud destination when its runtime becomes incompatible", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      agentModel: "openai/gpt-5.6-luna",
+      agentModel: "anthropic/claude-sonnet-4-6",
       models: [
         {
+          available: true,
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          agentRuntime: {
+            id: "openclaw",
+            cloudPlacementSupported: true,
+            cloudPlacementExecutionMode: "worker-turn",
+            source: "model",
+          },
+        },
+        {
+          available: true,
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
@@ -100,6 +113,10 @@ suite.define(() => {
               providerId: "crabbox",
               executionMode: "worker-turn",
               executionModes: ["worker-turn"],
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "fast", label: "Fast" },
+              ],
             },
           ],
         },
@@ -110,14 +127,42 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await gateway.waitForRequest("chat.metadata");
-      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("#new-session-where-trigger");
+      const model = page.locator('[data-chat-model-select="true"]');
+      const start = page.getByRole("button", { name: "Start session" });
+      await where.click();
 
       const profile = page.locator('[data-value="cloud:aws"]');
+      await profile.click();
+      await where.click();
+      await page.locator('[data-value="machine:fast"]').click();
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").fill("keep this task on the cloud");
+      await expect.poll(() => start.isEnabled()).toBe(true);
+
+      await model.click();
+      await page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').click();
+      await expect.poll(() => model.textContent()).toContain("GPT-5.6 Luna");
+      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => where.getAttribute("data-machine-class")).toBe("fast");
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+
+      await where.click();
+
       await profile.waitFor();
       await expect.poll(() => profile.isDisabled()).toBe(true);
       expect(await profile.getAttribute("title")).toBe(
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
       );
+      await page.keyboard.press("Escape");
+
+      await model.click();
+      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => where.getAttribute("data-machine-class")).toBe("fast");
+      await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {
       await context.close();
     }

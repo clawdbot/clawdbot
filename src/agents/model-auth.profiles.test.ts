@@ -206,6 +206,12 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
 });
 
+const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
+  vi.fn(({ provider }: { provider: string }) =>
+    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
+  ),
+);
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
     provider: string;
@@ -218,8 +224,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
-  resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
-    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
+  resolveProviderDeprecatedAuthProfileIds: resolveProviderDeprecatedAuthProfileIdsMock,
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
@@ -267,6 +272,7 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  resolveProviderDeprecatedAuthProfileIdsMock.mockClear();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
@@ -518,6 +524,28 @@ describe("getApiKeyForModelCore", () => {
         store,
       }),
     ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("skips incompatible OpenAI OAuth profiles before loading provider retirement policy", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "direct-openai-audio-key" }, async () => {
+      const resolved = await resolveApiKeyForProviderCore({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              ...oauthFixture,
+            },
+          },
+        },
+      });
+
+      expect(resolved).toMatchObject({ apiKey: "direct-openai-audio-key", mode: "api-key" });
+      expect(resolveProviderDeprecatedAuthProfileIdsMock).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
