@@ -20,6 +20,9 @@ import {
   buildAdjustedParamsKey,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
+import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -2267,19 +2270,42 @@ describe("handleToolExecutionEnd timeout metadata", () => {
   }
 
   it.each(["poll", "log"])(
-    "projects a structured terminal process diagnostic from %s",
+    "projects a structured diagnostic from the real terminal process %s result",
     async (action) => {
       const { ctx } = createTestContext();
-      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
-
-      expect(ctx.state.lastToolError).toMatchObject({
-        toolName: "process",
-        terminalDiagnostic: {
-          kind: "process",
-          sessionId: "wild-lagoon",
-          reason: { kind: "exit", exitCode: 7 },
-        },
+      const sessionId = `wild-lagoon-${action}`;
+      const session = createProcessSessionFixture({
+        id: sessionId,
+        command: "test",
+        backgrounded: true,
       });
+      addSession(session);
+      markExited(session, 0, null, "failed", "overall-timeout", false);
+
+      try {
+        const args = { action, sessionId } as Parameters<
+          ReturnType<typeof createProcessTool>["execute"]
+        >[1];
+        const result = await createProcessTool().execute(`tool-real-process-${action}`, args);
+        await executeTool(ctx, {
+          toolName: "process",
+          toolCallId: `tool-process-${action}`,
+          args,
+          isError: false,
+          result,
+        });
+
+        expect(ctx.state.lastToolError).toMatchObject({
+          toolName: "process",
+          terminalDiagnostic: {
+            kind: "process",
+            sessionId,
+            reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+          },
+        });
+      } finally {
+        deleteSession(sessionId);
+      }
     },
   );
 
