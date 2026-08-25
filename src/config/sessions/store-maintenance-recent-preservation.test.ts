@@ -15,37 +15,43 @@ import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+function installThrowingConversationResolver() {
+  const resolveSessionConversation = vi.fn(() => {
+    throw new Error("channel resolver must not run during session maintenance");
+  });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "broken",
+        source: "test",
+        plugin: {
+          id: "broken",
+          meta: { label: "Broken" },
+          messaging: { resolveSessionConversation },
+        },
+      },
+    ]),
+  );
+  return resolveSessionConversation;
+}
+
 describe("recent session maintenance preservation", () => {
   it.each(["classification", "pruning", "capping"] as const)(
     "preserves external conversations during %s without invoking channel plugins",
     (boundary) => {
-      const resolveSessionConversation = vi.fn(() => {
-        throw new Error("channel resolver must not run during session maintenance");
-      });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "broken",
-            source: "test",
-            plugin: {
-              id: "broken",
-              meta: { label: "Broken" },
-              messaging: { resolveSessionConversation },
-            },
-          },
-        ]),
-      );
+      const resolveSessionConversation = installThrowingConversationResolver();
 
       const updatedAt = Date.now() - 31 * DAY_MS;
       const protectedKeys = [
         "agent:main:broken:group:room:thread:reply",
         "agent:main:broken:channel:room:with:colon",
+        "agent:main:telegram:direct:user:topic:77",
         "agent:main:telegram:dm:user:topic:77",
         "agent:main:opaque:thread:reply",
       ];
       const removableKeys = [
         "agent:main:old",
-        "agent:main:subagent:worker",
+        "agent:main:subagent:worker:thread:reply",
         "agent:main:opaque:topic:unrelated",
       ];
       const store: Record<string, SessionEntry> = Object.fromEntries(
@@ -113,38 +119,51 @@ describe("recent session maintenance preservation", () => {
     expect(store).not.toHaveProperty(staleKey);
   });
 
-  it("keeps recent interactive sessions under file-store disk pressure", async () => {
-    await withTestDir({ prefix: "openclaw-preserve-recent-budget-" }, async (dir) => {
-      const now = Date.now();
-      const recentKey = "agent:main:dashboard:recent";
-      const staleKey = "agent:main:dashboard:stale";
-      const store: Record<string, SessionEntry> = {
-        [recentKey]: {
-          sessionId: "recent",
-          updatedAt: now,
-          displayName: "r".repeat(4_000),
-        },
-        [staleKey]: {
-          sessionId: "stale",
-          updatedAt: now - 8 * DAY_MS,
-          displayName: "s".repeat(4_000),
-        },
-      };
+  it("keeps recent and external sessions under disk pressure without invoking plugins", async () => {
+    const resolveSessionConversation = installThrowingConversationResolver();
+    try {
+      await withTestDir({ prefix: "openclaw-preserve-recent-budget-" }, async (dir) => {
+        const now = Date.now();
+        const recentKey = "agent:main:dashboard:recent";
+        const staleKey = "agent:main:dashboard:stale";
+        const externalKey = "agent:main:broken:group:room:thread:reply";
+        const store: Record<string, SessionEntry> = {
+          [recentKey]: {
+            sessionId: "recent",
+            updatedAt: now,
+            displayName: "r".repeat(4_000),
+          },
+          [staleKey]: {
+            sessionId: "stale",
+            updatedAt: now - 8 * DAY_MS,
+            displayName: "s".repeat(4_000),
+          },
+          [externalKey]: {
+            sessionId: "external",
+            updatedAt: now - 9 * DAY_MS,
+            displayName: "e".repeat(4_000),
+          },
+        };
 
-      const result = await enforceSessionDiskBudget({
-        store,
-        storePath: path.join(dir, "sessions.json"),
-        maintenance: {
-          highWaterBytes: 1,
-          maxDiskBytes: 1,
-          preserveRecentMs: 7 * DAY_MS,
-        },
-        warnOnly: false,
+        const result = await enforceSessionDiskBudget({
+          store,
+          storePath: path.join(dir, "sessions.json"),
+          maintenance: {
+            highWaterBytes: 1,
+            maxDiskBytes: 1,
+            preserveRecentMs: 7 * DAY_MS,
+          },
+          warnOnly: false,
+        });
+
+        expect(result?.removedEntries).toBe(1);
+        expect(store).toHaveProperty(recentKey);
+        expect(store).toHaveProperty(externalKey);
+        expect(store).not.toHaveProperty(staleKey);
+        expect(resolveSessionConversation).not.toHaveBeenCalled();
       });
-
-      expect(result?.removedEntries).toBe(1);
-      expect(store).toHaveProperty(recentKey);
-      expect(store).not.toHaveProperty(staleKey);
-    });
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 });

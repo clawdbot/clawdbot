@@ -136,7 +136,7 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 
-  it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
+  it("uses normal Codex collaboration instructions for every scheduled heartbeat", async () => {
     const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
@@ -155,7 +155,7 @@ describe("happy path prompt snapshots", () => {
     expect(group).not.toContain("This is an OpenClaw heartbeat turn.");
 
     expect(heartbeat).toContain('"collaborationMode": {');
-    expect(heartbeat).toContain('"developer_instructions": "This is an OpenClaw heartbeat turn.');
+    expect(heartbeat).toContain('"developer_instructions": "# Collaboration Mode: Default');
     expect(heartbeat).toContain(agentSoulHeading);
     const openClawRuntimeInstructions = renderedPromptSection(
       heartbeat,
@@ -169,11 +169,10 @@ describe("happy path prompt snapshots", () => {
     );
 
     expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).toContain(heartbeatPhrase);
-    // Monitor context now lives in cron scratch; the collaboration prompt must
-    // no longer reference the retired workspace file.
+    expect(collaborationModeInstructions).not.toContain(heartbeatPhrase);
     expect(collaborationModeInstructions).not.toContain("HEARTBEAT.md");
-    expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
+    expect(heartbeat).not.toContain("This is an OpenClaw heartbeat turn.");
+    expect(heartbeat).not.toContain("simulatedHeartbeatWorkspaceFile");
   });
 
   it("keeps the Codex model prompt fixture next to its source metadata", () => {

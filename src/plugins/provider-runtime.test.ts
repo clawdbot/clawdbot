@@ -33,6 +33,8 @@ type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 type ResolveBundledProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
+type ResolveProviderPolicySurface =
+  typeof import("./provider-public-artifacts.js").resolveProviderPolicySurface;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -50,6 +52,7 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
 const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
   (_) => null,
 );
+const resolveProviderPolicySurfaceMock = vi.fn<ResolveProviderPolicySurface>((_) => null);
 const providerRuntimeWarnMock = vi.fn();
 
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
@@ -271,6 +274,8 @@ describe("provider-runtime", () => {
       resolveBundledProviderPolicySurface: (
         ...args: Parameters<ResolveBundledProviderPolicySurface>
       ) => resolveBundledProviderPolicySurfaceMock(...args),
+      resolveProviderPolicySurface: (...args: Parameters<ResolveProviderPolicySurface>) =>
+        resolveProviderPolicySurfaceMock(...args),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -370,6 +375,8 @@ describe("provider-runtime", () => {
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
     resolveBundledProviderPolicySurfaceMock.mockReset();
     resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
+    resolveProviderPolicySurfaceMock.mockReset();
+    resolveProviderPolicySurfaceMock.mockReturnValue(null);
     providerRuntimeWarnMock.mockReset();
   });
 
@@ -1466,7 +1473,7 @@ describe("provider-runtime", () => {
     );
   });
 
-  it("passes heartbeat trigger context to the shared GPT-5 prompt overlay", () => {
+  it("keeps scheduled heartbeat guidance out of shared GPT-5 provider overlays", () => {
     const contribution = resolveProviderSystemPromptContribution({
       provider: "openrouter",
       context: {
@@ -1477,7 +1484,7 @@ describe("provider-runtime", () => {
       } as never,
     });
 
-    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
       "Heartbeat = useful proactive progress",
     );
   });
@@ -1674,7 +1681,7 @@ describe("provider-runtime", () => {
   });
 
   it("reads deprecated profile ids without loading provider runtime", () => {
-    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+    resolveProviderPolicySurfaceMock.mockReturnValue({
       deprecatedProfileIds: ["anthropic:claude-cli"],
     });
 

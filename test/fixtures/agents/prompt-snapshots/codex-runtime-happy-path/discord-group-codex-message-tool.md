@@ -7,7 +7,7 @@
 - Default happy path: the same Codex agent is mentioned in a Discord group/channel while Telegram can remain the user's primary direct interface.
 - Group-visible output must be explicit through the message tool; the model is also told to mostly lurk unless directly addressed or clearly useful.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.
 
 ## Scenario Metadata
 
@@ -20,7 +20,6 @@
   "model": "gpt-5.5",
   "modelProvider": "openai",
   "runtime": "codex_app_server",
-  "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
@@ -239,16 +238,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 1125
   },
   "totalTextOnly": {
-    "chars": 28882,
-    "roughTokens": 7221
+    "chars": 28816,
+    "roughTokens": 7204
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84085,
-    "roughTokens": 21022
+    "chars": 84019,
+    "roughTokens": 21005
   },
   "userInputText": {
-    "chars": 1300,
-    "roughTokens": 325
+    "chars": 1234,
+    "roughTokens": 309
   }
 }
 ```
@@ -509,7 +508,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.
 
 # Project Context
 
