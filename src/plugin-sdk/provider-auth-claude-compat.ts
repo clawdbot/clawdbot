@@ -1,5 +1,5 @@
 /** Retired Claude CLI credential shape kept only for source compatibility. */
-export type ClaudeCliCredential =
+type ClaudeCliCredential =
   | {
       type: "oauth";
       provider: "anthropic";
@@ -25,7 +25,7 @@ export type ClaudeCliCredential =
       helperHash: string;
     };
 
-export type ClaudeCliCredentialReadOptions = {
+type ClaudeCliCredentialReadOptions = {
   allowKeychainPrompt?: boolean;
   tryKeychainWithoutPrompt?: boolean;
   onStoredCredentialUnreadable?: () => void;

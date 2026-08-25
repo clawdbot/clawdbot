@@ -525,6 +525,7 @@ final class VoiceWakeManager: NSObject {
             .allowBluetoothHFP,
             .defaultToSpeaker,
         ])
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true, options: [])
     }
 

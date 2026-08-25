@@ -1752,7 +1752,7 @@ internal fun ChatBubble(
           visible
         }
         "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.isAudioAttachment() || part.isVideoAttachment()
+        else -> part.type == "file" || part.isAudioAttachment() || part.isVideoAttachment()
       }
     }
   val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)

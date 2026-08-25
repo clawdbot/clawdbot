@@ -124,7 +124,8 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       channelDriver: params.channelDriver ?? null,
       channel: params.channel ?? params.channelDriverSelection?.channel ?? null,
       channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
-      channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
+      // This persisted summary is unversioned; keep its existing key until a versioned migration.
+      channelDriverSmokePath: params.channelDriverSelection?.providerReadinessArtifactPath ?? null,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
       runtimePair: params.runtimePair ?? null,
@@ -218,8 +219,9 @@ export async function writeQaSuiteArtifacts(params: {
                     path: effectiveChannelDriverSelection.capabilityMatrixPath,
                   },
                   {
+                    // Evidence schema v2 keeps this persisted kind until an explicit schema migration.
                     kind: "channel-driver-smoke",
-                    path: effectiveChannelDriverSelection.smokeArtifactPath,
+                    path: effectiveChannelDriverSelection.providerReadinessArtifactPath,
                   },
                 ]
               : []),

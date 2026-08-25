@@ -393,10 +393,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (pageState.phase !== "ready") {
       return;
     }
-    const available = pageState.result.manualProviders.some(
-      (provider) => provider.id === this.manualProviderId,
-    );
-    if (!available) {
+    if (
+      !pageState.result.manualProviders.some((provider) => provider.id === this.manualProviderId)
+    ) {
       this.manualProviderId = pageState.result.manualProviders[0]?.id ?? "";
     }
   }
@@ -683,7 +682,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
-      onDetect: () => void this.detect(),
+      onDetect: () => {
+        this.firstRun.retryDetection();
+        void this.detect();
+      },
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option: AuthOption) => {

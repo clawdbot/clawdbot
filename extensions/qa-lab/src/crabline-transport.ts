@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Crabline local-provider transport behavior.
+// Qa Lab plugin module implements Crabline channel-driver transport behavior against local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -404,7 +404,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline channel-driver transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
@@ -435,7 +435,7 @@ export async function createQaCrablineTransportAdapter(params: {
     params.outputDir,
     "artifacts",
     "crabline",
-    `${params.selection.channel}-fake-provider.jsonl`,
+    `${params.selection.channel}-provider-server.jsonl`,
   );
   await fs.mkdir(path.dirname(recorderPath), { recursive: true });
   let observeEvent = (_event: unknown) => {};

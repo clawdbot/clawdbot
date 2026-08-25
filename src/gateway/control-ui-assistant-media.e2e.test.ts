@@ -1,6 +1,7 @@
 // Control UI assistant media e2e tests verify scoped media-ticket access through gateway HTTP routes.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, test } from "vitest";
 import { installGatewayTestHooks, testState, withGatewayServer } from "./test-helpers.js";
 
@@ -50,6 +51,26 @@ describe("Control UI assistant media e2e", () => {
           `attachment; filename="__ ticketed (final).txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20ticketed%20%28final%29.txt`,
         );
         expect(await ticketed.text()).toBe("ticketed control ui media\n");
+
+        const fileUrl = pathToFileURL(filePath).href;
+        for (const source of [
+          fileUrl,
+          fileUrl.replace(/^file:/u, "FILE:"),
+          fileUrl.replace(/^file:\/\//u, "file:"),
+          fileUrl.replace(/^file:\/\//u, "FILE:"),
+        ]) {
+          const equivalent = await fetch(
+            `${route}?source=${encodeURIComponent(source)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          );
+          expect(equivalent.status, source).toBe(200);
+          expect(await equivalent.text()).toBe("ticketed control ui media\n");
+        }
+        for (const source of ["file://evil-host/etc/hostname", "FILE://evil-host/etc/hostname"]) {
+          const remoteHost = await fetch(`${route}?source=${encodeURIComponent(source)}`, {
+            headers: { Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}` },
+          });
+          expect(remoteHost.status, source).toBe(404);
+        }
 
         const ranged = await fetch(
           `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
