@@ -336,7 +336,8 @@ describe("FRV proof workflows", () => {
       "pull-requests": "read",
     });
     const checkout = job.steps.find((step) => step.name === "Checkout trusted main broker");
-    expect(checkout.with).toEqual({
+    expect(checkout).toBeDefined();
+    expect(checkout?.with).toEqual({
       "fetch-depth": 1,
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
