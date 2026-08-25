@@ -45,7 +45,6 @@ import {
 } from "../../infra/continuation-tracer.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
-import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -117,6 +116,7 @@ import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-ma
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import type { ContinueWorkRequest } from "../tools/continue-work-tool.js";
 import type { ContextUsage } from "../usage.js";
+import { scheduleSpawnInitContinueWorkWake } from "./attempt-execution.continue-work.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -1516,111 +1516,6 @@ export async function runAgentAttempt(params: {
   }
 
   return embeddedRunResult;
-}
-
-/**
- * Schedule a continue_work TaskFlow election for the spawn-init / turn-1 path.
- * Loads chain state, enforces budgets, persists advancement, and lets the
- * durable work dispatcher arm or replay the same-session wake.
- */
-async function scheduleSpawnInitContinueWorkWake(params: {
-  sessionKey: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  requests: { reason: string; delaySeconds?: number; traceparent?: string }[];
-  cfg: OpenClawConfig;
-  runResult: EmbeddedAgentRunResult;
-  originRunId?: string;
-  originTurnId?: string;
-}): Promise<void> {
-  const [
-    { resolveLiveContinuationRuntimeConfig },
-    { loadContinuationChainState, persistContinuationChainState },
-    { scheduleContinuationWorkBatch },
-    { patchSessionEntryCore, resolveSessionEntryFromStore },
-  ] = await Promise.all([
-    import("../../auto-reply/continuation/config.js"),
-    import("../../auto-reply/continuation/state.js"),
-    import("../../auto-reply/continuation/lazy.runtime.js"),
-    import("../../config/sessions/session-accessor.js"),
-  ]);
-
-  const continuationConfig = resolveLiveContinuationRuntimeConfig(params.cfg);
-  const tailUsage = params.runResult.meta?.agentMeta?.usage;
-  const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
-  const chainState = loadContinuationChainState(params.sessionEntry, turnTokens);
-  const result = await scheduleContinuationWorkBatch({
-    sessionKey: params.sessionKey,
-    chainState,
-    requests: params.requests.map((request) => ({
-      reason: request.reason,
-      delaySeconds: request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
-      ...(request.traceparent ? { traceparent: request.traceparent } : {}),
-    })),
-    config: continuationConfig,
-    // Same-session own-turn continue_work has no spawning lineage — this election
-    // is the session's OWN next turn, not a delegate child. Leaving parentRunId
-    // unset keeps it on the bucket-1 never-reap path (parentRunId==null →
-    // same-session). Tagging the electing run here would make the orphan-reap
-    // cull the flow on any busy-defer: a subagent's electing run is always
-    // confident-terminal by wake time, so a single main-lane-busy skip would
-    // wrongly reap it before hop-2 ever runs. Chain lineage rides
-    // chainId/traceparent, not parentRunId.
-    ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
-    ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
-    log: (message) => log.info(message),
-  });
-  // cap-notice symmetry: surface cap-dropped elections on the subagent-init
-  // lane too, matching the main-reply lane (agent-runner) and followup lane
-  // (followup-runner). Without this, a subagent turn's partial cap-drop is
-  // silent even though the tool told the model each call was "scheduled".
-  // This MUST fire before the zero-scheduled early return: a session already at
-  // the pending/chain/cost cap before a multi-continue_work response returns
-  // scheduledCount:0 with cappedCount>0, so emitting after the early return
-  // would re-open the never-silent gap on this lane only. Multi-election only,
-  // to keep retained single-work behavior intact.
-  if (result.cappedCount > 0 && params.requests.length > 1) {
-    enqueueSystemEvent(
-      `[continuation] ${result.cappedCount} of ${params.requests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
-      { sessionKey: params.sessionKey, trusted: true },
-    );
-  }
-  if (result.scheduledCount === 0) {
-    return;
-  }
-  persistContinuationChainState({
-    sessionEntry: params.sessionEntry,
-    count: result.chainState.currentChainCount,
-    startedAt: result.chainState.chainStartedAt,
-    tokens: result.chainState.accumulatedChainTokens,
-    ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
-  });
-  if (params.storePath) {
-    const updated = await patchSessionEntryCore(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      () => ({
-        continuationChainCount: result.chainState.currentChainCount,
-        continuationChainStartedAt: result.chainState.chainStartedAt,
-        continuationChainTokens: result.chainState.accumulatedChainTokens,
-        ...(result.chainState.chainId ? { continuationChainId: result.chainState.chainId } : {}),
-      }),
-      { preserveActivity: true, requireWriteSuccess: true },
-    );
-    if (!updated) {
-      throw new Error(`session entry was not found: ${params.sessionKey}`);
-    }
-    if (params.sessionStore) {
-      const resolved = resolveSessionEntryFromStore({
-        store: params.sessionStore,
-        sessionKey: params.sessionKey,
-      });
-      params.sessionStore[resolved.normalizedKey] = updated;
-      for (const legacyKey of resolved.legacyKeys) {
-        delete params.sessionStore[legacyKey];
-      }
-    }
-  }
 }
 
 export function buildAcpResult(params: {

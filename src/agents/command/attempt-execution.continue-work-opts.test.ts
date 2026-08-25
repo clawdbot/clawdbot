@@ -28,6 +28,30 @@ import { runAgentAttempt } from "./attempt-execution.js";
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
+const sessionAccessorState = vi.hoisted(() => ({
+  disableAfterPatch: false,
+  failPatch: false,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    patchSessionEntryCore: async (
+      ...args: Parameters<typeof actual.patchSessionEntryCore>
+    ): ReturnType<typeof actual.patchSessionEntryCore> => {
+      if (sessionAccessorState.failPatch) {
+        throw new Error("synthetic continuation reservation failure");
+      }
+      const result = await actual.patchSessionEntryCore(...args);
+      if (sessionAccessorState.disableAfterPatch) {
+        sessionAccessorState.disableAfterPatch = false;
+        setRuntimeConfigSnapshot(makeContinuationDisabledConfig());
+      }
+      return result;
+    },
+  };
+});
 
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
@@ -149,6 +173,8 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runEmbeddedAgentMock.mockReset();
     runCliAgentMock.mockReset();
+    sessionAccessorState.disableAfterPatch = false;
+    sessionAccessorState.failPatch = false;
     runEmbeddedAgentMock.mockResolvedValue(makeEmbeddedResult());
     sessionEntry = {
       sessionId: "session-embedded",
@@ -176,6 +202,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
   });
 
   async function runEmbeddedAttempt(cfg: OpenClawConfig) {
+    setRuntimeConfigSnapshot(cfg);
     return await runAgentAttempt({
       preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
       pluginGeneration: undefined,
@@ -262,6 +289,114 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted?.continuationChainCount).toBe(1);
     expect(persisted?.continuationChainTokens).toBe(2);
+  });
+
+  it("does not schedule spawn-init work when continuation is disabled during the turn", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "disabled before scheduling", delaySeconds: 30 });
+      setRuntimeConfigSnapshot(makeContinuationDisabledConfig());
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBeUndefined();
+  });
+
+  it("rolls back spawn-init reservation when continuation is disabled during persistence", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "disabled during reservation", delaySeconds: 30 });
+      sessionAccessorState.disableAfterPatch = true;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]).toMatchObject({
+      continuationChainCount: 0,
+      continuationChainTokens: 0,
+    });
+  });
+
+  it("reserves spawn-init chain state before creating durable work", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "requires durable reservation", delaySeconds: 30 });
+      sessionAccessorState.failPatch = true;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBeUndefined();
+  });
+
+  it("merges a concurrent spawn-init chain advance before scheduling", async () => {
+    const concurrentStartedAt = Date.now() - 5_000;
+    const concurrentChainId = crypto.randomUUID();
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "merge fresh chain state", delaySeconds: 30 });
+      replaceSessionEntrySync(
+        { storePath, sessionKey },
+        {
+          ...sessionEntry,
+          continuationChainCount: 7,
+          continuationChainStartedAt: concurrentStartedAt,
+          continuationChainTokens: 100,
+          continuationChainId: concurrentChainId,
+        },
+      );
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const [flow] = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flow?.stateJson).toMatchObject({
+      hop: 8,
+      chainId: concurrentChainId,
+      accumulatedChainTokens: 102,
+    });
+    expect(sessionStore[sessionKey]).toMatchObject({
+      continuationChainCount: 8,
+      continuationChainStartedAt: concurrentStartedAt,
+      continuationChainTokens: 102,
+      continuationChainId: concurrentChainId,
+    });
   });
 
   it("schedules every same-turn continue_work tool election with independent delays", async () => {
