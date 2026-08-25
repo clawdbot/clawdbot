@@ -4,6 +4,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/env-substitution.js";
 import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import {
   coerceSecretRef,
@@ -587,7 +588,14 @@ function buildConfigPatchOperations(params: {
   const pathKey = (path: PathSegment[]) => JSON.stringify(path);
   const replacePathKeys = new Set(params.replacePaths.map(pathKey));
   const matchedReplacePathKeys = new Set<string>();
-  const visit = (value: unknown, path: PathSegment[]) => {
+  const visit = (value: unknown, path: PathSegment[], depth: number = 0) => {
+    // Depth limit check to prevent stack overflow from deeply nested structures
+    if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
+      throw new Error(
+        `Config patch nesting depth exceeds maximum of ${MAX_CONFIG_JSON_NESTING_DEPTH} ` +
+          `(measured ${depth} levels)${path.length ? ` at: ${toDotPath(path)}` : ""}.`,
+      );
+    }
     validatePathSegments(path);
     const replacementKey = pathKey(path);
     if (path.length > 0 && replacePathKeys.has(replacementKey)) {
@@ -613,7 +621,7 @@ function buildConfigPatchOperations(params: {
         return;
       }
       for (const [key, child] of Object.entries(value)) {
-        visit(child, [...path, key]);
+        visit(child, [...path, key], depth + 1);
       }
       return;
     }
@@ -623,7 +631,7 @@ function buildConfigPatchOperations(params: {
     operations.push(buildApplyValueOperation({ path, value }));
   };
 
-  visit(params.patch, []);
+  visit(params.patch, [], 0);
   const unusedReplacePath = params.replacePaths.find(
     (path) => !matchedReplacePathKeys.has(pathKey(path)),
   );
