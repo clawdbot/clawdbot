@@ -24,7 +24,9 @@ type ParsedWorkflow = {
   jobs?: Record<
     string,
     {
+      outputs?: Record<string, string>;
       steps?: Array<{
+        env?: Record<string, string>;
         if?: string;
         name?: string;
         run?: string;
@@ -117,7 +119,127 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
   };
 }
 
+function resolveFocusedProducer(
+  options: {
+    annotatedTag?: boolean;
+    consumer?: "ancestor" | "current" | "non-ancestor";
+    missingTag?: boolean;
+    run?: Record<string, unknown>;
+    tag?: Record<string, unknown>;
+  } = {},
+) {
+  const { policy, root } = fixturePolicy();
+  const producerSha =
+    options.consumer === "current" || options.consumer === "non-ancestor"
+      ? policy.candidateSha
+      : policy.baseCandidateSha;
+  const consumerSha =
+    options.consumer === "non-ancestor" ? policy.baseCandidateSha : policy.candidateSha;
+  const producerRef = `release-publish/${producerSha.slice(0, 12)}-123`;
+  const outputPath = join(root, "github-output");
+  const workflow = parse(
+    readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+  ) as ParsedWorkflow;
+  const run = {
+    id: 123,
+    run_attempt: 2,
+    name: "Authorized Beta Focused Validation",
+    path: ".github/workflows/authorized-beta-focused-validation.yml",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    head_branch: producerRef,
+    head_sha: producerSha,
+    ...options.run,
+  };
+  const tag = {
+    ref: `refs/tags/${producerRef}`,
+    object: { sha: producerSha, type: options.annotatedTag ? "tag" : "commit" },
+    ...options.tag,
+  };
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      [
+        "gh() {",
+        '  if [[ "$2" == */actions/runs/* ]]; then',
+        '    if [[ "${3:-}" == --jq ]]; then',
+        '      printf "%s\\n" "$MOCK_RUN_JSON" | jq -r "$4"',
+        "    else",
+        '      printf "%s\\n" "$MOCK_RUN_JSON"',
+        "    fi",
+        '  elif [[ "$2" == */git/ref/tags/* && "$MOCK_TAG_MISSING" != true ]]; then',
+        '    printf "%s\\n" "$MOCK_TAG_JSON" | jq -r "$4"',
+        "  else",
+        "    return 1",
+        "  fi",
+        "}",
+        namedStep(workflow, "resolve_release_target", "Resolve focused release evidence run").run,
+      ].join("\n"),
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: "2",
+        FOCUSED_RELEASE_EVIDENCE_RUN_ID: "123",
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        MOCK_RUN_JSON: JSON.stringify(run),
+        MOCK_TAG_JSON: JSON.stringify(tag),
+        MOCK_TAG_MISSING: String(options.missingTag ?? false),
+        WORKFLOW_SHA: consumerSha,
+      },
+    },
+  );
+  return { consumerSha, outputPath, producerRef, producerSha, result };
+}
+
 describe("authorized beta focused evidence", () => {
+  it.each(["ancestor", "current"] as const)(
+    "accepts an exact protected focused producer from %s trusted tooling",
+    (consumer) => {
+      const { outputPath, producerRef, producerSha, result } = resolveFocusedProducer({ consumer });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(readFileSync(outputPath, "utf8")).toBe(
+        `attempt=2\nworkflow_full_ref=refs/tags/${producerRef}\nworkflow_sha=${producerSha}\n`,
+      );
+    },
+  );
+
+  it.each([
+    { name: "non-ancestor tooling", options: { consumer: "non-ancestor" as const } },
+    {
+      name: "moved producer tag",
+      options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
+    },
+    { name: "missing producer tag", options: { missingTag: true } },
+    { name: "annotated producer tag", options: { annotatedTag: true } },
+    {
+      name: "producer SHA prefix mismatch",
+      options: { run: { head_branch: "release-publish/ffffffffffff-123" } },
+    },
+    {
+      name: "malformed producer tag",
+      options: { run: { head_branch: "release-publish/ffffffffffff-0" } },
+    },
+    {
+      name: "wrong producer workflow path",
+      options: { run: { path: ".github/workflows/openclaw-release-publish.yml" } },
+    },
+    { name: "wrong producer workflow name", options: { run: { name: "Other Validation" } } },
+    { name: "wrong producer event", options: { run: { event: "push" } } },
+    { name: "unfinished producer", options: { run: { status: "in_progress" } } },
+    { name: "failed producer", options: { run: { conclusion: "failure" } } },
+    { name: "wrong producer attempt", options: { run: { run_attempt: 3 } } },
+  ])("rejects $name before focused artifact download", ({ options }) => {
+    expect(resolveFocusedProducer(options).result.status).not.toBe(0);
+  });
+
   it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {
     const policy = readAuthorizedBetaFocusedPolicy();
     expect(policy.releaseTag).toBe("v2026.8.1-beta.3");
@@ -320,8 +442,11 @@ describe("authorized beta focused evidence", () => {
       const source = readFileSync(path, "utf8");
       expect(source).toContain("Verify focused release evidence");
       expect(source).toContain("gh attestation verify");
-      expect(source).toContain('--signer-digest "${WORKFLOW_SHA}"');
-      expect(source).toContain('--source-digest "${WORKFLOW_SHA}"');
+      const signerSha = path.endsWith("openclaw-release-publish.yml")
+        ? "PRODUCER_WORKFLOW_SHA"
+        : "WORKFLOW_SHA";
+      expect(source).toContain(`--signer-digest "\${${signerSha}}"`);
+      expect(source).toContain(`--source-digest "\${${signerSha}}"`);
       expect(source).toContain("validate-authorized-beta-focused-evidence.mts");
       expect(source).toContain("inputs.release_evidence_mode == 'full-release-validation'");
       expect(source).toContain("validate-full-release-validation-evidence.mjs");
@@ -348,6 +473,30 @@ describe("authorized beta focused evidence", () => {
     const resolveSteps = parentWorkflow.jobs?.resolve_release_target?.steps ?? [];
     const resolveStepNames = resolveSteps.map((step) => step.name);
     expect(resolveStepNames).not.toContain("Install focused release verifier dependency");
+    expect(parentWorkflow.jobs?.resolve_release_target?.outputs).toMatchObject({
+      focused_release_evidence_workflow_full_ref:
+        "${{ steps.focused_run.outputs.workflow_full_ref }}",
+      focused_release_evidence_workflow_sha: "${{ steps.focused_run.outputs.workflow_sha }}",
+    });
+    for (const [jobName, stepName] of [
+      ["resolve_release_target", "Verify focused release evidence"],
+      ["publish", "Verify focused release evidence after approval"],
+    ] as const) {
+      const verifyStep = namedStep(parentWorkflow, jobName, stepName);
+      const outputPrefix =
+        jobName === "publish"
+          ? "needs.resolve_release_target.outputs.focused_release_evidence_"
+          : "steps.focused_run.outputs.";
+      expect(verifyStep.env).toMatchObject({
+        PRODUCER_WORKFLOW_FULL_REF: `\${{ ${outputPrefix}workflow_full_ref }}`,
+        PRODUCER_WORKFLOW_SHA: `\${{ ${outputPrefix}workflow_sha }}`,
+      });
+      expect(verifyStep.run).toContain('--source-ref "${PRODUCER_WORKFLOW_FULL_REF}"');
+      expect(verifyStep.run).toContain(
+        '--producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}"',
+      );
+      expect(verifyStep.run).toContain('--producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"');
+    }
     const publishSteps = parentWorkflow.jobs?.publish?.steps ?? [];
     const publishStepNames = publishSteps.map((step) => step.name);
     expect(publishStepNames.indexOf("Verify focused release evidence after approval")).toBeLessThan(

@@ -128,6 +128,8 @@ jobs:
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
+      focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
+      focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
     steps:
       - name: Validate inputs
@@ -726,17 +728,49 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          run_attempt="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
-              --jq '.run_attempt'
-          )"
-          if [[ "${run_attempt}" != "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" ]]; then
-            echo "Focused evidence run attempt mismatch: expected ${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}, got ${run_attempt}." >&2
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --arg run_id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --arg attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            '.id == ($run_id | tonumber) and .run_attempt == ($attempt | tonumber) and
+             .name == "Authorized Beta Focused Validation" and
+             .path == ".github/workflows/authorized-beta-focused-validation.yml" and
+             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"' \
+            <<<"${run_json}" >/dev/null; then
+            echo "Focused evidence producer must be the exact successful authorized workflow run and attempt." >&2
             exit 1
           fi
-          echo "attempt=${run_attempt}" >> "$GITHUB_OUTPUT"
+          producer_ref="$(jq -r '.head_branch // empty' <<<"${run_json}")"
+          producer_sha="$(jq -r '.head_sha // empty' <<<"${run_json}")"
+          if [[ ! "${producer_ref}" =~ ^release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+            echo "Focused evidence producer must use a protected release-publish tag." >&2
+            exit 1
+          fi
+          producer_prefix="${BASH_REMATCH[1]}"
+          if [[ ! "${producer_sha}" =~ ^[a-f0-9]{40}$ || "${producer_sha:0:12}" != "${producer_prefix}" ]]; then
+            echo "Focused evidence producer tag does not match its workflow SHA." >&2
+            exit 1
+          fi
+          remote_producer_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${producer_ref}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          if [[ "${remote_producer_sha}" != "${producer_sha}" ]]; then
+            echo "Focused evidence producer tag is missing, moved, or annotated." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${producer_sha}" "${WORKFLOW_SHA}"; then
+            echo "Focused evidence producer tooling is not on the trusted publish workflow lineage." >&2
+            exit 1
+          fi
+          {
+            echo "attempt=${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}"
+            echo "workflow_full_ref=refs/tags/${producer_ref}"
+            echo "workflow_sha=${producer_sha}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
@@ -754,25 +788,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ steps.focused_run.outputs.attempt }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ steps.focused_run.outputs.workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ steps.focused_run.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
           gh attestation verify "${evidence}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
-            --signer-digest "${WORKFLOW_SHA}" \
-            --source-digest "${WORKFLOW_SHA}" \
-            --source-ref "${WORKFLOW_FULL_REF}" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
           node "${RUNNER_TEMP}/release-validation-tooling/validate-authorized-beta-focused-evidence.mts" verify \
             --candidate-root . \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
-            --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
-            --producer-workflow-sha "${WORKFLOW_SHA}"
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Validate release tag is reachable from a trusted release branch
         env:
@@ -890,25 +924,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
-          WORKFLOW_FULL_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_sha }}
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
           gh attestation verify "${evidence}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
-            --signer-digest "${WORKFLOW_SHA}" \
-            --source-digest "${WORKFLOW_SHA}" \
-            --source-ref "${WORKFLOW_FULL_REF}" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
           node .release-harness/scripts/validate-authorized-beta-focused-evidence.mts verify \
             --candidate-root . \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
-            --producer-workflow-full-ref "${WORKFLOW_FULL_REF}" \
-            --producer-workflow-sha "${WORKFLOW_SHA}"
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
