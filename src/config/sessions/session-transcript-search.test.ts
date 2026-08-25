@@ -17,6 +17,10 @@ import {
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  waitForSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 
 vi.mock("../config.js", async () => ({
@@ -157,8 +161,21 @@ describe("searchSessionTranscripts", () => {
     expect(() => search("x".repeat(4097))).toThrow(/must not exceed/);
   });
 
-  it("reindexes synchronously when a linear transcript is replaced", async () => {
+  it("preserves stale FTS rows until a replaced transcript is reconciled after commit", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
+    const { db, kysely } = agentKysely();
+    const indexedRows = () =>
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_transcript_fts")
+          .select(["message_id", "text"])
+          .where("session_id", "=", "session-1"),
+      ).rows;
+    const originalIndexedRows = indexedRows();
+    expect(originalIndexedRows).toEqual([
+      expect.objectContaining({ text: "obsolete branch text" }),
+    ]);
     await replaceTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
       {
         type: "message",
@@ -168,6 +185,22 @@ describe("searchSessionTranscripts", () => {
         timestamp: 1720000000000,
       } as unknown as TranscriptEvent,
     ]);
+
+    expect(indexedRows()).toEqual(originalIndexedRows);
+    expect(
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("session_transcript_index_state")
+          .select("needs_rebuild")
+          .where("session_id", "=", "session-1"),
+      ).rows,
+    ).toEqual([{ needs_rebuild: 1 }]);
+    expect(isSessionTranscriptIndexReconcileRunning({ agentId: "main", env: env() })).toBe(true);
+    expect(search("obsolete")).toMatchObject({ hits: [], indexing: true });
+    expect(search("replacement")).toMatchObject({ hits: [], indexing: true });
+
+    await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: env() });
 
     expect(search("obsolete").hits).toHaveLength(0);
     const result = search("replacement");

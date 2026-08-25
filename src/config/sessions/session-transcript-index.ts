@@ -310,7 +310,10 @@ function applyForwardIndex(
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
-function markSessionTranscriptIndexDirtyInTransaction(db: DatabaseSync, sessionId: string): void {
+export function markSessionTranscriptIndexDirtyInTransaction(
+  db: DatabaseSync,
+  sessionId: string,
+): void {
   const now = Date.now();
   const watermark = readSessionTranscriptProjectionState(db, sessionId);
   writeWatermark(

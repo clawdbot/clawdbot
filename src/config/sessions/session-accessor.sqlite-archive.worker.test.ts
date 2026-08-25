@@ -30,6 +30,7 @@ import {
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 
 type TestTranscriptEvent = {
   id: string;
@@ -426,6 +427,7 @@ describe("SQLite transcript archive worker", () => {
         db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
       ).rows.length,
     });
+    await waitForSessionTranscriptProjection(scope);
     const before = readLifecycleCounts();
 
     await expect(

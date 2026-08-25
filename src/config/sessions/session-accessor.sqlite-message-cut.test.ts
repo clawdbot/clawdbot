@@ -24,6 +24,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -423,6 +424,12 @@ describe("SQLite session message cuts", () => {
     if (result.status !== "created") {
       throw new Error("expected branch switch result");
     }
+    await waitForSessionTranscriptProjection({
+      agentId,
+      env,
+      sessionId: result.entry.sessionId,
+      sessionKey,
+    });
     const activeEventIds = readSessionTranscriptMessageEvents({
       agentId,
       env,
@@ -479,6 +486,12 @@ describe("SQLite session message cuts", () => {
     if (result.status !== "created") {
       throw new Error("expected rewind result");
     }
+    await waitForSessionTranscriptProjection({
+      agentId,
+      env,
+      sessionId: result.entry.sessionId,
+      sessionKey,
+    });
     expect(
       readSessionTranscriptMessageEventPage(
         { agentId, env, sessionId: result.entry.sessionId },

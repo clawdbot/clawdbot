@@ -26,6 +26,7 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionBranchListParams,
@@ -38,7 +39,7 @@ import type {
 } from "./session-accessor.types.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -325,10 +326,11 @@ function mutateSqliteSessionAtMessageInTransaction(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
-  appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
   if (params.mode !== "fork") {
-    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
+    ensureTranscriptSessionRoot(database, targetScope, Date.parse(header.timestamp));
+    markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
   }
+  appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
