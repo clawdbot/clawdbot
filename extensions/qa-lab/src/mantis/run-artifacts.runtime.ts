@@ -263,7 +263,10 @@ export async function publishMantisRunOutput(params: {
 
   throwIfMantisPublicationAborted(params.signal);
   const currentPath = path.join(params.outputDir, "mantis-current.json");
-  const publicationLock = await acquireFileLock(currentPath, MANTIS_PUBLICATION_LOCK_OPTIONS);
+  const publicationLock = await acquireFileLock(currentPath, {
+    ...MANTIS_PUBLICATION_LOCK_OPTIONS,
+    signal: params.signal,
+  });
   let publicationFailed = false;
   let publicationError: unknown;
   try {

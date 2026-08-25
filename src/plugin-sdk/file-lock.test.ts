@@ -61,6 +61,49 @@ describe("acquireFileLock", () => {
     );
   }, 5_000);
 
+  it("aborts a contended retry wait without acquiring the lock later", async () => {
+    const filePath = path.join(tempDir, "abortable-contention");
+    const first = await acquireFileLock(filePath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("stop waiting for the file lock");
+    const waiting = acquireFileLock(filePath, {
+      retries: { retries: 300, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
+      signal: controller.signal,
+      stale: 60_000,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    controller.abort(abortReason);
+
+    await expect(waiting).rejects.toBe(abortReason);
+    await first.release();
+    const next = await acquireFileLock(filePath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    });
+    await next.release();
+  });
+
+  it("does not create a lock when acquisition is already aborted", async () => {
+    const filePath = path.join(tempDir, "already-aborted");
+    const controller = new AbortController();
+    const abortReason = new Error("already cancelled");
+    controller.abort(abortReason);
+
+    await expect(
+      acquireFileLock(filePath, {
+        retries: { retries: 3, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        signal: controller.signal,
+        stale: 60_000,
+      }),
+    ).rejects.toBe(abortReason);
+    await expect(fs.access(`${filePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("reclaims a stale lock when its owner pid is dead", async () => {
     const filePath = path.join(tempDir, "auth-profiles.json");
     const lockPath = `${filePath}.lock`;

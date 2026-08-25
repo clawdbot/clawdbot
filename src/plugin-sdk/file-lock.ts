@@ -1,6 +1,7 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
 import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
+import { setTimeout as waitForTimeout } from "node:timers/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
@@ -32,6 +33,8 @@ export type FileLockOptions = {
    * Reuse one key only within that call chain; omit it for ordinary contention.
    */
   reentrantOwner?: string;
+  /** Cancels lock contention waits without leaving a late-acquired lock held. */
+  signal?: AbortSignal;
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -139,6 +142,39 @@ function normalizeLockError(err: unknown): never {
   throw err;
 }
 
+function computeFileLockRetryDelayMs(retry: FileLockOptions["retries"], attempt: number): number {
+  const base = Math.min(
+    retry.maxTimeout,
+    Math.max(retry.minTimeout, retry.minTimeout * retry.factor ** attempt),
+  );
+  const jitter = retry.randomize ? 1 + Math.random() : 1;
+  return Math.min(retry.maxTimeout, Math.round(base * jitter));
+}
+
+function createAbortedFileLockReleaseError(
+  abortReason: unknown,
+  releaseError: unknown,
+): AggregateError {
+  return new AggregateError(
+    [abortReason, releaseError],
+    "File lock acquisition was aborted and the acquired lock could not be released",
+    { cause: abortReason },
+  );
+}
+
+async function releaseFileLockAfterAbort(
+  lock: Awaited<ReturnType<typeof acquireFsSafeFileLock>>,
+  signal: AbortSignal,
+): Promise<never> {
+  try {
+    await lock.release();
+  } catch (releaseError) {
+    throw createAbortedFileLockReleaseError(signal.reason, releaseError);
+  }
+  signal.throwIfAborted();
+  throw new Error("File lock acquisition aborted without an abort reason");
+}
+
 /** Reset process-local file-lock state for tests that isolate lock managers. */
 export function resetFileLockStateForTest(): void {
   resetFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
@@ -155,11 +191,12 @@ export async function acquireFileLock(
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
   const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
-  try {
-    const lock = await acquireFsSafeFileLock(filePath, {
+  const signal = options.signal;
+  const acquireWithRetry = async (retry: FileLockOptions["retries"]) =>
+    await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
-      retry: options.retries,
+      retry,
       staleRecovery,
       reentrantOwner: options.reentrantOwner,
       payload: createCurrentProcessLockPayload,
@@ -181,9 +218,39 @@ export async function acquireFileLock(
           }
         : {}),
     });
-    return { lockPath: lock.lockPath, release: lock.release };
-  } catch (err) {
-    return normalizeLockError(err);
+  if (!signal) {
+    try {
+      const lock = await acquireWithRetry(options.retries);
+      return { lockPath: lock.lockPath, release: lock.release };
+    } catch (err) {
+      return normalizeLockError(err);
+    }
+  }
+  let attempt = 0;
+  while (true) {
+    signal.throwIfAborted();
+    try {
+      const lock = await acquireWithRetry({ ...options.retries, retries: 0 });
+      if (signal.aborted) {
+        return await releaseFileLockAfterAbort(lock, signal);
+      }
+      return { lockPath: lock.lockPath, release: lock.release };
+    } catch (err) {
+      if (
+        (err as { code?: unknown }).code !== FILE_LOCK_TIMEOUT_ERROR_CODE ||
+        attempt >= options.retries.retries
+      ) {
+        return normalizeLockError(err);
+      }
+    }
+    const delayMs = computeFileLockRetryDelayMs(options.retries, attempt);
+    attempt += 1;
+    try {
+      await waitForTimeout(delayMs, undefined, { signal });
+    } catch (error) {
+      signal.throwIfAborted();
+      throw error;
+    }
   }
 }
 

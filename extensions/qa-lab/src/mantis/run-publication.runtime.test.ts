@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
+import { acquireFileLock } from "openclaw/plugin-sdk/file-lock";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publishMantisRunOutput } from "./run-artifacts.runtime.js";
@@ -280,6 +281,44 @@ describe("Mantis generation publication", () => {
     expect(
       (await fs.readdir(outputDir)).filter((entry) => entry.startsWith(".mantis-compat-")),
     ).toEqual([]);
+  });
+
+  it("stops promptly when cancellation wins during publication lock contention", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cancel-lock");
+    const oldGeneration = await writeGenerationFixture(outputDir, "generation-old", "old");
+    const newGeneration = await writeGenerationFixture(outputDir, "generation-new", "new");
+    await writeCompatibilityFixture(outputDir, "old");
+    const currentPath = path.join(outputDir, "mantis-current.json");
+    await fs.writeFile(
+      currentPath,
+      `${JSON.stringify({ generation: ".mantis-generations/generation-old", schemaVersion: 1 })}\n`,
+      "utf8",
+    );
+    const held = await acquireFileLock(currentPath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("publication cancelled");
+    const outputRoot = await root(outputDir);
+    const publication = publishMantisRunOutput({
+      generationDir: newGeneration,
+      outputDir,
+      outputRoot,
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    controller.abort(abortReason);
+
+    try {
+      await expect(publication).rejects.toBe(abortReason);
+    } finally {
+      await held.release();
+    }
+    await expect(readCurrentGeneration(outputDir)).resolves.toBe(oldGeneration);
+    await expectCompatibilityFixture(outputDir, "old");
   });
 
   it("serializes concurrent publications and leaves the direct view on the pointer generation", async () => {
