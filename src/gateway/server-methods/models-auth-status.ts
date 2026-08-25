@@ -47,7 +47,6 @@ import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
-import { suppressSyntheticAliasRowsCoveredByExternalCli } from "./models-auth-status-projection.js";
 import {
   clearModelAuthStatusUsageCache,
   type ProviderUsageStatus,
@@ -645,20 +644,16 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
-      const providers = suppressSyntheticAliasRowsCoveredByExternalCli(
-        authHealth.providers.map((prov) =>
-          mapProvider(
-            prov,
-            usageByProvider,
-            configured.expectsOAuth,
-            apiKeys,
-            logoutProfileIds,
-            configBoundProfileIds,
-            externalCliProfileIds,
-          ),
+      const providers = authHealth.providers.map((prov) =>
+        mapProvider(
+          prov,
+          usageByProvider,
+          configured.expectsOAuth,
+          apiKeys,
+          logoutProfileIds,
+          configBoundProfileIds,
+          externalCliProfileIds,
         ),
-        externalCliProfileIds,
-        new Map(),
       );
       const providerCapabilities = buildProviderCapabilities({
         config: cfg,
