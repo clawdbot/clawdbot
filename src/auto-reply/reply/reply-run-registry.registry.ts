@@ -11,7 +11,6 @@ import {
   replyMessageInjectionTargetOperation,
   replyRunInterruptTargetOperation,
   type ReplyOperation,
-  type ReplyOperationPhase,
   type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
 } from "./reply-run-registry.contracts.js";
@@ -230,12 +229,6 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
-}
-
-export function resolveReplyRunPhaseForSessionId(
-  sessionId: string,
-): ReplyOperationPhase | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId)?.phase;
 }
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {

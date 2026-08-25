@@ -1,7 +1,10 @@
 // Slack plugin module implements outbound adapter behavior.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
@@ -316,6 +319,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       text: payload.text,
     });
     const useSingleDeliveryMarker = mediaUrls.length === 0 && deliveryMessages.length === 1;
+    const sentResults: Awaited<ReturnType<SlackSendFn>>[] = [];
     return attachChannelToResult(
       "slack",
       toSlackOutboundResult(
@@ -329,6 +333,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
               mediaUrl,
               deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
             }),
+          onResult: (result) => {
+            sentResults.push(result);
+          },
           finalize: async () => {
             let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
             for (const message of deliveryMessages) {
@@ -345,11 +352,32 @@ export const slackOutbound: ChannelOutboundAdapter = {
                 ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
                 deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
               });
+              sentResults.push(lastResult);
             }
             if (!lastResult) {
               throw new Error("Slack rendered presentation produced no deliverable segment");
             }
-            return lastResult;
+            if (sentResults.length === 1) {
+              return lastResult;
+            }
+            const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
+            receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+            const questionResult = sentResults.find(
+              (result) => result.meta?.slackQuestionActionIds.length,
+            );
+            return {
+              ...lastResult,
+              receipt,
+              ...(questionResult?.meta
+                ? {
+                    meta: {
+                      ...questionResult.meta,
+                      slackQuestionMessageId:
+                        questionResult.meta.slackQuestionMessageId ?? questionResult.messageId,
+                    },
+                  }
+                : {}),
+            };
           },
         }),
       ),
