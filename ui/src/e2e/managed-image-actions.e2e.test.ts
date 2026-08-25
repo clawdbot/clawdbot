@@ -91,8 +91,10 @@ suite.define(() => {
         });
       }
 
-      await page.locator(".chat-assistant-attachment-card--image").hover();
-      const downloadButton = page.locator(".chat-assistant-attachment-card__download");
+      const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
+      await imageFrame.hover();
+      const imageActions = imageFrame.locator(".chat-image-actions");
+      const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       await expect
         .poll(() =>
           downloadButton.evaluate((button) => {
@@ -114,9 +116,11 @@ suite.define(() => {
         .toMatchObject({ hit: true, pointerEvents: "auto" });
       const download = page.waitForEvent("download");
       await downloadButton.click();
-      expect((await download).suggestedFilename()).toBe("image.png");
+      expect((await download).suggestedFilename()).toBe("Ticketed generated image.png");
 
-      await page.locator(".chat-assistant-attachment-card__expand").click();
+      await imageActions
+        .getByRole("button", { name: "Open image Ticketed generated image" })
+        .click();
       await page
         .getByRole("dialog", { name: "Image preview: Ticketed generated image" })
         .waitFor({ state: "visible" });

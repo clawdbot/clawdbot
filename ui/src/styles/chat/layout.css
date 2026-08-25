@@ -1412,7 +1412,8 @@ openclaw-chat-page {
   transition: transform 150ms ease-out;
 }
 
-.chat-message-image-button:hover .chat-message-image {
+.chat-image-frame:hover .chat-message-image,
+.chat-assistant-attachments > .chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
 }
 
