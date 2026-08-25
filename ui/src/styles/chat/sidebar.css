@@ -66,6 +66,9 @@
 }
 
 .chat-main__conversation {
+  --chat-composer-top-margin: 8px;
+  --chat-transcript-composer-underlap: 10px;
+
   position: relative;
   display: flex;
   min-width: 0;

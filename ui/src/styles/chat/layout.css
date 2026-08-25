@@ -608,6 +608,14 @@ openclaw-chat-page {
   background: transparent;
 }
 
+/* Extend only the scroll viewport behind the composer's own surface. The
+   following zero-height anchor keeps its original layout position. */
+.chat-main__conversation > .chat-thread {
+  margin-bottom: calc(
+    0px - var(--chat-composer-top-margin) - var(--chat-transcript-composer-underlap)
+  );
+}
+
 /* The transcript stays keyboard-focusable for scroll keys, but the owner chose
    no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {
@@ -2029,7 +2037,7 @@ button.chat-reply-preview--message:disabled {
      not defined; the fallbacks keep its geometry identical there. */
   width: calc(100% - var(--chat-composer-side-inset, 36px));
   max-width: var(--chat-thread-max-width, 48rem);
-  margin: 8px auto var(--chat-composer-bottom-gap, 14px);
+  margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
 
 /* The conversation's top-right gutter, owned by one column so its members
@@ -7223,6 +7231,10 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 768px) {
+  .chat-main__conversation {
+    --chat-composer-top-margin: 6px;
+  }
+
   .chat-inline-approval {
     width: calc(100% - 8px);
   }
@@ -7262,7 +7274,7 @@ button.chat-pr__diff {
 
   .agent-chat__composer-shell {
     width: calc(100% - 8px);
-    margin: 6px 4px calc(14px + var(--safe-area-bottom));
+    margin: var(--chat-composer-top-margin) 4px calc(14px + var(--safe-area-bottom));
     gap: 6px;
   }
 
