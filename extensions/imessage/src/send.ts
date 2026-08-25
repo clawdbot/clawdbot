@@ -54,7 +54,10 @@ import {
 } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
-import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
+import {
+  rememberIMessageReplyCache,
+  resolveIMessageThreadReplyToId,
+} from "./monitor-reply-cache.js";
 import {
   forgetPersistedIMessageEchoKey,
   rememberPersistedIMessageEcho,
@@ -1026,6 +1029,12 @@ export async function sendMessageIMessage(
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
+    const threadOriginatorGuid = resolveIMessageThreadReplyToId(resolvedReplyToId, {
+      chatContext: chatContextFromIMessageTarget(target, service),
+    });
+    if (threadOriginatorGuid) {
+      params.thread_originator_guid = threadOriginatorGuid;
+    }
   }
   if (formatted.ranges.length > 0) {
     params.formatting = formatted.ranges;
@@ -1105,6 +1114,7 @@ export async function sendMessageIMessage(
         // reply_to stripped, keeping any file; a further failure propagates.
         const plainParams = { ...params };
         delete plainParams.reply_to;
+        delete plainParams.thread_originator_guid;
         result = await requestSuccessfulSend(plainParams);
         effectiveReplyToId = undefined;
       } else if (filePath || !isIMessageRpcSendTimeout(error)) {
