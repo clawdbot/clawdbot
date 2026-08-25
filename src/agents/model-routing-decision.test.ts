@@ -45,7 +45,7 @@ describe("admitted model routing decisions", () => {
       token,
       receipt: {
         action: { family: "model-routing", operation: "explicit-selection" },
-        decision: { reasonCode: "model_route_selected_after_fallback" },
+        decision: { reasonCode: "rate_limit" },
         enforcement: { coverageState: "attribution-only" },
       },
       refs: {

@@ -276,7 +276,7 @@ describe("prepareCliRunContext", () => {
           requestedProvider: "openai",
           requestedModel: "mock-1",
           stage: "fallback",
-          fallbackReason: "overloaded",
+          fallbackReason: "rate_limit",
         },
       }),
     ).finally(preparedRunAdmission.close);
@@ -284,7 +284,7 @@ describe("prepareCliRunContext", () => {
     expect(decisionWork).toHaveLength(1);
     expect(decisionWork[0]?.receipt).toMatchObject({
       action: { summary: "Requested openai/mock-1; selected test-cli/mock-2." },
-      decision: { reasonCode: "model_route_selected_after_fallback" },
+      decision: { reasonCode: "rate_limit" },
     });
   });
 

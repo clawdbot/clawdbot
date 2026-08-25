@@ -563,7 +563,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         },
         {
           action: { summary: "Requested openai/mock-1; selected groq/mock-2." },
-          decision: { reasonCode: "model_route_selected_after_fallback" },
+          decision: { reasonCode: "overloaded" },
         },
       ]);
       expect(observedModelRoutingProvenance).toMatchObject([

@@ -226,8 +226,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     selectionMode:
       runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "explicit" : "automatic",
     credentialProfileId: runtime.lastProfileId,
-    fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
-    fallbackReason: params.modelRoutingProvenance?.fallbackReason ?? fallbackReason,
+    fallbackSelected:
+      params.modelRoutingProvenance?.stage === "fallback" || Boolean(fallbackReason),
+    fallbackReason: params.modelRoutingProvenance?.fallbackReason,
   });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,

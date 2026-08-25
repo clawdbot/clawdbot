@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { recordExecutionDecisionWork } from "../audit/execution-decision-work.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 type ModelRoutingSelectionMode = "automatic" | "explicit";
 
@@ -21,7 +22,7 @@ export function recordAdmittedModelRoutingDecision(params: {
   selectionMode: ModelRoutingSelectionMode;
   credentialProfileId?: string;
   fallbackSelected?: boolean;
-  fallbackReason?: string | null;
+  fallbackReason?: FailoverReason | null;
   occurredAt?: number;
 }): boolean {
   if (!params.token) {
@@ -32,8 +33,9 @@ export function recordAdmittedModelRoutingDecision(params: {
   const selectedRef = boundedModelRef(params.selectedProvider, params.selectedModel);
   const credentialProfileId = params.credentialProfileId?.trim();
   const hasCredentialOwner = Boolean(credentialProfileId);
-  const fallbackSelected =
-    params.fallbackSelected === true || Boolean(params.fallbackReason?.trim());
+  const reasonCode =
+    params.fallbackReason ??
+    (params.fallbackSelected ? "model_route_selected_after_fallback" : "model_route_selected");
   return recordExecutionDecisionWork({
     workVersion: 1,
     token: params.token,
@@ -48,9 +50,7 @@ export function recordAdmittedModelRoutingDecision(params: {
       },
       decision: {
         outcome: "allowed",
-        reasonCode: fallbackSelected
-          ? "model_route_selected_after_fallback"
-          : "model_route_selected",
+        reasonCode,
       },
       enforcement: {
         coverageState: hasCredentialOwner ? "attribution-only" : "unknown",
