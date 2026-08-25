@@ -262,6 +262,50 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("logs the caller abort reason with bounded ChatGPT transport metadata", async () => {
+    const logWarn = vi.fn();
+    configureAiTransportHost({ logWarn });
+    const controller = new AbortController();
+    class AbortedWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        controller.abort(new Error("Compaction timed out"));
+      }
+
+      close(): void {}
+    }
+    vi.stubGlobal("WebSocket", AbortedWebSocket);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      signal: controller.signal,
+    }).result();
+
+    expect(result).toMatchObject({ stopReason: "aborted", errorMessage: "Request was aborted" });
+    expect(logWarn).toHaveBeenCalledWith(
+      "openai-transport",
+      "ChatGPT Responses stream terminated",
+      {
+        api: "openai-chatgpt-responses",
+        elapsedMs: expect.any(Number),
+        errorMessage: "Compaction timed out",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        stopReason: "aborted",
+        transport: "auto",
+      },
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(["sse", "websocket"] as const)(
     "preserves failed response identity and provider error details over %s",
     async (transport) => {

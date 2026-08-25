@@ -6,6 +6,7 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
@@ -288,6 +289,7 @@ export const streamOpenAICodexResponses: StreamFunction<
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
+    const startedAt = Date.now();
     let requestTimeoutMs: number | undefined;
     let requestTimeoutSignal: AbortSignal | undefined;
     let activeSignal: AbortSignal | undefined;
@@ -631,6 +633,22 @@ export const streamOpenAICodexResponses: StreamFunction<
         delete (block as { partialJson?: string }).partialJson;
       }
       const terminal = projectProviderError(normalizedError, options?.signal);
+      const diagnostic = projectProviderError(
+        options?.signal?.aborted && options.signal.reason !== undefined
+          ? options.signal.reason
+          : normalizedError,
+        options?.signal,
+      );
+      // Record only bounded transport metadata; never request or response content.
+      getAiTransportHost().logWarn("openai-transport", "ChatGPT Responses stream terminated", {
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        transport: options?.transport || "auto",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        stopReason: diagnostic.stopReason,
+        errorMessage: truncateUtf16Safe(diagnostic.errorMessage, 500),
+      });
       Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
