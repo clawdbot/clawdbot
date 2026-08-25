@@ -63,10 +63,10 @@ const SMALL_LIVE_MODEL_PRIORITY = [
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 
-const highSignalPriorityIndex = new Map(
+const highSignalPriorityIndex = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((ref, index) => [ref, index] as const),
 );
-const smallPriorityIndex = new Map(
+const smallPriorityIndex = new Map<string, number>(
   SMALL_LIVE_MODEL_PRIORITY.map((ref, index) => [ref, index] as const),
 );
 const excludedProviders = new Set(["codex", "codex-cli"]);
