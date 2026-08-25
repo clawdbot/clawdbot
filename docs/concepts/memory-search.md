@@ -145,10 +145,9 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; any dated `YYYY-MM-DD.md` file under `memory/`
-decays by its embedded date, including dated files in subdirectories such as
-`memory/dreaming/light/`.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
 
 ### MMR (diversity)
 
