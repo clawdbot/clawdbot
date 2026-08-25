@@ -193,6 +193,43 @@ describe("session workspace state", () => {
     expect(listFiles).toHaveBeenCalledTimes(2);
     resolveRefresh({ sessionKey: state.sessionKey, files: [] });
   });
+
+  it("retries a pending visible reload after the previous load failed", async () => {
+    let rejectInitialLoad!: (error: Error) => void;
+    const initialLoad = new Promise((_, reject) => {
+      rejectInitialLoad = reject;
+    });
+    const listFiles = vi
+      .fn()
+      .mockReturnValueOnce(initialLoad)
+      .mockResolvedValueOnce({ sessionKey: "agent:main:current", files: [] });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) } as never,
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      agentsList: { agents: [] },
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: { listFiles } as never,
+    } as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state, { expanded: true });
+    expect(listFiles).toHaveBeenCalledTimes(1);
+    refreshSessionWorkspace(state, true);
+    rejectInitialLoad(new Error("temporary failure"));
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).error).toContain("temporary failure"),
+    );
+
+    createSessionWorkspaceProps(state, { expanded: true });
+
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
+  });
 });
 
 describe("session workspace artifacts", () => {
