@@ -58,12 +58,7 @@ export function matchesSelectedTuiSession(
 
   const parsedEvent = parseAgentSessionKey(eventSessionKey);
   const parsedSelection = parseAgentSessionKey(state.currentSessionKey);
-  if (
-    parsedEvent &&
-    parsedSelection &&
-    normalizeLowercaseStringOrEmpty(parsedEvent.agentId) !==
-      normalizeLowercaseStringOrEmpty(parsedSelection.agentId)
-  ) {
+  if (parsedEvent && parsedSelection && parsedEvent.agentId !== parsedSelection.agentId) {
     return false;
   }
 
@@ -78,4 +73,15 @@ export function matchesSelectedTuiSession(
     return true;
   }
   return eventAgentId ? eventAgentId === selectedAgentId : selectedAgentId === defaultAgentId;
+}
+
+/** Requires explicit ownership for aliases before presenting actionable session prompts. */
+export function matchesOwnedTuiSession(session: string, agentId: string, event: TuiSessionEvent) {
+  const owner = normalizeLowercaseStringOrEmpty(event.agentId);
+  const selected = normalizeLowercaseStringOrEmpty(agentId);
+  return (
+    agentSessionKeysMatchByRequestKey(event.sessionKey, session) &&
+    (parseAgentSessionKey(event.sessionKey)?.agentId || owner) === selected &&
+    (!owner || owner === selected)
+  );
 }
