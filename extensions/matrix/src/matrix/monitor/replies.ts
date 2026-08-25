@@ -155,10 +155,6 @@ export async function deliverMatrixReplies(params: {
       }
       const explicitReplyToId =
         reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
-      const replyToId =
-        params.threadId || params.replyToMode !== "off"
-          ? (reply.replyToId ?? params.replyToId)?.trim()
-          : explicitReplyToId;
       const rawText = visibleText ?? "";
       const mediaList = reply.mediaUrls?.length
         ? reply.mediaUrls
@@ -168,8 +164,9 @@ export async function deliverMatrixReplies(params: {
 
       const replyToIdForReply =
         explicitReplyToId ||
-        (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value
-          ? replyToId
+        (params.threadId ||
+        (params.replyToMode !== "off" && (params.replyToMode === "all" || !hasRepliedRef.value))
+          ? (reply.replyToId ?? params.replyToId)?.trim()
           : undefined);
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.

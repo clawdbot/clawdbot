@@ -4785,6 +4785,24 @@ describe("matrix monitor handler draft streaming", () => {
     },
   );
 
+  it("finalizes the existing draft when an implicit reply is suppressed by off mode", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "off" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
+
+    expect(editMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
   it("redacts stale draft when final payload intentionally drops reply threading", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
     const { deliver, opts, finish } = await dispatch();
