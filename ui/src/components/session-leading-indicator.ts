@@ -5,6 +5,7 @@ import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
+  sessionHasRunningWork,
 } from "./session-attention-presentation.ts";
 import {
   renderSessionGlyph,
@@ -97,12 +98,14 @@ export function describeSessionTrailingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
+  const runningLabel =
+    session.hasActiveRun && session.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : t("sessionsView.activeRun");
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
     pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun
-      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
-      : "",
+    sessionHasRunningWork(session) ? runningLabel : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -124,7 +127,7 @@ export function renderSessionLeadingState(
   trailingIndicator: TemplateResult | typeof nothing;
   renderedOwnerId?: string;
 } {
-  const running = session.hasActiveRun;
+  const running = sessionHasRunningWork(session);
   const trailingIndicator = session.isChild
     ? nothing
     : renderSessionTrailingState(session, pullRequestState);
