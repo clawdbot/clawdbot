@@ -15,7 +15,7 @@ import {
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
-import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
+import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
@@ -100,6 +100,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         abortSignal: input.abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
+        toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
       })
@@ -220,16 +221,13 @@ function gateToolExecution(
   tools: readonly AnyAgentTool[],
   allowNames: readonly string[],
 ): AnyAgentTool[] {
-  const allowed = new Set(allowNames.map(normalizeToolPolicyName));
   return tools.map((tool) =>
-    allowed.has(normalizeToolPolicyName(tool.name)) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
+    isToolExecutionAllowed(allowNames, tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
       : {
           ...tool,
           execute: async () => {
-            throw new Error(
-              "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.",
-            );
+            throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
           },
         },
   );

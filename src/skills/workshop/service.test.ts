@@ -15,6 +15,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
@@ -286,6 +287,32 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "New body.",
     );
+  });
+
+  it("keeps an operator apply when autonomous review holds a stale pending snapshot", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "handwritten"),
+      name: "handwritten",
+      description: "Operator-owned skill",
+      body: "# Handwritten\n\nOld body.\n",
+    });
+    const snapshot = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "handwritten",
+      content: "# Handwritten\n\nNew body.\n",
+    });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: snapshot.record.id,
+      eventActor: { type: "gateway" },
+    });
+
+    await applyAutonomousSkillProposal({ workspaceDir, proposal: snapshot, reason: "review" });
+
+    const inspected = await inspectSkillProposal(snapshot.record.id, { workspaceDir });
+    expect(inspected?.record.status).toBe("applied");
+    expect(inspected?.record.statusReason).toBeUndefined();
   });
 
   it.runIf(process.platform !== "win32")(

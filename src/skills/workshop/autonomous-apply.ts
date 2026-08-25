@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { applySkillProposal } from "./service.js";
-import { updateSkillProposalRecord } from "./store.js";
+import { readSkillProposalRecord, updateSkillProposalRecord } from "./store.js";
+import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalReadResult, SkillProposalRecord } from "./types.js";
 
 const USER_AUTHORED_PENDING_REASON = "user-authored skill; awaiting operator review";
@@ -27,12 +28,29 @@ export async function applyAutonomousSkillProposal(params: {
     params.proposal.record.kind !== "create" &&
     !isWorkshopOwnedSkillDir(params.workspaceDir, params.proposal.record.target.skillDir, store)
   ) {
-    const record = {
-      ...params.proposal.record,
-      updatedAt: new Date().toISOString(),
-      statusReason: USER_AUTHORED_PENDING_REASON,
-    };
-    await updateSkillProposalRecord({ record, store });
+    // Same commit lock as apply: an operator may apply this proposal between the ownership
+    // check and this write, and the pending reason must not overwrite that outcome.
+    const record = await withSkillProposalCommitLock(
+      params.workspaceDir,
+      params.proposal.record,
+      async () => {
+        const current = await readSkillProposalRecord(params.proposal.record.id, store);
+        if (!current) {
+          throw new Error(`Skill proposal not found: ${params.proposal.record.id}`);
+        }
+        if (current.status !== "pending") {
+          return current;
+        }
+        const pending = {
+          ...current,
+          updatedAt: new Date().toISOString(),
+          statusReason: USER_AUTHORED_PENDING_REASON,
+        };
+        await updateSkillProposalRecord({ record: pending, store });
+        return pending;
+      },
+      store,
+    );
     return { status: "pending", record };
   }
   const applied = await applySkillProposal({
