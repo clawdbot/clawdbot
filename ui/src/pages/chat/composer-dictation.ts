@@ -63,7 +63,7 @@ type ComposerDictationControllerOptions = {
   onCommit: (text: string) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onStateChange: () => void;
-  onTap: () => void;
+  onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
 
@@ -465,8 +465,15 @@ export class ComposerDictationController {
     return this.stop({ commit: true });
   }
 
-  cancelActive(): void {
-    void this.stop({ commit: false });
+  startDirect(): boolean {
+    if (this.phase !== "idle" || !this.canHold()) {
+      return false;
+    }
+    // Surfaces without Talk do not need the hold discriminator. Enter the same
+    // session start path directly so capture, errors, partials and finalization stay canonical.
+    this.setPhase("holding");
+    void this.start();
+    return true;
   }
 
   update(options: ComposerDictationControllerOptions): void {
@@ -528,14 +535,14 @@ export class ComposerDictationController {
     }
     if (this.active) {
       event.preventDefault();
-      this.cancelActive();
+      void this.finishActive();
       return;
     }
     if (this.phase !== "idle") {
       event.preventDefault();
       return;
     }
-    this.options.onTap();
+    this.options.onTap?.();
   }
 
   handleContextMenu(event: MouseEvent): void {
@@ -574,7 +581,7 @@ export class ComposerDictationController {
       this.clearGesture();
       this.setPhase("idle");
       if (cleanTap) {
-        this.options.onTap();
+        this.options.onTap?.();
       }
       this.expireClickSuppression();
       return;

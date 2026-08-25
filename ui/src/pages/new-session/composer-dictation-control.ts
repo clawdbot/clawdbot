@@ -1,7 +1,9 @@
+import { html } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  renderComposerDictationSubmitAction,
   renderComposerVoiceButton,
   renderMicrophonePicker,
 } from "../chat/components/chat-composer-controls.ts";
@@ -16,24 +18,18 @@ type NewSessionDictationOptions = {
   canCommit: () => boolean;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
+  onSubmit: () => void;
   requestUpdate: () => void;
 };
 
 /**
- * Dictation for the new-session draft: hold the microphone, speak, release, and
- * the transcript lands at the caret.
- *
- * Deliberately dictation only. The chat composer's microphone doubles as a Talk
- * toggle, but Talk needs a live session and this composer exists precisely
- * because there is not one yet, so a plain tap has nothing to start and says so
- * instead of silently doing nothing.
+ * Dictation for the new-session draft. This surface has no Talk capability, so
+ * its microphone enters the shared dictation session directly on click.
  */
 export class NewSessionDictationControl {
   private readonly devicePicker: ComposerMicrophonePicker;
   private dictation: ComposerDictationController | null = null;
   private owner: { key: string } | null = null;
-  private hint: string | null = null;
-  private hintTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: NewSessionDictationOptions) {
     this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
@@ -48,30 +44,17 @@ export class NewSessionDictationControl {
     this.dictation?.dispose();
     this.dictation = null;
     this.devicePicker.dispose();
-    this.clearHint();
   }
 
-  currentHint(): string | undefined {
-    return this.hint ?? undefined;
+  get active(): boolean {
+    return this.dictation?.active === true;
   }
 
-  private showHint(): void {
-    this.clearHint();
-    this.hint = t("newSession.dictationHoldToSpeak");
-    this.hintTimer = setTimeout(() => {
-      this.hint = null;
-      this.hintTimer = null;
-      this.options.requestUpdate();
-    }, 6_000);
-    this.options.requestUpdate();
-  }
-
-  private clearHint(): void {
-    if (this.hintTimer !== null) {
-      clearTimeout(this.hintTimer);
-      this.hintTimer = null;
-    }
-    this.hint = null;
+  previewDraft(): string | undefined {
+    const dictation = this.dictation;
+    return dictation?.active
+      ? this.options.textarea.previewTranscript(dictation.partial)
+      : undefined;
   }
 
   render(ownerKey: string) {
@@ -79,7 +62,6 @@ export class NewSessionDictationControl {
       this.owner = { key: ownerKey };
       this.dictation?.dispose();
       this.dictation = null;
-      this.clearHint();
     }
     const owner = this.owner;
     const ownsDraft = () => this.owner === owner;
@@ -99,7 +81,6 @@ export class NewSessionDictationControl {
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
-        this.clearHint();
         const next = this.options.textarea.insertTranscript(transcript);
         if (next !== null) {
           this.options.onMessage(next);
@@ -117,43 +98,42 @@ export class NewSessionDictationControl {
         }
       },
       onDictationUnavailable: this.devicePicker.handleOpen,
-      onTap: () => {
-        if (ownsDraft()) {
-          this.showHint();
-        }
-      },
     };
     this.dictation ??= new ComposerDictationController(dictationOptions);
     this.dictation.update(dictationOptions);
     const dictation = this.dictation;
 
-    return renderComposerVoiceButton({
-      connected,
-      sending: false,
-      isBusy: !enabled,
-      dictation,
-      idleLabel: t("newSession.dictate"),
-      microphonePicker: renderMicrophonePicker({
-        devices: this.devicePicker.devices,
-        loading: this.devicePicker.loading,
-        open: this.devicePicker.open,
-        selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
-        voiceActive: false,
-        issue: this.devicePicker.issue,
-        showRealtimeCapability: false,
-        realtimeStatus: this.devicePicker.realtimeStatus,
-        dictationStatus: this.devicePicker.dictationStatus,
-        onOpen: this.devicePicker.handleOpen,
-        onClose: this.devicePicker.handleClose,
-        onSelect: (deviceId: string) => {
-          patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
-          this.devicePicker.handleClose();
-        },
-      }),
-      onDictationPointerDown: (event: PointerEvent) => {
-        this.options.textarea.captureSelection();
-        dictation.handlePointerDown(event);
-      },
-    });
+    return html`
+      ${renderComposerVoiceButton({
+        connected,
+        sending: false,
+        isBusy: !enabled,
+        dictation,
+        idleLabel: t("newSession.dictate"),
+        microphonePicker: renderMicrophonePicker({
+          devices: this.devicePicker.devices,
+          loading: this.devicePicker.loading,
+          open: this.devicePicker.open,
+          selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
+          voiceActive: false,
+          issue: this.devicePicker.issue,
+          showRealtimeCapability: false,
+          realtimeStatus: this.devicePicker.realtimeStatus,
+          dictationStatus: this.devicePicker.dictationStatus,
+          onOpen: this.devicePicker.handleOpen,
+          onClose: this.devicePicker.handleClose,
+          onSelect: (deviceId: string) => {
+            patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
+            this.devicePicker.handleClose();
+          },
+        }),
+        onDirectDictationStart: () => this.options.textarea.captureSelection(),
+      })}
+      ${renderComposerDictationSubmitAction(dictation, () => {
+        if (ownsDraft() && this.options.canCommit()) {
+          this.options.onSubmit();
+        }
+      })}
+    `;
   }
 }

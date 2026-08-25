@@ -35,18 +35,20 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
-  it("separates dictation insert from discard and never sends either action", () => {
+  function renderActiveDictationActions(overrides: {
+    finishActive: ReturnType<typeof vi.fn>;
+    onSend?: ReturnType<typeof vi.fn>;
+  }) {
     const container = document.createElement("div");
-    const finishActive = vi.fn().mockResolvedValue(true);
     const cancelActive = vi.fn();
     const handleClick = vi.fn();
-    const onSend = vi.fn();
+    const onSend = overrides.onSend ?? vi.fn();
     const dictation = {
       active: true,
       connecting: false,
       finalizing: false,
       locksComposer: true,
-      finishActive,
+      finishActive: overrides.finishActive,
       cancelActive,
       handleClick,
     } as unknown as ComposerDictationController;
@@ -64,19 +66,46 @@ describe("renderChatComposer controls", () => {
       }),
       container,
     );
+    return { cancelActive, container, handleClick, onSend };
+  }
 
-    const insert = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
-    const discard = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
-    expect(insert?.getAttribute("aria-label")).toBe("Stop and insert dictation");
-    expect(discard?.getAttribute("aria-label")).toBe("Cancel and discard dictation");
+  it("stops dictation by keeping its text without sending", () => {
+    const finishActive = vi.fn().mockResolvedValue(true);
+    const { cancelActive, container, handleClick, onSend } = renderActiveDictationActions({
+      finishActive,
+    });
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
 
-    insert?.click();
-    discard?.click();
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(cancelActive).toHaveBeenCalledOnce();
+    expect(cancelActive).not.toHaveBeenCalled();
     expect(handleClick).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("commits dictation before sending the complete composer draft", async () => {
+    const order: string[] = [];
+    const finishActive = vi.fn(async () => {
+      order.push("commit");
+      return true;
+    });
+    const onSend = vi.fn(() => order.push("send"));
+    const { cancelActive, container, handleClick } = renderActiveDictationActions({
+      finishActive,
+      onSend,
+    });
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+
+    expect(send?.getAttribute("aria-label")).toBe("Send");
+    send?.click();
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(order).toEqual(["commit", "send"]);
+    expect(cancelActive).not.toHaveBeenCalled();
+    expect(handleClick).not.toHaveBeenCalled();
   });
 
   it.each([

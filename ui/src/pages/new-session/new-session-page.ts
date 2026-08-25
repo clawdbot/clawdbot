@@ -167,6 +167,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
+      onSubmit: () => void this.submission.submit(),
       requestUpdate: () => this.requestUpdate(),
     });
     this.subscriptions = new SubscriptionsController(this)
@@ -537,7 +538,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
     const capabilities = this.submission.capabilities;
     const voiceControl = this.dictation.render(this.routeOwnerKey());
-    const dictationLocked = this.dictation.locked;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -562,10 +562,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
           agent: this.place.selectedAgent(),
           agentId: this.place.agentId,
           attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: !this.submission.submitting && !dictationLocked && this.submission.canSubmit(),
+          canSubmit: !this.submission.submitting && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
-          dictationHint: this.dictation.currentHint(),
+          dictationActive: this.dictation.active,
+          dictationPreview: this.dictation.previewDraft(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           draftOwnerKey: this.routeOwnerKey(),

@@ -5187,16 +5187,6 @@ button.chat-pr__diff {
   stroke: none;
 }
 
-.agent-chat__input .chat-send-btn--dictation-commit {
-  background: color-mix(in srgb, white 92%, var(--chat-composer-surface));
-  color: color-mix(in srgb, black 82%, var(--primary));
-}
-
-.agent-chat__input .chat-send-btn--dictation-commit:hover:not(:disabled) {
-  background: color-mix(in srgb, white 84%, var(--chat-composer-surface));
-  color: color-mix(in srgb, black 88%, var(--primary));
-}
-
 .agent-chat__input .chat-send-btn--dictation-commit > svg {
   width: 17px;
   height: 17px;

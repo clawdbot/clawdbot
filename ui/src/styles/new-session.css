@@ -840,32 +840,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   opacity: 0.5;
 }
 
-/* Gesture guidance is transient chrome, not an error in the page flow. */
-.new-session-page__dictation-hint {
-  position: absolute;
-  right: 12px;
-  bottom: calc(100% + 10px);
-  z-index: 45;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  max-width: min(440px, calc(100vw - 32px));
-  padding: 8px 11px;
-  border: 1px solid var(--chat-composer-hairline);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.new-session-page__dictation-hint svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__start-submit[aria-busy="true"] svg {
     animation: none;

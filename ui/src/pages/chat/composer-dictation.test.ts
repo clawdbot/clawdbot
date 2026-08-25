@@ -190,6 +190,19 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
+  it("starts the canonical session immediately for a direct-dictation surface", async () => {
+    const { controller } = createHarness();
+
+    expect(controller.startDirect()).toBe(true);
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
+    );
+
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(controller.active).toBe(true);
+    controller.dispose();
+  });
+
   it("consumes the click tail when a hold falls back to unavailable dictation", async () => {
     const { controller, onDictationUnavailable, onTap, target } = createHarness({
       dictationAvailable: false,
@@ -704,7 +717,7 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
-  it("stays latched after release until the operator discards with the square", async () => {
+  it("stays latched after release until the square keeps the transcript", async () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
     emit({
@@ -726,7 +739,7 @@ describe("ComposerDictationController", () => {
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
     await vi.advanceTimersByTimeAsync(1500);
-    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCommit).toHaveBeenCalledWith("keep recording");
     controller.dispose();
   });
 

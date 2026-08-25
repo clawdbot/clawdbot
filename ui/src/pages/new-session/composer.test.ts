@@ -28,7 +28,8 @@ function renderComposer(
     requiresModifier?: boolean;
     submitDisabledReason?: string;
     blockedSubmitNotice?: string;
-    dictationHint?: string;
+    dictationActive?: boolean;
+    dictationPreview?: string;
     terminalAction?: {
       canStart: boolean;
       disabledReason?: string;
@@ -81,7 +82,8 @@ function renderComposer(
         requestUpdate: renderCurrent,
         submitDisabledReason: overrides.submitDisabledReason,
         blockedSubmitNotice: overrides.blockedSubmitNotice,
-        dictationHint: overrides.dictationHint,
+        dictationActive: overrides.dictationActive,
+        dictationPreview: overrides.dictationPreview,
         terminalAction: overrides.terminalAction,
         submitting: overrides.submitting ?? false,
         textareaController,
@@ -454,13 +456,21 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders dictation guidance as floating status chrome", () => {
-    const { composer } = renderComposer({ dictationHint: "Hold to dictate." });
-    const hint = composer.querySelector<HTMLElement>(".new-session-page__dictation-hint");
+  it("previews dictation in a locked draft and reserves the primary slot for Send", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      message: "Existing draft",
+      dictationActive: true,
+      dictationPreview: "Existing draft spoken words",
+      onSubmit,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
 
-    expect(hint?.getAttribute("role")).toBe("status");
-    expect(hint?.textContent).toContain("Hold to dictate.");
-    expect(hint?.querySelector("svg")).not.toBeNull();
+    expect(textarea?.value).toBe("Existing draft spoken words");
+    expect(textarea?.readOnly).toBe(true);
+    expect(composer.querySelector(".new-session-page__start-submit")).toBeNull();
+    textarea?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });
 
@@ -832,6 +842,16 @@ describe("new-session composer dictation insertion", () => {
 
     expect(textareaController.insertTranscript("please")).toBe("please ship it");
     expect(textareaController.insertTranscript("now")).toBe("please ship it now");
+  });
+
+  it("previews from the captured draft without consuming or mutating it", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const textarea = draftTextarea(composer, "ship it", 4);
+    textareaController.captureSelection();
+
+    expect(textareaController.previewTranscript("please")).toBe("ship please it");
+    expect(textarea.value).toBe("ship it");
+    expect(textareaController.insertTranscript("please")).toBe("ship please it");
   });
 
   it("has nothing to insert into once the draft is gone", () => {
