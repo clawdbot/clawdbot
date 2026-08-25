@@ -19,6 +19,7 @@ import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
+import type { ModelCallUrgency } from "./vllm-priority.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   /** Explicit session owner captured before fallback agent resolution. */
@@ -61,6 +62,8 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   inputProvenance?: InputProvenance;
+  /** Urgency inherited from the run that requested this auxiliary model call. */
+  modelCallUrgency?: ModelCallUrgency;
   /** Consumed in-process subagent-completion capability; never derived from public input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   toolsAllow?: string[];

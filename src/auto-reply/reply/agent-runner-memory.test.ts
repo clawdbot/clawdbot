@@ -279,6 +279,7 @@ type CompactEmbeddedAgentSessionParams = {
   force?: boolean;
   forcePreflight?: boolean;
   modelSelectionLocked?: boolean;
+  modelCallUrgency?: "foreground" | "normal" | "background";
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
   sessionEntry?: SessionEntry;
@@ -1875,6 +1876,82 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(compactCall.contextTokenBudget).toBe(258_000);
     },
   );
+
+  it.each([
+    {
+      name: "direct interactive input",
+      runOverrides: {},
+      expectedUrgency: "foreground" as const,
+    },
+    {
+      name: "inter-session input",
+      runOverrides: { inputProvenance: { kind: "inter_session" as const } },
+      expectedUrgency: "normal" as const,
+    },
+    {
+      name: "spawned work",
+      runOverrides: { spawnedBy: "agent:parent:main" },
+      expectedUrgency: "normal" as const,
+    },
+  ])("passes $expectedUrgency urgency for $name preflight compaction", async (testCase) => {
+    const sessionFile = path.join(rootDir, `urgency-${testCase.expectedUrgency}.jsonl`);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 245_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "agent:main:main",
+      ...testCase.runOverrides,
+    });
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 258_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall().modelCallUrgency).toBe(
+      testCase.expectedUrgency,
+    );
+  });
+
+  it("skips preflight compaction for a heartbeat run", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 245_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+
+    const result = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionKey: "agent:main:main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 258_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: true,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
     registerMemoryFlushPlanResolverForTest(() =>
       createModifiedMemoryFlushPlan({ softThresholdTokens: 0, reserveTokensFloor: 10 }),

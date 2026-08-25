@@ -35,6 +35,7 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { resolveModelCallUrgency } from "../vllm-priority.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -518,6 +519,12 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "authProfileIdSource"
   | "runtimePlan"
   | "userTurnTranscriptRecorder"
+  | "trigger"
+  | "bootstrapContextRunKind"
+  | "currentInboundEventKind"
+  | "inputProvenance"
+  | "spawnedBy"
+  | "trustedInternalHandoff"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
@@ -582,6 +589,7 @@ export function buildAfterTurnRuntimeContext(params: {
       config: params.attempt.config,
       skillsSnapshot: params.attempt.skillsSnapshot,
       senderId: params.attempt.senderId,
+      modelCallUrgency: resolveModelCallUrgency(params.attempt),
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
