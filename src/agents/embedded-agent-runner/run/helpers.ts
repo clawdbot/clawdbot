@@ -261,9 +261,24 @@ export function buildErrorAgentMeta(params: {
   lastRunPromptUsage: UsageSnapshot | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
+  // lastRunPromptUsage already went through resolveLatestCallUsage's authoritative
+  // ordering (promptCache.lastCallUsage preferred over the assistant message's own
+  // usage field — see attempt-normalization.ts). Deriving latestUsage straight from
+  // currentAttemptAssistant here would bypass that ordering and let the
+  // lower-priority candidate win on every error/abort return. The one exception is
+  // the CLI "no context provenance" sentinel (contextUsage.state === "unavailable"):
+  // that's a deliberate "we don't know" signal that must still win over a stale
+  // lastRunPromptUsage number, so it's checked separately rather than through
+  // hasNonzeroUsage, which treats the sentinel itself as non-empty.
+  const currentAttemptUsage = normalizeAssistantUsageForContext(params.currentAttemptAssistant);
+  const currentAttemptIsUnavailableSentinel =
+    currentAttemptUsage?.contextUsage?.state === "unavailable";
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
-    latestUsage: normalizeAssistantUsageForContext(params.currentAttemptAssistant),
+    latestUsage:
+      !currentAttemptIsUnavailableSentinel && hasNonzeroUsage(params.lastRunPromptUsage)
+        ? params.lastRunPromptUsage
+        : currentAttemptUsage,
     lastRunPromptUsage: params.lastRunPromptUsage,
   });
   return {
