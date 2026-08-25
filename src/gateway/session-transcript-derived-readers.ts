@@ -11,9 +11,23 @@ import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   normalizeUsage,
+  type ContextUsage,
   type UsageLike,
 } from "../agents/usage.js";
-import type { SessionTranscriptUsageSnapshot } from "./session-utils.fs.js";
+
+export type SessionTranscriptUsageSnapshot = {
+  modelProvider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  contextUsage?: ContextUsage;
+  trailingBytes?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  costUsd?: number;
+};
 
 type TranscriptUsageSource = "sqlite" | "artifact";
 

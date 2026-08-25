@@ -7,7 +7,6 @@ import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import type { ContextUsage } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
@@ -16,7 +15,10 @@ import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
+import {
+  aggregateSessionTranscriptUsage,
+  type SessionTranscriptUsageSnapshot,
+} from "./session-transcript-derived-readers.js";
 import {
   resolveSessionTranscriptCandidates,
   resolveSessionTranscriptResetArchiveCandidatesAsync,
@@ -32,6 +34,8 @@ import {
   projectTranscriptEntryMessage,
 } from "./session-transcript-message.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+
+export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
@@ -868,20 +872,6 @@ export async function resolveSessionHistoryTranscriptPathAsync(
     allowResetArchiveFallback: opts?.allowResetArchiveFallback,
   });
 }
-
-export type SessionTranscriptUsageSnapshot = {
-  modelProvider?: string;
-  model?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  contextUsage?: ContextUsage;
-  trailingBytes?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  costUsd?: number;
-};
 
 export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
