@@ -38,7 +38,7 @@ describe("ChatAudioPlayer", () => {
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["0:00", "0:00"]);
+    ).toEqual(["0:00 / 0:00"]);
 
     const media = player.querySelector("audio")!;
     setMediaNumber(media, "currentTime", 65.9);
@@ -50,7 +50,7 @@ describe("ChatAudioPlayer", () => {
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["1:05", "61:05"]);
+    ).toEqual(["1:05 / 61:05"]);
   });
 
   it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {
@@ -148,7 +148,7 @@ describe("ChatAudioPlayer", () => {
     );
     expect(
       first
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__reason a")
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
         ?.getAttribute("download"),
     ).toBe("broken.mp3");
 
@@ -215,7 +215,7 @@ describe("ChatAudioPlayer", () => {
     );
     expect(
       player
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__reason a")
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
         ?.getAttribute("href"),
     ).not.toContain("playback=1");
   });
@@ -382,7 +382,7 @@ describe("ChatAudioPlayer", () => {
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["0:00", "1:40"]);
+    ).toEqual(["0:00 / 1:40"]);
   });
 
   it("does not buffer or cache a chunked waveform response above 8 MiB", async () => {
