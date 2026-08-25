@@ -961,7 +961,9 @@ describe("WorkboardStore", () => {
       metadata: {
         attempts: [
           expect.objectContaining({
-            id: "agent:main:dashboard:1",
+            // Card-scoped: `sessionKey` is shared by every card touched in one
+            // dashboard session, so it cannot be the global attempt PRIMARY KEY.
+            id: `${card.id}:agent:main:dashboard:1`,
             status: "running",
             engine: "claude",
             mode: "manual",
@@ -971,6 +973,44 @@ describe("WorkboardStore", () => {
         ],
       },
     });
+  });
+
+  it("scopes sessionKey-derived attempt ids per card so two cards can share a session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:dashboard:shared";
+    const execution = {
+      kind: "agent-session" as const,
+      engine: "claude" as const,
+      mode: "manual" as const,
+      status: "running" as const,
+      model: "anthropic/claude-sonnet-4-6",
+      sessionKey,
+      startedAt: 10,
+      updatedAt: 10,
+    };
+
+    // Same session, no runId — both fall back to sessionKey for the attempt id.
+    const first = await store.create({
+      title: "First card",
+      execution: { ...execution, id: "exec-a" },
+    });
+    const second = await store.create({
+      title: "Second card",
+      execution: { ...execution, id: "exec-b" },
+    });
+
+    const firstId = first.metadata?.attempts?.[0]?.id;
+    const secondId = second.metadata?.attempts?.[0]?.id;
+
+    expect(firstId).toBe(`${first.id}:${sessionKey}`);
+    expect(secondId).toBe(`${second.id}:${sessionKey}`);
+    // The regression: unscoped ids collided on workboard_card_attempts.id, and
+    // insertChildren's DELETE is scoped to card_id so it could never clear the
+    // row the other card owned — the second write failed on every sync forever.
+    expect(firstId).not.toBe(secondId);
+
+    const reloaded = await store.list();
+    expect(reloaded.filter((card) => [first.id, second.id].includes(card.id))).toHaveLength(2);
   });
 
   it("ignores dependency links from generic metadata writes", async () => {

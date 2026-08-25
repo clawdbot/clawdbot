@@ -67,21 +67,35 @@ export function syncExecutionAttemptMetadata(
   metadata: WorkboardMetadata,
   execution: WorkboardExecution | undefined,
   now: number,
+  cardId?: string,
 ): WorkboardMetadata {
   if (!execution) {
     return metadata;
   }
   const attemptStatus = executionAttemptStatus(execution);
   const attempts = [...(metadata.attempts ?? [])];
-  const key = execution.runId ?? execution.sessionKey ?? execution.id;
+  // `workboard_card_attempts.id` is a global PRIMARY KEY, but `sessionKey` and
+  // `id` are shared by every card touched in one dashboard session. Without a
+  // card prefix, two cards mint the same attempt id and the second insert dies
+  // on the primary key forever — the row delete in insertChildren is scoped to
+  // `card_id`, so it can never clear the row the other card owns. `runId` is
+  // already per-run, so it stays unprefixed and existing rows keep matching.
+  const legacyKey = execution.runId ?? execution.sessionKey ?? execution.id;
+  const key = execution.runId ?? (cardId ? `${cardId}:${legacyKey}` : legacyKey);
   const existingIndex = attempts.findIndex(
     (attempt) =>
       (execution.runId && attempt.runId === execution.runId) ||
-      (!execution.runId && attempt.id === key),
+      // Match the legacy id too so an upgrade rewrites the existing attempt in
+      // place instead of appending a duplicate beside it.
+      (!execution.runId && (attempt.id === key || attempt.id === legacyKey)),
   );
   const existingAttempt = existingIndex >= 0 ? attempts[existingIndex] : undefined;
   const nextAttempt: WorkboardRunAttempt = {
-    id: existingAttempt?.id ?? key,
+    // Always adopt `key`, never the stored id: an attempt already persisted
+    // under the legacy shared id must migrate to the card-scoped one, or the
+    // collision survives the upgrade. When `runId` is set, `key` is that runId,
+    // so this is identical to the previous behavior.
+    id: key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
     mode: execution.mode,
