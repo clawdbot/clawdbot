@@ -16,12 +16,12 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
-import { loadModels } from "../chat/models.ts";
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;

@@ -667,6 +667,73 @@ describe("googlechat monitor inbound space classification", () => {
     });
   });
 
+  it.each([
+    {
+      name: "the agent identity name",
+      accountName: undefined,
+      agent: { identity: { name: "Alvin" } },
+      expectedText: "_Alvin is typing..._",
+    },
+    {
+      name: "the account name before agent names",
+      accountName: "Workspace Bot",
+      agent: { name: "Agent Name", identity: { name: "Identity Name" } },
+      expectedText: "_Workspace Bot is typing..._",
+    },
+    {
+      name: "the agent name before its identity name",
+      accountName: undefined,
+      agent: { name: "Agent Name", identity: { name: "Identity Name" } },
+      expectedText: "_Agent Name is typing..._",
+    },
+    {
+      name: "the generic fallback when names are empty",
+      accountName: " ",
+      agent: { name: " ", identity: { name: " " } },
+      expectedText: "_OpenClaw is typing..._",
+    },
+  ])("uses $name in the typing message", async ({ accountName, agent, expectedText }) => {
+    const { core } = createInboundClassificationHarness();
+    const account = {
+      accountId: "work",
+      config: accountName === undefined ? {} : { name: accountName },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      space: { name: "spaces/IDENTITY", type: "DM" },
+      message: {
+        name: "spaces/IDENTITY/messages/1",
+        text: "hello",
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await processGoogleChatTestEvent({
+      event,
+      account,
+      config: { agents: { entries: { "agent-1": agent } } },
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/IDENTITY",
+      text: expectedText,
+      thread: undefined,
+    });
+  });
+
   it("continues delivery in the typing message's canonical fallback thread", async () => {
     const requestedThread = "spaces/CLASSIFY/threads/requested";
     const deliveredThread = "spaces/CLASSIFY/threads/fallback";
@@ -834,75 +901,6 @@ describe("googlechat monitor sender bot status", () => {
 });
 
 describe("googlechat monitor direct messages", () => {
-  it("creates typing messages by default", async () => {
-    const runTurn = vi.fn();
-    const buildContext = vi.fn((payload: unknown) => payload);
-    const core = {
-      logging: { shouldLogVerbose: () => false },
-      channel: {
-        routing: {
-          resolveAgentRoute: () => ({
-            agentId: "agent-1",
-            accountId: "work",
-            sessionKey: "session-1",
-          }),
-        },
-        session: {
-          resolveStorePath: () => "/tmp/openclaw-googlechat-test",
-          readSessionUpdatedAt: () => undefined,
-          recordInboundSession: vi.fn(),
-        },
-        reply: {
-          resolveEnvelopeFormatOptions: () => ({}),
-          formatAgentEnvelope: ({ body }: { body: string }) => body,
-          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-        },
-        inbound: { buildContext, run: runTurn },
-      },
-    } as unknown as GoogleChatCoreRuntime;
-    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
-    const account = {
-      accountId: "work",
-      config: {},
-      credentialSource: "inline",
-    } as ResolvedGoogleChatAccount;
-    const event = {
-      type: "MESSAGE",
-      eventTime: "2026-03-22T00:00:00.001Z",
-      space: { name: "spaces/DM", type: "DM" },
-      message: {
-        name: "spaces/DM/messages/2",
-        text: "hello",
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-      },
-    } satisfies GoogleChatEvent;
-
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
-
-    await processGoogleChatTestEvent({
-      event,
-      account,
-      config: {},
-      runtime,
-      core,
-      mediaMaxMb: 10,
-    });
-
-    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/DM",
-      text: "_OpenClaw is typing..._",
-      thread: undefined,
-    });
-    expect(runTurn).toHaveBeenCalledOnce();
-  });
-
   it("omits thread metadata from DM reply context and typing messages", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);

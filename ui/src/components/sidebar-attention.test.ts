@@ -2,13 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  CronJob,
-  CronJobsListResult,
-  ModelAuthStatusResult,
-  UpdateScheduleState,
-} from "../api/types.ts";
+import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
+import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -16,16 +12,21 @@ import {
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
-  addDismissal,
-  dismissUpdateAttention,
+  dismissSidebarAttention,
   dismissalStoreKey,
-  isUpdateAttentionDismissed,
+  isSidebarAttentionDismissed,
   loadDismissals,
-  pruneDismissals,
+  reconcileSidebarAttentionDismissals,
   resolveUpdateAttentionDismissal,
-  type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
+import {
+  buildScopeUpgradeInboxEntry,
+  buildSidebarInboxEntries,
+  buildUpdateInboxEntry,
+  sidebarInboxTabCounts,
+  type SidebarAttentionKind,
+} from "./sidebar-attention-entries.ts";
+import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import "./sidebar-attention.ts";
 
 function deferred<T>() {
@@ -68,15 +69,13 @@ type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
   hasUpdateSurface(): boolean;
-  updateSurfaceVisible(): boolean;
-  dismissUpdateSurface(): void;
   startUpdate(): void;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
 
 function cronItems(cronJobs: readonly CronJob[], now = 0) {
-  return buildSidebarAttentionItems({
+  return buildSidebarAttentionEntries({
     cronJobs,
     modelAuthStatus: null,
     now,
@@ -84,7 +83,7 @@ function cronItems(cronJobs: readonly CronJob[], now = 0) {
 }
 
 function authItems(agentId: string) {
-  return buildSidebarAttentionItems({
+  return buildSidebarAttentionEntries({
     cronJobs: [],
     modelAuthStatus: {
       ts: 1,
@@ -174,7 +173,7 @@ describe("model auth attention", () => {
   });
 
   it("keeps a missing canonical route visible beside CLI OAuth", () => {
-    const items = buildSidebarAttentionItems({
+    const items = buildSidebarAttentionEntries({
       cronJobs: [],
       modelAuthStatus: {
         ts: 1,
@@ -197,7 +196,7 @@ describe("model auth attention", () => {
       now: 0,
     });
 
-    expect(items.some((item) => item.kind === "modelAuthExpired")).toBe(true);
+    expect(items.some((entry) => entry.kind === "modelAuthExpired")).toBe(true);
   });
 
   it("presents expired providers to the custodian with raw status", () => {
@@ -578,117 +577,29 @@ describe("update attention", () => {
     expect(element.hasUpdateSurface()).toBe(true);
   });
 
-  it("dismisses one target for one Gateway boot and resurfaces on either change", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const overlaySnapshot = {
+  it.each([
+    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
+    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
+    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
+  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
+    const dismissal = resolveUpdateAttentionDismissal({
+      gatewayBootId: "boot-a",
       updateAvailable: {
         currentVersion: "2026.8.1",
         latestVersion: "2026.8.2",
         channel: "latest",
       },
-      updateSchedule: {
-        channel: "stable",
-        autoEnabled: false,
-        target: { kind: "package" as const, version: "2026.8.2" },
-      },
-      updateCampaignStatusHydrated: true,
-      updateReconciliationPending: false,
-      updateRunning: false,
-      updateStatusBanner: null,
-    };
-    const gatewaySnapshot = {
-      client: {} as GatewayBrowserClient,
-      phase: "connected" as const,
-      hello: {
-        server: { bootId: "boot-a" },
-        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-        features: { methods: ["update.run"] },
-      },
-    };
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    element.context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://gateway.test" },
-        snapshot: gatewaySnapshot,
-      },
-      overlays: { snapshot: overlaySnapshot },
-    } as unknown as ApplicationContext;
-    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
-
-    expect(element.updateSurfaceVisible()).toBe(true);
-    element.dismissUpdateSurface();
-    expect(element.updateSurfaceVisible()).toBe(false);
-    expect(loadDismissals("ws://gateway.test").updateAvailable).toEqual({
-      version: "2026.8.2",
-      gatewayBootId: "boot-a",
     });
 
-    overlaySnapshot.updateSchedule.target.version = "2026.8.3";
-    expect(element.updateSurfaceVisible()).toBe(true);
-    overlaySnapshot.updateSchedule.target.version = "2026.8.2";
-    gatewaySnapshot.hello.server.bootId = "boot-b";
-    expect(element.updateSurfaceVisible()).toBe(true);
-  });
+    const entry = buildUpdateInboxEntry({
+      canDismiss,
+      dismissal,
+      forced,
+      severity: "warning",
+      visible: true,
+    });
 
-  it("forces a dismissed update back for warning and failure outcomes", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    const overlaySnapshot = {
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "latest",
-      },
-      updateSchedule: null as UpdateScheduleState | null,
-      updateCampaignStatusHydrated: true,
-      updateReconciliationPending: false,
-      updateRunning: false,
-      updateStatusBanner: null as null | { tone: "warn" | "danger"; text: string },
-    };
-    element.context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://gateway.test" },
-        snapshot: {
-          client: {} as GatewayBrowserClient,
-          phase: "connected",
-          hello: {
-            server: { bootId: "boot-a" },
-            auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-            features: { methods: ["update.run"] },
-          },
-        },
-      },
-      overlays: { snapshot: overlaySnapshot },
-    } as unknown as ApplicationContext;
-    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
-    element.dismissUpdateSurface();
-    expect(element.updateSurfaceVisible()).toBe(false);
-
-    overlaySnapshot.updateStatusBanner = { tone: "warn", text: "Update blocked" };
-    expect(element.updateSurfaceVisible()).toBe(true);
-    overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
-    expect(element.updateSurfaceVisible()).toBe(true);
-
-    overlaySnapshot.updateStatusBanner = null;
-    overlaySnapshot.updateRunning = true;
-    expect(element.updateSurfaceVisible()).toBe(true);
-    overlaySnapshot.updateRunning = false;
-    overlaySnapshot.updateReconciliationPending = true;
-    expect(element.updateSurfaceVisible()).toBe(true);
-    overlaySnapshot.updateReconciliationPending = false;
-    overlaySnapshot.updateSchedule = {
-      channel: "stable",
-      autoEnabled: true,
-      target: { kind: "package", version: "2026.8.2" },
-      campaign: {
-        id: "campaign-applying",
-        state: "applying",
-        announcedAtMs: 1,
-        forceAtMs: 2,
-        updatedAtMs: 2,
-      },
-    };
-    expect(element.updateSurfaceVisible()).toBe(true);
+    expect(Boolean(entry?.dismissal)).toBe(dismissible);
   });
 
   it("does not start an update when a failure has no actionable target", () => {
@@ -721,22 +632,39 @@ describe("update attention", () => {
   });
 });
 
-describe("pruneDismissals", () => {
+describe("reconcileSidebarAttentionDismissals", () => {
   const chip = (kind: SidebarAttentionKind, signature: string) => ({
     kind,
     signature,
   });
+  const gatewayUrl = "ws://gateway.test";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const reconcile = (
+    dismissals: Record<string, string[]>,
+    active: Array<{ kind: SidebarAttentionKind; signature: string }>,
+  ) => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    localStorage.setItem(dismissalStoreKey(gatewayUrl), JSON.stringify(dismissals));
+    return reconcileSidebarAttentionDismissals({
+      active,
+      gatewayUrl,
+    });
+  };
 
   it("keeps a dismissal while the same entity set is still affected", () => {
     const dismissals = { cronFailed: ["alpha", "beta"] };
     expect(
-      pruneDismissals(dismissals, [chip("cronFailed", "alpha"), chip("cronFailed", "beta")]),
-    ).toBe(dismissals);
+      reconcile(dismissals, [chip("cronFailed", "alpha"), chip("cronFailed", "beta")]),
+    ).toEqual(dismissals);
   });
 
   it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
     expect(
-      pruneDismissals({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }, [
+      reconcile({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }, [
         chip("cronFailed", "beta"),
         chip("modelAuthExpired", "openai"),
       ]),
@@ -744,7 +672,91 @@ describe("pruneDismissals", () => {
   });
 });
 
-describe("addDismissal", () => {
+describe("scope upgrade dismissal fact", () => {
+  const cases: Array<{
+    dismissible: boolean;
+    state: ScopeUpgradeState;
+  }> = [
+    { state: { phase: "hidden" }, dismissible: false },
+    { state: { phase: "guidance" }, dismissible: true },
+    { state: { phase: "available" }, dismissible: true },
+    { state: { phase: "requesting" }, dismissible: false },
+    { state: { phase: "pending", requestId: "request-1" }, dismissible: false },
+    {
+      state: { phase: "rejected", requestId: "request-1", expired: false },
+      dismissible: false,
+    },
+    { state: { phase: "error", message: "request failed" }, dismissible: false },
+  ];
+
+  it.each(cases)(
+    "projects $state.phase with explicit dismissal policy",
+    ({ state, dismissible }) => {
+      const entry = buildScopeUpgradeInboxEntry({
+        scopes: ["operator.write", "operator.read"],
+        state,
+      });
+
+      expect(Boolean(entry?.dismissal)).toBe(dismissible);
+    },
+  );
+
+  it("resurfaces when manual guidance becomes an actionable upgrade", () => {
+    const scopes = ["operator.write", "operator.read"];
+    const guidance = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "guidance" } });
+    const available = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "available" } });
+
+    expect(guidance?.dismissal).not.toEqual(available?.dismissal);
+  });
+});
+
+describe("sidebar Inbox projection", () => {
+  it("derives every tab count and dismiss control from one entry list", () => {
+    const attention = buildSidebarAttentionEntries({
+      cronJobs: [cronJob("failed-job")],
+      modelAuthStatus: null,
+      now: 0,
+    });
+    const scopeUpgrade = buildScopeUpgradeInboxEntry({
+      scopes: ["operator.read"],
+      state: { phase: "available" },
+    });
+    const update = buildUpdateInboxEntry({
+      canDismiss: true,
+      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
+      forced: true,
+      severity: "warning",
+      visible: true,
+    });
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        {
+          id: "approval-1",
+          kind: "exec",
+          request: { command: "pwd" },
+          createdAtMs: 1,
+          expiresAtMs: 60_000,
+        },
+      ],
+      attention,
+      scopeUpgrade,
+      update,
+    });
+
+    expect(sidebarInboxTabCounts(entries)).toEqual({
+      all: 4,
+      approvals: 1,
+      automations: 1,
+      system: 2,
+    });
+    expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
+      "scopeUpgrade",
+      "attention",
+    ]);
+  });
+});
+
+describe("dismissSidebarAttention", () => {
   function createStorageMock(): Storage {
     const map = new Map<string, string>();
     return {
@@ -769,7 +781,10 @@ describe("addDismissal", () => {
     // Another tab dismissed a cron chip after this tab last loaded.
     localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
 
-    const next = addDismissal("ws://gateway.test", "cronFailed", "beta");
+    const next = dismissSidebarAttention("ws://gateway.test", {
+      kind: "cronFailed",
+      signature: "beta",
+    });
 
     const expected = { cronFailed: ["alpha", "beta"] };
     expect(next).toEqual(expected);
@@ -808,12 +823,15 @@ describe("update dismissal fact", () => {
         target: { kind: "package", version: "2026.8.3" },
       },
     });
-    expect(dismissal).toEqual({ version: "2026.8.3", gatewayBootId: "boot-a" });
-    const stored = dismissUpdateAttention("ws://gateway.test", dismissal!);
-    expect(isUpdateAttentionDismissed(stored, dismissal)).toBe(true);
+    expect(dismissal).toEqual({
+      kind: "updateAvailable",
+      signature: '["2026.8.3","boot-a"]',
+    });
+    const stored = dismissSidebarAttention("ws://gateway.test", dismissal!);
+    expect(isSidebarAttentionDismissed(stored, dismissal!)).toBe(true);
     expect(
       JSON.parse(localStorage.getItem(dismissalStoreKey("ws://gateway.test")) ?? "null"),
-    ).toEqual({ updateAvailable: { version: "2026.8.3", gatewayBootId: "boot-a" } });
+    ).toEqual({ updateAvailable: ['["2026.8.3","boot-a"]'] });
   });
 
   it("uses the git target SHA instead of an unchanged package version", () => {
@@ -836,6 +854,9 @@ describe("update dismissal fact", () => {
           },
         },
       }),
-    ).toEqual({ version: "abcdef1234567890", gatewayBootId: "boot-a" });
+    ).toEqual({
+      kind: "updateAvailable",
+      signature: '["abcdef1234567890","boot-a"]',
+    });
   });
 });

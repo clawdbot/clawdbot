@@ -366,7 +366,7 @@ fun filterSessionEntries(
   val query = search.trim().lowercase()
   if (query.isEmpty()) return sessions
   return sessions.filter { session ->
-    listOfNotNull(session.displayName, session.label, session.key)
+    listOfNotNull(session.displayName, session.label, session.category, session.key)
       .any { it.lowercase().contains(query) }
   }
 }

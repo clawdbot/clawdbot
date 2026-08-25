@@ -209,8 +209,11 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: vi.fn() }),
 }));
 
-const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
-  await import("./prepared-model-runtime.js");
+const {
+  getPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimePublicationListener,
+} = await import("./prepared-model-runtime.js");
 const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
 const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
@@ -431,7 +434,12 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
     expect(snapshot?.mediaCapabilityProviders).toBeDefined();
+    const catalogPublicationEvents: string[] = [];
+    const unregisterCatalogPublication = registerPreparedModelRuntimePublicationListener((event) =>
+      catalogPublicationEvents.push(event.phase),
+    );
     await snapshot?.loadFullModelCatalog?.();
+    expect(catalogPublicationEvents).toEqual(["catalog-published"]);
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
@@ -452,13 +460,17 @@ describe("prepared model runtime Gateway catalog mode", () => {
       }),
     ).toEqual({ entries: [], routeVariants: [] });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+    expect(catalogPublicationEvents).toEqual(["catalog-published"]);
 
     await snapshot?.loadFullModelCatalog?.({ refresh: true });
+    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
     mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("refresh failed"));
     await expect(snapshot?.loadFullModelCatalog?.({ refresh: true })).rejects.toThrow(
       "refresh failed",
     );
+    expect(catalogPublicationEvents).toEqual(["catalog-published", "catalog-published"]);
+    unregisterCatalogPublication();
     expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();

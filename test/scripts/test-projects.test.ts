@@ -1003,6 +1003,14 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
     [
+      "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
       "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
     ],

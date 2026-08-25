@@ -231,6 +231,7 @@ export type CronState = {
   // Exact definition the editor was opened or refreshed against; cronJobs is
   // only the current filtered/paged table cache.
   cronEditingJob: CronJob | null;
+  cronCloningJob: CronJob | null;
   cronEditingJobId: string | null;
   cronEditingConfigRevision: string | null;
   cronRunsJobId: string | null;
@@ -288,6 +289,7 @@ export function createInitialCronState(
     cronCreateOpen: false,
     cronFieldErrors: {},
     cronEditingJob: null,
+    cronCloningJob: null,
     cronEditingJobId: null,
     cronEditingConfigRevision: null,
     cronRunsJobId: null,
@@ -313,15 +315,28 @@ function supportsAnnounceDelivery(
   return form.sessionTarget !== "main" && (form.payloadKind === "agentTurn" || form.payloadLocked);
 }
 
-export function normalizeCronFormState(form: CronFormState): CronFormState {
-  if (form.deliveryMode !== "announce") {
-    return form;
+export function normalizeCronFormState(
+  form: CronFormState,
+  changed: Partial<CronFormState> = {},
+): CronFormState {
+  let normalized = form;
+  if (!form.payloadLocked) {
+    if (changed.sessionTarget !== undefined) {
+      const payloadKind = form.sessionTarget === "main" ? "systemEvent" : "agentTurn";
+      if (form.payloadKind !== payloadKind) {
+        normalized = { ...normalized, payloadKind };
+      }
+    } else if (form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
+      normalized = { ...normalized, sessionTarget: "main" };
+    } else if (form.payloadKind === "agentTurn" && form.sessionTarget === "main") {
+      normalized = { ...normalized, sessionTarget: "isolated" };
+    }
   }
-  if (supportsAnnounceDelivery(form)) {
-    return form;
+  if (normalized.deliveryMode !== "announce" || supportsAnnounceDelivery(normalized)) {
+    return normalized;
   }
   return {
-    ...form,
+    ...normalized,
     deliveryMode: "none",
   };
 }
@@ -821,6 +836,7 @@ function resolveCronJobScheduleKind(job: CronJob): string | null {
 
 function clearCronEditState(state: CronState) {
   state.cronEditingJob = null;
+  state.cronCloningJob = null;
   state.cronEditingJobId = null;
   state.cronEditingConfigRevision = null;
 }
@@ -833,6 +849,7 @@ function clearCronRunsPage(state: CronState) {
 }
 
 function resetCronFormToDefaults(state: CronState, agentId: string | null) {
+  state.cronCloningJob = null;
   state.cronForm = { ...DEFAULT_CRON_FORM, agentId: agentId ?? "" };
   // A fresh form starts visually clean; validation re-arms on the first change
   // or submit so required-field errors do not greet the user immediately.
@@ -1015,6 +1032,30 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   return normalizeCronFormState(next);
 }
 
+function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boolean {
+  const schedule = job.schedule;
+  if (form.scheduleKind !== schedule.kind) {
+    return false;
+  }
+  if (schedule.kind === "at") {
+    return form.scheduleAt === formatDateTimeLocal(schedule.at);
+  }
+  if (schedule.kind === "every") {
+    return parseCronEveryMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
+  }
+  if (schedule.kind === "cron") {
+    const stagger = parseStaggerSchedule(schedule.staggerMs);
+    return (
+      form.cronExpr.trim() === schedule.expr &&
+      form.cronTz.trim() === (schedule.tz ?? "") &&
+      form.scheduleExact === stagger.scheduleExact &&
+      form.staggerAmount.trim() === stagger.staggerAmount &&
+      form.staggerUnit === stagger.staggerUnit
+    );
+  }
+  return true;
+}
+
 function buildCronSchedule(form: CronFormState) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
@@ -1177,17 +1218,14 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       ? requireCronConfigRevision(state.cronEditingConfigRevision)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    // Preserve a process-backed schedule while the form still points at it; if the
-    // user selects an editable schedule kind, the update must apply it.
-    const preserveSchedule = Boolean(
-      editingJob &&
-      (((editingJob?.schedule.kind === "on-exit" || editingJob?.schedule.kind === "stream") &&
-        form.scheduleKind === editingJob.schedule.kind) ||
-        (editingJob?.schedule.kind === "at" &&
-          form.scheduleKind === "at" &&
-          form.scheduleAt === formatDateTimeLocal(editingJob.schedule.at))),
-    );
-    const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
+    const sourceJob = editingJob ?? state.cronCloningJob;
+    // Form fields cannot represent process commands, anchors, or full timestamp/stagger precision.
+    const schedule =
+      sourceJob && hasUnchangedCronSchedule(form, sourceJob)
+        ? editingJob
+          ? undefined
+          : sourceJob.schedule
+        : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
       editingJob && form.payloadLocked && isReadOnlyCronPayload(editingPayload),
     );
@@ -1575,6 +1613,7 @@ export function updateCronRunsFilter(
 
 function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
   state.cronEditingJob = job;
+  state.cronCloningJob = null;
   state.cronEditingJobId = job.id;
   state.cronEditingConfigRevision = job.configRevision ?? null;
   state.cronRunsJobId = job.id;
@@ -1605,6 +1644,7 @@ function buildCloneName(name: string, existingNames: Set<string>) {
 
 export function startCronClone(state: CronState, job: CronJob) {
   clearCronEditState(state);
+  state.cronCloningJob = job;
   state.cronRunsJobId = job.id;
   const existingNames = new Set(
     state.cronJobs.map((entry) => normalizeLowercaseStringOrEmpty(entry.name)),
@@ -1616,7 +1656,7 @@ export function startCronClone(state: CronState, job: CronJob) {
     cloned.payloadKind = DEFAULT_CRON_FORM.payloadKind;
     cloned.payloadText = "";
   }
-  state.cronForm = cloned;
+  state.cronForm = normalizeCronFormState(cloned, { payloadKind: cloned.payloadKind });
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }
 
