@@ -3126,7 +3126,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(heavyFactory).not.toHaveBeenCalled();
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("does not let disabled bundled tool owners poison explicit runtime allowlists", () => {
@@ -3186,7 +3186,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
     expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
-    expectLoaderSelectedOnlyPluginIds(["memory-core"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("keeps a cold-loaded standalone registry scoped through tool callbacks", async () => {
