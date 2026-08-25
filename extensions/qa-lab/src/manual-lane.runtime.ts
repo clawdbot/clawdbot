@@ -174,12 +174,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
             candidate.direction === "outbound" && candidate.conversation.id === "qa-operator",
         )?.text ?? null;
 
-    result = {
-      model: params.primaryModel,
-      waited,
-      reply,
-      watchUrl: lab.baseUrl,
-    };
+    result = { model: params.primaryModel, waited, reply, watchUrl: lab.baseUrl };
   } catch (error) {
     runError = error;
   } finally {
@@ -208,8 +203,13 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     throw cleanupError;
   }
 
-  if (!result) {
-    throw new Error("manual lane did not produce a result");
+  if (
+    !result?.reply?.trim() ||
+    (result.waited.status === "error"
+      ? result.waited.error?.trim().toLowerCase() !== "completed"
+      : !["ok", "completed", "succeeded"].includes(result.waited.status ?? ""))
+  ) {
+    throw new Error(result?.waited.error ?? "manual lane did not produce a successful reply");
   }
   return result;
 }
