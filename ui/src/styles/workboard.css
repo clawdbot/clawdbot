@@ -1647,6 +1647,23 @@ openclaw-workboard-card-dashboard {
 }
 
 @media (max-width: 900px) {
+  .content--workboard {
+    overflow-y: auto;
+  }
+
+  .content--workboard > openclaw-router-outlet,
+  .content--workboard openclaw-workboard-page,
+  .workboard,
+  .workboard-main,
+  .workboard-board {
+    flex: none;
+    min-height: auto;
+  }
+
+  .workboard {
+    overflow: visible;
+  }
+
   .workboard-draft {
     width: 100%;
     height: 100dvh;
@@ -1697,7 +1714,7 @@ openclaw-workboard-card-dashboard {
   .workboard-board--page {
     flex-direction: column;
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: visible;
     scroll-snap-type: none;
   }
 
