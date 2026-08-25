@@ -2023,7 +2023,7 @@ src/agents/sessions/agent-session-tree.ts	2
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	4
 src/agents/sessions/extensions/loader.ts	7
-src/agents/sessions/extensions/runner.ts	19
+src/agents/sessions/extensions/runner.ts	17
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	13
