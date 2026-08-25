@@ -93,6 +93,7 @@ function mockArchiveResponse(buffer: Uint8Array): void {
       status: 200,
       statusText: "OK",
       body: Readable.from([Buffer.from(buffer)]),
+      headers: new Headers(),
     },
     release: async () => undefined,
   });
@@ -227,6 +228,99 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
+  it("rejects oversized advertised HTTP downloads before staging the response body", async () => {
+    let responseCompleted = false;
+    let resolveConnectionClosed: (() => void) | undefined;
+    const connectionClosed = new Promise<void>((resolve) => {
+      resolveConnectionClosed = resolve;
+    });
+
+    await withDownloadServer(
+      (response) => {
+        response.once("close", () => resolveConnectionClosed?.());
+        response.once("finish", () => {
+          responseCompleted = true;
+        });
+        response.writeHead(200, {
+          "content-length": "268435457",
+          "content-type": "application/octet-stream",
+        });
+        response.write(Buffer.from([1]));
+      },
+      async (origin, release) => {
+        const entry = buildEntry("oversized-advertised-http-download");
+        const toolsRoot = resolveSkillToolsRootDir(entry);
+        const result = await installDownloadSpec({
+          entry,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}/oversized.bin`,
+            extract: false,
+            targetDir: "runtime",
+          },
+          timeoutMs: 1_000,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.stderr).toBe(
+          "Skill download exceeds 268435456-byte limit (declared 268435457 bytes)",
+        );
+        await connectionClosed;
+        expect(responseCompleted).toBe(false);
+        expect(release).toHaveBeenCalledOnce();
+        await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
+          false,
+        );
+        await expect(
+          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
+        ).resolves.toEqual([]);
+      },
+    );
+  }, 10_000);
+
+  it.each([
+    {
+      name: "encoded-response-length",
+      headers: new Headers({ "content-encoding": "gzip", "content-length": "268435457" }),
+    },
+    {
+      name: "malformed-response-length",
+      headers: new Headers({ "content-length": "1e9" }),
+    },
+  ])("streams a decoded response with an unusable declared length ($name)", async (testCase) => {
+    const body = Buffer.from("decoded skill artifact");
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200, headers: testCase.headers }),
+      release,
+    });
+    const entry = buildEntry(testCase.name);
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/artifact.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe(`downloaded=${body.byteLength}`);
+    await expect(fs.readFile(path.join(toolsRoot, "runtime", "artifact.bin"))).resolves.toEqual(
+      body,
+    );
+    expect(release).toHaveBeenCalledOnce();
+    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
+      [],
+    );
+  });
+
   it("aborts oversized chunked HTTP downloads and removes partial staging data", async () => {
     const maxBytes = 256 * 1024 * 1024;
     const chunk = Buffer.alloc(1024 * 1024);
@@ -433,6 +527,7 @@ describe("installDownloadSpec extraction safety", () => {
           ok: true,
           status: 200,
           statusText: "OK",
+          headers: new Headers(),
           body: Readable.from(
             (async function* () {
               yield Buffer.from("payload");
