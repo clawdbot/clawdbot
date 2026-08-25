@@ -81,6 +81,7 @@ describe("agent model discovery synthetic auth", () => {
           config: undefined,
           provider: "claude-cli",
           providerConfig: undefined,
+          purpose: "discovery",
         },
       });
       expect(credentials["claude-cli"]).toEqual({

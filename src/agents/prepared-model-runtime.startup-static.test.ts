@@ -393,6 +393,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       config,
       provider: "openai",
       providerConfig: undefined,
+      purpose: "discovery",
     });
     expect(mocks.discoverModels).toHaveBeenLastCalledWith(
       mocks.authStorage,

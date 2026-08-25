@@ -133,6 +133,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
         config: undefined,
         provider: "fireworks",
         providerConfig: undefined,
+        purpose: "discovery",
       },
     });
   });
