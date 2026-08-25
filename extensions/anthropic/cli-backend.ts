@@ -4,9 +4,11 @@
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
+  CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
 import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -17,7 +19,9 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import anthropicPluginPackage from "./package.json" with { type: "json" };
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -35,6 +39,23 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+// Agent SDK query() writes this value into process.env. Seed it before core
+// fingerprints the child env so the first resumed turn keeps its warm query.
+const CLAUDE_AGENT_SDK_VERSION =
+  anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"];
+const CLAUDE_CLI_DEFAULT_ARGS = [
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--setting-sources",
+  "user",
+  "--allowedTools",
+  "mcp__openclaw__*",
+  "--disallowedTools",
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+] as const;
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -137,14 +158,6 @@ export function buildAnthropicCliBackend(
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
-    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
-    // runtime checks the advertised capability so backports and wrappers work.
-    liveSessionRequirement: {
-      capability: "msg_lifecycle_v1",
-      minimumVersion: "2.1.206",
-      versionArgs: ["--version"],
-      updateCommand: "claude update",
-    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
@@ -190,34 +203,8 @@ export function buildAnthropicCliBackend(
     subscriptionAuthDispatch: true,
     config: {
       command: "claude",
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-      ],
-      resumeArgs: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-        "--resume",
-        "{sessionId}",
-      ],
+      args: [...CLAUDE_CLI_DEFAULT_ARGS],
+      resumeArgs: [...CLAUDE_CLI_DEFAULT_ARGS, "--resume", "{sessionId}"],
       forkArg: "--fork-session",
       // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
       // emits the matching transcript UUID on assistant records.
@@ -232,6 +219,7 @@ export function buildAnthropicCliBackend(
       sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
+      freshSessionRecovery: "invalidated-only",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
@@ -240,6 +228,8 @@ export function buildAnthropicCliBackend(
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveModelId: ({ modelId, contextWindow }) =>
+      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
     prepareExecution: (context) => {
       const prepare = () => {
@@ -250,11 +240,23 @@ export function buildAnthropicCliBackend(
         };
         const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
+        const agentSdkExecution =
+          !isolatedCompletion && context.executionMode === "agent"
+            ? {
+                async *execute(executionContext: CliBackendExecuteContext) {
+                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                },
+              }
+            : undefined;
         const env = {
+          ...(agentSdkExecution ? { CLAUDE_AGENT_SDK_VERSION } : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion
+        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
           ? {
               env,
               // The paired side-question argv projection disables settings, memory,
@@ -263,6 +265,7 @@ export function buildAnthropicCliBackend(
               ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
               ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
               ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+              ...agentSdkExecution,
             }
           : undefined;
       };

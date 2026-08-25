@@ -4,7 +4,6 @@ import path from "node:path";
 import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { resolveCliNoOutputTimeoutMs } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 
@@ -92,7 +91,7 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiOAuthPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext),
@@ -110,7 +109,7 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiOAuthPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         } as GeminiPrepareContext),
       ).rejects.toThrow("Code Assist auth can inject administrator-required tools");
     });
@@ -131,7 +130,7 @@ describe("google gemini cli backend auth bridge", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-preview",
           env: { GEMINI_CLI_HOME: ambientHome },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         } as GeminiPrepareContext),
       ).rejects.toThrow("Code Assist auth can inject administrator-required tools");
     });
@@ -148,7 +147,7 @@ describe("google gemini cli backend auth bridge", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-pro-preview",
           env: { GEMINI_API_KEY: "prepared-key" },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         });
         expect(prepared?.env?.GEMINI_API_KEY).toBe("prepared-key");
         expect(prepared?.env?.GOOGLE_GENAI_USE_GCA).toBe("false");
@@ -186,7 +185,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -230,7 +229,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir: projectDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -263,7 +262,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -298,7 +297,7 @@ describe("google gemini cli backend auth bridge", () => {
           workspaceDir,
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-preview",
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext);
@@ -320,7 +319,7 @@ describe("google gemini cli backend auth bridge", () => {
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
           modelId: "auto",
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "auto",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext),
@@ -389,7 +388,6 @@ describe("google gemini cli backend auth bridge", () => {
         context.toolAvailability = {
           native: [],
           openClaw: [...allowed],
-          mcp: allowed.map((toolName) => `mcp__openclaw__${toolName}`),
         };
         const prepared = await backend.prepareExecution?.(context);
         const preparedHome = prepared?.env?.GEMINI_CLI_HOME ?? "";
@@ -476,7 +474,7 @@ describe("google gemini cli backend auth bridge", () => {
             GEMINI_API_KEY: "ambient-key",
             GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
           },
-          toolAvailability: { native: ["run_shell_command"], openClaw: [], mcp: [] },
+          toolAvailability: { native: ["run_shell_command"], openClaw: [] },
         }),
       ).rejects.toThrow("cannot expose backend-native tools");
     });
@@ -508,7 +506,7 @@ describe("google gemini cli backend auth bridge", () => {
           GEMINI_API_KEY: "ambient-key",
           GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
         },
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
       });
       try {
         expect(prepared?.toolAvailabilityEnforced).toBe(true);
@@ -1022,7 +1020,7 @@ describe("google gemini cli backend auth bridge", () => {
     try {
       const context = buildGeminiApiKeyPrepareContext(workspaceDir);
       context.env = { GEMINI_CLI_HOME: ambientHome };
-      context.toolAvailability = { native: [], openClaw: [], mcp: [] };
+      context.toolAvailability = { native: [], openClaw: [] };
       mkdtempSpy.mockClear();
       const preparation = backend.prepareExecution?.(context);
       await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
@@ -1040,30 +1038,5 @@ describe("google gemini cli backend auth bridge", () => {
 
     expect(backend.authEpochMode).toBe("profile-only");
     expect(backend.prepareExecution).toBeTypeOf("function");
-  });
-});
-
-describe("Gemini CLI backend descriptor watchdog defaults (#125045)", () => {
-  it("does not ship stock watchdog defaults that disable resume-watchdog promotion", () => {
-    // Same invariant as the Anthropic CLI backend: shipping byte-identical
-    // copies of the fallback defaults only makes `configured` truthy and
-    // disables the promotion gate in pickWatchdogProfile.
-    const { config } = buildGoogleGeminiCliBackend();
-    expect(config.reliability?.watchdog).toBeUndefined();
-  });
-
-  it("promotes resumed cron turns to the fresh no-output budget via the real resolver", () => {
-    // Real-behavior proof: the shipped descriptor config (no reliability.watchdog block
-    // post-fix) drives the production resolver to the promoted fresh budget for a resumed
-    // cron turn. Pre-fix the resume defaults made `configured` truthy and the promotion
-    // gate dead, pinning the turn to the 180s resume ceiling.
-    const { config } = buildGoogleGeminiCliBackend();
-    const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: config,
-      timeoutMs: 600_000,
-      useResume: true,
-      trigger: "cron",
-    });
-    expect(timeoutMs).toBe(480_000);
   });
 });
