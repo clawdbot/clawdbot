@@ -165,6 +165,19 @@ even when `telemetry.enabled` is `true`. `DO_NOT_TRACK` does not disable the
 daily update check: OpenClaw sends the update-only `GET` request without a
 feature-statistics body.
 
+## Automated environments
+
+OpenClaw sends nothing when it detects an automated environment, meaning the
+`CI` environment variable is set to a truthy value. Continuous integration jobs
+are not installations: they would outnumber real operators by orders of
+magnitude and make version and platform counts meaningless, and your pipeline
+should not report to us on every job.
+
+This applies to both tiers, so a CI job sends no update check and no feature
+statistics. Setting `OPENCLAW_TELEMETRY_ENDPOINT` overrides the suppression,
+because a configured endpoint means the run is deliberately exercising this
+path.
+
 ## Disable every automatic update request
 
 To go fully dark, disable the existing startup update check:
