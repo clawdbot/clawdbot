@@ -415,9 +415,12 @@ describe("markdown sidebar", () => {
     await panel.updateComplete;
 
     expect(panel.querySelector("iframe")).toBeNull();
-    expect(
-      panel.querySelector<HTMLAnchorElement>(".sidebar-attachment-preview__unavailable a")?.href,
-    ).toBe("https://files.example/external.html");
+    const download = panel.querySelector<HTMLAnchorElement>(
+      ".sidebar-attachment-preview__unavailable a",
+    );
+    expect(download?.href).toBe("https://files.example/external.html");
+    expect(download?.target).toBe("_blank");
+    expect(download?.rel).toBe("noreferrer");
     panel.remove();
   });
 

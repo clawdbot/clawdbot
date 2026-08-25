@@ -104,6 +104,8 @@ function renderSidebarAttachment(
         class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__download"
         href=${src}
         download=${content.title}
+        target="_blank"
+        rel="noreferrer"
         >${icons.download} ${t("chat.attachments.download")}</a
       >
     </div>
