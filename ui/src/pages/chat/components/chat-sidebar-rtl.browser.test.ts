@@ -124,4 +124,23 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       release();
     }
   });
+
+  // `.sidebar-markdown` is shared with the skills, session-progress-card and
+  // agent status-file previews, none of which set a document direction. Those
+  // surfaces must keep their existing code-block rendering, so the line-level
+  // bidi rule stays scoped to the reader.
+  it("leaves code blocks alone on shared markdown surfaces without the reader", () => {
+    const surface = document.createElement("div");
+    surface.className = "sidebar-markdown";
+    const pre = document.createElement("pre");
+    pre.textContent = "שורה בעברית\nan english line";
+    surface.append(pre);
+    document.body.append(surface);
+
+    try {
+      expect(getComputedStyle(pre).unicodeBidi).not.toBe("plaintext");
+    } finally {
+      surface.remove();
+    }
+  });
 });

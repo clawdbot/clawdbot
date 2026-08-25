@@ -125,10 +125,18 @@
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.12);
   font-family: var(--mono);
-  /* Give every hard-wrapped line its own direction, so an RTL line inside a
-     code block — or inside the raw-text view, which renders the whole document
-     as one fenced block — reads correctly regardless of the document's
-     direction. Block art carries no strong characters, so it stays LTR. */
+}
+
+/* Give every hard-wrapped line its own direction, so an RTL line inside a code
+   block — or inside the raw-text view, which renders the whole document as one
+   fenced block — reads correctly regardless of the document's direction. Block
+   art carries no strong characters, so it stays LTR.
+
+   Scoped to the reader on purpose: `.sidebar-markdown` is shared with the
+   skills, session-progress-card and agent status-file previews, and those do
+   not opt into a document direction. Only the chat preview sets `dir`, so only
+   it gets line-level bidi resolution. */
+.sidebar-markdown-reader pre {
   unicode-bidi: plaintext;
 }
 
