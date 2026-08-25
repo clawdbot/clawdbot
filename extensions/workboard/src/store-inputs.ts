@@ -96,6 +96,8 @@ export type WorkboardClaimOptions = {
   };
   /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
   adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
+  /** Trusted dispatcher mode; retain an ownerless card while recording its effective claim owner. */
+  preserveUnassignedAgent?: boolean;
 };
 export type WorkboardHeartbeatInput = {
   token?: unknown;
