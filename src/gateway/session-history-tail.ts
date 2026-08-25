@@ -139,9 +139,6 @@ export async function readIncrementalChatHistoryTail(params: {
       break;
     }
     if (rawPageMessages >= rawHistoryWindowMessages) {
-      if (result.projected.length > 0) {
-        break;
-      }
       scanLimit = rawHistoryWindowMessages + SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES;
     }
     if (rawPageMessages >= scanLimit) {

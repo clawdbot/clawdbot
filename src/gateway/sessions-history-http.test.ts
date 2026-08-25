@@ -1300,6 +1300,25 @@ describe("session history HTTP endpoints", () => {
         } finally {
           await stream.reader.cancel();
         }
+
+        if (!heartbeatBoundary) {
+          await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+            { type: "session", version: 1, id: sessionId },
+            { message: { role: "assistant", content: "older visible history" } },
+            ...Array.from({ length: 60 }, () => ({
+              message: { role: "assistant", content: "NO_REPLY" },
+            })),
+            { message: { role: "assistant", content: "newer visible history" } },
+          ]);
+
+          const sparsePage = await readSessionHistoryBody(harness.port, sessionKey, {
+            query: "?limit=2",
+          });
+          expect(sparsePage.messages?.map((message) => message.content)).toEqual([
+            "older visible history",
+            "newer visible history",
+          ]);
+        }
       });
     },
   );
