@@ -176,6 +176,21 @@ struct DashboardGatewaysBridgeTests {
             port: 80,
             dashboardURL: url))
     }
+
+    @Test func `gateway alerts preserve exact English copy`() {
+        let setPrimary = DashboardWindowController.makeSetPrimaryAlert(gatewayName: "Studio")
+        #expect(setPrimary.messageText == "Set Studio as primary?")
+        #expect(setPrimary.informativeText ==
+            "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections.")
+        #expect(setPrimary.buttons.map(\.title) == ["Set as Primary", "Cancel"])
+
+        let setup = DashboardWindowController.makeGatewaySetupAlert(
+            title: "Gateway Setup Not Supported",
+            message: "Use a token instead.")
+        #expect(setup.messageText == "Gateway Setup Not Supported")
+        #expect(setup.informativeText == "Use a token instead.")
+        #expect(setup.buttons.map(\.title) == ["Change Gateway", "Cancel"])
+    }
 }
 
 @Suite(.serialized)
@@ -487,6 +502,14 @@ private final class DashboardGatewayTestUpdater: UpdaterProviding {
 
 @MainActor
 struct DashboardPrimaryGatewayAdapterTests {
+    @Test func `gateway errors preserve exact English copy`() {
+        let passwordError = "Password authentication is not supported by the Mac app's " +
+            "primary Gateway connection. Use a token instead."
+        #expect(DashboardPrimaryGatewayError.notPromotable.errorDescription ==
+            "This Gateway cannot be set as primary.")
+        #expect(DashboardPrimaryGatewayError.passwordUnsupported.errorDescription == passwordError)
+    }
+
     @Test func `token profile promotion carries its TLS pin`() async throws {
         let state = AppState(preview: true)
         let url = try #require(URL(string: "wss://studio.example:443/"))
@@ -678,9 +701,11 @@ struct DashboardGatewaySetupCoordinatorTests {
         coordinator.handle(link)
 
         #expect(prompts.count == 1)
+        #expect(prompts[0].0 == "Change the primary Gateway?")
+        #expect(prompts[0].1 ==
+            "Connect the Mac app directly to 192.168.1.20:18789 using an unencrypted private-network connection?")
         #expect(!prompts[0].0.contains(token))
         #expect(!prompts[0].1.contains(token))
-        #expect(prompts[0].1.contains("unencrypted private-network connection"))
         #expect(!prompts[0].1.localizedCaseInsensitiveContains("loopback"))
         #expect(state.remoteTransport == .ssh)
         #expect(state.remoteUrl == "wss://previous.example:443")
@@ -694,6 +719,7 @@ struct DashboardGatewaySetupCoordinatorTests {
         let state = AppState(preview: true)
         var persistedFingerprints: [String?] = []
         var openedSettings = 0
+        var prompts: [(String, String)] = []
         let adapter = DashboardPrimaryGatewayAdapter(
             state: state,
             persist: { _, fingerprint in
@@ -702,7 +728,10 @@ struct DashboardGatewaySetupCoordinatorTests {
             })
         let coordinator = DashboardGatewaySetupCoordinator(
             adapter: adapter,
-            confirm: { _, _ in true },
+            confirm: {
+                prompts.append(($0, $1))
+                return true
+            },
             presentError: { _, _ in Issue.record("unexpected error") },
             openConnectionSettings: { openedSettings += 1 })
         let link = GatewayConnectDeepLink(
@@ -715,6 +744,9 @@ struct DashboardGatewaySetupCoordinatorTests {
 
         coordinator.handle(link)
 
+        #expect(prompts.count == 1)
+        #expect(prompts[0].0 == "Change the primary Gateway?")
+        #expect(prompts[0].1 == "Connect the Mac app directly to gateway.example:443 using TLS?")
         #expect(state.remoteUrl == "wss://gateway.example:443")
         #expect(state.remoteToken == "fixture-token")
         #expect(persistedFingerprints == [nil])
@@ -747,6 +779,10 @@ struct DashboardGatewaySetupCoordinatorTests {
 
         #expect(promptCount == 0)
         #expect(errors.count == 1)
+        #expect(errors[0].0 == "Gateway Setup Not Supported")
+        #expect(errors[0].1 ==
+            "Password authentication is not supported by the Mac app's " +
+            "primary Gateway connection. Use a token instead.")
         #expect(!errors[0].0.contains(password))
         #expect(!errors[0].1.contains(password))
         #expect(state.remoteUrl == "wss://previous.example:443")

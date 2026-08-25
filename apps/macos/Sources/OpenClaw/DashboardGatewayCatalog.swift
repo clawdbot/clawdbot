@@ -134,9 +134,14 @@ enum DashboardPrimaryGatewayError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notPromotable:
-            "This Gateway cannot be set as primary."
+            String(localized: "This Gateway cannot be set as primary.")
         case .passwordUnsupported:
-            "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead."
+            // Localization extraction requires one literal.
+            // swiftlint:disable line_length
+            // swiftformat:disable wrap,wrapArguments
+            String(localized: "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead.")
+            // swiftformat:enable wrap,wrapArguments
+            // swiftlint:enable line_length
         }
     }
 }
@@ -218,21 +223,28 @@ struct DashboardGatewaySetupCoordinator {
     func handle(_ link: GatewayConnectDeepLink) {
         if link.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty != nil {
             self.presentError(
-                "Gateway Setup Not Supported",
+                String(localized: "Gateway Setup Not Supported"),
                 DashboardPrimaryGatewayError.passwordUnsupported.localizedDescription)
             return
         }
         let endpoint = "\(link.host):\(link.port)"
-        let transport = link.tls ? "TLS" : "an unencrypted private-network connection"
+        let transport = link.tls
+            ? String(localized: "TLS")
+            : String(localized: "an unencrypted private-network connection")
         guard self.confirm(
-            "Change the primary Gateway?",
-            "Connect the Mac app directly to \(endpoint) using \(transport)?")
+            String(localized: "Change the primary Gateway?"),
+            String(
+                format: String(localized: "Connect the Mac app directly to %@ using %@?"),
+                endpoint,
+                transport))
         else { return }
         do {
             try self.adapter.apply(link: link)
             self.openConnectionSettings()
         } catch {
-            self.presentError("Could Not Change Primary Gateway", error.localizedDescription)
+            self.presentError(
+                String(localized: "Could Not Change Primary Gateway"),
+                error.localizedDescription)
         }
     }
 }

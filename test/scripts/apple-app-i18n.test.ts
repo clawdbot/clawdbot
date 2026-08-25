@@ -105,15 +105,26 @@ describe("Apple app i18n catalogs", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         "Browse ClawHub",
+        "Change Gateway",
+        "Change the primary Gateway?",
+        "Connect the Mac app directly to %@ using %@?",
+        "Could Not Change Primary Gateway",
         "Done in %@",
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
+        "Gateway Setup Not Supported",
         "General",
+        "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead.",
         "Searching…",
+        "Set %@ as primary?",
+        "Set as Primary",
         "Shelling",
         "Stopped",
+        "This Gateway cannot be set as primary.",
+        "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections.",
         "Voice Wake requires macOS 26 or newer",
         "Waiting",
+        "an unencrypted private-network connection",
       ]),
     );
     expect(keys).not.toContain("OpenClaw");

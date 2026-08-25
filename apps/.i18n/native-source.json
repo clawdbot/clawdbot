@@ -23034,6 +23034,10 @@
           "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift"
         },
         {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift"
+        },
+        {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift"
         },
@@ -23234,12 +23238,23 @@
       ]
     },
     {
+      "id": "native.apple.11dfa551e1c0cab8",
+      "source": "Change Gateway",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.c767224da1135c79",
       "source": "Change the primary Gateway?",
       "surface": "apple",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]
@@ -24748,6 +24763,17 @@
       ]
     },
     {
+      "id": "native.apple.41304f8f292602af",
+      "source": "Connect the Mac app directly to %@ using %@?",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.95850409a087b937",
       "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
       "surface": "apple",
@@ -25891,7 +25917,7 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]
@@ -29797,7 +29823,7 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "ui-call",
+          "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]
@@ -38006,6 +38032,17 @@
       ]
     },
     {
+      "id": "native.apple.c94b907489b7de9d",
+      "source": "Password authentication is not supported by the Mac app's primary Gateway connection. Use a token instead.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.d1ed2f81c595fc4f",
       "source": "Paste a setup code to continue.",
       "surface": "apple",
@@ -43410,6 +43447,17 @@
       ]
     },
     {
+      "id": "native.apple.edf83ff7ab9e70de",
+      "source": "Set %@ as primary?",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.49c597caf33902b9",
       "source": "Set API Key",
       "surface": "apple",
@@ -43450,6 +43498,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/MenuGatewaysInjector.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.009f96b5c7539815",
+      "source": "Set as Primary",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift"
         }
       ]
     },
@@ -45491,6 +45550,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]
     },
@@ -46755,6 +46818,17 @@
       ]
     },
     {
+      "id": "native.apple.d45e330cb331698a",
+      "source": "This Gateway cannot be set as primary.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.7eaec64446531ddf",
       "source": "This allowlist entry is inherited. Edit its owning scope and retry.",
       "surface": "apple",
@@ -46873,6 +46947,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.d07cdec724b1ccea",
+      "source": "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift"
         }
       ]
     },
@@ -50703,7 +50788,7 @@
       "surface": "apple",
       "sites": [
         {
-          "kind": "conditional-branch",
+          "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"
         }
       ]

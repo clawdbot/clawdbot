@@ -133,6 +133,22 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-TW": "zh-Hant",
 };
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift": [
+    'String(localized: "This Gateway cannot be set as primary.")',
+    'String(localized: "Password authentication is not supported by the Mac app\'s primary Gateway connection. Use a token instead.")',
+    'String(localized: "Gateway Setup Not Supported")',
+    'String(localized: "an unencrypted private-network connection")',
+    'String(localized: "Change the primary Gateway?")',
+    'format: String(localized: "Connect the Mac app directly to %@ using %@?")',
+    'String(localized: "Could Not Change Primary Gateway")',
+  ],
+  "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift": [
+    'format: String(localized: "Set %@ as primary?")',
+    'String(localized: "This changes the Mac app\'s primary Gateway and resets Talk Mode, canvas, and chat connections.")',
+    'alert.addButton(withTitle: String(localized: "Set as Primary"))',
+    'alert.addButton(withTitle: String(localized: "Change Gateway"))',
+    'alert.addButton(withTitle: String(localized: "Cancel"))',
+  ],
   "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
     "enum SettingsTextValue: ExpressibleByStringLiteral",
     "case localized(LocalizedStringKey)",
