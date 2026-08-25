@@ -357,17 +357,22 @@ describe("SidebarSessionProjection running subtitle hold", () => {
   it("holds the subtitle across a run-id rotation while the session stays running", () => {
     // Live repro: queued->running rotates activeRunIds; the row must not blank.
     const projection = new SidebarSessionProjection();
-    const queued = sessionRow("running", {
-      hasActiveRun: true,
-      activeRunIds: ["run-one"],
-      status: "queued",
-    });
-    projection.project(projectionInput([queued]));
-    const rotated = sessionRow(queued.key, { hasActiveRun: true, activeRunIds: ["run-two"] });
+    const running = sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"] });
+    projection.project(
+      projectionInput([running], {
+        subtitle: {
+          sidebarLiveActivity: true,
+          showPreview: true,
+          narrationLines: new Map([[running.key, "Pre-rotation activity"]]),
+          observerDigests: new Map(),
+        },
+      }),
+    );
+    const rotated = sessionRow(running.key, { hasActiveRun: true, activeRunIds: ["run-two"] });
     projection.project(projectionInput([rotated]));
 
     expect(projection.resolveSubtitle(subtitleParams(rotated)).subtitle).toBe(
-      "Waiting for a concurrency slot",
+      "Pre-rotation activity",
     );
   });
 
@@ -408,15 +413,15 @@ describe("SidebarSessionProjection running subtitle hold", () => {
     );
 
     clock = 200;
-    const queued = sessionRow(running.key, {
+    const needsInput = sessionRow(running.key, {
       hasActiveRun: true,
       activeRunIds: ["run-one"],
-      status: "queued",
+      agentStatusNote: "Blocked on operator input",
     });
-    projection.project(projectionInput([queued]));
+    projection.project(projectionInput([needsInput]));
 
-    expect(projection.resolveSubtitle(subtitleParams(queued)).subtitle).toBe(
-      "Waiting for a concurrency slot",
+    expect(projection.resolveSubtitle(subtitleParams(needsInput)).subtitle).toBe(
+      "Blocked on operator input",
     );
   });
 
