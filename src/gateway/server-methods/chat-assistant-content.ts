@@ -366,7 +366,12 @@ export function stripManagedOutgoingAssistantContentBlocks(
     return undefined;
   }
   const filtered = content.filter((block) => {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      block?.type !== "document"
+    ) {
       return true;
     }
     return !(isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl));
@@ -422,7 +427,10 @@ export function hasManagedOutgoingAssistantContent(
   return Boolean(
     content?.some(
       (block) =>
-        (block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+        (block?.type === "image" ||
+          block?.type === "audio" ||
+          block?.type === "video" ||
+          block?.type === "document") &&
         (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
     ),
   );

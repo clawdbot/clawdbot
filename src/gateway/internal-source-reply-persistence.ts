@@ -101,12 +101,16 @@ export async function persistInternalSourceReply(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       mediaUrls,
+      attachments: params.payload.attachments,
       messageId,
       localRoots: getAgentScopedMediaLocalRootsForSources({
         cfg: params.cfg,
         agentId: params.agentId,
         mediaSources: mediaUrls,
       }),
+      // The message action runner has already validated and staged these paths into
+      // gateway-owned storage before this persistence boundary is reached.
+      allowLocalNonImage: true,
     });
     const content: Array<Record<string, unknown>> = [
       ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),

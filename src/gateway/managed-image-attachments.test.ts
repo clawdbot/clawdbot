@@ -1528,6 +1528,36 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks)).toMatchObject({ type: "audio", fileName: "theme.mp3" });
   });
 
+  it("creates managed document blocks with media artifact ids", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "report.csv");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "account,balance\nprimary,42\n", "utf8");
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.join(stateDir, "workspace")],
+      allowLocalNonImage: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({
+      type: "document",
+      mimeType: "text/csv",
+      fileName: "report.csv",
+    });
+    const attachmentId = requireAttachmentIdFromUrl(block.url);
+    expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
+    expect(readManagedImageRecord(attachmentId, stateDir)?.original).toMatchObject({
+      contentType: "text/csv",
+      filename: "report.csv",
+      width: null,
+      height: null,
+    });
+  });
+
   it("marks exotic managed media metadata for playback transcoding", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.caf");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -2046,17 +2076,18 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("drops downloaded non-image sources without leaving orphaned originals", async () => {
+  it("rejects untrusted local documents without leaving orphaned originals", async () => {
     const pdfPath = path.join(stateDir, "not-an-image.pdf");
     await fs.writeFile(pdfPath, Buffer.from("%PDF-1.4\n% test\n"));
 
-    const blocks = await createManagedOutgoingImageBlocks({
-      sessionKey: "agent:main:main",
-      mediaUrls: [pdfPath],
-      stateDir,
-      localRoots: [stateDir],
-    });
-    expect(blocks).toStrictEqual([]);
+    await expect(
+      createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [pdfPath],
+        stateDir,
+        localRoots: [stateDir],
+      }),
+    ).rejects.toThrow(/Managed document attachment.*could not be prepared/u);
     const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
     let originals: string[] | null = null;
     try {

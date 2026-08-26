@@ -1,5 +1,5 @@
 // Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing image/audio/video attachments.
+// Validates, stores, serves, and cleans up outgoing image/audio/video/document attachments.
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -110,7 +110,7 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video">;
+type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -621,7 +621,12 @@ function parseMediaDataUrl(
   }
 
   const mediaKind = mediaKindFromMime(contentType);
-  if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
+  if (
+    mediaKind !== "image" &&
+    mediaKind !== "audio" &&
+    mediaKind !== "video" &&
+    mediaKind !== "document"
+  ) {
     return { kind: "unsupported-data-url" };
   }
 
@@ -818,7 +823,9 @@ function resolveManagedSessionOwnerAgentId(
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
   const kind = mediaKindFromMime(record.original.contentType);
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
+  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
+    ? kind
+    : null;
 }
 
 function buildManagedMediaBlock(
@@ -908,7 +915,12 @@ function collectManagedOutgoingAttachmentRefs(
 ) {
   const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
   for (const block of blocks ?? []) {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      block?.type !== "document"
+    ) {
       continue;
     }
     for (const candidate of [block.url, block.openUrl]) {
@@ -1373,7 +1385,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const hintedKind =
       dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
         ? dataUrlKind
-        : inferredKind === "image" || inferredKind === "audio" || inferredKind === "video"
+        : inferredKind === "image" ||
+            inferredKind === "audio" ||
+            inferredKind === "video" ||
+            inferredKind === "document"
           ? inferredKind
           : "media";
 
@@ -1385,10 +1400,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
       }
       if (
         localMediaPath &&
-        (hintedKind === "audio" || hintedKind === "video") &&
+        (hintedKind === "audio" || hintedKind === "video" || hintedKind === "document") &&
         params.allowLocalNonImage !== true
       ) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        throw new Error("Local non-image media requires an explicitly trusted reply payload");
       }
       let resizeWarning: ManagedMediaBlock | null = null;
       let savedOriginal =
@@ -1425,6 +1440,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
                   limits.maxBytes,
                   maxBytesForKind("audio"),
                   maxBytesForKind("video"),
+                  maxBytesForKind("document"),
                   MEDIA_MAX_BYTES,
                 ),
               );
@@ -1437,13 +1453,18 @@ export async function createManagedOutgoingMediaBlocks(params: {
         continue;
       }
       const mediaKind = mediaKindFromMime(savedOriginalContentType);
-      if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
+      if (
+        mediaKind !== "image" &&
+        mediaKind !== "audio" &&
+        mediaKind !== "video" &&
+        mediaKind !== "document"
+      ) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;
       }
       if (localMediaPath && mediaKind !== "image" && params.allowLocalNonImage !== true) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        throw new Error("Local non-image media requires an explicitly trusted reply payload");
       }
       const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
       if (savedOriginal.size > maxBytes) {
@@ -1614,9 +1635,7 @@ function buildManagedMediaContentDisposition(value: string | null, contentType: 
   const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
   const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
   const filename = base || fallback;
-  return /^[\x20-\x7e]+$/u.test(filename)
-    ? `inline; filename="${filename}"`
-    : buildAssistantMediaContentDisposition(filename, contentType);
+  return buildAssistantMediaContentDisposition(filename, contentType);
 }
 
 export async function handleManagedOutgoingMediaHttpRequest(
