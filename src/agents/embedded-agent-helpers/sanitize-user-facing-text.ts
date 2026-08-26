@@ -123,7 +123,21 @@ function stripVerifiedConversationContext(
     "u",
   );
   let candidateStart = result.indexOf(sourceStart, searchStart);
+  let completedCandidates = 0;
   while (candidateStart !== -1) {
+    const remainingLength = result.length - candidateStart;
+    const startsPromptLine =
+      remainingLength >= firstSourceLine.length
+        ? result.startsWith(firstSourceLine, candidateStart)
+        : firstSourceLine.startsWith(result.slice(candidateStart));
+    if (!startsPromptLine) {
+      candidateStart = result.indexOf(sourceStart, candidateStart + 1);
+      continue;
+    }
+    // Bound attacker-controlled full-marker floods without releasing an ambiguous private suffix.
+    if (++completedCandidates > 16) {
+      return result.slice(0, searchStart);
+    }
     const suffix = result.slice(candidateStart).replace(/\r\n?/gu, "\n");
     const sourceLines = normalizedSource.split("\n");
     let lineIndex = 0;

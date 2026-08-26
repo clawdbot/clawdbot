@@ -236,6 +236,34 @@ describe("agent runner streaming presentation", () => {
     }
   });
 
+  it("preserves bracket-heavy streamed text without treating every bracket as a prompt", () => {
+    const marker = "[Current message - respond to this]";
+    const conversationContext = `${marker}\nprivate inbound paragraph`;
+    const visibleText = `${marker}${"[".repeat(40_000)}`;
+    const presentation = createPresentation({ conversationContext });
+
+    const result = presentation.normalizeStreamingText({ text: visibleText });
+
+    expect(result.skip).toBe(false);
+    expect(result.text?.length).toBe(visibleText.length - 1);
+    expect(result.text?.startsWith(marker)).toBe(true);
+  });
+
+  it("withholds repeated prompt markers before their private streaming continuation", () => {
+    const marker = "[Current message - respond to this]";
+    const conversationContext = `${marker}\nprivate inbound paragraph`;
+    const presentation = createPresentation({ conversationContext });
+    const repeatedMarkers = `${marker}\n`.repeat(32);
+
+    for (const privatePrefix of ["private", "private inbound"]) {
+      const visibleText =
+        presentation.normalizeStreamingText({ text: `${repeatedMarkers}${privatePrefix}` }).text ??
+        "";
+
+      expect(visibleText).not.toContain("private");
+    }
+  });
+
   it.each([
     { name: "bulleted", prefix: "- ", sourcePrefix: "- " },
     { name: "quoted", prefix: "> ", sourcePrefix: "> " },
