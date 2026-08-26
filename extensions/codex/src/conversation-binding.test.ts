@@ -2583,7 +2583,7 @@ describe("codex conversation binding", () => {
     });
   });
 
-  it("moves bounded visible session history while clamping source-owned conversation permissions", async () => {
+  it("moves session history while clamping rootless inherited cwd to the agent workspace", async () => {
     const source = {
       agentId: "main",
       sessionId: "source-session",
@@ -2597,8 +2597,7 @@ describe("codex conversation binding", () => {
       entry: {
         sessionId: source.sessionId,
         updatedAt: Date.now(),
-        permissionMode: "full",
-        sessionRoot: tempDir,
+        permissionMode: "workspace",
       },
     });
     await upsertSessionEntry({
@@ -2640,7 +2639,7 @@ describe("codex conversation binding", () => {
       binding: {
         threadId: source.threadId,
         clientId: "source-client",
-        cwd: tempDir,
+        cwd: path.join(tempDir, "..", "outside-rootless-session"),
         model: "gpt-5.5",
         modelProvider: "openai",
         approvalPolicy: "never",
@@ -2705,7 +2704,6 @@ describe("codex conversation binding", () => {
       bindingId: "binding-source-transfer",
       workspaceDir: tempDir,
       source,
-      start: { id: "start-source-transfer" },
     };
 
     await expect(
