@@ -313,7 +313,7 @@ extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diagnostics-prometheus/src/service.ts	1
-extensions/diffs/src/config.ts	5
+extensions/diffs/src/config.ts	4
 extensions/diffs/src/language-hints.ts	9
 extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
@@ -875,7 +875,6 @@ extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/sso-token-store.ts	2
 extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
-extensions/mxc/src/config.ts	1
 extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
@@ -958,7 +957,6 @@ extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/config.ts	1
 extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
