@@ -5,7 +5,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
@@ -35,6 +34,8 @@ import {
   normalizeProviderId,
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+
+export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
@@ -1690,9 +1691,9 @@ export function createModelVisibilityPolicyWithFallbacks(
     raw: string | undefined,
     retained: boolean,
     aliasIndex: ModelAliasIndex,
-  ) => {
+  ): ModelRef | undefined => {
     if (!raw?.trim() || parseModelPolicyWildcardRef(raw)) {
-      return;
+      return undefined;
     }
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
@@ -1705,7 +1706,7 @@ export function createModelVisibilityPolicyWithFallbacks(
       manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
-      return;
+      return undefined;
     }
     const key = modelCatalogLogicalKey({
       provider: resolved.ref.provider,

@@ -27,7 +27,6 @@ import {
 } from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
-export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
 import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
@@ -40,6 +39,7 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
+export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
 export { buildAllowedModelSet } from "./model-selection-shared.js";
 export {
   resolveThinkingDefault,
