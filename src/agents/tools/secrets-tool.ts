@@ -1,11 +1,8 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 import {
-  QuestionWaitAnswerResultSchema,
   validateSecretsStoreListResult,
   type QuestionRequestQuestion,
-  type QuestionWaitAnswerResult,
   type SecretsStoreListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
@@ -15,23 +12,16 @@ import { describeSecretsTool } from "../tool-description-presets.js";
 import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import { beginAskUserPromptDelivery } from "./ask-user-tool.js";
 import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import {
+  awaitGatewayQuestionAnswer,
+  createGatewayQuestionCanceller,
+  type GatewayQuestionCall,
+} from "./gateway-question-lifecycle.js";
+import { callGatewayTool } from "./gateway.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
-const SECRETS_RPC_GRACE_MS = 10_000;
 const SECRET_STORE_KINDS = ["secret", "env"] as const;
 type SecretStoreKind = (typeof SECRET_STORE_KINDS)[number];
-type SecretsGatewayCall = (
-  method: string,
-  opts: GatewayCallOptions,
-  params?: unknown,
-  extra?: {
-    signal?: AbortSignal;
-    requireAgentRuntimeIdentity?: boolean;
-    scopes?: (typeof ADMIN_SCOPE)[];
-  },
-) => Promise<unknown>;
-
 const SecretsToolSchema = Type.Object(
   {
     action: stringEnum(["request", "list", "delete"], {
@@ -204,9 +194,9 @@ export function createSecretsTool(params: {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  gatewayCall?: SecretsGatewayCall;
+  gatewayCall?: GatewayQuestionCall;
 }): AnyAgentTool {
-  const gatewayCall: SecretsGatewayCall = params.gatewayCall ?? callGatewayTool;
+  const gatewayCall: GatewayQuestionCall = params.gatewayCall ?? callGatewayTool;
   return {
     label: "Secrets",
     name: "secrets",
@@ -254,15 +244,10 @@ export function createSecretsTool(params: {
       });
       const timeoutMs = request.timeoutSeconds * 1_000;
       let registered = false;
-      let cancellation: Promise<unknown> | undefined;
-      const cancelPendingQuestion = (resolvedBy: string) => {
-        cancellation ??= gatewayCall(
-          "question.resolve",
-          { timeoutMs: SECRETS_RPC_GRACE_MS },
-          { id: delivery.questionId, cancel: true, resolvedBy },
-        ).catch(() => undefined);
-        return cancellation;
-      };
+      const cancelPendingQuestion = createGatewayQuestionCanceller({
+        gatewayCall,
+        questionId: delivery.questionId,
+      });
       const cancelOnAbort = () => {
         delivery.release();
         void cancelPendingQuestion("run-abort");
@@ -281,8 +266,8 @@ export function createSecretsTool(params: {
               ...(params.runId ? { runId: params.runId } : {}),
               timeoutMs,
             },
-            // Store-bound requests are gated on an admin client server-side;
-            // the default least-privilege scope for question.request is not enough.
+            // Store-bound requests are gated on an admin client server-side; the
+            // default least-privilege scope for question.request is not enough.
             { scopes: [ADMIN_SCOPE], ...(signal ? { signal } : {}) },
           ),
         );
@@ -306,16 +291,11 @@ export function createSecretsTool(params: {
           cancelOnAbort();
           signal.throwIfAborted();
         }
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + SECRETS_RPC_GRACE_MS },
-          { id: delivery.questionId, timeoutMs },
-          signal ? { signal } : undefined,
-        ).then((result): QuestionWaitAnswerResult => {
-          if (!Value.Check(QuestionWaitAnswerResultSchema, result)) {
-            throw new Error("question.waitAnswer returned an invalid status");
-          }
-          return result;
+        const answerPromise = awaitGatewayQuestionAnswer({
+          gatewayCall,
+          questionId: delivery.questionId,
+          timeoutMs,
+          ...(signal ? { signal } : {}),
         });
         delivery.markReady();
         if (delivery.hasSubscriber) {
@@ -342,7 +322,13 @@ export function createSecretsTool(params: {
           return storedSecretResult(request, replacedExisting);
         }
         if (result.status === "pending") {
-          await cancelPendingQuestion("wait-timeout");
+          // The human may have submitted between the wait timeout and this
+          // cancel; the Gateway then rejects the cancel and hands back the
+          // answer, which means the credential is already stored.
+          const answered = await cancelPendingQuestion("wait-timeout");
+          if (answered) {
+            return storedSecretResult(request, replacedExisting);
+          }
         }
         if (
           result.status === "pending" ||

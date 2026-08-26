@@ -248,6 +248,42 @@ describe("secrets tool", () => {
     },
   );
 
+  it("keeps a credential stored when the human answers during the wait timeout", async () => {
+    // The Gateway rejects the late cancel as terminal and hands back the answer;
+    // the value is already in the store, so the tool must not report no_answer.
+    const terminal = Object.assign(new Error("question is already answered"), {
+      name: "GatewayClientRequestError",
+      details: { reason: "QUESTION_ALREADY_TERMINAL" },
+    });
+    let waitCalls = 0;
+    const gateway = gatewayStub(async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.get") {
+        return { question: { questions: [{}] } };
+      }
+      if (method === "question.resolve") {
+        throw terminal;
+      }
+      waitCalls += 1;
+      return waitCalls === 1
+        ? { status: "pending" }
+        : { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
+    });
+
+    const result = await createSecretsTool({
+      sessionKey: "agent:main:late-answer",
+      gatewayCall: gateway.call,
+    }).execute("call-late-answer", {
+      action: "request",
+      name: "SERVICE_API_KEY",
+      kind: "secret",
+    });
+
+    expect(result.details).toMatchObject({ status: "stored", name: "SERVICE_API_KEY" });
+  });
+
   it("cancels a registered credential request when its agent run aborts", async () => {
     const controller = new AbortController();
     const gateway = gatewayStub(async (method, _options, params, extra) => {
