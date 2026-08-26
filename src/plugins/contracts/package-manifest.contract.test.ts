@@ -37,6 +37,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
+  {
+    pluginId: "imap",
+    pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"],
+  },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "amazon-bedrock" },
