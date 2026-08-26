@@ -9189,6 +9189,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let message: String?
     public let attachments: [[String: AnyCodable]]?
     public let projectid: String?
+    public let projectgiturl: String?
     public let worktree: Bool?
     public let worktreebaseref: String?
     public let worktreename: String?
@@ -9219,6 +9220,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         message: String? = nil,
         attachments: [[String: AnyCodable]]? = nil,
         projectid: String? = nil,
+        projectgiturl: String? = nil,
         worktree: Bool? = nil,
         worktreebaseref: String? = nil,
         worktreename: String? = nil,
@@ -9248,6 +9250,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.message = message
         self.attachments = attachments
         self.projectid = projectid
+        self.projectgiturl = projectgiturl
         self.worktree = worktree
         self.worktreebaseref = worktreebaseref
         self.worktreename = worktreename
@@ -9279,6 +9282,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case message
         case attachments
         case projectid = "projectId"
+        case projectgiturl = "projectGitUrl"
         case worktree
         case worktreebaseref = "worktreeBaseRef"
         case worktreename = "worktreeName"
