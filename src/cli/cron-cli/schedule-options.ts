@@ -10,6 +10,7 @@ import {
 
 type ScheduleOptionInput = {
   at?: unknown;
+  commandCwd?: unknown;
   cron?: unknown;
   every?: unknown;
   onExit?: unknown;
@@ -64,17 +65,21 @@ type CronEditScheduleRequest =
 
 /** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
 function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
+  for (const [flag, cwd] of [
+    ["--command-cwd", options.commandCwd],
+    ["--on-exit-cwd", options.onExitCwd],
+    ["--stream-cwd", options.streamCwd],
+  ] as const) {
+    if (typeof cwd === "string" && !normalizeOptionalString(cwd)) {
+      throw new Error(`${flag} must not be blank`);
+    }
+  }
   const normalized = normalizeScheduleOptions(options);
   if (normalized.onExitCwd && !normalized.onExitCommand) {
     throw new Error("--on-exit-cwd requires --on-exit.");
   }
-  const chosen = countChosenSchedules(normalized);
-  if (chosen !== 1) {
-    throw new Error(
-      "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
-    );
-  }
-  const schedule = resolveDirectSchedule(normalized);
+  const schedule =
+    countChosenSchedules(normalized) === 1 ? resolveDirectSchedule(normalized) : undefined;
   if (!schedule) {
     throw new Error(
       "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",

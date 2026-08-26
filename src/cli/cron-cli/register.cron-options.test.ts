@@ -59,6 +59,59 @@ describe("shared automation mutation options", () => {
     }
   });
 
+  it.each([
+    { flag: "--command-cwd", schedule: ["--every", "1m"], payload: ["--command", "pwd"] },
+    { flag: "--on-exit-cwd", schedule: ["--on-exit", "pwd"], payload: ["--message", "run"] },
+    {
+      flag: "--stream-cwd",
+      schedule: ["--stream-command", '["node","events.mjs"]'],
+      payload: ["--message", "run"],
+    },
+  ])("rejects blank $flag before creating an automation", async ({ flag, schedule, payload }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    try {
+      for (const cwd of ["", "   "]) {
+        errorSpy.mockClear();
+        exitSpy.mockClear();
+        callGatewayFromCli.mockClear();
+        await createMutationProgram().parseAsync(
+          ["add", "--name", "cwd-proof", ...schedule, ...payload, flag, cwd],
+          { from: "user" },
+        );
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`${flag} must not be blank`));
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("keeps blank stream-cwd edits available for clearing an existing working directory", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.get"
+        ? {
+            id: "job-1",
+            schedule: { kind: "stream", command: ["node", "events.mjs"], cwd: "/repo" },
+            payload: { kind: "agentTurn", message: "run" },
+          }
+        : { ok: true },
+    );
+
+    await createMutationProgram().parseAsync(["edit", "job-1", "--stream-cwd", "   "], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        schedule: expect.objectContaining({ kind: "stream", cwd: undefined }),
+      },
+    });
+  });
+
   it("keeps creation defaults out of automation edit patches", () => {
     const program = createMutationProgram();
     const add = program.commands.find((command) => command.name() === "add")!;
