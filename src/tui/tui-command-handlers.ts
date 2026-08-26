@@ -881,7 +881,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
     const admission = resolveMessageAdmission(text);
     if (admission.status === "blocked") {
       reportBlockedMessageSubmit(text, admission);
@@ -937,7 +937,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
         runId,
       });
       const acceptedRunId = sendResult.runId || runId;
