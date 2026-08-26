@@ -23,10 +23,10 @@ function splitEnvPaths(value: string): string[] {
  * identity — a cached registry bakes in the cede map those declarations produced, so two loads
  * that differ only by `OPENCLAW_PLUGIN_CATALOG_PATHS` must not share a cache entry.
  *
- * Paths only. Rewriting a catalog at the same path is a known limitation: it leaves the registry
- * cache key unchanged. The registry load cache that would need clearing is currently cleared by
- * `clearPluginRegistryLoadCache()` on plugin config mutation, not on catalog rewrite or the plugin
- * metadata lifecycle clear.
+ * Paths distinguish concurrent environments. Same-path catalog rewrites are not watched, and an
+ * ordinary config reload does not advance the plugin metadata generation. A later explicit
+ * metadata refresh (`plugins.refresh`) or installed-index write clears the lifecycle; only then
+ * does the next registry load observe the rewritten catalog.
  */
 export function resolveExternalPluginCatalogPaths(env: NodeJS.ProcessEnv): string[] {
   for (const key of ENV_CATALOG_PATHS) {

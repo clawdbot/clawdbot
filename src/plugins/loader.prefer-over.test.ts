@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs: string[] = [];
@@ -471,6 +472,75 @@ describe("plugin loader preferOver activation", () => {
 
     expect(ownerWithCatalog(preferringCatalog)).toBe("zz-replacement");
     expect(ownerWithCatalog(neutralCatalog)).toBe("zz-fallback");
+  });
+
+  it("does not reuse a cached registry after a same-path catalog lifecycle refresh", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+    });
+    const catalogPath = path.join(makePluginLoaderTempDir(), "catalog.json");
+    const writeCatalog = (preferOver: string[]) => {
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          entries: [
+            {
+              name: "@openclaw/zz-replacement",
+              openclaw: {
+                plugin: { id: "zz-replacement" },
+                channel: { id: "zzalpha", preferOver },
+              },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+    };
+    const baseEnv = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const env = {
+      ...baseEnv,
+      OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    writeCatalog(["zz-fallback"]);
+    // Keep catalog preference out of materialized activation so the rewritten catalog remains the
+    // only owner-changing input across the two registry loads.
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env: baseEnv });
+    const loadRegistry = () =>
+      loadOpenClawPlugins({
+        config: autoEnabled.config,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: autoEnabled.autoEnabledReasons,
+        env,
+      });
+    const owner = (registry: ReturnType<typeof loadRegistry>) =>
+      registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId;
+
+    const first = loadRegistry();
+    expect(owner(first)).toBe("zz-replacement");
+
+    writeCatalog([]);
+    clearPluginMetadataLifecycleCaches();
+
+    const second = loadRegistry();
+    expect(Object.is(second, first)).toBe(false);
+    expect(owner(second)).toBe("zz-fallback");
   });
 
   // Neither claimant has to supply a descriptor at all: a catalog-declared preference between

@@ -78,4 +78,67 @@ describe("config.get redaction hints", () => {
       );
     });
   });
+
+  it("redacts a custom channel secret when its authored key uses capitals", async () => {
+    const schema = {
+      schema: { type: "object" },
+      uiHints: { "channels.acmechat.opaqueCredential": { sensitive: true } },
+      version: "test-schema",
+    };
+    buildRuntimeConfigSchemaForConfigMock.mockReturnValue(schema);
+    loadGatewayRuntimeConfigSchemaMock.mockReturnValue(schema);
+
+    await withTempDir("openclaw-config-get-channel-case-", async (dir) => {
+      // Discovery needs the manifest to accept AcmeChat into the parsed config snapshot. The mocked
+      // runtime schema returns the canonical hint path that this manifest's metadata emits.
+      const pluginDir = path.join(dir, "acme-chat");
+      await fs.mkdir(pluginDir);
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "acme-chat",
+          channels: ["AcmeChat"],
+          channelConfigs: {
+            AcmeChat: {
+              schema: {
+                type: "object",
+                properties: { opaqueCredential: { type: "string" } },
+                additionalProperties: false,
+              },
+              uiHints: { opaqueCredential: { sensitive: true } },
+            },
+          },
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(pluginDir, "index.js"), "export default { register() {} };\n");
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          channels: { AcmeChat: { opaqueCredential: "case-secret" } },
+          plugins: { load: { paths: [pluginDir] } },
+        }),
+        "utf-8",
+      );
+      await withEnvAsync(
+        { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: dir },
+        async () => {
+          const harness = await invokeConfigGet();
+          const lastCall = expectDefined(
+            harness.respond.mock.calls.at(-1),
+            "config.get respond call",
+          );
+          const payload = lastCall[1] as {
+            config: { channels?: { AcmeChat?: { opaqueCredential?: string } } };
+            raw?: string | null;
+          };
+
+          expect(payload.config.channels?.AcmeChat?.opaqueCredential).toBe("__OPENCLAW_REDACTED__");
+          expect(payload.raw).not.toContain("case-secret");
+        },
+      );
+    });
+  });
 });

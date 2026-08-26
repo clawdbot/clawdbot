@@ -134,6 +134,22 @@ describe("restoreRedactedValues", () => {
     expect(result.humanReadableMessage).toContain("channels.newChannel.token");
   });
 
+  it("names the authored channel key in a restore failure, not the canonical one", () => {
+    // The hint is keyed on the canonical channel, the operator authored an alias. The lookup may
+    // canonicalise, but the message they read must quote the key they actually wrote.
+    const hints: ConfigUiHints = {
+      "channels.wecom.opaqueCredential": { sensitive: true },
+    };
+    const incoming = {
+      channels: { QYWX: { opaqueCredential: REDACTED_SENTINEL } },
+    };
+    const result = restoreRedactedValues_orig(incoming, { channels: { QYWX: {} } }, hints);
+
+    expect(result.ok).toBe(false);
+    expect(result.humanReadableMessage).toContain("channels.QYWX.opaqueCredential");
+    expect(result.humanReadableMessage).not.toContain("channels.wecom");
+  });
+
   it("rejects sentinel literals that survive restore", () => {
     const hints: ConfigUiHints = {
       "custom.*": { sensitive: true },
@@ -195,6 +211,61 @@ describe("restoreRedactedValues", () => {
       hints,
     ) as typeof originalConfig;
     expect(restored).toEqual(originalConfig);
+  });
+
+  it("redacts canonical hints through an authored-case custom channel key", () => {
+    const hints: ConfigUiHints = {
+      "channels.acmechat.opaqueCredential": { sensitive: true },
+    };
+    const originalConfig = {
+      channels: { AcmeChat: { opaqueCredential: "case-secret" } },
+    };
+    const snapshot = makeSnapshot(originalConfig);
+
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const redactedConfig = redacted.config as typeof originalConfig;
+    expect(redactedConfig.channels.AcmeChat.opaqueCredential).toBe(REDACTED_SENTINEL);
+  });
+
+  it("restores canonical hints through an authored-case custom channel key", () => {
+    const hints: ConfigUiHints = {
+      "channels.acmechat.opaqueCredential": { sensitive: true },
+    };
+    const incoming = {
+      channels: { AcmeChat: { opaqueCredential: REDACTED_SENTINEL } },
+    };
+    const original = {
+      channels: { AcmeChat: { opaqueCredential: "case-secret" } },
+    };
+
+    expect(restoreRedactedValues(incoming, original, hints)).toEqual(original);
+  });
+
+  it("redacts an alias-keyed hint without exposing a non-heuristic field", () => {
+    const hints: ConfigUiHints = {
+      "channels.wechat.opaqueCredential": { sensitive: true },
+    };
+    const originalConfig = {
+      channels: { wechat: { opaqueCredential: "alias-secret" } },
+    };
+
+    const redacted = redactConfigSnapshot(makeSnapshot(originalConfig), hints);
+    const redactedConfig = redacted.config as typeof originalConfig;
+    expect(redactedConfig.channels.wechat.opaqueCredential).toBe(REDACTED_SENTINEL);
+    expect(redacted.raw).not.toContain("alias-secret");
+  });
+
+  it("applies an explicit non-sensitive hint across channel aliases", () => {
+    const hints: ConfigUiHints = {
+      "channels.yuanbao.apiKey": { sensitive: false },
+    };
+    const originalConfig = {
+      channels: { yb: { apiKey: "documented-public-value" } },
+    };
+
+    const redacted = redactConfigSnapshot(makeSnapshot(originalConfig), hints);
+    const redactedConfig = redacted.config as typeof originalConfig;
+    expect(redactedConfig.channels.yb.apiKey).toBe("documented-public-value");
   });
 
   it("rejects sentinel literals even when uiHints mark the path non-sensitive", () => {

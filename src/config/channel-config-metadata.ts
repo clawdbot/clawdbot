@@ -189,7 +189,7 @@ function resolveOriginRank(origin: PluginOrigin): number {
   return PLUGIN_ORIGIN_RANK[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function normalizeClaimedChannelId(channelId: string): string {
+export function normalizeChannelMetadataKey(channelId: string): string {
   return normalizeOwnedChannelId(channelId);
 }
 
@@ -242,7 +242,7 @@ function collectChannelClaimants(
   const claimantsByChannel = new Map<string, PluginManifestRecord[]>();
   for (const record of registry.plugins) {
     for (const channelId of record.channels) {
-      const claimedId = normalizeClaimedChannelId(channelId);
+      const claimedId = normalizeChannelMetadataKey(channelId);
       const claimants = claimantsByChannel.get(claimedId) ?? [];
       claimantsByChannel.set(claimedId, claimants);
       claimants.push(record);
@@ -640,10 +640,10 @@ export function collectChannelSchemaMetadataWithOwnership(
     const rootDescription = record.channelCatalogMeta?.blurb;
 
     for (const declaredChannelId of record.channels) {
-      // Key by the canonical id. Ownership below already decides on `normalizeClaimedChannelId`,
-      // and the runtime config is canonical too, so keying the entry by the declared spelling put
-      // a differently-spelled claimant in its own bucket that no `channels.<id>.*` path can reach.
-      const channelId = normalizeClaimedChannelId(declaredChannelId);
+      // Key by the canonical id ownership and metadata consumers compare. Runtime config keeps its
+      // authored spelling, so validation and redaction canonicalize only their metadata lookup key;
+      // bucketing here by declared spelling would split one runtime channel across claimants.
+      const channelId = normalizeChannelMetadataKey(declaredChannelId);
       const current = byChannelId.get(channelId);
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
@@ -654,7 +654,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         // by the preference below, or an inactive plugin that operator policy already ruled out
         // however close its origin sits. The winner re-sets both below.
         const ownerId = current?.schemaPluginId;
-        const claimedId = normalizeClaimedChannelId(channelId);
+        const claimedId = normalizeChannelMetadataKey(channelId);
         const recordActive = policy.isPluginActive(record.id, claimedId);
         // Ranks tie by the time the schema pass reaches this record, since the entry adopts this
         // record's rank right here, so only policy and the declaration separate the two.
@@ -697,7 +697,7 @@ export function collectChannelSchemaMetadataWithOwnership(
     for (const [declaredChannelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
       // Same canonicalization as the declaration loop: a sensitive hint collected under a
       // non-canonical spelling never lines up with the config path redaction actually reads.
-      const channelId = normalizeClaimedChannelId(declaredChannelId);
+      const channelId = normalizeChannelMetadataKey(declaredChannelId);
       // Only a record that claims the channel in `record.channels` may supply its descriptor:
       // auto-enable and the channel facade build candidate sets from that list alone. Reading the
       // descriptor anyway let a closer-origin non-claimant win an unconfigured channel's schema —
@@ -750,7 +750,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         current !== undefined &&
         (current.configSchema !== undefined || current.configUiHints !== undefined);
       if (currentOwnsSchema) {
-        const claimedId = normalizeClaimedChannelId(channelId);
+        const claimedId = normalizeChannelMetadataKey(channelId);
         const ownerId = current.schemaPluginId;
         const decision = decideChannelSchemaOwnership({
           currentActive: ownerId === undefined || policy.isPluginActive(ownerId, claimedId),

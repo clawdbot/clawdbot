@@ -33,6 +33,7 @@ import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
+import { getPluginMetadataLifecycleGeneration } from "./plugin-metadata-lifecycle.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
@@ -141,6 +142,7 @@ function buildActivationMetadataHash(params: {
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   configuredChannelIds: readonly string[];
   externalCatalogPaths: readonly string[];
+  metadataLifecycleGeneration: number;
 }): string {
   const configuredChannels = [...new Set(params.configuredChannelIds)].toSorted((left, right) =>
     left.localeCompare(right),
@@ -189,6 +191,7 @@ function buildActivationMetadataHash(params: {
         enabledChannels: enabledSourceChannels,
         configuredChannels,
         externalCatalogPaths: params.externalCatalogPaths,
+        metadataLifecycleGeneration: params.metadataLifecycleGeneration,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -415,11 +418,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       // those are is decided entirely by `OPENCLAW_PLUGIN_CATALOG_PATHS`/`OPENCLAW_MPM_CATALOG_PATHS`
       // (falling back to the config dir). Neither variable reaches the discovery fingerprint, so
       // without them here two loads that differ only by catalog file share one cache entry and the
-      // second gets the first's cede map — the wrong runtime channel owner. Paths only: rewriting
-      // a catalog at the same path remains a known limitation because it leaves this key unchanged.
-      // The registry cache that would need clearing is cleared on plugin config mutation, not on
-      // catalog rewrite or the plugin metadata lifecycle clear.
+      // second gets the first's cede map — the wrong runtime channel owner. Paths distinguish
+      // concurrent environments. Same-path rewrites are not watched; a later `plugins.refresh` or
+      // installed-index write advances the lifecycle generation below before the next load.
       externalCatalogPaths: resolveExternalPluginCatalogPaths(env),
+      metadataLifecycleGeneration: getPluginMetadataLifecycleGeneration(),
     }),
     installs: installRecords,
     env,

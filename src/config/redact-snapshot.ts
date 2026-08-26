@@ -10,6 +10,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import {
+  normalizeChannelMetadataHints,
+  normalizeChannelMetadataPath,
+} from "./redact-snapshot-channel-metadata.js";
+import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
@@ -140,8 +144,12 @@ type RedactionContext = {
 };
 
 function createRedactionContext(hints?: ConfigUiHints): RedactionContext {
-  const lookup = hints ? buildRedactionLookup(hints) : undefined;
-  return { hints, lookup: lookup?.has("") ? lookup : undefined };
+  // A hint describes the canonical owned field, so every authored case/alias spelling shares its
+  // sensitive=true, sensitive=false, and URL-tag semantics. Canonicalize once before every hint
+  // read; true wins collisions so a duplicate alias can never downgrade redaction.
+  const normalizedHints = hints ? normalizeChannelMetadataHints(hints) : undefined;
+  const lookup = normalizedHints ? buildRedactionLookup(normalizedHints) : undefined;
+  return { hints: normalizedHints, lookup: lookup?.has("") ? lookup : undefined };
 }
 
 // Schema lookup coverage is prefix-scoped. After a path misses, heuristic detection must own the
@@ -177,10 +185,11 @@ function redactValue(
 
   if (Array.isArray(obj)) {
     const path = `${prefix}[]`;
-    const schemaMatched = context.lookup?.has(path) === true;
+    const metadataPath = normalizeChannelMetadataPath(path);
+    const schemaMatched = context.lookup?.has(metadataPath) === true;
     const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
     const heuristicSensitive =
-      !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
+      !isExplicitlyNonSensitivePath(context.hints, [metadataPath]) && isSensitivePath(path);
     return obj.map((item) => {
       if (
         typeof item === "string" &&
@@ -202,9 +211,10 @@ function redactValue(
   const fallbackContext = withoutRedactionLookup(context);
   for (const [key, value] of Object.entries(obj)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    const wildcardPath = prefix ? `${prefix}.*` : "*";
+    const metadataPath = normalizeChannelMetadataPath(path);
+    const wildcardPath = normalizeChannelMetadataPath(prefix ? `${prefix}.*` : "*");
     const candidate = context.lookup
-      ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
+      ? [metadataPath, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
     if (candidate) {
       result[key] = value;
@@ -238,7 +248,7 @@ function redactValue(
       continue;
     }
 
-    const hintPaths = [path, wildcardPath];
+    const hintPaths = [metadataPath, wildcardPath];
     const markedNonSensitive = isExplicitlyNonSensitivePath(context.hints, hintPaths);
     if (
       typeof value === "string" &&
@@ -608,6 +618,10 @@ function restoreRedactedValue(
   original: unknown,
   prefix: string,
   context: RedactionContext,
+  // The lookup prefix may be canonicalised or a wildcard, both of which nested hint matching
+  // depends on. `authoredPrefix` tracks the spelling the operator actually wrote and is used
+  // only to build operator-facing messages.
+  authoredPrefix: string = prefix,
 ): unknown {
   if (incoming === null || incoming === undefined || typeof incoming !== "object") {
     return incoming;
@@ -615,10 +629,12 @@ function restoreRedactedValue(
 
   if (Array.isArray(incoming)) {
     const path = `${prefix}[]`;
-    const schemaMatched = context.lookup?.has(path) === true;
+    const authoredArrayPath = `${authoredPrefix}[]`;
+    const metadataPath = normalizeChannelMetadataPath(path);
+    const schemaMatched = context.lookup?.has(metadataPath) === true;
     const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
     const heuristicSensitive =
-      !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
+      !isExplicitlyNonSensitivePath(context.hints, [metadataPath]) && isSensitivePath(path);
     return mapRedactedArray({
       incoming,
       original,
@@ -626,7 +642,7 @@ function restoreRedactedValue(
       mapItem: (item, originalItem) =>
         item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
           ? originalItem
-          : restoreRedactedValue(item, originalItem, path, fallbackContext),
+          : restoreRedactedValue(item, originalItem, path, fallbackContext, authoredArrayPath),
     });
   }
 
@@ -635,18 +651,22 @@ function restoreRedactedValue(
   const fallbackContext = withoutRedactionLookup(context);
   for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
-    const wildcardPath = prefix ? `${prefix}.*` : "*";
+    const authoredPath = authoredPrefix ? `${authoredPrefix}.${key}` : key;
+    const metadataPath = normalizeChannelMetadataPath(path);
+    const wildcardPath = normalizeChannelMetadataPath(prefix ? `${prefix}.*` : "*");
     const candidate = context.lookup
-      ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
+      ? [metadataPath, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
     if (candidate) {
       if (
         value === REDACTED_SENTINEL &&
         (context.hints?.[candidate]?.sensitive === true ||
-          hasSensitiveUrlHintPath(context.hints, [candidate, path, wildcardPath]) ||
+          hasSensitiveUrlHintPath(context.hints, [candidate, metadataPath, wildcardPath]) ||
           isSensitiveUrlPath(path))
       ) {
-        result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+        // Report the authored path, not the canonicalised lookup key: an operator who
+        // wrote channels.QYWX must not be told about channels.wecom.
+        result[key] = restoreOriginalValueOrThrow({ key, path: authoredPath, original: orig });
       } else if (typeof value === "object" && value !== null) {
         const restoredSecretRef = maybeRestoreSecretRefId({
           incoming: value,
@@ -655,28 +675,28 @@ function restoreRedactedValue(
         });
         result[key] = restoredSecretRef.handled
           ? restoredSecretRef.value
-          : restoreRedactedValue(value, orig[key], candidate, context);
+          : restoreRedactedValue(value, orig[key], candidate, context, authoredPath);
       } else {
         result[key] = value;
       }
       continue;
     }
 
-    const hintPaths = [path, wildcardPath];
+    const hintPaths = [metadataPath, wildcardPath];
     const canRestore =
       !isExplicitlyNonSensitivePath(context.hints, hintPaths) &&
       (isSensitivePath(path) ||
         hasSensitiveUrlHintPath(context.hints, hintPaths) ||
         isSensitiveUrlPath(path));
     if (value === REDACTED_SENTINEL && canRestore) {
-      result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
+      result[key] = restoreOriginalValueOrThrow({ key, path: authoredPath, original: orig });
     } else if (typeof value === "object" && value !== null) {
       const restoredSecretRef = canRestore
         ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })
         : { handled: false as const };
       result[key] = restoredSecretRef.handled
         ? restoredSecretRef.value
-        : restoreRedactedValue(value, orig[key], path, fallbackContext);
+        : restoreRedactedValue(value, orig[key], path, fallbackContext, authoredPath);
     } else {
       result[key] = value;
     }

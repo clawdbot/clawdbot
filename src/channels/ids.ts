@@ -5,11 +5,10 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
-/**
- * Canonical chat channel id used by core routing, plugin config, and channel catalogs.
- */
+/** Canonical chat channel id used by core routing, plugin config, and channel catalogs. */
 export type ChatChannelId = string;
 
 type BundledChatChannelEntry = {
@@ -37,21 +36,19 @@ const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(listBundledChatChannelEntries
 const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
 let runtimeBundledChatChannelEntries: BundledChatChannelEntry[] | null = null;
 
-/**
- * Stable built-in channel order derived from generated bundled channel metadata.
- */
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  runtimeBundledChatChannelEntries = null;
+});
+
+/** Stable built-in channel order derived from generated bundled channel metadata. */
 export const CHAT_CHANNEL_ORDER = Object.freeze(
   BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id),
 );
 
-/**
- * Alias retained for callers that still refer to chat channel ordering as channel ids.
- */
+/** Alias retained for callers that still refer to chat channel ordering as channel ids. */
 export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 
-/**
- * Maps configured built-in channel aliases to canonical chat channel ids.
- */
+/** Maps configured built-in channel aliases to canonical chat channel ids. */
 const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
     BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
@@ -105,9 +102,7 @@ export function normalizeOwnedChannelId(channelId: string): string {
   );
 }
 
-/**
- * Normalizes a raw chat channel id or alias to a known canonical built-in channel id.
- */
+/** Normalizes a raw chat channel id or alias to a known canonical built-in channel id. */
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {

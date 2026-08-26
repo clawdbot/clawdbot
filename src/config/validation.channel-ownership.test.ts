@@ -1,7 +1,10 @@
 // Verifies validation reads channel schema ownership from the authored sourceConfig.
 
 import { describe, expect, it } from "vitest";
+import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+import { normalizeChannelMetadataKey } from "./channel-config-metadata.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -131,6 +134,208 @@ describe("validateConfigObjectWithPlugins channel schema ownership sourceConfig"
       expect(result.issues).toContainEqual(
         expect.objectContaining({ path: expect.stringContaining("channels.voxchat") }),
       );
+    }
+  });
+
+  it("validates an authored-case custom channel against its canonical metadata schema", () => {
+    const manifestRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-chat",
+          origin: "global",
+          channels: ["AcmeChat"],
+          channelConfigs: {
+            AcmeChat: {
+              schema: {
+                type: "object",
+                properties: { endpoint: { type: "string" } },
+                required: ["endpoint"],
+                additionalProperties: false,
+              },
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { AcmeChat: { endpoint: 42 } } },
+      { pluginMetadataSnapshot: { manifestRegistry } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "channels.AcmeChat.endpoint" }),
+      );
+    }
+  });
+
+  it.each([{ declaredChannelId: "wechat", authoredChannelId: "wechat" }])(
+    "validates runtime-catalog alias $authoredChannelId against the $declaredChannelId schema",
+    ({ declaredChannelId, authoredChannelId }) => {
+      const manifestRegistry: PluginManifestRegistry = {
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecord({
+            id: `alias-${declaredChannelId}`,
+            origin: "global",
+            channels: [declaredChannelId],
+            channelConfigs: {
+              [declaredChannelId]: {
+                schema: {
+                  type: "object",
+                  properties: { endpoint: { type: "string" } },
+                  required: ["endpoint"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          }),
+        ],
+      };
+
+      const result = validateConfigObjectRawWithPlugins(
+        { channels: { [authoredChannelId]: { endpoint: 42 } } },
+        { pluginMetadataSnapshot: { manifestRegistry } },
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({ path: `channels.${authoredChannelId}.endpoint` }),
+        );
+      }
+    },
+  );
+
+  it("uses the metadata ownership key for every generated and runtime catalog spelling", () => {
+    const entries = [
+      ...GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => ({
+        id: entry.channelId,
+        aliases: entry.aliases ?? [],
+      })),
+      ...listBundledChannelCatalogEntries(),
+    ];
+    const spellings = new Set<string>();
+    for (const entry of entries) {
+      expect(normalizeChannelMetadataKey(entry.id)).toBe(entry.id);
+      for (const spelling of [entry.id, ...entry.aliases]) {
+        expect(normalizeChannelMetadataKey(spelling)).toBe(entry.id);
+        spellings.add(spelling);
+        spellings.add(spelling.toUpperCase());
+      }
+    }
+    const channelSchema = {
+      schema: {
+        type: "object",
+        properties: { endpoint: { type: "string" } },
+        required: ["endpoint"],
+        additionalProperties: false,
+      },
+    };
+    const manifestRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "catalog-normalization-contract",
+          origin: "global",
+          channels: [...spellings],
+          channelConfigs: Object.fromEntries(
+            [...spellings].map((spelling) => [spelling, channelSchema]),
+          ),
+        }),
+      ],
+    };
+    const result = validateConfigObjectRawWithPlugins(
+      {
+        channels: Object.fromEntries(
+          [...spellings].map((spelling) => [spelling, { endpoint: 42 }]),
+        ),
+      },
+      { pluginMetadataSnapshot: { manifestRegistry } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issuePaths = new Set(result.issues.map((issue) => issue.path));
+      expect(
+        [...spellings].filter((spelling) => !issuePaths.has(`channels.${spelling}.endpoint`)),
+      ).toEqual([]);
+    }
+  });
+
+  it.each(["TELEGRAM", "Telegram", "lark"])(
+    "rejects %s, which canonicalises onto a real channel but is read by nothing at runtime",
+    (authored) => {
+      const result = validateConfigObjectRawWithPlugins(
+        { channels: { [authored]: { enabled: true } } },
+        { pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } } },
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual({
+          path: `channels.${authored}`,
+          message: `unknown channel id: ${authored}`,
+        });
+      }
+    },
+  );
+
+  it("rejects an authored spelling that differs from the one the plugin declares", () => {
+    // The plugin declares `qywx`; runtime reads `channels.qywx`. An authored `channels.QYWX`
+    // canonicalises onto the same channel but is never read, so schema-validating it would
+    // report a block that does nothing as healthy.
+    const manifestRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "alias-qywx",
+          origin: "global",
+          channels: ["qywx"],
+          channelConfigs: {
+            qywx: {
+              schema: {
+                type: "object",
+                properties: { endpoint: { type: "string" } },
+                required: ["endpoint"],
+                additionalProperties: false,
+              },
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { QYWX: { endpoint: 42 } } },
+      { pluginMetadataSnapshot: { manifestRegistry } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual({
+        path: "channels.QYWX",
+        message: "unknown channel id: QYWX",
+      });
+      expect(result.issues.map((issue) => issue.path)).not.toContain("channels.QYWX.endpoint");
+    }
+  });
+
+  it("keeps reserved channel container keys case-sensitive", () => {
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { Defaults: {} } },
+      { pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual({
+        path: "channels.Defaults",
+        message: "unknown channel id: Defaults",
+      });
     }
   });
 });

@@ -16,6 +16,7 @@ import type {
 import { createConfigIO } from "../config/io.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { getPluginMetadataLifecycleGeneration } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -4527,7 +4528,9 @@ describe("startGatewayConfigReloader", () => {
       readPluginInstallRecords,
     });
 
+    const generationBeforeRefresh = getPluginMetadataLifecycleGeneration();
     harness.reloader.notifyPluginMetadataChanged();
+    expect(getPluginMetadataLifecycleGeneration()).toBe(generationBeforeRefresh + 1);
     await vi.runOnlyPendingTimersAsync();
 
     expect(readSnapshot).toHaveBeenCalledOnce();

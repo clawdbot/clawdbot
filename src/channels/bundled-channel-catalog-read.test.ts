@@ -50,6 +50,7 @@ import {
   findBundledChannelCatalogMetadata,
   listBundledChannelCatalogEntries,
 } from "./bundled-channel-catalog-read.js";
+import { normalizeOwnedChannelId } from "./ids.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const tempDirs: string[] = [];
@@ -102,6 +103,7 @@ function seedChannelPkg(
     docsPath: string;
     label?: string;
     blurb?: string;
+    aliases?: readonly string[];
     markdownCapable?: boolean;
     approvalFlags?: readonly ["native"];
   },
@@ -116,6 +118,7 @@ function seedChannelPkg(
         label: opts.label ?? opts.id,
         docsPath: opts.docsPath,
         blurb: opts.blurb ?? "test blurb",
+        ...(opts.aliases ? { aliases: opts.aliases } : {}),
         ...(opts.markdownCapable !== undefined ? { markdownCapable: opts.markdownCapable } : {}),
         ...(opts.approvalFlags ? { approvalFlags: opts.approvalFlags } : {}),
       },
@@ -364,6 +367,28 @@ describe("listBundledChannelCatalogEntries", () => {
     expect(
       listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
     ).toBe("After");
+  });
+
+  it("rebuilds the derived ownership alias table after a plugin lifecycle reset", () => {
+    const root = seedRoot("bcr-owned-alias-lifecycle-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    const packagePath = path.join(extensionsRoot, "alpha", "package.json");
+    seedChannelPkg(packagePath, {
+      id: "alpha",
+      docsPath: "/channels/alpha",
+      aliases: ["alpha-before"],
+    });
+    useBundledPluginsDir(extensionsRoot);
+
+    expect(normalizeOwnedChannelId("alpha-before")).toBe("alpha");
+    seedChannelPkg(packagePath, {
+      id: "alpha",
+      docsPath: "/channels/alpha",
+      aliases: ["alpha-after"],
+    });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(normalizeOwnedChannelId("alpha-after")).toBe("alpha");
   });
 
   it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {

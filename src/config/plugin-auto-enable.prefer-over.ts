@@ -105,16 +105,16 @@ function readExternalCatalogChannels(
 
 /**
  * One slot holding the parsed external catalogs, rebuilt only when the resolved paths change.
- * Catalog files are plugin metadata, so they are process-stable until an install or reload flow
- * runs. `loadGatewayRuntimeConfigSchema` builds a schema per Control UI config request and now
- * resolves channel ownership, so reading and parsing them per build would put synchronous
- * filesystem work on the Gateway event loop.
+ * Catalog files are plugin metadata, so they are process-stable until an explicit metadata
+ * lifecycle refresh. `loadGatewayRuntimeConfigSchema` builds a schema per Control UI config
+ * request and now resolves channel ownership, so reading and parsing them per build would put
+ * synchronous filesystem work on the Gateway event loop.
  */
 let externalCatalogSnapshot: { pathsKey: string; channels: ExternalCatalogChannelEntry[] } | null =
   null;
 
-// An install, reload, or doctor flow can rewrite a catalog at the same path, which leaves the
-// paths key unchanged; the owner-triggered metadata refresh has to drop this slot with the rest.
+// Same-path rewrites are not watched and ordinary config reloads leave this slot intact. An
+// explicit metadata refresh or installed-index write drops it through the shared lifecycle clear.
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   externalCatalogSnapshot = null;
 });

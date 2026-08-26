@@ -14,7 +14,10 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { collectChannelDmPolicyMetadata } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  normalizeChannelMetadataKey,
+} from "./channel-config-metadata.js";
 import { configuredChannelSchemas } from "./channel-ownership-policy.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
@@ -594,13 +597,24 @@ function validateConfigObjectWithPluginsBase(
     mutatedConfig.plugins!.entries![pluginId] = { ...currentEntry, config: nextValue };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  const reservedChannelKeys = new Set(["defaults", "modelByChannel"]);
+  // Membership is checked against the spelling each channel is actually declared under, not its
+  // canonical form. `resolveChannelConfigRecord` reads `channels[<key>]` exactly as authored, so a
+  // key that only matches after canonicalisation — `channels.TELEGRAM`, `channels.lark` — is read
+  // by nothing at runtime. Accepting it would schema-validate a block that silently does nothing,
+  // which is the failure this change exists to remove. The schema lookup below still canonicalises,
+  // so a declared alias resolves to its owner's schema.
+  const allowedChannels = new Set<string>(bundledChannelIds);
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
       if (!trimmed) {
         continue;
       }
+      if (reservedChannelKeys.has(trimmed)) {
+        continue;
+      }
+      const metadataKey = normalizeChannelMetadataKey(trimmed);
       if (!allowedChannels.has(trimmed)) {
         for (const record of ensureRegistry().registry.plugins) {
           for (const channelId of record.channels) {
@@ -620,13 +634,13 @@ function validateConfigObjectWithPluginsBase(
         }
         continue;
       }
-      const channelSchema = ensureChannelSchemas().get(trimmed);
+      const channelSchema = ensureChannelSchemas().get(metadataKey);
       if (!channelSchema?.schema) {
         continue;
       }
       const result = validateJsonSchemaValue({
         schema: channelSchema.schema,
-        cacheKey: `channel:${trimmed}`,
+        cacheKey: `channel:${metadataKey}`,
         value: config.channels[trimmed],
         applyDefaults: true, // Always apply defaults for AJV schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
