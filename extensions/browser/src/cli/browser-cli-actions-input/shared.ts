@@ -3,9 +3,11 @@
  */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../../browser/act-policy.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  withBrowserActionTimeoutSlack,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -18,18 +20,6 @@ type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };
-
-const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
-
-/** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
-export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
-  return (
-    addTimerTimeoutGraceMs(
-      timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-      BROWSER_ACTION_TRANSPORT_SLACK_MS,
-    ) ?? 1
-  );
-}
 
 /** Resolves inherited Browser action context from a commander command. */
 export function resolveBrowserActionContext(

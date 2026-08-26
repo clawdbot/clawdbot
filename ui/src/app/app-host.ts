@@ -29,6 +29,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -520,6 +521,7 @@ class OpenClawShell
       const client = this.context?.gateway?.snapshot.client;
       if (client) {
         invalidateChatMetadataStore(client);
+        invalidateModelCatalogCache(client);
       }
     }
     this.shellGateway.handleGatewayEvent(event);
@@ -728,6 +730,7 @@ class OpenClawShell
       // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
         invalidateChatMetadataStore(snapshot.client);
+        invalidateModelCatalogCache(snapshot.client);
       }
     }
     this.shellGateway.synchronizeGateway(snapshot);

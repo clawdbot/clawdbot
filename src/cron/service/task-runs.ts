@@ -1,5 +1,4 @@
 /** Detached task-ledger integration for cron runs. */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -62,18 +61,6 @@ function requireCronAgentId(agentId: string | undefined): string {
 
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
-
-const activeCronTaskRunId = new AsyncLocalStorage<string>();
-
-/** Keeps the detached task id on the async execution that owns it. */
-export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
-  const normalizedRunId = taskRunId?.trim();
-  return normalizedRunId ? activeCronTaskRunId.run(normalizedRunId, run) : run();
-}
-
-export function getActiveCronTaskRunId(): string | undefined {
-  return activeCronTaskRunId.getStore();
 }
 
 /** Carries exact admission into the first post-admission owner lifecycle phase. */

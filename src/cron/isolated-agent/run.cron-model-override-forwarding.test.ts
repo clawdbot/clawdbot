@@ -2,8 +2,6 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getAgentRunTaskRunId } from "../../infra/agent-run-registry.js";
-import { withCronTaskRunId } from "../service/task-runs.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -228,25 +226,20 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   it("passes the cron payload model to the embedded agent runner", async () => {
     // Use passthrough so runEmbeddedAgentMock actually gets called
     mockRunCronFallbackPassthrough();
-    let activeTaskRunId: string | undefined;
-    runEmbeddedAgentMock.mockImplementation(async ({ runId }: { runId: string }) => {
-      activeTaskRunId = getAgentRunTaskRunId(runId);
+    runEmbeddedAgentMock.mockImplementation(async () => {
       return {
         payloads: [{ text: "summary done" }],
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
       };
     });
 
-    const result = await withCronTaskRunId("task-run-1", () =>
-      runCronIsolatedAgentTurn(makeParams()),
-    );
+    const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
     expect(embeddedCall).not.toHaveProperty("taskRunId");
-    expect(activeTaskRunId).toBe("task-run-1");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {

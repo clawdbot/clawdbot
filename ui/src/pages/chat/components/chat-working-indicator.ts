@@ -46,12 +46,19 @@ export function renderPlacementStartupStatus(
   }
   if (status.phase === "failed") {
     return html`
-      <div class="chat-error chat-cloud-startup-error" role="alert">
-        <span class="chat-error__dot" aria-hidden="true"></span>
-        <span class="chat-error__content"
-          >${t("newSession.placementStartFailed", {
-            error: status.error ?? t("newSession.createFailed"),
-          })}</span
+      <div
+        class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-cloud-startup-error"
+        role="alert"
+      >
+        <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+          >${icons.alertTriangle}</span
+        >
+        <span class="chat-composer-neighbor-card__copy"
+          ><strong
+            >${t("newSession.placementStartFailed", {
+              error: status.error ?? t("newSession.createFailed"),
+            })}</strong
+          ></span
         >
         ${status.retryable && onRetry
           ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
@@ -62,15 +69,30 @@ export function renderPlacementStartupStatus(
     `;
   }
   return html`
-    <div class="chat-working-indicator chat-cloud-startup" role="status" aria-live="polite">
-      <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
-      <span class="chat-working-indicator__status">
-        <span>${placementStartupStatusLabel(status)}</span>
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--info chat-cloud-startup"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="chat-composer-neighbor-card__icon chat-cloud-startup__spinner" aria-hidden="true"
+        >${icons.loader}</span
+      >
+      <span class="chat-composer-neighbor-card__copy">
+        <strong>${placementStartupStatusLabel(status)}</strong>
         <openclaw-elapsed-time
           class="chat-working-indicator__elapsed"
           .startMs=${status.startedAt}
         ></openclaw-elapsed-time>
       </span>
+    </div>
+  `;
+}
+
+export function renderTurnTerminalStatusRow(status: "interrupted") {
+  return html`
+    <div class="chat-turn-terminal-status chat-turn-terminal-status--${status}" role="status">
+      <span aria-hidden="true">${icons.stop}</span>
+      <span>${t("chat.composer.runInterrupted")}</span>
     </div>
   `;
 }

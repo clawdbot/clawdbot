@@ -162,14 +162,6 @@ function resolveSelectedMusicGenerationProvider(params: {
   });
 }
 
-function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
-  return resolveGenerateAction({
-    args,
-    allowed: ["generate", "status", "list"],
-    defaultAction: "generate",
-  });
-}
-
 function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFormat | undefined {
   const normalized = normalizeOptionalLowercaseString(raw) as
     | MusicGenerationOutputFormat
@@ -568,7 +560,7 @@ export function createMusicGenerateTool(options?: {
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
-      const action = resolveAction(args);
+      const action = resolveGenerateAction(args);
 
       if (action === "list") {
         return createMusicGenerateListActionResult(cfg, {

@@ -224,6 +224,8 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const modelList = programLocal.command("models").command("aliases").command("list");
+    modelList.option("--plain").action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
     for (const skillCommand of ["list", "check"]) {
@@ -897,6 +899,26 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       measure: expect.any(Function),
       commandPath: ["machine"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("keeps plain model output clean throughout Commander startup", async () => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+
+    await runPreAction({
+      parseArgv: ["models", "aliases", "list"],
+      processArgv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+    });
+
+    expect(loggingState.forceConsoleToStderr).toBe(true);
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath: ["models", "aliases", "list"],
       suppressDoctorStdout: true,
     });
   });

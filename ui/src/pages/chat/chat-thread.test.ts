@@ -1785,6 +1785,21 @@ describe("buildCachedChatItems working spark", () => {
 });
 
 describe("buildCachedChatItems", () => {
+  it("does not inspect ordinary transcript messages for tool previews", () => {
+    const messages = [userMessage("hello", 1_000), assistantMessage("reply", 1_001)];
+    const previewExtraction = vi.spyOn(toolCards, "extractToolCardsCached");
+
+    buildCachedChatItems(createProps({ paneId: "ordinary-transcript", messages }));
+
+    expect(
+      previewExtraction.mock.calls.filter(
+        ([message, prefix]) =>
+          messages.includes(message as (typeof messages)[number]) && prefix === "preview",
+      ),
+    ).toEqual([]);
+    previewExtraction.mockRestore();
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [

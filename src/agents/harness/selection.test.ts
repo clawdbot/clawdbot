@@ -230,6 +230,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -2216,6 +2217,34 @@ describe("selectAgentHarness", () => {
     );
   });
 
+  it("keeps a private-QA forced runtime despite a plugin-declared fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({
+        supported: false,
+        reason: "authored request params are unsupported",
+        fallbackRuntime: "openclaw",
+      }),
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:43123/v1",
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+      }).id,
+    ).toBe("codex");
+  });
+
   it("keeps request-scoped transport overrides on the implicit OpenClaw runtime", () => {
     registerAgentHarness({
       id: "codex",
@@ -2546,6 +2575,31 @@ describe("selectAgentHarness", () => {
         ...pin,
       }).id,
     ).toBe("openclaw");
+  });
+
+  it("keeps private-QA forced Codex across prepared routes that declare fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+      }).id,
+    ).toBe("codex");
   });
 
   it.each([

@@ -178,8 +178,29 @@ describe("sqlite hot query plans", () => {
           FROM session_nodes
          WHERE current_session_id = ?
          ORDER BY updated_at DESC, session_key ASC
+        LIMIT 1
+      `,
+    });
+    const latestWindowPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT session_id, updated_at
+          FROM session_windows
+         WHERE session_key = ?
+         ORDER BY updated_at DESC, session_id ASC
          LIMIT 1
       `,
+      ["agent:worker-1:main"],
+    );
+    expect(latestWindowPlan).toContain("idx_agent_session_windows_session_key");
+    expect(latestWindowPlan).not.toContain("SCAN session_windows");
+    expect(latestWindowPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_windows_session_key",
+      params: ["agent:worker-1:main"],
+      sql: "DELETE FROM session_nodes WHERE session_key = ?",
     });
     expectPlanUsesIndex({
       db: database.db,
@@ -235,6 +256,12 @@ describe("sqlite hot query plans", () => {
           FROM transcript_event_identities
          WHERE session_id = ? AND event_type = ?
       `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_transcript_event_identity_sequence",
+      params: ["session-1", 1],
+      sql: "DELETE FROM transcript_events WHERE session_id = ? AND seq = ?",
     });
 
     expectPlanIncludes({
@@ -341,7 +368,7 @@ describe("sqlite hot query plans", () => {
     expect(visibleDeltaPayloadPlan).toContain(
       "sqlite_autoindex_session_transcript_active_events_1",
     );
-    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(visibleDeltaPayloadPlan).toContain("idx_agent_transcript_event_identity_sequence");
     expect(visibleDeltaPayloadPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
     const historyAnchorPlan = explainQueryPlan(

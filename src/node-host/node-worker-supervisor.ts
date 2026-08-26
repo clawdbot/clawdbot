@@ -412,11 +412,12 @@ class NodeWorkerSupervisor {
         }
       }
       await Promise.allSettled(this.starting.values());
-      await Promise.all(
+      const stopped = await Promise.allSettled(
         [...this.active.values()]
           .filter((active): active is NodeWorkerRunningChild => active.state === "running")
-          .map(async (active) => await this.stopChild(active, "interrupted")),
+          .map((active) => this.stopChild(active, "interrupted")),
       );
+      errors.push(...stopped.flatMap((r) => (r.status === "rejected" ? [r.reason] : [])));
       for (const active of this.active.values()) {
         if (active.state !== "observed") {
           continue;
@@ -427,11 +428,10 @@ class NodeWorkerSupervisor {
           errors.push(error);
         }
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "node worker terminal reconciliation failed");
+      if (errors.length > 0) {
+        throw errors.length === 1
+          ? errors[0]
+          : new AggregateError(errors, "node worker terminal reconciliation failed");
       }
     })();
     const closePromise = operation.finally(() => {

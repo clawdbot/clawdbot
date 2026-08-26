@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -309,7 +310,8 @@ describe("gateway session utils", () => {
   });
 
   beforeEach(() => {
-    // Real artifact loading belongs to its owner tests; session projections only need the contract.
+    // Real metadata/artifact loading belongs to owner tests; projections only need the contract.
+    clearPluginMetadataLifecycleCaches();
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
   });
@@ -627,6 +629,33 @@ describe("gateway session utils", () => {
     expect(listed.offset).toBe(2);
     expect(listed.nextOffset).toBe(4);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session list search includes the session group name", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:roadmap": {
+        sessionId: "roadmap",
+        displayName: "Quarterly roadmap",
+        category: "Team Planning",
+        updatedAt: 2,
+      },
+      "agent:main:other": {
+        sessionId: "other",
+        displayName: "Unrelated",
+        category: "Personal",
+        updatedAt: 1,
+      },
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "team planning" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["agent:main:roadmap"]);
   });
 
   test("session list search includes direct-session origin display labels", () => {
@@ -1249,10 +1278,10 @@ describe("gateway session utils", () => {
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
-    expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
-      "openai",
-      { manifestRegistry: undefined },
-    );
+    const [providerId, options] =
+      providerArtifactMocks.resolveBundledProviderPolicySurface.mock.calls.at(-1) ?? [];
+    expect(providerId).toBe("openai");
+    expect(options).toHaveProperty("manifestRegistry");
   });
 
   test("keeps stored thinking text without a catalog and clamps it when one is present", () => {

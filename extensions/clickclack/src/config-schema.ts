@@ -61,9 +61,10 @@ const ClickClackAccountConfigSchema = z
   })
   .strict();
 
-const ClickClackConfigSchema = buildMultiAccountChannelSchema(ClickClackAccountConfigSchema, {
-  accountSchema: ClickClackAccountConfigSchema.partial(),
-});
+const ClickClackConfigSchema = buildMultiAccountChannelSchema(
+  ClickClackAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: ClickClackAccountConfigSchema.partial() },
+);
 
 /**
  * Config schema exported to core so `openclaw doctor` and config validation

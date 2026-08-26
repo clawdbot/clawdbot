@@ -1729,30 +1729,35 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("reports service config drift but skips service rewrite when service repair policy is external", async () => {
-    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
-      setupGatewayEntrypointRepairScenario({
-        currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
-        installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
-        installWorkingDirectory: "/tmp",
+  it.each(["OPENCLAW_SERVICE_REPAIR_POLICY", "OPENCLAW_SUPERVISOR_MODE"])(
+    "reports service config drift but skips repair when %s is external",
+    async (envKey) => {
+      await withEnvAsync({ [envKey]: "external" }, async () => {
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+          installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+          installWorkingDirectory: "/tmp",
+        });
+        const prompter = makeDoctorPrompts();
+
+        await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter);
+
+        expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledOnce();
+        expectNoteContaining(
+          "Gateway service entrypoint does not match the current install.",
+          "Gateway service config",
+        );
+        expect(mocks.note).toHaveBeenCalledWith(
+          EXTERNAL_SERVICE_REPAIR_NOTE,
+          "Gateway service config",
+        );
+        expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(mocks.stage).not.toHaveBeenCalled();
+        expect(mocks.install).not.toHaveBeenCalled();
       });
-
-      await runRepair({ gateway: {} });
-
-      expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledTimes(1);
-      expectNoteContaining(
-        "Gateway service entrypoint does not match the current install.",
-        "Gateway service config",
-      );
-      expect(mocks.note).toHaveBeenCalledWith(
-        EXTERNAL_SERVICE_REPAIR_NOTE,
-        "Gateway service config",
-      );
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(mocks.stage).not.toHaveBeenCalled();
-      expect(mocks.install).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
     await withEnvAsync({}, async () => {
@@ -1985,7 +1990,7 @@ describe("maybeScanExtraGatewayServices", () => {
     expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
   });
 
-  it("skips structured host-service discovery in externally managed containers", async () => {
+  it("skips structured host-service discovery in containers without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
 
     await expect(detectExtraGatewayServiceIssues({ deep: true })).resolves.toEqual([]);
@@ -2385,22 +2390,26 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalled();
   });
 
-  it("skips removal and prompts nothing when service repair is externally managed", async () => {
-    mockProcessPlatform("linux");
-    process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
-    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
-    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
-    const prompter = makeDoctorPrompts();
+  it.each(["OPENCLAW_SERVICE_REPAIR_POLICY", "OPENCLAW_SUPERVISOR_MODE"])(
+    "skips removal and repair confirmation when %s is external",
+    async (envKey) => {
+      mockProcessPlatform("linux");
+      mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+      mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+      const prompter = makeDoctorPrompts();
 
-    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+      await withEnvAsync({ [envKey]: "external" }, async () => {
+        await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+      });
 
-    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
-    expect(mocks.note).toHaveBeenCalledWith(
-      EXTERNAL_SERVICE_REPAIR_NOTE,
-      "Gateway cleanup skipped",
-    );
-  });
+      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+      expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+      expect(mocks.note).toHaveBeenCalledWith(
+        EXTERNAL_SERVICE_REPAIR_NOTE,
+        "Gateway cleanup skipped",
+      );
+    },
+  );
 
   it("keeps the user unit when the system unit is enabled but not running", async () => {
     mockProcessPlatform("linux");

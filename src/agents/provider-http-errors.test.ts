@@ -436,6 +436,28 @@ describe("provider error utils", () => {
     ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
   });
 
+  it("bounds stalled binary provider responses with the shared default idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+        }),
+        { headers: { "content-type": "audio/mpeg" } },
+      );
+      const assertion = expect(
+        readProviderBinaryResponse(response, "stalled-provider", "audio"),
+      ).rejects.toThrow("stalled-provider: response body stalled for 30000ms");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

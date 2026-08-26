@@ -520,8 +520,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return environmentAccess.project(
         await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
-          ...(machineClass === undefined ? {} : { machineClass }),
-          ...(executionMode === undefined ? {} : { executionMode }),
+          machineClass,
+          executionMode,
         }),
       );
     },
@@ -538,8 +538,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             providerId: profile.providerId,
             profileSnapshot: profile.profileSnapshot,
           },
-          ...(machineClass === undefined ? {} : { machineClass }),
-          ...(executionMode === undefined ? {} : { executionMode }),
+          machineClass,
+          executionMode,
         }),
       );
     },

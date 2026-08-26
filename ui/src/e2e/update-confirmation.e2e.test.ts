@@ -171,11 +171,25 @@ suite.define(() => {
         expect(await page.locator(".sidebar-footer-update__dismiss").count()).toBe(0);
 
         await page.locator(".sidebar-issues-button").click();
+        const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
+        await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
+        await scopeGuidance.waitFor({ state: "detached" });
         const updateIssue = page.locator(
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         await updateIssue.waitFor();
         expect(await updateIssue.locator(".sidebar-issues-panel__dismiss").count()).toBe(0);
+        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+        expect(await page.locator("#sidebar-issues-tab-all .hub-tab__badge--count").count()).toBe(
+          0,
+        );
+        expect(
+          await page.locator("#sidebar-issues-tab-system .hub-tab__badge--count").count(),
+        ).toBe(0);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(PROOF_DIR, "05-read-only-informational-update.png"),
+        });
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
     );

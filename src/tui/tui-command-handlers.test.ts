@@ -2071,6 +2071,52 @@ describe("tui command handlers", () => {
     },
   );
 
+  it.each([
+    { command: "/think high", rejected: false },
+    { command: "/verbose full", rejected: false },
+    { command: "/usage reset", rejected: false },
+    { command: "/model openai/gpt-5.6-luna", rejected: true },
+  ])(
+    "ignores a stale $command patch after the same session is reset",
+    async ({ command, rejected }) => {
+      const deferred = createDeferred<{
+        ok: true;
+        path: string;
+        key: string;
+        entry: Record<string, unknown>;
+      }>();
+      const harness = createHarness({
+        currentSessionId: "session-before-reset",
+        sessionGeneration: 4,
+        sessionInfo: { responseUsage: "tokens", effectiveResponseUsage: "tokens" },
+        patchSession: vi.fn(() => deferred.promise),
+      });
+
+      const pending = harness.handleCommand(command);
+      harness.state.currentSessionId = "session-after-reset";
+      harness.state.sessionGeneration = 5;
+      if (rejected) {
+        deferred.reject(new Error("stale session setting"));
+      } else {
+        deferred.resolve({
+          ok: true,
+          path: "/sessions/patch",
+          key: "agent:main:main",
+          entry: { model: "stale-model" },
+        });
+      }
+      await pending;
+
+      expect(harness.state.sessionInfo.responseUsage).toBe("tokens");
+      expect(harness.state.sessionInfo.effectiveResponseUsage).toBe("tokens");
+      expect(harness.applySessionInfoFromPatch).not.toHaveBeenCalled();
+      expect(harness.refreshSessionInfo).not.toHaveBeenCalled();
+      expect(harness.loadHistory).not.toHaveBeenCalled();
+      expect(harness.clearTools).not.toHaveBeenCalled();
+      expect(harness.addSystem).not.toHaveBeenCalled();
+    },
+  );
+
   it("applies a model patch after its selected session becomes canonical", async () => {
     const deferred = createDeferred<{
       ok: true;
@@ -2119,6 +2165,11 @@ describe("tui command handlers", () => {
   it.each([
     { name: "another session", initialKey: "agent:main:first", nextKey: "agent:main:second" },
     { name: "another global agent", initialKey: "global", nextKey: "global" },
+    {
+      name: "a replacement incarnation",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+    },
   ])("ignores a stale reset after selecting $name", async ({ initialKey, nextKey }) => {
     const deferred = createDeferred<{
       ok: true;
@@ -2128,6 +2179,8 @@ describe("tui command handlers", () => {
     const harness = createHarness({
       currentSessionKey: initialKey,
       currentAgentId: "main",
+      currentSessionId: "first-session",
+      sessionGeneration: 4,
       resetSession: vi.fn(() => deferred.promise),
       applySessionMutationResult: vi.fn().mockReturnValue(true),
     });
@@ -2141,6 +2194,9 @@ describe("tui command handlers", () => {
     harness.state.currentSessionKey = nextKey;
     if (initialKey === "global") {
       harness.state.currentAgentId = "work";
+    }
+    if (initialKey === nextKey && initialKey !== "global") {
+      harness.state.sessionGeneration += 1;
     }
     harness.state.currentSessionId = "second-session";
     deferred.resolve({
@@ -2247,6 +2303,28 @@ describe("tui command handlers", () => {
     });
     await openclaw.handleCommand("/think");
     expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
+  });
+
+  it("uses the active session's supported thinking levels in help and command usage", async () => {
+    const { handleCommand, addSystem } = createHarness({
+      sessionInfo: {
+        modelProvider: "minimax",
+        model: "MiniMax-M3",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "max", label: "max" },
+        ],
+      },
+    });
+
+    await handleCommand("/help");
+    await handleCommand("/think");
+
+    expect(addSystem).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/think <off|max|default>"),
+    );
+    expect(addSystem).toHaveBeenNthCalledWith(2, "usage: /think <off|max|default>");
   });
 
   it.each([

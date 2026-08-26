@@ -15,9 +15,9 @@ extension AgentProTab {
                         color: OpenClawBrand.accentForeground)
                 }
                 HStack(spacing: 10) {
-                    self.detailMetric(label: "Cost", value: self.usageValue)
-                    self.detailMetric(label: "Tokens", value: self.usageTokenValue)
-                    self.detailMetric(label: "Cache", value: self.usageCacheValue)
+                    agentProDetailMetric(label: "Cost", value: self.usageValue)
+                    agentProDetailMetric(label: "Tokens", value: self.usageTokenValue)
+                    agentProDetailMetric(label: "Cache", value: self.usageCacheValue)
                 }
             }
         }
@@ -42,7 +42,7 @@ extension AgentProTab {
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
                 let days = Self.displayedUsageDays(self.overview?.usage?.daily ?? [])
                 if days.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "chart.bar",
                         title: "No daily usage yet",
                         detail: "The gateway returned totals without daily session cost rows.")

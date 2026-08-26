@@ -129,7 +129,7 @@ extension NodeServiceManager {
         let message = parsed?.error ?? parsed?.message
         let payload = parsed?.text.data(using: .utf8)
             ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
-        let success = ok ?? response.success
+        let success = response.success && (ok ?? true)
         if success {
             return CommandResult(success: true, payload: payload, message: nil, parsed: parsed)
         }

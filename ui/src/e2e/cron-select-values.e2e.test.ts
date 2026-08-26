@@ -81,6 +81,17 @@ suite.define(() => {
         // Control: delivery mode's default is also its first option.
         expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("announce");
         expect(await pickerValue("wa-select#cron-delivery-channel")).toBe("last");
+
+        await action.click();
+        await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
+        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("systemEvent");
+        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("main");
+
+        const target = page.locator("wa-select#cron-session-target");
+        await target.click();
+        await page.getByRole("option", { name: "Isolated session", exact: true }).click();
+        await expect.poll(() => pickerValue("wa-select#cron-session-target")).toBe("isolated");
+        await expect.poll(() => pickerValue("wa-select#cron-payload-kind")).toBe("agentTurn");
       },
     );
   });

@@ -10,6 +10,7 @@ import {
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
+  serializeNativeI18nInventory,
   syncNativeLocale,
   type NativeI18nEntry,
   validateNativeLocaleArtifact,
@@ -41,6 +42,37 @@ function hasSite(
 }
 
 describe("native app i18n inventory", () => {
+  it("serializes each complete entry on one line", () => {
+    const entries = [
+      {
+        id: "native.android.fixture",
+        source: 'A quoted "label"\nwith two lines',
+        surface: "android",
+        sites: [
+          { kind: "xml-string", path: "apps/android/res/values/strings.xml" },
+          { kind: "ui-call", path: "apps/android/src/Fixture.kt" },
+        ],
+      },
+      {
+        id: "native.apple.fixture",
+        source: "Settings",
+        surface: "apple",
+        sites: [{ kind: "ui-call", path: "apps/ios/Sources/Fixture.swift" }],
+      },
+    ] satisfies NativeI18nEntry[];
+
+    const serialized = serializeNativeI18nInventory(entries);
+    const lines = serialized.trimEnd().split("\n");
+
+    expect(JSON.parse(serialized)).toEqual({ version: 2, entries });
+    expect(lines).toHaveLength(entries.length + 5);
+    expect(lines.slice(3, -2)).toEqual([
+      `    ${JSON.stringify(entries[0])},`,
+      `    ${JSON.stringify(entries[1])}`,
+    ]);
+    expect(serialized.endsWith("\n")).toBe(true);
+  });
+
   it("merges sites and hashes only surface plus source", () => {
     const source = "Gateway status";
     const entries = assignNativeI18nIds([

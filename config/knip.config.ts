@@ -413,7 +413,6 @@ const config = {
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
-    "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
@@ -848,7 +847,7 @@ const config = {
       // crypto dependencies. The protocol barrel is the vendored library's
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
-      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      entry: [...bundledPluginEntries, "protocol/index.ts!"],
       project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },

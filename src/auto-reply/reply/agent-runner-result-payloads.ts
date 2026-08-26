@@ -46,7 +46,6 @@ import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { attachMcpConnectChannelAction } from "./mcp-connect-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -217,10 +216,7 @@ export async function prepareReplyAgentPayloads(state: {
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         messagingToolSentTexts: runResult.messagingToolSentTexts,
         messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
+        originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
         originatingThreadId: replyRouteThreadId,
         accountId: sessionCtx.AccountId,
       }));
@@ -265,10 +261,7 @@ export async function prepareReplyAgentPayloads(state: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingChatType: sessionCtx.ChatType,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: sessionCtx.OriginatingTo,
-        to: sessionCtx.To,
-      }),
+      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
       originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
