@@ -19,11 +19,13 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 
 // Two concurrent plans halve the serial tail of packed jobs. Children run with
 // inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
+const PLAN_CONCURRENCY_ENV_KEY = "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
 const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
@@ -308,7 +310,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const baseEnv = options.env ?? process.env;
   const parsedVitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
   const vitestExtraArgs = isStringArray(parsedVitestExtraArgs) ? parsedVitestExtraArgs : [];
-  const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
+  const requestedConcurrency = options.concurrency ?? PLAN_CONCURRENCY;
+  if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
+    throw new Error("Shard plan concurrency must be a positive safe integer");
+  }
+  const concurrency = Math.min(requestedConcurrency, Math.max(1, plans.length));
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
@@ -389,7 +395,11 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
   // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
   // the planner; overlapping them with a sibling Vitest run causes flakes.
-  const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
+  const planConcurrency = readPositiveEnvInt(
+    PLAN_CONCURRENCY_ENV_KEY,
+    process.env,
+    PLAN_CONCURRENCY,
+  );
   process.exitCode = await runShardPlans(plans, {
     concurrency: planConcurrency,
     continueOnFailure: process.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",

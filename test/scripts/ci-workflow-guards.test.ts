@@ -9427,6 +9427,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
     expect(sparseCheckoutPaths).toContain("scripts/ci-run-node-test-shard.mts");
+    expect(sparseCheckoutPaths).toContain("scripts/lib/numeric-options.mjs");
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
     }

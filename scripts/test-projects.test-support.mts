@@ -2412,6 +2412,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
+  [
+    /^scripts\/lib\/numeric-options\.(?:mjs|d\.mts)$/u,
+    ["test/scripts/numeric-options.test.ts", workflowGuards],
+  ],
   [/^scripts\/check-changed\.(?:mjs|mts)$/u, ["changed-lanes"]],
   [/^scripts\/changed-lanes\.(?:mjs|mts)$/u, ["changed-lanes"]],
   [/^scripts\/(?:lib\/tsx-cli-shim|tsx)\.mjs$/u, ["direct-run-entrypoints"]],

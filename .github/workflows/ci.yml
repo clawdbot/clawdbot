@@ -2991,6 +2991,7 @@ jobs:
             scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
+            scripts/lib/numeric-options.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

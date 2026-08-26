@@ -1239,6 +1239,11 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/check-changelog-attributions.mts"],
       ["test/scripts/check-changelog-attributions.test.ts"],
     );
+
+    expectChangedTargets(
+      ["scripts/lib/numeric-options.mjs"],
+      ["test/scripts/numeric-options.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+    );
   });
 
   it("routes shared contract ownership and declarations through every affected lane", () => {

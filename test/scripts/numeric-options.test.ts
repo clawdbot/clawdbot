@@ -39,7 +39,7 @@ describe("readPositiveEnvInt", () => {
     expect(readPositiveEnvInt("LIMIT", { LIMIT: " 123 " }, 42)).toBe(123);
   });
 
-  it.each(["0", "-1", "1.5", "1e3", "0x10", "9007199254740992"])(
+  it.each(["0", "01", "-1", "1.5", "1e3", "0x10", "Infinity", "9007199254740992"])(
     "rejects invalid value %s",
     (raw) => {
       expect(() => readPositiveEnvInt("LIMIT", { LIMIT: raw }, 42)).toThrow(

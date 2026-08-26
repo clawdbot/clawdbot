@@ -168,6 +168,26 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
 
+  it("does not create more workers than plans", async () => {
+    const scratchDir = makeScratchDir();
+    let runs = 0;
+    const exitCode = await runShardPlans(
+      [{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }],
+      {
+        concurrency: Number.MAX_SAFE_INTEGER,
+        env: {},
+        runChild: async () => {
+          runs += 1;
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(runs).toBe(1);
+  });
+
   it("runs per-config groups serially through one persistent cache slot", async () => {
     const scratchDir = makeScratchDir();
     const persistentRoot = path.join(makeScratchDir(), "persistent");
