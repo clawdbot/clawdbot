@@ -2890,7 +2890,7 @@ describe("tui command handlers", () => {
       "model-selector",
       "loading models...",
     );
-    expect(failingHarness.dismissPendingSystem).not.toHaveBeenCalled();
+    expect(failingHarness.dismissPendingSystem).toHaveBeenCalledWith("model-selector");
     expect(failingHarness.addSystem).toHaveBeenCalledWith("model list failed: catalog exploded");
   });
 

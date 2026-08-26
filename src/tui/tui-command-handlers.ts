@@ -380,6 +380,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
+      chatLog.dismissPendingSystem(pendingRunId);
       chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
       tui.requestRender();
     }
