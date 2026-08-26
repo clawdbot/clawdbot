@@ -517,8 +517,9 @@ export async function processCompletionsStream(
     }
     for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
       const choiceDelta = normalizedDelta.delta;
+      const deltaFields = choiceDelta as Record<string, unknown>;
       const reasoningBatch = readOpenAICompletionsReasoningBatch(
-        choiceDelta as Record<string, unknown>,
+        deltaFields,
         visibleReasoningDetailTypes,
       );
       const reasoningDeltas = reasoningBatch.deltas;
@@ -635,9 +636,7 @@ export async function processCompletionsStream(
           }
         }
       }
-      encryptedReasoning?.consumeDetails(
-        (choiceDelta as { reasoning_details?: unknown }).reasoning_details,
-      );
+      encryptedReasoning?.consumeDetails(deltaFields.reasoning_details);
     }
     flushPendingPostToolCallDeltas();
     emitReasoningUsageActivity(hasReasoningUsageActivity);
