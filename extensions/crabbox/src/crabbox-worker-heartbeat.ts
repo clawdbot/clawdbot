@@ -101,16 +101,17 @@ export function createCrabboxHeartbeatManager(dependencies: {
     schedule(entry);
   };
 
-  const stop = (leaseId: string): void => {
+  const stop = (leaseId: string): boolean => {
     const entry = entries.get(leaseId);
     if (!entry) {
-      return;
+      return false;
     }
     entries.delete(leaseId);
     if (entry.timer) {
       clearTimeout(entry.timer);
     }
     entry.controller?.abort();
+    return true;
   };
 
   return {

@@ -16,7 +16,6 @@ import {
 import {
   type CrabboxCommandRunner,
   isAuthoritativeLeaseAbsence,
-  provisionProfileError,
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
@@ -34,7 +33,6 @@ import {
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import {
-  buildCrabboxWarmupArgs,
   CRABBOX_WORKER_PROVIDER_ID,
   nonEmptyString,
   operationLeaseId,
@@ -57,6 +55,7 @@ import {
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
@@ -470,6 +469,11 @@ export function createCrabboxWorkerProvider(
     runCommand,
     warn,
   });
+  const warmImages = createCrabboxWarmImageManager({
+    runCommand,
+    runArgs: crabboxLeaseRunArgs,
+    warn,
+  });
   const resolveLeaseContext = (
     lease: Parameters<WorkerProvider["inspect"]>[0],
   ): LeaseHeartbeatContext => {
@@ -552,20 +556,13 @@ export function createCrabboxWorkerProvider(
         }
       }
 
-      const warmup = await runCrabboxCommand({
-        action: "warmup",
-        args: buildCrabboxWarmupArgs(parsed, leaseId, slug),
-        binary,
-        runCommand,
-        timeoutMs: remainingProvisionTimeout(deadline, warmupTimeoutMs),
+      await warmImages.allocate({
+        ...context,
+        id: leaseId,
+        profile: parsed,
+        slug,
+        timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
-      if (warmup.termination !== "exit" || warmup.code !== 0) {
-        const profileError = provisionProfileError(warmup);
-        if (profileError) {
-          throw profileError;
-        }
-        throw crabboxCommandError("warmup", warmup);
-      }
       let inspected: InspectCommandResult;
       try {
         inspected = await inspectWithContext({
@@ -713,7 +710,11 @@ export function createCrabboxWorkerProvider(
     async destroy(lease): Promise<void> {
       const context = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
-      heartbeats.stop(context.id);
+      const eligible = heartbeats.stop(context.id);
+      const profile = parseCrabboxProfile(lease.profile);
+      if (profile.warmImage) {
+        await warmImages.capture({ ...context, profile, eligible });
+      }
       await stopCrabboxLease({
         ...context,
         runCommand,
