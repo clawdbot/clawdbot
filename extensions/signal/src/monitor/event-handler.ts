@@ -81,7 +81,6 @@ import {
 import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
-import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
@@ -878,23 +877,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
-      return true;
-    }
-    if (
-      conversationKey &&
-      (await maybeResolveSignalQuestionReaction({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        isRemove: Boolean(params.reaction.isRemove),
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logDebug: logVerbose,
-      }))
-    ) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);

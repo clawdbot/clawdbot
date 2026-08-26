@@ -471,6 +471,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       config: resolvedConfig,
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       pluginToolDenylist: options?.pluginToolDenylist,
+      questionInputMode: options?.questionInputMode,
     })
       ? [
           createAskUserTool({

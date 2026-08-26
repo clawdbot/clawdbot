@@ -20,9 +20,11 @@ import {
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
+  ChannelQuestionInputMode,
 } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 export { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -150,6 +152,19 @@ export function resolveChannelPromptCapabilities(params: {
     capabilities.push(NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY);
   }
   return capabilities;
+}
+
+/** Prepare whether the active conversation can complete a structured question. */
+export function resolveChannelQuestionInputMode(params: {
+  channel?: string | null;
+}): ChannelQuestionInputMode {
+  if (!params.channel || params.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return "native";
+  }
+  const channelId = normalizeAnyChannelId(params.channel);
+  return channelId
+    ? (getChannelPlugin(channelId)?.agentPrompt?.questionInputMode ?? "none")
+    : "none";
 }
 
 function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {

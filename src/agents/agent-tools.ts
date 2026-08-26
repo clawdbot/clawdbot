@@ -791,6 +791,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),
+            questionInputMode: capabilityProfile.conversation.questionInputMode,
             agentAccountId: options?.agentAccountId,
             gatewayCallerAccountId: gatewayCaller.accountId,
             gatewayCallerChannel: gatewayCaller.channel,

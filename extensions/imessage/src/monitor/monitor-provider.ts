@@ -71,10 +71,6 @@ import {
   imessageRpcSupportsMethod,
   probeIMessage,
 } from "../probe.js";
-import {
-  hasIMessageQuestionReactionTarget,
-  maybeResolveIMessageQuestionReaction,
-} from "../question-reactions.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -761,11 +757,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
-    const isQuestionReaction = hasIMessageQuestionReactionTarget({
-      accountId: accountInfo.accountId,
-      message,
-      bodyText,
-    });
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -784,7 +775,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
-      reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,
+      reactionNotifications: imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -898,18 +889,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     if (decision.kind === "reaction") {
-      if (
-        await maybeResolveIMessageQuestionReaction({
-          cfg,
-          accountId: accountInfo.accountId,
-          message,
-          bodyText,
-          senderId: decision.senderNormalized,
-          logDebug: logVerbose,
-        })
-      ) {
-        return;
-      }
       enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }

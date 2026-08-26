@@ -675,7 +675,10 @@ export type ChannelMessagingAdapter = {
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
+export type ChannelQuestionInputMode = "native" | "buttons" | "none";
+
 export type ChannelAgentPromptAdapter = {
+  questionInputMode?: Exclude<ChannelQuestionInputMode, "native" | "none">;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   messageToolCapabilities?: (params: {
     cfg: OpenClawConfig;

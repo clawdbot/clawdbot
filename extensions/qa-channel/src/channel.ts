@@ -148,6 +148,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   base: {
     ...qaChannelPluginBase,
     capabilities: { ...qaChannelPluginBase.capabilities, media: true },
+    agentPrompt: { questionInputMode: "buttons" },
     messaging: {
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,

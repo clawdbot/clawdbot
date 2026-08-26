@@ -50,6 +50,7 @@ export function createSlackPluginBase(params: {
     setupContract: params.setupContract,
     doctor: slackDoctor,
     agentPrompt: {
+      questionInputMode: "buttons",
       inboundFormattingHints: () => ({
         text_markup: "slack_mrkdwn",
         rules: [
