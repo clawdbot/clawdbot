@@ -49,7 +49,11 @@ import {
   storedChatOutboxScopeKey,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -431,6 +435,19 @@ export function handlePageGatewayEvent(
     const sessionMatches = Boolean(
       payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
     );
+    const recoveryRunId =
+      payload?.state === "final" &&
+      (payload.message === undefined || payload.message === null) &&
+      sessionMatches &&
+      typeof payload.runId === "string" &&
+      (!state.chatRunId || state.chatRunId === payload.runId)
+        ? payload.runId
+        : null;
+    const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
+    const projectedRunBeforeEvent =
+      recoveryRunId && recoveryScope
+        ? getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
+        : undefined;
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
@@ -484,12 +501,14 @@ export function handlePageGatewayEvent(
     }
     replayPendingSessionMessageReload(state, payload, isPresented);
     if (
-      payload?.state === "final" &&
-      (payload.message === undefined || payload.message === null) &&
-      sessionMatches
+      recoveryRunId &&
+      recoveryScope &&
+      (projectedRunBeforeEvent === undefined || projectedRunBeforeEvent.status === "streaming") &&
+      getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
+        ?.status === "completed"
     ) {
-      // Lifecycle completion can arrive without a live assistant projection.
-      // Reconcile the durable transcript so Done never strands a persisted reply.
+      // Only the first owned completion can recover history. Replayed, yielded,
+      // or background-run terminals must not repeat I/O or disturb the foreground pane.
       void loadChatHistory(state, { deferBranches: !isPresented() }).finally(() =>
         state.requestUpdate?.(),
       );

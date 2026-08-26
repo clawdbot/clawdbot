@@ -538,11 +538,16 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([
-    { name: "omitted", terminalMessage: undefined },
-    { name: "null", terminalMessage: null },
+    { name: "omitted", terminalMessage: undefined, startsActive: true },
+    { name: "null", terminalMessage: null, startsActive: true },
+    {
+      name: "omitted for an idle selected session",
+      terminalMessage: undefined,
+      startsActive: false,
+    },
   ])(
     "recovers the durable reply when the terminal message is $name",
-    async ({ terminalMessage }) => {
+    async ({ terminalMessage, startsActive }) => {
       const runId = "run-with-message-less-terminal";
       const replyText = "The durable reply must appear below Done.";
       const prompt = {
@@ -571,7 +576,7 @@ describe("canonical session message recovery", () => {
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
-        chatRunId: runId,
+        chatRunId: startsActive ? runId : null,
         chatStream: null,
         chatStreamSegments: [],
         chatToolMessages: [],
@@ -607,8 +612,69 @@ describe("canonical session message recovery", () => {
           { role: "assistant", text: replyText },
         ]),
       );
+
+      request.mockClear();
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "final",
+          message: terminalMessage,
+        },
+      });
+      expect(request).not.toHaveBeenCalled();
     },
   );
+
+  it("does not reload for a background run's message-less final", () => {
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatRunId: "foreground-run",
+      chatStream: "The foreground reply is still streaming.",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "background-run",
+        state: "final",
+      },
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.chatRunId).toBe("foreground-run");
+    expect(state.chatStream).toBe("The foreground reply is still streaming.");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
+  it("does not reload for a yielded message-less final", () => {
+    const runId = "yielded-run";
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatRunId: runId,
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        yielded: true,
+        stopReason: "end_turn",
+      },
+    });
+
+    expect(request).not.toHaveBeenCalled();
+  });
 
   it("keeps the live final projection without an unnecessary history reload", () => {
     const runId = "run-with-live-terminal-message";

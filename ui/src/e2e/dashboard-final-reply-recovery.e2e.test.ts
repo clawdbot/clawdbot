@@ -68,7 +68,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const params = send.params as Record<string, unknown>;
-      const runId = String(params.idempotencyKey ?? "");
+      const runId = typeof params.idempotencyKey === "string" ? params.idempotencyKey : "";
       expect(runId).not.toBe("");
 
       await gateway.setHistoryMessages([
