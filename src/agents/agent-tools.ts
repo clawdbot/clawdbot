@@ -525,6 +525,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       options?.senderIsOwner === false || options?.isTurnTainted?.() === true
         ? "untrusted"
         : "agent",
+    sessionId: options?.sessionId,
+    sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
