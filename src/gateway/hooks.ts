@@ -336,6 +336,14 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   externalContentSource?: HookExternalContentSource;
   /** Configured ingress source attribution; never an authenticated principal. */
   mappingId?: string;
+  /**
+   * "background" admits without the start deadline: the run is never canceled
+   * for admitting slowly, and its eventual result feeds the replay cache.
+   * Fan-out items use it because their producer retries by redelivery — a
+   * fixed admission deadline would cancel every item of a slow cold batch,
+   * cache nothing, and turn each redelivery into the same cold burst forever.
+   */
+  admissionMode?: "bounded" | "background";
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];

@@ -712,6 +712,7 @@ export function createHooksRequestHandler(
                   timeoutSeconds: action.timeoutSeconds,
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
+                  ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
                   externalContentSource: resolveMappedHookExternalContentSource({
                     subPath,
                     sessionKey: sessionKey.value,
