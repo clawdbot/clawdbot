@@ -41,7 +41,6 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
-const RESTART_INDICATOR_MIN_DURATION_MS = 15_000;
 
 function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
@@ -99,7 +98,6 @@ export function createApplicationGateway(
     client: null,
     phase: "stopped",
     offlineStable: false,
-    restartPending: false,
     hello: null,
     canvasPluginSurfaceUrl: null,
     assistantAgentId: null,
@@ -149,9 +147,9 @@ export function createApplicationGateway(
           setSnapshot({ ...snapshot, restartPending: false });
         }
       },
-      resolveSafeTimeoutDelayMs((restartExpectedMs ?? 0) * 3, {
-        minMs: RESTART_INDICATOR_MIN_DURATION_MS,
-      }),
+      // Floor 15s: a failed restart must degrade to the offline pill, never
+      // wear the amber state forever.
+      resolveSafeTimeoutDelayMs((restartExpectedMs ?? 0) * 3, { minMs: 15_000 }),
     );
   };
   const scheduleOfflineIndicator = () => {
@@ -278,16 +276,13 @@ export function createApplicationGateway(
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
     if (event.event === "shutdown") {
+      // Remote payload: non-numeric or hostile values fall to the timer clamp's floor.
       const payload = event.payload;
       const expected =
         payload && typeof payload === "object" && "restartExpectedMs" in payload
           ? payload.restartExpectedMs
           : undefined;
-      scheduleRestartDeadline(
-        typeof expected === "number" && Number.isSafeInteger(expected) && expected >= 0
-          ? expected
-          : undefined,
-      );
+      scheduleRestartDeadline(typeof expected === "number" ? expected : undefined);
       setSnapshot({ ...snapshot, restartPending: true });
       if (!isCurrentClient(eventClient)) {
         return;
@@ -349,9 +344,11 @@ export function createApplicationGateway(
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
     // A different Gateway has no established session to keep mounted on failure.
+    // Accepted tradeoff: a restart pill armed for the previous gateway may
+    // linger across a mid-restart gateway switch until the next hello or the
+    // restart deadline clears it; no special-case reset for that rare edge.
     if (gatewayUrlChanged) {
       everConnected = false;
-      clearRestartDeadlineTimer();
     }
     connection = nextConnection;
     // Trust the connected gateway's origin for avatar route resolution so
@@ -504,8 +501,10 @@ export function createApplicationGateway(
           return;
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        // Fresh drain evidence re-arms the deadline: the server still says
+        // "restarting", so the amber state stays honest for another window.
         const restartPending = isGatewayRestartUnavailableError(error);
-        if (restartPending && !snapshot.restartPending) {
+        if (restartPending) {
           scheduleRestartDeadline();
         }
         setSnapshot({
@@ -577,7 +576,6 @@ export function createApplicationGateway(
       assistantAgentId: null,
       selfUser: null,
       sessionKey: nextSessionKey,
-      restartPending: gatewayUrlChanged ? false : snapshot.restartPending,
       lastError: null,
       lastErrorCode: null,
     });

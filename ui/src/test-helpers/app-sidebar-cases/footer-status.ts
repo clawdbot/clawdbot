@@ -70,9 +70,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "git@e8cbc62 · 4h ago",
-    );
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account: git@e8cbc62 · 4h ago",
     );
@@ -87,7 +84,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     sidebar.requestUpdate();
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account",
     );
@@ -99,7 +95,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
+    ).not.toContain("Local Gateway");
   });
 
   it("stays hidden with one configured gateway", async () => {
@@ -107,7 +105,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
+    ).not.toContain("Local Gateway");
   });
 
   it("shows the current gateway health, name, and primary suffix", async () => {
@@ -116,18 +116,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("ok");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Local Gateway",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")?.textContent).toBe(
-      "· primary",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).not.toContain(
-      "git@e8cbc62",
-    );
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account: Local Gateway, primary",
     );
@@ -157,8 +145,6 @@ describe("AppSidebar gateway footer subtitle", () => {
     ).toBe("connection refused?[redacted-credential]");
     status?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account: Reconnecting…",
     );
@@ -194,12 +180,8 @@ describe("AppSidebar gateway footer subtitle", () => {
     window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed"));
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Remote Gateway",
-    );
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("error");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")).toBeNull();
+    const ariaLabel = sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label");
+    expect(ariaLabel).toContain("Remote Gateway");
+    expect(ariaLabel).not.toContain("primary");
   });
 });

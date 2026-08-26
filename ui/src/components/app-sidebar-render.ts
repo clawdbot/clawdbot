@@ -381,27 +381,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
         <span class="sidebar-identity-card__text">
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
-          ${gateway
-            ? html`<span
-                class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway sr-only"
-                aria-hidden="true"
-              >
-                <span
-                  class="sidebar-identity-card__gateway-health"
-                  data-health=${gateway.health}
-                ></span>
-                <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
-                ${gatewayPrimaryTag
-                  ? html`<span class="sidebar-identity-card__gateway-primary"
-                      >· ${gatewayPrimaryTag}</span
-                    >`
-                  : nothing}
-              </span>`
-            : !host.offline && buildSubtitle
-              ? html`<span class="sidebar-identity-card__subtitle sr-only" aria-hidden="true"
-                  >${buildSubtitle}</span
-                >`
-              : nothing}
         </span>
       </button>
       ${host.restartPending || host.offline

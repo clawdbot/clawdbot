@@ -3334,60 +3334,17 @@ openclaw-sidebar-attention {
   min-width: 0;
 }
 
-.sidebar-identity-card__name,
-.sidebar-identity-card__subtitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-identity-card__name {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 18px;
-}
-
-.sidebar-identity-card__subtitle {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
-}
-
-.sidebar-identity-card__subtitle--gateway {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.sidebar-identity-card__gateway-health {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.sidebar-identity-card__gateway-health[data-health="ok"] {
-  background: var(--ok);
-}
-
-.sidebar-identity-card__gateway-health[data-health="error"] {
-  background: var(--danger);
-}
-
-.sidebar-identity-card__gateway-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-identity-card__gateway-primary {
-  flex: none;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {

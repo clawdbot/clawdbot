@@ -5,12 +5,15 @@ export const GATEWAY_SUSPEND_UNAVAILABLE_REASON = "gateway-suspending";
 
 /** Detects the structured retryable error emitted while a restart drain refuses work. */
 export function isGatewayRestartUnavailableError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("details" in error)) {
+  if (!error || typeof error !== "object") {
     return false;
   }
-  const details = error.details;
-  if (typeof details !== "object" || details === null || !("reason" in details)) {
-    return false;
-  }
-  return details.reason === GATEWAY_RESTART_UNAVAILABLE_REASON;
+  // SAFETY: optional read off an untrusted shape; the reason equality gates the result.
+  const details = (error as { details?: unknown }).details;
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    // SAFETY: same untrusted-shape read, guarded by the equality check.
+    (details as { reason?: unknown }).reason === GATEWAY_RESTART_UNAVAILABLE_REASON
+  );
 }
