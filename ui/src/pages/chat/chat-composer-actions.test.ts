@@ -9,7 +9,10 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatPrimaryActions } from "./components/chat-composer-controls.ts";
+import {
+  renderChatPrimaryActions,
+  type ChatRunControlsProps,
+} from "./components/chat-composer-controls.ts";
 import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
@@ -35,45 +38,114 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
-  it.each([
-    { committed: false, sends: 0 },
-    { committed: true, sends: 1 },
-  ])(
-    "sends after dictation only when the current transcript committed: $committed",
-    async ({ committed, sends }) => {
-      const container = document.createElement("div");
-      const finishActive = vi.fn().mockResolvedValue(committed);
-      const onSend = vi.fn();
-      const dictation = {
-        active: true,
-        connecting: false,
-        finalizing: false,
-        locksComposer: true,
-        elapsed: "0:01",
-        finishActive,
-      } as unknown as ComposerDictationController;
-      render(
-        renderChatPrimaryActions({
-          canAbort: false,
-          canSend: true,
-          connected: true,
-          draft: "preexisting draft",
-          isBusy: false,
-          steerNowEnabled: false,
-          sending: false,
-          dictation,
-          onSend,
-        }),
-        container,
-      );
+  function renderActiveDictationActions(overrides: {
+    finishActive: ReturnType<typeof vi.fn>;
+    onSend?: ChatRunControlsProps["onSend"];
+  }) {
+    const container = document.createElement("div");
+    const cancelActive = vi.fn();
+    const handleClick = vi.fn();
+    const onSend = overrides.onSend ?? vi.fn<ChatRunControlsProps["onSend"]>();
+    const dictation = {
+      active: true,
+      connecting: false,
+      finalizing: false,
+      locksComposer: true,
+      finishActive: overrides.finishActive,
+      cancelActive,
+      handleClick,
+    } as unknown as ComposerDictationController;
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: true,
+        connected: true,
+        draft: "preexisting draft",
+        isBusy: false,
+        steerNowEnabled: false,
+        sending: false,
+        dictation,
+        onSend,
+      }),
+      container,
+    );
+    return { cancelActive, container, handleClick, onSend };
+  }
 
-      container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-send")?.click();
-      await Promise.resolve();
+  it("stops dictation by keeping its text without sending", () => {
+    const finishActive = vi.fn().mockResolvedValue(true);
+    const { cancelActive, container, handleClick, onSend } = renderActiveDictationActions({
+      finishActive,
+    });
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
 
-      expect(finishActive).toHaveBeenCalledOnce();
-      expect(onSend).toHaveBeenCalledTimes(sends);
-    },
-  );
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    stop?.click();
+
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(cancelActive).not.toHaveBeenCalled();
+    expect(handleClick).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("commits dictation before sending the complete composer draft", async () => {
+    const order: string[] = [];
+    const finishActive = vi.fn(async () => {
+      order.push("commit");
+      return true;
+    });
+    const onSend = vi.fn(() => order.push("send"));
+    const { cancelActive, container, handleClick } = renderActiveDictationActions({
+      finishActive,
+      onSend,
+    });
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+
+    expect(send?.getAttribute("aria-label")).toBe("Send");
+    send?.click();
+    await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+
+    expect(finishActive).toHaveBeenCalledOnce();
+    expect(order).toEqual(["commit", "send"]);
+    expect(cancelActive).not.toHaveBeenCalled();
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps Stop and Send visually stable while dictation finalizes", () => {
+    const container = document.createElement("div");
+    const dictation = {
+      active: true,
+      connecting: false,
+      finalizing: true,
+      locksComposer: true,
+      finishActive: vi.fn(),
+    } as unknown as ComposerDictationController;
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: true,
+        connected: true,
+        draft: "preexisting draft",
+        isBusy: false,
+        steerNowEnabled: false,
+        sending: false,
+        dictation,
+        onSend: vi.fn(),
+      }),
+      container,
+    );
+
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    expect(stop?.disabled).toBe(false);
+    expect(stop?.getAttribute("aria-disabled")).toBe("true");
+    expect(stop?.querySelector("rect")).not.toBeNull();
+    expect(send?.classList.contains("chat-send-btn--send")).toBe(true);
+    expect(send?.disabled).toBe(false);
+    expect(send?.getAttribute("aria-disabled")).toBe("true");
+    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+  });
 
   it.each([
     {
@@ -136,7 +208,7 @@ describe("renderChatComposer controls", () => {
   );
 
   it.each([
-    [undefined, "Tap to talk · Hold to dictate"],
+    [undefined, t("chat.composer.voiceGestureHint")],
     [false, t("chat.composer.startVoiceInput")],
   ])(
     "uses the gesture hint only when hold-to-dictate is available",
@@ -533,7 +605,7 @@ describe("renderChatComposer controls", () => {
     });
   });
 
-  it("renders reconnect waits as quiet status without the raw transport error", () => {
+  it("renders reconnect waits as compact badges without the raw transport error", () => {
     const { container } = renderComposer({
       queue: [
         {
@@ -547,12 +619,13 @@ describe("renderChatComposer controls", () => {
     });
     const item = container.querySelector(".chat-queue__item");
     expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
-    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(
+      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
+    ).not.toBeNull();
     expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    const badge = item?.querySelector(".chat-queue__badge");
-    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
-    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    const state = item?.querySelector(".chat-queue__badge--reconnect");
+    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {
@@ -588,7 +661,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    expect(view.container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+    expect(view.container.querySelector(".chat-queue__state")?.textContent?.trim()).toBe(
       "Running command",
     );
     expect(view.container.querySelector(".chat-queue__retry")).toBeNull();

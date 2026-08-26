@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340901,
-  "reason": "refresh after cumulative current-main UI fixes exhausted the startup tolerance",
+  "startupJsGzipBytes": 341489,
+  "reason": "composer queue stack rebased onto current main",
   "updatedAt": "2026-08-26"
 }

@@ -101,6 +101,7 @@ export type ChatThreadProps = {
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -114,9 +115,9 @@ export type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;

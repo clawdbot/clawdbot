@@ -145,17 +145,14 @@ export function resolveMatrixPendingHistoryText(params: {
   content: RoomMessageEventContent;
   mediaUrl?: string;
 }): string {
-  if (params.mentionPrecheckText) {
-    return params.mentionPrecheckText;
-  }
   if (!params.mediaUrl) {
-    return "";
+    return params.mentionPrecheckText;
   }
   const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
     typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return formatMatrixMessageText({ body, filename, msgtype }) ?? "";
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? params.mentionPrecheckText;
 }
 
 export function resolveMatrixInboundMediaContent(content: RoomMessageEventContent) {

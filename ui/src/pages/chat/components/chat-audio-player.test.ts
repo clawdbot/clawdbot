@@ -32,13 +32,28 @@ afterEach(() => {
 });
 
 describe("ChatAudioPlayer", () => {
+  it("keeps the download action for normalized base64 audio", async () => {
+    const player = document.createElement("openclaw-chat-audio-player");
+    player.src = "data:audio/wav;base64,UklGRg==";
+    player.sourceIdentity = "inline-audio";
+    player.label = "inline.wav";
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(
+      player
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe("data:audio/wav;base64,UklGRg==");
+  });
+
   it("formats elapsed and total media time", async () => {
     const player = await createPlayer("timing");
     expect(
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["0:00", "0:00"]);
+    ).toEqual(["0:00 / 0:00"]);
 
     const media = player.querySelector("audio")!;
     setMediaNumber(media, "currentTime", 65.9);
@@ -50,7 +65,7 @@ describe("ChatAudioPlayer", () => {
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["1:05", "61:05"]);
+    ).toEqual(["1:05 / 61:05"]);
   });
 
   it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {
@@ -148,7 +163,7 @@ describe("ChatAudioPlayer", () => {
     );
     expect(
       first
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__reason a")
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
         ?.getAttribute("download"),
     ).toBe("broken.mp3");
 
@@ -215,12 +230,23 @@ describe("ChatAudioPlayer", () => {
     );
     expect(
       player
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__reason a")
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
         ?.getAttribute("href"),
     ).not.toContain("playback=1");
   });
 
-  it("reuses the waveform fetch as the audio element Blob source", async () => {
+  it("renders decoded waveform peaks when the player reaches the viewport", async () => {
+    const intersectionCallbacks: IntersectionObserverCallback[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionCallbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
     const samples = new Float32Array([0, 0.5, -1, 0.25]);
     const decodeAudioData = vi.fn(async () => ({
       duration: 4,
@@ -247,7 +273,15 @@ describe("ChatAudioPlayer", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-audio");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const player = await createPlayer("waveform-reuse");
+    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
     player.serverDurationMs = 4_000;
+    await player.updateComplete;
+    expect(fetchMock).not.toHaveBeenCalled();
+    intersectionCallbacks.shift()?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const media = player.querySelector("audio")!;
     let paused = true;
     Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
@@ -260,9 +294,6 @@ describe("ChatAudioPlayer", () => {
       media.dispatchEvent(new Event("pause"));
     });
 
-    player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
-    expect(play).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     resolveFetch?.(
       new Response(new Uint8Array([1, 2, 3, 4]), {
         status: 200,
@@ -273,13 +304,19 @@ describe("ChatAudioPlayer", () => {
       expect(player.querySelectorAll(".chat-audio-player__waveform rect")).toHaveLength(96),
     );
     await player.updateComplete;
+    expect(
+      new Set(
+        Array.from(player.querySelectorAll(".chat-audio-player__waveform rect"), (rect) =>
+          rect.getAttribute("height"),
+        ),
+      ).size,
+    ).toBeGreaterThan(1);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(decodeAudioData).toHaveBeenCalledOnce();
-    expect(media.getAttribute("src")).toBe("https://example.com/waveform-reuse.mp3");
+    expect(media.getAttribute("src")).toBe("blob:waveform-audio");
 
-    media.pause();
     player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
-    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
     expect(media.getAttribute("src")).toBe("blob:waveform-audio");
     expect(fetchMock).toHaveBeenCalledOnce();
 
@@ -296,11 +333,14 @@ describe("ChatAudioPlayer", () => {
     refreshed.serverDurationMs = 4_000;
     document.body.append(refreshed);
     await refreshed.updateComplete;
+    intersectionCallbacks.shift()?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
     const refreshedMedia = refreshed.querySelector("audio")!;
     Object.defineProperty(refreshedMedia, "paused", { configurable: true, value: true });
     vi.spyOn(refreshedMedia, "play").mockResolvedValue(undefined);
-    refreshed.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     resolveFetch?.(new Response(null, { status: 500 }));
   });
 
@@ -374,7 +414,7 @@ describe("ChatAudioPlayer", () => {
       Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
         item.textContent?.trim(),
       ),
-    ).toEqual(["0:00", "1:40"]);
+    ).toEqual(["0:00 / 1:40"]);
   });
 
   it("does not buffer or cache a chunked waveform response above 8 MiB", async () => {

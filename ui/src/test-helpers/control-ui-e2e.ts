@@ -1815,6 +1815,15 @@ function installControlUiMockGateway(
           commands: [],
           models: scenario.models,
         };
+      case "talk.catalog":
+        return {
+          modes: [],
+          transports: [],
+          brains: [],
+          speech: { providers: [] },
+          transcription: { providers: [] },
+          realtime: { ready: true, providers: [] },
+        };
       case "chat.send":
         return {
           runId:

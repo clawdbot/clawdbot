@@ -57,9 +57,11 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway starts one isolated collection-review session per
-agent workspace each week. The session can only read skills and submit
-one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
+In `auto` mode, the Gateway runs one system-owned cron job per writable
+workspace each week. The job appears in `openclaw cron list` and runs every
+7 days. Cron owns the cadence; the job is enabled only when
+`skills.workshop.autonomous.mode` is `auto`. The review can only read skills
+and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
@@ -93,8 +95,7 @@ To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
 workspace lock. Restore refuses if any affected skill changed after cleanup.
 
-The weekly attempt is persisted per workspace before the model starts. Gateway
-restarts do not repeat a failed or successful attempt within 7 days. Review is admitted only for collections of at most
+Each attempt is persisted per workspace before the model starts. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 

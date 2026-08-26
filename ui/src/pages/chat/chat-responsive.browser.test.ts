@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -52,7 +53,7 @@ let cachedUiCss: string | null = null;
 const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
-const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%2Emp4?download=1";
+const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
@@ -126,6 +127,8 @@ type ControlRect = {
   scrollWidth?: number;
   clientHeight?: number;
   scrollHeight?: number;
+  overflow?: string;
+  textOverflow?: string;
   scrollTop?: number;
   text?: string;
   display?: string;
@@ -186,6 +189,9 @@ function readUiCss(): string {
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/composer-queue.css",
+    "ui/src/styles/chat/progress-card.css",
+    "ui/src/styles/chat/composer-progress.css",
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
     "ui/src/styles/chat/tool-cards.css",
@@ -198,6 +204,89 @@ function readUiCss(): string {
 
 function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
+}
+
+function messageCircleOffSvg() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"></path><path d="M4.93 4.929a10 10 0 0 0-1.938 11.412 2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 0 0 11.302-1.989"></path><path d="M8.35 2.69A10 10 0 0 1 21.3 15.65"></path></svg>`;
+}
+
+const QUEUE_MATRIX_MODES = [
+  "steer",
+  "followup",
+  "collect",
+  "interrupt",
+] as const satisfies readonly QueueMode[];
+const QUEUE_MATRIX_RUNTIMES = ["connected-running", "connected-idle", "disconnected"] as const;
+const QUEUE_MATRIX_VARIANTS = ["never-steered", "steered", "editing"] as const;
+
+type QueueMatrixRuntime = (typeof QUEUE_MATRIX_RUNTIMES)[number];
+type QueueMatrixVariant = (typeof QUEUE_MATRIX_VARIANTS)[number];
+
+function queueMatrixCellReachable(mode: QueueMode, variant: QueueMatrixVariant): boolean {
+  // Steering replaces the delivery mode with `steer`; the prior mode is no
+  // longer observable, so a "steered collect/followup/interrupt" row cannot
+  // exist in the current queue item contract.
+  return variant !== "steered" || mode === "steer";
+}
+
+function queueMatrixCellHtml(
+  mode: QueueMode,
+  runtime: QueueMatrixRuntime,
+  variant: QueueMatrixVariant,
+) {
+  const disconnected = runtime === "disconnected";
+  const editing = variant === "editing";
+  const steerMode = mode === "steer";
+  const badge = steerMode
+    ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
+    : "";
+  const state = disconnected ? '<span class="chat-queue__state">Waiting for reconnect</span>' : "";
+  const copy = editing
+    ? `<textarea class="chat-queue__edit-input">Edit ${mode} message</textarea>`
+    : `<span class="chat-queue__copy"><span class="chat-queue__text">${mode} message</span>${badge}${state}</span>`;
+  const actions = editing
+    ? `<span class="chat-queue__actions"><button class="chat-queue__edit-submit">${iconSvg()}</button><button class="chat-queue__edit-cancel">${iconSvg()}</button></span>`
+    : `<span class="chat-queue__actions">${runtime === "connected-running" ? `<button class="chat-queue__action chat-queue__steer">${iconSvg()}<span>Steer</span></button>` : ""}<button class="chat-queue__remove">${iconSvg()}</button><button class="chat-queue__more">${iconSvg()}</button></span>`;
+  return `<article class="queue-matrix-cell" data-queue-cell="${mode}-${runtime}-${variant}">
+    <header>${mode} · ${runtime} · ${variant}</header>
+    <div class="agent-chat__composer-shell">
+      <div class="chat-queue">
+        <div class="chat-queue__scroll">
+          <div class="chat-queue__item chat-queue__item--no-avatar${steerMode ? " chat-queue__item--steered" : ""}${disconnected ? " chat-queue__item--reconnect" : ""}${editing ? " chat-queue__item--editing" : ""}">
+            <span class="chat-queue__leading">${iconSvg()}</span>${copy}${actions}
+          </div>
+        </div>
+      </div>
+      <div class="agent-chat__input">Composer</div>
+    </div>
+  </article>`;
+}
+
+function queueExceptionCellHtml(
+  key: string,
+  globalState: string,
+  itemClass: string,
+  rowState: string,
+  error = "",
+  actions = `<button class="chat-queue__remove">${iconSvg()}</button>`,
+) {
+  return `<article class="queue-matrix-cell" data-queue-exception="${key}">
+    <header>${key}</header>
+    <div class="agent-chat__composer-shell">
+      <div class="chat-queue">
+        ${globalState}
+        <div class="chat-queue__scroll">
+          <div class="chat-queue__item chat-queue__item--no-avatar ${itemClass}">
+            <span class="chat-queue__leading">${iconSvg()}</span>
+            <span class="chat-queue__copy"><span class="chat-queue__text">Queued message</span>${rowState}</span>
+            <span class="chat-queue__actions">${actions}</span>
+            ${error}
+          </div>
+        </div>
+      </div>
+      <div class="agent-chat__input">Composer</div>
+    </div>
+  </article>`;
 }
 
 function activityAlignmentHtml() {
@@ -409,22 +498,9 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
   `;
 }
 
-function composerControlsHtml(crowded = false) {
+function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      ${
-        crowded
-          ? `<div class="agent-chat__composer-run-status">
-          <span class="agent-chat__run-status agent-chat__run-status--interrupted">
-            ${iconSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
-          </span>
-        </div>
-        <span class="agent-chat__session-overrides-pill">
-          <button class="agent-chat__session-overrides-open" type="button">4 session overrides</button>
-          <button class="agent-chat__session-overrides-clear" type="button" aria-label="Clear session overrides">${iconSvg()}</button>
-        </span>`
-          : ""
-      }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
@@ -443,6 +519,14 @@ function composerControlsHtml(crowded = false) {
               <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
               <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
             </div>
+          </div>
+          </details>
+          <details class="chat-controls__inline-select chat-controls__permission-picker">
+          <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
+            <span class="chat-controls__inline-select-label">Guarded</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
+            <button class="chat-controls__permission-option">Guarded</button>
           </div>
           </details>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
@@ -584,6 +668,15 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   : ""
               }
               <div class="agent-chat__composer-shell">
+                ${
+                  opts.crowdedComposerFooter
+                    ? `<div class="agent-chat__composer-run-status">
+                    <span class="agent-chat__run-status agent-chat__run-status--interrupted">
+                      ${messageCircleOffSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
+                    </span>
+                  </div>`
+                    : ""
+                }
                 <div class="agent-chat__input" data-composer-layout="multiline">
                   ${
                     opts.slashMenu
@@ -671,7 +764,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         </details>
                       </div>
                     </div>
-                    ${composerControlsHtml(opts.crowdedComposerFooter)}
+                    ${composerControlsHtml()}
                       <div class="agent-chat__composer-actions">
                         <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
                       </div>
@@ -1635,41 +1728,216 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("centers a standalone interrupted status on the composer axis", async () => {
-    const page = await openBrowserPage(1200, 800);
-    try {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+  it.each([
+    [1200, 800, "desktop"],
+    [390, 844, "mobile"],
+  ] as const)(
+    "floats the complete interrupted status on the %s composer axis",
+    async (width, height, label) => {
+      const page = await openBrowserPage(width, height);
+      try {
+        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
         <section class="card chat">
-          <div class="chat-thread" role="log">
-            <div class="chat-thread-inner">
-              <div class="chat-turn-terminal-status chat-turn-terminal-status--interrupted">
-                ${iconSvg()}<span>Interrupted</span>
+          <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
+          <div class="agent-chat__composer-shell">
+            <div class="agent-chat__composer-overlay">
+              <div class="agent-chat__composer-run-status">
+                <span class="agent-chat__run-status agent-chat__run-status--interrupted">
+                  ${messageCircleOffSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
+                </span>
               </div>
             </div>
+            <div class="agent-chat__input">Composer</div>
           </div>
-          <div class="agent-chat__composer-shell"><div class="agent-chat__input">Composer</div></div>
         </section>
       </body></html>`);
 
-      const [composer, status] = await Promise.all([
-        getRect(page, ".agent-chat__composer-shell"),
-        getRect(page, ".chat-turn-terminal-status--interrupted"),
-      ]);
-      expect(
-        Math.abs(status.left + status.width / 2 - (composer.left + composer.width / 2)),
-      ).toBeLessThan(1);
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "interrupted-status-centered.png"),
-        });
+        const [composer, status] = await Promise.all([
+          getRect(page, ".agent-chat__composer-shell"),
+          getRect(page, ".agent-chat__composer-run-status"),
+        ]);
+        expect(
+          Math.abs(status.left + status.width / 2 - (composer.left + composer.width / 2)),
+        ).toBeLessThan(1);
+        expect(status.bottom).toBeLessThanOrEqual(composer.top);
+        expect(
+          await page
+            .locator(".agent-chat__composer-overlay")
+            .evaluate((node) => getComputedStyle(node).position),
+        ).toBe("absolute");
+        expect(
+          await page.locator(".agent-chat__run-status-label").evaluate((node) => ({
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+            text: node.textContent,
+          })),
+        ).toEqual(expect.objectContaining({ text: "Interrupted" }));
+        const labelWidths = await page
+          .locator(".agent-chat__run-status-label")
+          .evaluate((node) => ({
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+          }));
+        expect(labelWidths.scrollWidth).toBeLessThanOrEqual(labelWidths.clientWidth);
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `interrupted-status-${label}.png`),
+          });
+        }
+      } finally {
+        await closeBrowserPage(page);
       }
+    },
+  );
+
+  it("optically matches the effort lightning to the microphone without shrinking fast mode", async () => {
+    const page = await openBrowserPage(800, 300);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="agent-chat__input">
+          <span class="chat-controls__effort-zap">${iconSvg()}</span>
+          <button class="chat-send-btn chat-send-btn--voice">${iconSvg()}</button>
+          <span class="chat-controls__fast-mode-icon">${iconSvg()}</span>
+        </div>
+      </body></html>`);
+      const sizes = await page.evaluate(() => {
+        const size = (selector: string) => {
+          const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return { height: rect.height, width: rect.width };
+        };
+        return {
+          effort: size(".chat-controls__effort-zap"),
+          fast: size(".chat-controls__fast-mode-icon"),
+          microphone: size(".chat-send-btn--voice svg"),
+        };
+      });
+      expect(sizes.effort).toEqual({ height: 14, width: 14 });
+      expect(sizes.microphone).toEqual({ height: 16, width: 16 });
+      expect(sizes.fast).toEqual({ height: 16, width: 16 });
     } finally {
       await closeBrowserPage(page);
     }
   });
+
+  it.each([
+    [800, 4],
+    [390, 0],
+  ] as const)("keeps the %spx model picker label-to-chevron gap at %spx", async (width, gap) => {
+    const page = await openBrowserPage(width, 800);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="agent-chat__composer-shell">
+          <div class="agent-chat__input">
+            <div class="chat-controls__model-settings">
+              <div class="chat-controls__inline-select">
+                <div class="chat-controls__inline-select-trigger chat-controls__model-trigger">
+                  <span class="chat-controls__inline-select-label">Model</span>
+                  <span class="chat-controls__inline-select-chevron">${iconSvg()}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body></html>`);
+      const measuredGap = await page.evaluate(() => {
+        const label = document
+          .querySelector<HTMLElement>(".chat-controls__inline-select-label")!
+          .getBoundingClientRect();
+        const chevron = document
+          .querySelector<HTMLElement>(".chat-controls__inline-select-chevron")!
+          .getBoundingClientRect();
+        return chevron.left - label.right;
+      });
+      expect(measuredGap).toBeCloseTo(gap, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
+    [1200, 800, "desktop"],
+    [390, 844, "mobile"],
+  ] as const)(
+    "keeps topbar and composer notices out of the %s transcript layout",
+    async (width, height, label) => {
+      const page = await openBrowserPage(width, height);
+      try {
+        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
+          <section class="card chat">
+            <div class="chat-main">
+              <div class="chat-main__conversation-column">
+                <header class="chat-pane__header">Session</header>
+                <div class="chat-topbar-notices" hidden>
+                  <div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>
+                </div>
+                <div class="chat-main__conversation">
+                  <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
+                  <div class="agent-chat__composer-shell">
+                    <div class="agent-chat__composer-overlay" hidden>
+                      <div class="chat-composer-neighbor-card chat-error">Model unavailable</div>
+                    </div>
+                    <div class="agent-chat__input">Composer</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </body></html>`);
+        await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+
+        const geometry = async () =>
+          await page.evaluate(() => {
+            const rect = (selector: string) => {
+              const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+              return {
+                height: bounds.height,
+                top: bounds.top,
+                width: bounds.width,
+              };
+            };
+            return {
+              composer: rect(".agent-chat__composer-shell"),
+              conversation: rect(".chat-main__conversation"),
+              thread: rect(".chat-thread"),
+            };
+          });
+        const before = await geometry();
+        await page
+          .locator(".chat-topbar-notices")
+          .evaluate((node) => node.removeAttribute("hidden"));
+        await page
+          .locator(".agent-chat__composer-overlay")
+          .evaluate((node) => node.removeAttribute("hidden"));
+        await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        const after = await geometry();
+
+        expect(after).toEqual(before);
+        expect(
+          await page
+            .locator(".chat-topbar-notices")
+            .evaluate((node) => getComputedStyle(node).position),
+        ).toBe("absolute");
+        expect(
+          await page
+            .locator(".agent-chat__composer-overlay")
+            .evaluate((node) => getComputedStyle(node).position),
+        ).toBe("absolute");
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `notice-overlays-${label}.png`),
+          });
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("gives inline MCP Apps the full assistant message column", async () => {
     const page = await openBrowserPage(1366, 900);
@@ -2272,16 +2540,25 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it(
-    "renders encoded media extensions from assistant output and transcript fields",
+    "renders encoded media extensions as images and compact cards",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
       const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      const video = page.locator(`video[src="${SHARED_APP_VIDEO_URL}"]`);
+      const videoDownload = page.locator(
+        `a.chat-assistant-attachment-card__download[href="${SHARED_APP_VIDEO_URL}"]`,
+      );
+      const videoCard = page
+        .locator(".chat-assistant-attachment-card--compact")
+        .filter({ has: videoDownload });
       await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await video.waitFor({ state: "attached", timeout: 10_000 });
+      await videoCard.waitFor({ state: "attached", timeout: 10_000 });
       expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await video.getAttribute("src")).toBe(SHARED_APP_VIDEO_URL);
+      expect(await videoDownload.getAttribute("href")).toBe(SHARED_APP_VIDEO_URL);
+      expect(
+        (await videoCard.locator(".chat-assistant-attachment-card__title").textContent())?.trim(),
+      ).toBe("clip%2Emp4");
+      expect(await videoCard.locator("video").count()).toBe(0);
     },
   );
 
@@ -2808,7 +3085,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("keeps composer actions touch-sized on phones", async () => {
+  it("keeps primary composer actions desktop-sized on phones", async () => {
     const page = await openFixture(320, 568);
     try {
       const sizes = await page.locator(".chat-send-btn").evaluateAll((nodes) =>
@@ -2819,12 +3096,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       );
       expect(sizes.length).toBeGreaterThan(0);
       for (const size of sizes) {
-        expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(size.width).toBeCloseTo(32, 2);
+        expect(size.height).toBeCloseTo(32, 2);
       }
       const attach = await getRect(page, ".agent-chat__input-btn--attach");
       expect(attach.width).toBeGreaterThanOrEqual(36);
       expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("uses the model picker's corner radii for permissions and attachments", async () => {
+    const page = await openFixture(1024, 768);
+    try {
+      const radii = await page.evaluate(() => {
+        const radius = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector);
+          return node ? getComputedStyle(node).borderRadius : null;
+        };
+        return {
+          attachTrigger: radius(".agent-chat__input-btn--attach"),
+          modelOption: radius(".chat-controls__model-option"),
+          modelTrigger: radius(".chat-controls__model-trigger"),
+          permissionOption: radius(".chat-controls__permission-option"),
+          permissionTrigger: radius(".chat-controls__permission-trigger"),
+        };
+      });
+
+      expect(radii.permissionOption).toBe(radii.modelOption);
+      expect(radii.permissionTrigger).toBe(radii.modelTrigger);
+      expect(radii.attachTrigger).toBe(radii.modelTrigger);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2866,7 +3168,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps the expanded mobile composer tight, scrollable, and separated from the thread", async () => {
+  it("keeps the expanded mobile composer tight, scrollable, and flush with the thread", async () => {
     const page = await openFixture(393, 852);
     try {
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
@@ -2954,9 +3256,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       // inside it, so a long draft can never push the thread off the page.
       expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
-      expect(input.y - (thread.y + thread.height)).toBeGreaterThanOrEqual(5.5);
-      expect(shell.x).toBeLessThanOrEqual(8);
-      expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(8);
+      expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
+      expect(shell.x).toBeLessThanOrEqual(12);
+      expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(12);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
       expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
       expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
@@ -3066,6 +3368,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const rectFor = (selector: string) => {
           const node = document.querySelector<HTMLElement>(selector)!;
           const rect = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
           return {
             x: rect.x,
             y: rect.y,
@@ -3073,13 +3376,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             height: rect.height,
             clientWidth: node.clientWidth,
             scrollWidth: node.scrollWidth,
+            overflow: style.overflow,
+            textOverflow: style.textOverflow,
           };
         };
         return {
           controls: rectFor(".agent-chat__composer-controls"),
           footer: rectFor(".agent-chat__composer-footer"),
+          input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
-          overrides: rectFor(".agent-chat__session-overrides-pill"),
           settings: rectFor(".chat-controls__model-trigger"),
           status: rectFor(".agent-chat__composer-run-status"),
           typing: rectFor(".agent-chat__typing-indicator--outside"),
@@ -3087,19 +3392,22 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
-      for (const control of [layout.status, layout.overrides, layout.settings]) {
+      for (const control of [layout.status, layout.settings]) {
         expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
         expect(control.x + control.width).toBeLessThanOrEqual(
           layout.footer.x + layout.footer.width + 1,
         );
       }
+      expect(layout.status.x).toBeGreaterThanOrEqual(layout.input.x - 1);
+      expect(layout.status.x + layout.status.width).toBeLessThanOrEqual(
+        layout.input.x + layout.input.width + 1,
+      );
       expect(layout.typing.x).toBeGreaterThanOrEqual(0);
       expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(320);
       expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       for (const [left, right] of [
-        [layout.status, layout.overrides],
-        [layout.overrides, layout.settings],
+        [layout.status, layout.settings],
         [layout.settings, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
@@ -3131,6 +3439,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               return null;
             }
             const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
             return {
               x: rect.x,
               y: rect.y,
@@ -3138,7 +3447,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               height: rect.height,
               clientWidth: node.clientWidth,
               scrollWidth: node.scrollWidth,
-              display: getComputedStyle(node).display,
+              display: style.display,
+              overflow: style.overflow,
+              textOverflow: style.textOverflow,
             };
           };
           const paddingFor = (selector: string) => {
@@ -3248,8 +3559,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
         }
         if (width <= 768) {
-          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(send.width).toBeCloseTo(32, 2);
+          expect(send.height).toBeCloseTo(32, 2);
           for (const control of [model, context]) {
             expect(
               Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
@@ -3283,6 +3594,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
     },
   );
+
+  it("keeps the compact mobile composer bottom edge stable when its textarea is focused", async () => {
+    const page = await openFixture(390, 844);
+    try {
+      const shell = page.locator(".agent-chat__composer-shell");
+      const readPosition = () => shell.evaluate((node) => getComputedStyle(node).marginBottom);
+      const unfocused = await readPosition();
+
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      const focused = await readPosition();
+
+      expect(focused).toBe(unfocused);
+      expect(focused).toBe("0px");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 
   it.each([
     [320, 568],
@@ -3625,6 +3953,362 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       expect(geometry.copyOverflow).toBeLessThanOrEqual(1);
       expect(geometry.gap).toBeGreaterThanOrEqual(8);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the mobile queue steer label visible", async () => {
+    const page = await openBrowserPage(390, 844);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <button class="chat-queue__action chat-queue__steer"><span>Steer</span></button>
+      </body></html>`);
+      expect(
+        await page
+          .locator(".chat-queue__steer span")
+          .evaluate((node) => getComputedStyle(node).display),
+      ).not.toBe("none");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("covers every reachable queue presentation cell without repeating global state", async () => {
+    const page = await openBrowserPage(1520, 2400);
+    const reachableCells = QUEUE_MATRIX_MODES.flatMap((mode) =>
+      QUEUE_MATRIX_RUNTIMES.flatMap((runtime) =>
+        QUEUE_MATRIX_VARIANTS.filter((variant) => queueMatrixCellReachable(mode, variant)).map(
+          (variant) => ({ mode, runtime, variant }),
+        ),
+      ),
+    );
+    const unreachableCells = QUEUE_MATRIX_MODES.flatMap((mode) =>
+      QUEUE_MATRIX_RUNTIMES.flatMap((runtime) =>
+        QUEUE_MATRIX_VARIANTS.filter((variant) => !queueMatrixCellReachable(mode, variant)).map(
+          (variant) => ({ mode, runtime, variant }),
+        ),
+      ),
+    );
+    try {
+      const exceptionCells = [
+        queueExceptionCellHtml(
+          "item-reconnect",
+          "",
+          "chat-queue__item--reconnect",
+          '<span class="chat-queue__state">Waiting for reconnect</span>',
+        ),
+        queueExceptionCellHtml(
+          "running-command",
+          "",
+          "",
+          '<span class="chat-queue__state">Running command</span>',
+        ),
+        queueExceptionCellHtml(
+          "failed",
+          "",
+          "chat-queue__item--failed",
+          "",
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Failed</span><span class="chat-queue__error-text">Request rejected</span></span>',
+        ),
+        queueExceptionCellHtml(
+          "unconfirmed",
+          "",
+          "chat-queue__item--failed",
+          "",
+          '<span class="chat-queue__error"><span class="chat-queue__badge">Delivery uncertain</span><span class="chat-queue__error-text">Review before retrying</span></span>',
+        ),
+        queueExceptionCellHtml(
+          "applying-settings",
+          '<div class="chat-queue__global-state" data-chat-queue-global-state="settings">Applying chat settings</div>',
+          "",
+          "",
+          "",
+          `<button class="chat-queue__action chat-queue__steer" disabled>${iconSvg()}<span>Steer</span></button><button class="chat-queue__remove">${iconSvg()}</button>`,
+        ),
+      ];
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}
+        body { padding: 20px; background: var(--bg); color: var(--text); }
+        .queue-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+        .queue-matrix-cell { min-width: 0; }
+        .queue-matrix-cell > header { margin: 0 0 6px; color: var(--muted); font: 11px/1.3 var(--mono); }
+        .queue-matrix-cell .agent-chat__composer-shell { width: 100%; }
+        .queue-matrix-cell .agent-chat__input { min-height: 54px; }
+      </style></head><body>
+        <main class="queue-matrix">
+          ${reachableCells.map(({ mode, runtime, variant }) => queueMatrixCellHtml(mode, runtime, variant)).join("")}
+          ${exceptionCells.join("")}
+        </main>
+      </body></html>`);
+
+      expect(reachableCells).toHaveLength(27);
+      expect(unreachableCells).toHaveLength(9);
+      expect(await page.locator("[data-queue-cell]").count()).toBe(reachableCells.length);
+      expect(await page.getByText("Waiting for current run", { exact: true }).count()).toBe(0);
+      expect(
+        await page.locator('[data-queue-cell*="-disconnected-"] .chat-queue__global-state').count(),
+      ).toBe(0);
+      expect(
+        await page.locator('[data-queue-cell*="-disconnected-"] .chat-queue__state').count(),
+      ).toBe(5);
+      expect(
+        await page
+          .locator('[data-queue-cell*="-connected-running-"] .chat-queue__global-state')
+          .count(),
+      ).toBe(0);
+      expect(
+        await page
+          .locator('[data-queue-cell*="-connected-idle-"] .chat-queue__global-state')
+          .count(),
+      ).toBe(0);
+      expect(
+        await page
+          .locator('[data-queue-exception="applying-settings"] .chat-queue__global-state')
+          .count(),
+      ).toBe(1);
+      expect(
+        await page.locator('[data-queue-exception="applying-settings"] .chat-queue__state').count(),
+      ).toBe(0);
+      expect(
+        await page
+          .locator('[data-queue-exception="applying-settings"] .chat-queue__steer')
+          .isDisabled(),
+      ).toBe(true);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        for (const { mode, runtime, variant } of reachableCells) {
+          await page.locator(`[data-queue-cell="${mode}-${runtime}-${variant}"]`).screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `${mode}-${runtime}-${variant}.png`),
+          });
+        }
+        for (const key of [
+          "item-reconnect",
+          "running-command",
+          "failed",
+          "unconfirmed",
+          "applying-settings",
+        ]) {
+          await page.locator(`[data-queue-exception="${key}"]`).screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `exception-${key}.png`),
+          });
+        }
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps a ten-step task panel full-width with a fixed header and an internal list scroll", async () => {
+    const page = await openBrowserPage(980, 844);
+    const steps = Array.from(
+      { length: 10 },
+      (
+        _,
+        index,
+      ) => `<li class="session-progress-card__step session-progress-card__step--${index < 5 ? "completed" : index === 5 ? "in_progress" : "pending"}">
+        <span class="session-progress-card__step-marker">${iconSvg()}</span>
+        <span class="session-progress-card__step-text">Plan step ${index + 1}</span>
+      </li>`,
+    ).join("");
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}
+        body { margin: 0; padding: 32px; background: var(--bg); }
+        .agent-chat__composer-shell { width: 760px; margin: 0 auto; }
+      </style></head><body>
+        <div class="agent-chat__composer-shell">
+          <div class="agent-chat__progress-float">
+            <details class="session-progress-card session-progress-card--composer" open>
+              <summary class="session-progress-card__summary">
+                <span class="session-progress-card__summary-collapsed">
+                  <span class="session-progress-card__summary-indicator">${iconSvg()}</span>
+                  <span class="session-progress-card__current">Abrir a interface</span>
+                </span>
+                <span class="session-progress-card__summary-count session-progress-card__summary-count--collapsed">1/10</span>
+                <span class="session-progress-card__summary-expanded">
+                  <span class="session-progress-card__summary-title">Task progress</span>
+                  <span class="session-progress-card__heading-actions">6 of 10</span>
+                </span>
+                <span class="session-progress-card__summary-chevron">${iconSvg()}</span>
+              </summary>
+              <div class="session-progress-card__body"><ol class="session-progress-card__steps">${steps}</ol></div>
+            </details>
+          </div>
+          <div class="chat-queue">
+            <div class="chat-queue__scroll">
+              <div class="chat-queue__item chat-queue__item--no-avatar">
+                <span class="chat-queue__leading">${iconSvg()}</span>
+                <span class="chat-queue__copy"><span class="chat-queue__text">Queued after the plan</span></span>
+                <span class="chat-queue__actions"><button class="chat-queue__remove">${iconSvg()}</button></span>
+              </div>
+            </div>
+          </div>
+          <div class="agent-chat__input">Composer</div>
+        </div>
+      </body></html>`);
+
+      const summary = page.locator(".session-progress-card__summary");
+      const card = page.locator(".session-progress-card--composer");
+      const list = page.locator(".session-progress-card__steps");
+      const widthBefore = (await card.boundingBox())?.width;
+      const summaryBefore = await summary.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { background: style.backgroundColor, y: node.getBoundingClientRect().y };
+      });
+      await summary.hover();
+      const widthAfter = (await card.boundingBox())?.width;
+      const summaryAfter = await summary.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { background: style.backgroundColor, y: node.getBoundingClientRect().y };
+      });
+      expect(widthBefore).toBeCloseTo(760, 1);
+      expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
+      expect(summaryAfter.background).toBe(summaryBefore.background);
+
+      const listLayout = await list.evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        const visibleItems = [...node.children].filter((child) => {
+          const row = child.getBoundingClientRect();
+          return row.bottom <= bounds.bottom + 1 && row.top >= bounds.top - 1;
+        }).length;
+        return {
+          clientHeight: node.clientHeight,
+          overflowY: getComputedStyle(node).overflowY,
+          scrollHeight: node.scrollHeight,
+          visibleItems,
+        };
+      });
+      expect(listLayout.overflowY).toBe("auto");
+      expect(listLayout.scrollHeight).toBeGreaterThan(listLayout.clientHeight);
+      expect(listLayout.visibleItems).toBeGreaterThanOrEqual(5);
+      expect(listLayout.visibleItems).toBeLessThanOrEqual(7);
+      expect(
+        await page
+          .locator(".session-progress-card__body")
+          .evaluate((node) => getComputedStyle(node).overflow),
+      ).toBe("hidden");
+
+      await list.evaluate((node) => {
+        node.scrollTop = node.scrollHeight;
+      });
+      expect((await summary.boundingBox())?.y).toBeCloseTo(summaryBefore.y, 1);
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await list.evaluate((node) => {
+          node.scrollTop = 0;
+        });
+        await page.locator(".agent-chat__composer-shell").screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "task-progress-expanded-with-queue.png"),
+        });
+      }
+
+      await card.evaluate((node) => node.removeAttribute("open"));
+      const collapsed = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        const current = rect(".session-progress-card__current");
+        const count = rect(".session-progress-card__summary-count--collapsed");
+        const chevron = rect(".session-progress-card__summary-chevron");
+        return {
+          countLeft: count.left,
+          countRight: count.right,
+          currentRight: current.right,
+          chevronLeft: chevron.left,
+        };
+      });
+      expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
+      expect(collapsed.countRight).toBeLessThanOrEqual(collapsed.chevronLeft);
+      if (artifactDir) {
+        await page.locator(".agent-chat__composer-shell").screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "task-progress-collapsed-with-queue.png"),
+        });
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps queued states neutral and puts the editing ring only on the input", async () => {
+    const page = await openBrowserPage(820, 640);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-queue">
+          <div class="chat-queue__item chat-queue__item--steered">
+            <span class="chat-queue__badge chat-queue__badge--steered">Steer</span>
+            <span class="chat-queue__state">Waiting for reconnect</span>
+          </div>
+          <div class="chat-queue__item chat-queue__item--editing">
+            <textarea class="chat-queue__edit-input">Change course</textarea>
+          </div>
+        </div>
+      </body></html>`);
+      await page.locator(".chat-queue__edit-input").focus();
+
+      const styles = await page.evaluate(() => {
+        const steered = getComputedStyle(document.querySelector(".chat-queue__item--steered")!);
+        const badge = getComputedStyle(document.querySelector(".chat-queue__badge--steered")!);
+        const state = getComputedStyle(document.querySelector(".chat-queue__state")!);
+        const editing = getComputedStyle(document.querySelector(".chat-queue__item--editing")!);
+        const input = getComputedStyle(document.querySelector(".chat-queue__edit-input")!);
+        return {
+          steeredBackground: steered.backgroundColor,
+          badgeBackground: badge.backgroundColor,
+          badgeColor: badge.color,
+          stateBackground: state.backgroundColor,
+          stateBorder: state.borderStyle,
+          editingShadow: editing.boxShadow,
+          inputOutlineStyle: input.outlineStyle,
+          inputOutlineWidth: input.outlineWidth,
+        };
+      });
+
+      expect(styles.steeredBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(styles.badgeBackground).not.toContain("96, 165, 250");
+      expect(styles.badgeColor).not.toContain("96, 165, 250");
+      expect(styles.stateBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(styles.stateBorder).toBe("none");
+      expect(styles.editingShadow).toBe("none");
+      expect(styles.inputOutlineStyle).toBe("solid");
+      expect(styles.inputOutlineWidth).toBe("2px");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("renders the terminal turn recap as plain transcript text", async () => {
+    const page = await openBrowserPage(820, 640);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-tasks-status chat-turn-recap">Done in 7 seconds · 58 tokens</div>
+      </body></html>`);
+      const style = await page.locator(".chat-turn-recap").evaluate((element) => {
+        const computed = getComputedStyle(element);
+        return {
+          background: computed.backgroundColor,
+          border: computed.borderStyle,
+          borderRadius: computed.borderRadius,
+          boxShadow: computed.boxShadow,
+          minHeight: computed.minHeight,
+          padding: computed.padding,
+        };
+      });
+
+      expect(style).toEqual({
+        background: "rgba(0, 0, 0, 0)",
+        border: "none",
+        borderRadius: "0px",
+        boxShadow: "none",
+        minHeight: "0px",
+        padding: "0px",
+      });
     } finally {
       await closeBrowserPage(page);
     }
