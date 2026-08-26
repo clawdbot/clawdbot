@@ -1072,9 +1072,11 @@ describe("detectChangedScope", () => {
       );
       expect(output.changed_paths_json, testCase.label).toBe(testCase.changedPaths);
       for (const [key, value] of Object.entries(output)) {
-        if (key !== "changed_paths_json") {
-          expect(value, `${testCase.label}: ${key}`).toBe(testCase.scopeValue);
+        if (key === "changed_paths_json") {
+          continue;
         }
+        const expectedValue = key.startsWith("run_node_fast_") ? "false" : testCase.scopeValue;
+        expect(value, `${testCase.label}: ${key}`).toBe(expectedValue);
       }
     }
   });
