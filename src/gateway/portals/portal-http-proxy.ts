@@ -8,7 +8,6 @@ import type {
 import { request as requestHttp } from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
-import type { PortalTarget } from "./portal-service.js";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
 // Browser cookie jars are hostname-scoped, so the stable listener port in the
@@ -36,6 +35,16 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+
+export type PortalTarget =
+  | { kind: "local"; port: number }
+  | {
+      kind: "worker";
+      environmentId: string;
+      ownerEpoch: number;
+      remotePort: number;
+      connect: () => Promise<Duplex>;
+    };
 
 type PortalProxyTarget = {
   listenPort: number;

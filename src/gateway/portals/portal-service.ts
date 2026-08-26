@@ -10,19 +10,15 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
-import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
+import {
+  handlePortalProxyRequest,
+  handlePortalProxyUpgrade,
+  type PortalTarget,
+} from "./portal-http-proxy.js";
 
 const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
 
-export type PortalTarget =
-  | { kind: "local"; port: number }
-  | {
-      kind: "worker";
-      environmentId: string;
-      ownerEpoch: number;
-      remotePort: number;
-      connect: () => Promise<Duplex>;
-    };
+export type { PortalTarget } from "./portal-http-proxy.js";
 
 type PortalEntry = {
   id: string;
