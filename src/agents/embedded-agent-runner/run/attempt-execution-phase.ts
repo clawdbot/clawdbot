@@ -39,6 +39,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       markSourceReplyDelivered,
       replaySafeToolNames,
       replaySafeTools,
+      codeModeExecToolNames,
       sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
@@ -209,6 +210,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     builtinToolNames,
     coreBuiltinToolNames,
     replaySafeToolNames,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     diagnosticOwner,
   });
