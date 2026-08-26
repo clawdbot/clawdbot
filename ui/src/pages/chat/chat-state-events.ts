@@ -483,6 +483,17 @@ export function handlePageGatewayEvent(
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
     replayPendingSessionMessageReload(state, payload, isPresented);
+    if (
+      payload?.state === "final" &&
+      (payload.message === undefined || payload.message === null) &&
+      sessionMatches
+    ) {
+      // Lifecycle completion can arrive without a live assistant projection.
+      // Reconcile the durable transcript so Done never strands a persisted reply.
+      void loadChatHistory(state, { deferBranches: !isPresented() }).finally(() =>
+        state.requestUpdate?.(),
+      );
+    }
     if (terminalPayload) {
       if (outboxScope) {
         removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);

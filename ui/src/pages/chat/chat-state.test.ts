@@ -538,6 +538,118 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([
+    { name: "omitted", terminalMessage: undefined },
+    { name: "null", terminalMessage: null },
+  ])(
+    "recovers the durable reply when the terminal message is $name",
+    async ({ terminalMessage }) => {
+      const runId = "run-with-message-less-terminal";
+      const replyText = "The durable reply must appear below Done.";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish the dashboard task" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const persistedReply = {
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        stopReason: "stop",
+        __openclaw: { id: "reply-1", runId, seq: 2 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt, persistedReply],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        chatStream: null,
+        chatStreamSegments: [],
+        chatToolMessages: [],
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "final",
+          message: terminalMessage,
+        },
+      });
+
+      expect(state.chatRunId).toBeNull();
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Finish the dashboard task" },
+      ]);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("chat.history", {
+          agentId: "main",
+          sessionKey: state.sessionKey,
+          limit: 100,
+        }),
+      );
+      await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+      await vi.waitFor(() =>
+        expect(renderedTranscript(state)).toEqual([
+          { role: "user", text: "Finish the dashboard task" },
+          { role: "assistant", text: replyText },
+        ]),
+      );
+    },
+  );
+
+  it("keeps the live final projection without an unnecessary history reload", () => {
+    const runId = "run-with-live-terminal-message";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish the dashboard task" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const request = vi.fn();
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The live reply is already projected." }],
+        },
+      },
+    });
+
+    expect(state.chatRunId).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish the dashboard task" },
+      { role: "assistant", text: "The live reply is already projected." },
+    ]);
+  });
+
+  it.each([
     { name: "an unowned legacy", runId: undefined },
     { name: "an exactly producer-owned", runId: "older-run" },
   ])("never lets $name delayed older assistant row displace a newer run's reply", ({ runId }) => {
