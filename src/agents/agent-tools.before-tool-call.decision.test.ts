@@ -316,17 +316,44 @@ describe("generic tool action decision receipts", () => {
   });
 
   it.each([
-    { label: "returns adjusted params", result: { params: { ownerAdjusted: true } } },
-    { label: "returns void", result: undefined },
+    {
+      label: "returns adjusted params",
+      result: { params: { ownerAdjusted: true } },
+      matcher: undefined,
+      toolName: undefined,
+      expectedHandlerCalls: 1,
+      expectedGenericReceipts: 0,
+      expectedOwnerReceipts: 1,
+    },
+    {
+      label: "returns void",
+      result: undefined,
+      matcher: undefined,
+      toolName: undefined,
+      expectedHandlerCalls: 1,
+      expectedGenericReceipts: 0,
+      expectedOwnerReceipts: 1,
+    },
+    {
+      label: "does not match the tool",
+      result: undefined,
+      matcher: ["exec"],
+      toolName: "read",
+      expectedHandlerCalls: 0,
+      expectedGenericReceipts: 1,
+      expectedOwnerReceipts: 0,
+    },
   ] as const)(
-    "does not follow an owner-native plugin allow receipt with a generic allow fact when it $label",
-    async ({ result }) => {
+    "routes generic attribution only when a plugin hook $label",
+    async ({ result, ...testCase }) => {
       const registry = createEmptyPluginRegistry();
+      const handler = vi.fn(() => result);
       addTestHook({
         registry,
         pluginId: "owner-plugin",
         hookName: "before_tool_call",
-        handler: (() => result) as PluginHookRegistration["handler"],
+        handler: handler as PluginHookRegistration["handler"],
+        ...(testCase.matcher ? { matcher: [...testCase.matcher] } : {}),
       });
       setActivePluginRegistry(registry);
       initializeGlobalHookRunner(registry);
@@ -337,7 +364,11 @@ describe("generic tool action decision receipts", () => {
         return true;
       });
       const tool = wrapToolWithBeforeToolCallHook(
-        assembledTool("data", "hook_allow_subject", vi.fn().mockResolvedValue({ content: [] })),
+        assembledTool(
+          "data",
+          testCase.toolName ?? "hook_allow_subject",
+          vi.fn().mockResolvedValue({ content: [] }),
+        ),
       );
 
       try {
@@ -346,12 +377,21 @@ describe("generic tool action decision receipts", () => {
         clearOwnerSink();
       }
 
-      expect(works).toEqual([]);
-      expect(ownerReceipts).toHaveLength(1);
-      expect(ownerReceipts[0]).toMatchObject({
-        decision: { outcome: "allowed", reasonCode: "plugin_hook_allowed" },
-        source: { owner: "plugin-hook" },
-      });
+      expect(handler).toHaveBeenCalledTimes(testCase.expectedHandlerCalls);
+      expect(works).toHaveLength(testCase.expectedGenericReceipts);
+      expect(ownerReceipts).toHaveLength(testCase.expectedOwnerReceipts);
+      if (testCase.expectedGenericReceipts === 1) {
+        expect(works[0]?.receipt).toMatchObject({
+          decision: { outcome: "allowed", reasonCode: "generic_action_attributed" },
+          source: { owner: "tool-action" },
+        });
+      }
+      if (testCase.expectedOwnerReceipts === 1) {
+        expect(ownerReceipts[0]).toMatchObject({
+          decision: { outcome: "allowed", reasonCode: "plugin_hook_allowed" },
+          source: { owner: "plugin-hook" },
+        });
+      }
     },
   );
 

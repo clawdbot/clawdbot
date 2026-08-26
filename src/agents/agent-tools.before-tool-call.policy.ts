@@ -331,11 +331,15 @@ export async function runBeforeToolCallHook(args: {
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const callerIdentity = getGatewayToolCallerIdentity();
+    let ownerDecisionMarked = false;
     const receipt =
       callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
         ? {
             token: callerIdentity.executionIdentityToken,
             assertAuthority: callerIdentity.receiptAuthority,
+            markOwnerDecision: () => {
+              ownerDecisionMarked = true;
+            },
           }
         : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -410,7 +414,7 @@ export async function runBeforeToolCallHook(args: {
       blocked: false as const,
       params: finalParams,
     };
-    if (hasBeforeToolCallHooks || finalApprovalResolution) {
+    if (ownerDecisionMarked || finalApprovalResolution) {
       markPrivateDecision(allowed, "ownerDecision");
     }
     if (finalApprovalResolution) {
