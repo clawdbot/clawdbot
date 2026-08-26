@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import type { LlmRuntime } from "@openclaw/ai";
 import {
   defaultLlmRuntime,
@@ -854,6 +855,84 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       runController.abort();
       notifyLlmRequestActivity(mergedSignal);
       expect(onCallerActivity).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not retain completed provider streams on a reused caller signal", async () => {
+    const requestSignals: AbortSignal[] = [];
+    const providerStreamFn = vi.fn(
+      (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) => {
+        if (!options?.signal) {
+          throw new Error("expected a composed provider request signal");
+        }
+        requestSignals.push(options.signal);
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+        stream.end({
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "openai-completions",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        });
+        return stream;
+      },
+    );
+    const runController = new AbortController();
+    const callerController = new AbortController();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn: providerStreamFn as never,
+      sessionId: "session-1",
+      signal: runController.signal,
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+    const initialListenerCount = getEventListeners(callerController.signal, "abort").length;
+    const onCallerActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(callerController.signal, onCallerActivity);
+
+    try {
+      for (let turn = 0; turn < 2; turn += 1) {
+        const stream = streamFn(
+          { provider: "openai", id: "gpt-5.4" } as never,
+          {} as never,
+          { signal: callerController.signal },
+        ) as AssistantMessageEventStream;
+        const requestSignal = requestSignals[turn];
+        expect(requestSignal).toBeDefined();
+        notifyLlmRequestActivity(requestSignal);
+        expect(onCallerActivity).toHaveBeenCalledTimes(turn + 1);
+
+        const events = [];
+        for await (const event of stream) {
+          events.push(event);
+        }
+        expect(events).toEqual([{ type: "text_delta", contentIndex: 0, delta: "done" }]);
+        await expect(stream.result()).resolves.toMatchObject({
+          stopReason: "stop",
+          content: [{ type: "text", text: "done" }],
+        });
+        expect(getEventListeners(callerController.signal, "abort")).toHaveLength(
+          initialListenerCount,
+        );
+      }
+      expect(requestSignals[0]).not.toBe(requestSignals[1]);
     } finally {
       unsubscribe();
     }
