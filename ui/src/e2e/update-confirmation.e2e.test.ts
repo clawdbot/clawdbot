@@ -98,7 +98,7 @@ suite.define(() => {
                 .filter((className) => typeof className === "string" && className.length > 0),
             ),
         ).toEqual(["sr-only", "sidebar-issues-button", "sidebar-footer-update-slot"]);
-        expect((await footerUpdate.boundingBox())?.width).toBe(40);
+        expect((await footerUpdate.boundingBox())?.width).toBe(32);
         expect(await page.locator(".sidebar-footer-update__label").isVisible()).toBe(false);
         const inboxBox = await page.locator(".sidebar-issues-button").boundingBox();
         const updateSlotBox = await page.locator(".sidebar-footer-update-slot").boundingBox();
@@ -119,7 +119,7 @@ suite.define(() => {
           (button) => getComputedStyle(button).backgroundColor,
         );
         await footerUpdate.hover();
-        await expect.poll(async () => (await footerUpdate.boundingBox())?.width).toBe(40);
+        await expect.poll(async () => (await footerUpdate.boundingBox())?.width).toBe(32);
         await expect
           .poll(() => footerUpdate.evaluate((button) => getComputedStyle(button).backgroundColor))
           .not.toBe(restingBackground);
@@ -137,7 +137,7 @@ suite.define(() => {
           .poll(() => dismissButton.evaluate((button) => getComputedStyle(button).opacity))
           .toBe("1");
         await dismissButton.hover();
-        await expect.poll(async () => (await footerUpdate.boundingBox())?.width).toBe(40);
+        await expect.poll(async () => (await footerUpdate.boundingBox())?.width).toBe(32);
         await expect
           .poll(async () => {
             const inboxBoxOnDismiss = await page.locator(".sidebar-issues-button").boundingBox();
@@ -190,7 +190,7 @@ suite.define(() => {
         const footerUpdate = page.locator(".sidebar-footer-update");
         await footerUpdate.waitFor();
         expect(await footerUpdate.isDisabled()).toBe(true);
-        expect((await footerUpdate.boundingBox())?.width).toBe(40);
+        expect((await footerUpdate.boundingBox())?.width).toBe(32);
         expect(await footerUpdate.locator(".sidebar-footer-update__icon").isVisible()).toBe(true);
         expect(await footerUpdate.evaluate((button) => getComputedStyle(button).opacity)).toBe("1");
         expect(await page.locator(".sidebar-footer-update__dismiss").count()).toBe(0);

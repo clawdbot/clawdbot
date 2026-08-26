@@ -10,6 +10,9 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  --shell-native-titlebar-controls-inset: 92px;
+  --shell-native-titlebar-controls-width: 156px;
+  --shell-native-titlebar-safe-area-left: 246px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
      Optional controls contribute only while they are actually mounted. */
   --shell-controls-width: 104px;
@@ -219,14 +222,14 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   top: 0;
   /* Clear the traffic lights (~74px cluster) with breathing room before the
      first hosted button, so the two groups read as separate. */
-  left: 92px;
+  left: var(--shell-native-titlebar-controls-inset);
   /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
   z-index: 50;
   display: flex;
   align-items: center;
   gap: 4px;
   width: max-content;
-  min-width: 156px;
+  min-width: var(--shell-native-titlebar-controls-width);
   height: var(--openclaw-native-titlebar-height, 50px);
 }
 

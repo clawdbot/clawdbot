@@ -28,6 +28,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         <button class="shell-chrome-controls__button"></button>
         <button class="shell-chrome-controls__button shell-chrome-controls__custodian"></button>
       </div>
+      <nav class="macos-titlebar-controls">
+        ${Array.from(
+          { length: 5 },
+          () => '<button class="topbar-icon-btn macos-titlebar-controls__button"></button>',
+        ).join("")}
+      </nav>
       <main class="content">
         <openclaw-sidebar-attention class="sidebar-attention--floating">
           <button class="sidebar-issues-button"></button>
@@ -38,6 +44,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
     const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
+    const nativeChrome = shell.querySelector<HTMLElement>(".macos-titlebar-controls")!;
     const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
     expect(getComputedStyle(attention).position).toBe("fixed");
@@ -54,7 +61,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(getComputedStyle(attention).top).toBe("52px");
 
     document.documentElement.classList.add("openclaw-native-web-chrome");
-    expect(getComputedStyle(attention).left).toBe("16px");
+    expect(
+      attention.getBoundingClientRect().left - nativeChrome.getBoundingClientRect().right,
+    ).toBe(4);
   });
 
   it("keeps hub tabs compact and item rails flush with the scrollport", async () => {
