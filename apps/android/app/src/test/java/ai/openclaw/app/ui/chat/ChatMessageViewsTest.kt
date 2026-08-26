@@ -104,6 +104,77 @@ class ChatMessageViewsTest {
   }
 
   @Test
+  fun attachmentOnlyUserTurnsRetainEntryActionsWithoutEmptyTextActions() {
+    val actions = mutableListOf<String>()
+    val messages =
+      listOf(
+        Triple("user", "photo.png", "photo-entry"),
+        Triple("user", "report.pdf", "document-entry"),
+        Triple("assistant", "assistant.pdf", "assistant-entry"),
+        Triple("user", "unpersisted.pdf", null),
+        Triple("user", "disabled.pdf", "disabled-entry"),
+      )
+
+    composeRule.setContent {
+      Column {
+        messages.forEach { (role, fileName, entryId) ->
+          ChatBubble(
+            messageId = fileName,
+            entryId = entryId,
+            role = role,
+            live = false,
+            content =
+              listOf(
+                ChatMessageContent(
+                  type = if (fileName == "photo.png") "image" else "file",
+                  fileName = fileName,
+                ),
+              ),
+            timestampMs = null,
+            onReplyMessage = { actions += "reply:$it" },
+            sessionActionsEnabled = fileName != "disabled.pdf",
+            onRewindMessage = { actions += "rewind:$it" },
+            onForkMessage = { actions += "fork:$it" },
+            speechState = null,
+            onToggleListen = { _, _ -> actions += "listen" },
+            inlineMediaPlaybackBlocked = false,
+            inlineWidgetResolverReady = false,
+            resolveInlineWidgetResource = { _, _ -> null },
+            loadImageArtifact = { null },
+            loadMediaArtifact = { _, _, _ -> null },
+          )
+        }
+      }
+    }
+
+    listOf("assistant.pdf", "unpersisted.pdf", "disabled.pdf").forEach { fileName ->
+      val speaker = if (fileName == "assistant.pdf") "OpenClaw" else "You"
+      val semantics =
+        composeRule
+          .onNode(hasContentDescription(speaker) and hasText(fileName))
+          .fetchSemanticsNode()
+          .config
+      assertTrue(SemanticsActions.OnLongClick !in semantics)
+    }
+
+    listOf("photo.png" to "Rewind to here", "report.pdf" to "Fork from here").forEach { (fileName, selectedAction) ->
+      composeRule
+        .onNode(hasContentDescription("You") and hasText(fileName))
+        .performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+
+      listOf("Rewind to here", "Fork from here").forEach { label ->
+        composeRule.onNode(hasText(label) and hasClickAction()).assertExists()
+      }
+      listOf("Copy", "Select text", "Share", "Reply", "Listen").forEach { label ->
+        composeRule.onAllNodesWithText(label).assertCountEquals(0)
+      }
+      composeRule.onNodeWithText(selectedAction).performClick()
+    }
+
+    assertEquals(listOf("rewind:photo-entry", "fork:document-entry"), actions)
+  }
+
+  @Test
   fun outboxBubbleExposesSpeakerWithoutReplacingStatusOrActions() {
     composeRule.setContent {
       Column {
