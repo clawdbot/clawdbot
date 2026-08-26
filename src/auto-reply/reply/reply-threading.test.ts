@@ -136,27 +136,27 @@ describe("resolveReplyToMode", () => {
   });
 
   it("applies canonical account policy before channel-wide threading defaults", () => {
-    setActivePluginRegistry(createTestRegistry([]));
-    const cfg = {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "irc", source: "test", plugin: createChannelTestPluginBase({ id: "irc" }) },
+      ]),
+    );
+    const cfg: OpenClawConfig = {
       channels: {
         irc: {
           replyToMode: "off",
-          replyToModeByChatType: { group: "first" },
           accounts: {
-            "Ops Team": {
-              replyToMode: "all",
-              replyToModeByChatType: { group: "batched" },
-            },
-            support: { replyToMode: "all" },
+            "Ops Team": { replyToMode: "all" },
+            support: { replyToMode: "first" },
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
-    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("batched");
+    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("all");
     expect(resolveReplyToMode(cfg, "irc", "OPS TEAM", "direct")).toBe("all");
-    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("all");
-    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("off");
     expect(resolveReplyToMode(cfg, "irc", null, "direct")).toBe("off");
   });
 });
