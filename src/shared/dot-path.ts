@@ -3,6 +3,10 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 export type ConcreteConfigPathSegment = string | number;
+export type ParsedConcreteConfigPath = {
+  tokens: ConcreteConfigPathSegment[];
+  quotedNumericSegments: ReadonlySet<number>;
+};
 
 function parseBracketPathSegment(raw: string, fullPath: string): ConcreteConfigPathSegment {
   const trimmed = raw.trim();
@@ -51,13 +55,14 @@ function findBracketPathClose(path: string, open: number): number {
   return -1;
 }
 
-/** Parses one concrete path while keeping explicit array brackets distinct from quoted keys. */
-export function parseConcreteConfigPathTokens(raw: string): ConcreteConfigPathSegment[] {
+/** Retains quoted numeric-key provenance alongside the public concrete path tokens. */
+export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Path is empty.");
   }
   const parts: ConcreteConfigPathSegment[] = [];
+  const quotedNumericSegments = new Set<number>();
   let current = "";
   let segmentEmitted = false;
   let index = 0;
@@ -102,7 +107,15 @@ export function parseConcreteConfigPathTokens(raw: string): ConcreteConfigPathSe
       if (!inside) {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
-      parts.push(parseBracketPathSegment(inside, raw));
+      const segment = parseBracketPathSegment(inside, raw);
+      if (
+        typeof segment === "string" &&
+        (inside.startsWith('"') || inside.startsWith("'")) &&
+        parseConfigPathArrayIndex(segment) !== undefined
+      ) {
+        quotedNumericSegments.add(parts.length);
+      }
+      parts.push(segment);
       const next = trimmed[close + 1];
       if (next !== undefined && next !== "." && next !== "[") {
         throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
@@ -125,7 +138,12 @@ export function parseConcreteConfigPathTokens(raw: string): ConcreteConfigPathSe
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
-  return parts;
+  return { tokens: parts, quotedNumericSegments };
+}
+
+/** Parses one concrete path while keeping explicit array brackets distinct from quoted keys. */
+export function parseConcreteConfigPathTokens(raw: string): ConcreteConfigPathSegment[] {
+  return parseConcreteConfigPathWithProvenance(raw).tokens;
 }
 
 /** Parses one concrete config path into the existing string-segment CLI contract. */
@@ -138,7 +156,7 @@ export function appendConfigPathSegment(path: string, segment: string | number):
   if (typeof segment === "number") {
     return `${path}[${segment}]`;
   }
-  if (!/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(segment)) {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$:-]*$/.test(segment)) {
     return `${path}[${JSON.stringify(segment)}]`;
   }
   return path ? `${path}.${segment}` : segment;
@@ -165,7 +183,5 @@ export function formatConcreteConfigPath(
 
 /** Joins path segments into their dotted-path representation. */
 export function toDotPath(segments: readonly string[]): string {
-  return segments[0] === "plugins" && segments[1] === "entries"
-    ? segments.reduce(appendConfigPathSegment, "")
-    : segments.join(".");
+  return segments.join(".");
 }

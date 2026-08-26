@@ -1,7 +1,11 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { toDotPath } from "../shared/dot-path.js";
+import {
+  formatConcreteConfigPath,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
@@ -9,6 +13,14 @@ import { formatStrictJsonParseFailure } from "./error-format.js";
 export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
 
 export type PathSegment = string;
+
+export function formatConfigSetPath(
+  path: readonly PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+  source?: unknown,
+): string {
+  return formatConcreteConfigPath(pathTokens ?? path, source);
+}
 
 export type JsonSchemaRecord = {
   type?: unknown;
@@ -22,6 +34,8 @@ export type JsonSchemaRecord = {
 
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   schema?: JsonSchemaRecord;
 };
 
@@ -230,6 +244,13 @@ function shouldCreateArrayForMissingPathSegment(params: {
   options?: SetAtPathOptions;
 }): boolean {
   if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+    return false;
+  }
+  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
+  if (typeof nextToken === "number") {
+    return true;
+  }
+  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
     return false;
   }
   const parentPath = params.path.slice(0, params.segmentIndex + 1);

@@ -412,24 +412,17 @@ describe("getStatusSummary", () => {
   });
 
   it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
-    const webhookPath = "plugins.entries.webhooks.config.routes.a.secret";
-    const owners = [
-      ["provider", "openai", "models.providers.openai.apiKey", "stale"],
-      ["plugin-capability", "beam:beam-mirror", "plugins.entries.beam.config.token", "cold"],
-      ["plugin-provider", "comfy:comfy", "plugins.entries.comfy.config.apiKey", "cold"],
-      ["plugin-route", "webhooks:routes.a.secret", webhookPath, "cold"],
-    ] as const;
-    setActiveDegradedSecretOwners(
-      owners.map(([ownerKind, ownerId, ownerPath, degradationState]) => ({
-        ownerKind,
-        ownerId,
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
         state: "unavailable",
-        degradationState,
-        paths: [ownerPath],
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
         reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
-      })),
-    );
+      },
+    ]);
     setActiveCredentialDegradedOwner({
       ownerKind: "account",
       ownerId: "telegram:work",
@@ -441,8 +434,15 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary();
 
-    expect(summary.degradedSecretOwners).toMatchObject([
-      ...owners.map(([ownerKind, ownerId]) => ({ ownerKind, ownerId })),
+    expect(summary.degradedSecretOwners).toEqual([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
+        reason: "secret resolution failed",
+      },
       {
         ownerKind: "account",
         ownerId: "telegram:work",
@@ -452,7 +452,6 @@ describe("getStatusSummary", () => {
         reason: "secret resolution failed",
       },
     ]);
-    expect(summary.degradedSecretOwners?.[0]?.degradationState).toBe("stale");
     expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
   });
 

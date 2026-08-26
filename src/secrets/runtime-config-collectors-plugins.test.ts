@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
-import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import { createResolverContext, type ResolverContext } from "./runtime-shared.js";
 
 const { loadPluginManifestRegistryForPluginRegistryMock } = vi.hoisted(() => ({
@@ -37,7 +36,7 @@ function makeContext(
 ): ResolverContext {
   return createResolverContext({
     sourceConfig,
-    env: {},
+    env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME },
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 }
@@ -165,103 +164,6 @@ describe("collectPluginConfigAssignments", () => {
     expect(assignment.expected).toBe("string");
   });
 
-  it.each([
-    {
-      descriptor: { ownerKind: "route" },
-      ownerKind: "plugin-route",
-      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "service.token"),
-    },
-    {
-      descriptor: { ownerKind: "capability", ownerId: "feature-owner" },
-      ownerKind: "plugin-capability",
-      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "feature-owner"),
-    },
-    {
-      descriptor: { ownerKind: "provider", ownerId: "provider-owner" },
-      ownerKind: "plugin-provider",
-      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "provider-owner"),
-    },
-  ] as const)("isolates only the manifest-declared $ownerKind owner", (scenario) => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "secret-owner",
-          origin: "config",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "service.token", expected: "string", ...scenario.descriptor }],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    const context = collectAssignments(
-      createPluginConfig("secret-owner", {
-        service: { endpoint: "https://example.invalid", token: envRef("OWNER_TOKEN") },
-      }),
-      [["secret-owner", "config"]],
-    );
-
-    expect(context.assignments).toMatchObject([
-      {
-        path: "plugins.entries.secret-owner.config.service.token",
-        ownerKind: scenario.ownerKind,
-        ownerId: scenario.ownerId,
-        requiredForGateway: false,
-        disposition: "isolate",
-        ownerContractDigest: expect.any(String),
-      },
-    ]);
-  });
-
-  it.each(["capability", "provider"] as const)(
-    "keeps the same manifest-local %s owner distinct across plugins",
-    (ownerKind) => {
-      const pluginIds = ["cold-plugin", "healthy-plugin"] as const;
-      loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-        plugins: pluginIds.map((id) => ({
-          id,
-          origin: "config",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "service.token", ownerKind, ownerId: "shared-owner" }],
-            },
-          },
-        })),
-        diagnostics: [],
-      });
-
-      const config = asConfig({
-        plugins: {
-          entries: {
-            "cold-plugin": {
-              enabled: true,
-              config: { service: { token: envRef("COLD_PLUGIN_TOKEN") } },
-            },
-            "healthy-plugin": {
-              enabled: true,
-              config: { service: { token: envRef("HEALTHY_PLUGIN_TOKEN") } },
-            },
-          },
-        },
-      });
-      const context = collectAssignments(config, [
-        ["cold-plugin", "config"],
-        ["healthy-plugin", "config"],
-      ]);
-      const ownerIds = pluginIds.map((pluginId) =>
-        runtimePluginManifestSecretOwnerId(pluginId, "shared-owner"),
-      );
-
-      expect(ownerIds).toEqual(["cold-plugin:shared-owner", "healthy-plugin:shared-owner"]);
-      expect(context.assignments).toMatchObject(
-        ownerIds.map((ownerId) => ({ ownerKind: `plugin-${ownerKind}`, ownerId })),
-      );
-    },
-  );
-
   it("keeps dotted plugin identities and plugin-local route paths distinct", () => {
     const pluginIds = ["foo.config.bar", "foo"] as const;
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
@@ -300,14 +202,14 @@ describe("collectPluginConfigAssignments", () => {
     expect(context.assignments).toMatchObject([
       {
         path: 'plugins.entries["foo.config.bar"].config.token',
-        ownerKind: "plugin-route",
-        ownerId: runtimePluginManifestSecretOwnerId("foo.config.bar", "token"),
+        ownerKind: "route",
+        ownerId: 'plugins.entries["foo.config.bar"].config.token',
         ref: { id: "DOTTED_TOKEN" },
       },
       {
         path: "plugins.entries.foo.config.bar.config.token",
-        ownerKind: "plugin-route",
-        ownerId: runtimePluginManifestSecretOwnerId("foo", "bar.config.token"),
+        ownerKind: "route",
+        ownerId: "plugins.entries.foo.config.bar.config.token",
         ref: { id: "NESTED_TOKEN" },
       },
     ]);
@@ -322,10 +224,7 @@ describe("collectPluginConfigAssignments", () => {
           origin: "config",
           configContracts: {
             secretInputs: {
-              paths: [
-                { path: "*.token", ownerKind: "capability", ownerId: "dotted-owner" },
-                { path: "*.*.token", ownerKind: "provider", ownerId: "nested-owner" },
-              ],
+              paths: [{ path: "*.token" }, { path: "*.*.token" }],
             },
           },
         },
@@ -341,14 +240,10 @@ describe("collectPluginConfigAssignments", () => {
     expect(context.assignments).toMatchObject([
       {
         path: 'plugins.entries.distinct-keys.config["alpha.beta"].token',
-        ownerKind: "plugin-capability",
-        ownerId: runtimePluginManifestSecretOwnerId("distinct-keys", "dotted-owner"),
         ref: { id: "DOTTED_TOKEN" },
       },
       {
         path: "plugins.entries.distinct-keys.config.alpha.beta.token",
-        ownerKind: "plugin-provider",
-        ownerId: runtimePluginManifestSecretOwnerId("distinct-keys", "nested-owner"),
         ref: { id: "NESTED_TOKEN" },
       },
     ]);
@@ -358,72 +253,6 @@ describe("collectPluginConfigAssignments", () => {
       "alpha.beta": { token: "resolved-dotted" },
       alpha: { beta: { token: "resolved-nested" } },
     });
-  });
-
-  it("projects declared contract fields from the exact matched owner block", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "secret-owner",
-          origin: "config",
-          configContracts: {
-            secretInputs: {
-              paths: [
-                {
-                  path: "service.token",
-                  ownerKind: "capability",
-                  ownerId: "feature-owner",
-                  ownerContractFields: ["endpoint", "token"],
-                },
-              ],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    const digest = (endpoint: string, description: string, sibling: string) => {
-      const config = createPluginConfig("secret-owner", {
-        service: { endpoint, description, token: envRef("OWNER_TOKEN") },
-        sibling: { description: sibling },
-      });
-      return requireAssignment(collectAssignments(config, [["secret-owner", "config"]]), 0)
-        .ownerContractDigest;
-    };
-
-    expect(digest("https://first.example.invalid", "first", "first")).toBe(
-      digest("https://first.example.invalid", "changed", "changed"),
-    );
-    expect(digest("https://first.example.invalid", "first", "first")).not.toBe(
-      digest("https://second.example.invalid", "first", "first"),
-    );
-  });
-
-  it("preserves the complete existing owner contract when fields are omitted", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "secret-owner",
-          origin: "config",
-          configContracts: {
-            secretInputs: { paths: [{ path: "service.token", ownerKind: "route" }] },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    const digest = (sibling: string) => {
-      const config = createPluginConfig("secret-owner", {
-        service: { token: envRef("OWNER_TOKEN") },
-        sibling,
-      });
-      return requireAssignment(collectAssignments(config, [["secret-owner", "config"]]), 0)
-        .ownerContractDigest;
-    };
-
-    expect(digest("first")).not.toBe(digest("changed"));
   });
 
   it("keeps installed web-provider headers unknown while applying exact dotted keys", () => {

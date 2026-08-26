@@ -1999,6 +1999,41 @@ describe("config cli", () => {
       ]);
     });
 
+    it.each([
+      [
+        'agents.defaults.models["fixture/model.v1"].params["literal.dot"]',
+        "LITERAL",
+        { "literal.dot": "LITERAL" },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.literal.dot',
+        "NESTED",
+        { literal: { dot: "NESTED" } },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.record["0"]',
+        "RECORD-ZERO",
+        { record: { "0": "RECORD-ZERO" } },
+      ],
+      [
+        'agents.defaults.models["fixture/model.v1"].params.list[0]',
+        "ARRAY-ZERO",
+        { list: ["ARRAY-ZERO"] },
+      ],
+    ])("preserves generic config path identity for %s", async (configPath, value, expected) => {
+      const resolved = {
+        agents: { defaults: { models: { "fixture/model.v1": { params: {} } } } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigSet(configPath, JSON.stringify(value), "--strict-json");
+
+      expect(firstWrittenConfig().agents?.defaults?.models?.["fixture/model.v1"]?.params).toEqual(
+        expected,
+      );
+      expectLogIncludes(`Updated ${configPath}`);
+    });
+
     it("keeps numeric config set path segments as object keys for schema-backed Discord guild records", async () => {
       setConfigMutationShapeSchema();
       const resolved: OpenClawConfig = {
@@ -4598,7 +4633,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.1.model.primary");
+      expectLogIncludes("Updated agents.list[1].model.primary");
       expectLogIncludes("Change will apply without restarting the gateway.");
       expectLogExcludes("Restart the gateway to apply.");
     });
@@ -4648,7 +4683,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Updated agents.list[0].model.primary");
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
@@ -4672,7 +4707,7 @@ describe("config cli", () => {
         "--strict-json",
       ]);
 
-      expectLogIncludes("Updated agents.list.0.model.primary");
+      expectLogIncludes("Updated agents.list[0].model.primary");
       expectLogIncludes("Change will apply without restarting the gateway.");
       expectLogExcludes("Restart the gateway to apply.");
     });
@@ -4778,23 +4813,30 @@ describe("config cli", () => {
       expectLogExcludes("Change will apply without restarting the gateway.");
     });
 
-    it("keeps plugin entry config writes restart-backed when reload metadata is absent", async () => {
-      const resolved: OpenClawConfig = {
-        plugins: {
-          entries: {
-            canvas: { enabled: true },
+    it.each([
+      ["canvas", "plugins.entries.canvas.enabled"],
+      ["canvas.internal", 'plugins.entries["canvas.internal"].enabled'],
+      ["canvas", "plugins.entries.canvas.config.accounts[0].enabled"],
+    ])(
+      "keeps plugin entry %s writes unambiguous and restart-backed",
+      async (pluginId, configPath) => {
+        const resolved = {
+          plugins: {
+            entries: {
+              [pluginId]: { enabled: true, config: { accounts: [{ enabled: true }] } },
+            },
           },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
+        } as unknown as OpenClawConfig;
+        setSnapshot(resolved, resolved);
 
-      await runConfigSet("plugins.entries.canvas.enabled", "false");
+        await runConfigSet(configPath, "false");
 
-      expectLogIncludes("Updated plugins.entries.canvas.enabled");
-      expectLogIncludes("Restart the gateway to apply.");
-      expectLogExcludes("Change will apply without restarting the gateway.");
-      expectLogExcludes("No gateway restart needed.");
-    });
+        expectLogIncludes(`Updated ${configPath}`);
+        expectLogIncludes("Restart the gateway to apply.");
+        expectLogExcludes("Change will apply without restarting the gateway.");
+        expectLogExcludes("No gateway restart needed.");
+      },
+    );
 
     it("keeps the restart hint for mixed hot and restart batch updates", async () => {
       const resolved: OpenClawConfig = {

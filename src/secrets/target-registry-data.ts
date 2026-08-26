@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { toDotPath } from "../shared/dot-path.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
 import { parseDotPath } from "./shared.js";
@@ -24,7 +24,7 @@ function createPluginOpenClawConfigSecretTargetEntry(
 ): SecretTargetRegistryEntry {
   const pluginConfigPath = ["plugins", "entries", pluginId, "config"];
   const pathPatternSegments = [...pluginConfigPath, ...parseDotPath(configPath)];
-  const pathPattern = `${toDotPath(pluginConfigPath)}.${configPath}`;
+  const pathPattern = `${formatConcreteConfigPath(pluginConfigPath)}.${configPath}`;
   return {
     id: pathPattern,
     targetType: pathPattern,

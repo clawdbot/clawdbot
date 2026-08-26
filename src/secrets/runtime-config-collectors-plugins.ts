@@ -6,10 +6,8 @@ import {
   resolvePluginConfigContractsById,
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
-import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { toDotPath } from "../shared/dot-path.js";
-import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   collectRuntimeSecretInputAssignment,
   type ResolverContext,
@@ -134,13 +132,18 @@ export function collectPluginConfigAssignments(params: {
 function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
-  secretPaths: ReadonlyArray<PluginManifestSecretInputPath>;
+  secretPaths: ReadonlyArray<{ path: string; expected?: "string"; ownerKind?: "route" }>;
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const pluginConfigPath = toDotPath(["plugins", "entries", params.pluginId, "config"]);
+  const pluginConfigPath = formatConcreteConfigPath([
+    "plugins",
+    "entries",
+    params.pluginId,
+    "config",
+  ]);
   const seenPaths = new Set<string>();
   for (const secretPath of params.secretPaths) {
     for (const match of collectPluginConfigContractMatches({
@@ -153,7 +156,6 @@ function collectConfiguredPluginSecretAssignments(params: {
         continue;
       }
       seenPaths.add(fullPath);
-      const ownerConfig = match.parent;
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
@@ -169,37 +171,16 @@ function collectConfiguredPluginSecretAssignments(params: {
         ...(secretPath.ownerKind
           ? {
               owner: {
-                ownerKind:
-                  secretPath.ownerKind === "route"
-                    ? "plugin-route"
-                    : secretPath.ownerKind === "capability"
-                      ? "plugin-capability"
-                      : "plugin-provider",
-                ownerId: runtimePluginManifestSecretOwnerId(
-                  params.pluginId,
-                  secretPath.ownerKind === "route" ? match.path : secretPath.ownerId,
-                ),
+                ownerKind: secretPath.ownerKind,
+                ownerId: fullPath,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
-                contract: secretPath.ownerContractFields
-                  ? isRecord(ownerConfig) &&
-                    secretPath.ownerContractFields.every((field) =>
-                      Object.hasOwn(ownerConfig, field),
-                    )
-                    ? Object.fromEntries(
-                        secretPath.ownerContractFields.map((field) => [field, ownerConfig[field]]),
-                      )
-                    : undefined
-                  : params.pluginConfig,
+                contract: params.pluginConfig,
               },
             }
           : {}),
         apply: (value) => {
-          if (Array.isArray(ownerConfig)) {
-            ownerConfig[Number(match.key)] = value;
-          } else {
-            ownerConfig[match.key] = value;
-          }
+          Reflect.set(match.parent, match.key, value);
         },
       });
     }

@@ -160,21 +160,17 @@ describe("runDoctorLintCli", () => {
       },
       path: "/tmp/openclaw.json",
     });
-    const webhookPath = "plugins.entries.webhooks.config.routes.a.secret";
-    const degradedOwners = [
-      ["account", "discord:ops", "channels.discord.accounts.ops.token"],
-      ["plugin-capability", "beam:beam-mirror", "plugins.entries.beam.config.token"],
-      ["plugin-provider", "comfy:comfy", "plugins.entries.comfy.config.apiKey"],
-      ["plugin-route", "webhooks:routes.a.secret", webhookPath],
-    ] as const;
     mocks.callGateway.mockResolvedValue({
-      degradedSecretOwners: degradedOwners.map(([ownerKind, ownerId, ownerPath]) => ({
-        ownerKind,
-        ownerId,
-        state: "unavailable",
-        paths: [ownerPath],
-        reason: "secret reference was not found (PRIVATE_REF_ID=SYNTHETIC_OWNER_SECRET)",
-      })),
+      degradedSecretOwners: [
+        {
+          ownerKind: "account",
+          ownerId: "discord:ops",
+          state: "unavailable",
+          paths: ["channels.discord.accounts.ops.token"],
+          reason:
+            "secret reference was not found (env:default:PRIVATE_REF_ID=SYNTHETIC_OWNER_SECRET)",
+        },
+      ],
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const originalIsTTY = process.stdout.isTTY;
@@ -210,9 +206,8 @@ describe("runDoctorLintCli", () => {
 
       expect(exitCode).toBe(1);
       expect(output).toContain("core/doctor/gateway-health");
-      for (const [ownerKind, ownerId] of degradedOwners) {
-        expect(output).toContain(`cold ${ownerKind}:${ownerId}`);
-      }
+      expect(output).toContain("cold account:discord:ops");
+      expect(output).toContain("channels.discord.accounts.ops.token");
       expect(output).toContain("openclaw secrets reload");
       expect(output).not.toContain("SYNTHETIC_GATEWAY_SECRET");
       expect(output).not.toContain("SYNTHETIC_OWNER_SECRET");
@@ -222,12 +217,14 @@ describe("runDoctorLintCli", () => {
         expect(JSON.parse(output)).toMatchObject({
           ok: false,
           checksRun: 1,
-          findings: degradedOwners.map(([ownerKind, ownerId, ownerPath]) => ({
-            checkId: "core/doctor/gateway-health",
-            severity: "warning",
-            path: ownerPath,
-            target: `${ownerKind}:${ownerId}`,
-          })),
+          findings: [
+            {
+              checkId: "core/doctor/gateway-health",
+              severity: "warning",
+              path: "channels.discord.accounts.ops.token",
+              target: "account:discord:ops",
+            },
+          ],
         });
       } else {
         expect(output).toContain("[warning] core/doctor/gateway-health");

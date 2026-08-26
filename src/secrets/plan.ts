@@ -6,7 +6,6 @@ import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   parseConcreteConfigPathTokens,
-  toDotPath,
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
@@ -104,7 +103,7 @@ export function resolveValidatedPlanTarget(candidate: {
   if (
     segments.length === 0 ||
     segments.some(isBlockedObjectKey) ||
-    (!parsedPathMatches && path !== toDotPath(segments) && path !== segments.join("."))
+    (!parsedPathMatches && path !== segments.join("."))
   ) {
     return null;
   }
@@ -115,7 +114,7 @@ export function resolveValidatedPlanTarget(candidate: {
     pathSegments: segments,
     pathTokens: parsedPathMatches ? parsedTokens : segments,
     // Only an authored array pattern can disambiguate indices in shipped v1 dotted plans.
-    allowLegacyArrayString: hasPathSegments && path === segments.join("."),
+    allowLegacyArrayString: path === segments.join("."),
     providerId: candidate.providerId,
     accountId: candidate.accountId,
   });

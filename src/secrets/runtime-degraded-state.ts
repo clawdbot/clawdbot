@@ -18,9 +18,6 @@ export type SecretOwnerKind =
   | "account"
   | "capability"
   | "gateway"
-  | "plugin-capability"
-  | "plugin-provider"
-  | "plugin-route"
   | "provider"
   | "route"
   | "unknown";

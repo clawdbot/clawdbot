@@ -1,11 +1,7 @@
 /** Shared plan construction for plugin-owned SecretRef setup commands. */
 import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
 import type { PluginIntegrationSecretProviderConfig, SecretRef } from "../config/types.secrets.js";
-import {
-  formatConcreteConfigPath,
-  parseConcreteConfigPathTokens,
-  toDotPath,
-} from "../shared/dot-path.js";
+import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
 import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
@@ -92,10 +88,7 @@ function createPluginConfigSecretTarget(params: {
     throw new Error(`Invalid --target config path: ${params.path}`);
   }
   const pathSegments = parsedPath.map(String);
-  const normalizedPath =
-    pathSegments[0] === "plugins" && pathSegments[1] === "entries"
-      ? formatConcreteConfigPath(parsedPath)
-      : toDotPath(pathSegments);
+  const normalizedPath = formatConcreteConfigPath(parsedPath);
   if (normalizedPath !== params.path) {
     throw new Error(`Invalid --target config path: ${params.path}`);
   }

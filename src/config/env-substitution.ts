@@ -22,11 +22,11 @@
 
 // Pattern for valid uppercase env var names: starts with letter or underscore,
 // followed by letters, numbers, or underscores (all uppercase)
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isPlainObject } from "../utils.js";
 import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
-const SAFE_CONFIG_PATH_KEY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
 
 /** Error thrown when a config value references a missing or empty environment variable. */
 export class MissingEnvVarError extends Error {
@@ -194,12 +194,11 @@ function substituteAny(
         path === "plugins.entries" ||
         path.startsWith("plugins.entries.") ||
         path.startsWith("plugins.entries[");
-      const childPath =
-        isPluginConfigPath && !SAFE_CONFIG_PATH_KEY_PATTERN.test(key)
-          ? `${path}[${JSON.stringify(key)}]`
-          : path
-            ? `${path}.${key}`
-            : key;
+      const childPath = isPluginConfigPath
+        ? appendConfigPathSegment(path, key)
+        : path
+          ? `${path}.${key}`
+          : key;
       result[key] = substituteAny(val, env, childPath, opts);
     }
     return result;

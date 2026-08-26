@@ -254,7 +254,7 @@ function discoverSecretTargetsFromEntries(
       if (!resolved) {
         continue;
       }
-      const key = JSON.stringify([entry.id, ...resolved.pathSegments]);
+      const key = JSON.stringify([entry.id, ...resolved.pathTokens]);
       if (seen.has(key)) {
         continue;
       }

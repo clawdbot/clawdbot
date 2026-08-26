@@ -20,12 +20,13 @@ import {
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
 import {
-  parseConcreteConfigPathTokens,
+  parseConcreteConfigPathWithProvenance,
   toDotPath,
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
+  formatConfigSetPath,
   parseConfigSetPath,
   parseConfigSetValue,
   type PathSegment,
@@ -47,6 +48,8 @@ const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 export type ConfigSetOperation = {
   inputMode: ConfigSetDryRunInputMode;
   requestedPath: PathSegment[];
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   setPath: PathSegment[];
   value: unknown;
   mutation?: "set" | "merge" | "replace" | "delete";
@@ -319,6 +322,7 @@ function touchesSecretDefaults(path: PathSegment[]): boolean {
 function buildRefAssignmentOperation(params: {
   requestedPath: PathSegment[];
   pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   ref: SecretRef;
   inputMode: ConfigSetDryRunInputMode;
 }): ConfigSetOperation {
@@ -327,10 +331,14 @@ function buildRefAssignmentOperation(params: {
     return {
       inputMode: params.inputMode,
       requestedPath: params.requestedPath,
+      ...(params.pathTokens ? { pathTokens: params.pathTokens } : {}),
+      ...(params.quotedNumericSegments
+        ? { quotedNumericSegments: params.quotedNumericSegments }
+        : {}),
       setPath: resolved.refPathSegments,
       value: params.ref,
       schemaValidated: true,
-      touchedSecretTargetPath: toDotPath(resolved.pathSegments),
+      touchedSecretTargetPath: formatConfigSetPath(resolved.pathSegments, params.pathTokens),
       assignedRef: params.ref,
       ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
     };
@@ -338,10 +346,17 @@ function buildRefAssignmentOperation(params: {
   return {
     inputMode: params.inputMode,
     requestedPath: params.requestedPath,
+    ...(params.pathTokens ? { pathTokens: params.pathTokens } : {}),
+    ...(params.quotedNumericSegments
+      ? { quotedNumericSegments: params.quotedNumericSegments }
+      : {}),
     setPath: params.requestedPath,
     value: params.ref,
     ...(resolved ? { schemaValidated: true } : {}),
-    touchedSecretTargetPath: toDotPath(resolved?.pathSegments ?? params.requestedPath),
+    touchedSecretTargetPath: formatConfigSetPath(
+      resolved?.pathSegments ?? params.requestedPath,
+      params.pathTokens,
+    ),
     assignedRef: params.ref,
     ...(resolved?.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
   };
@@ -350,6 +365,7 @@ function buildRefAssignmentOperation(params: {
 function buildValueAssignmentOperation(params: {
   requestedPath: PathSegment[];
   pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   value: unknown;
   inputMode: ConfigSetDryRunInputMode;
 }): ConfigSetOperation {
@@ -359,12 +375,18 @@ function buildValueAssignmentOperation(params: {
   return {
     inputMode: params.inputMode,
     requestedPath: params.requestedPath,
+    ...(params.pathTokens ? { pathTokens: params.pathTokens } : {}),
+    ...(params.quotedNumericSegments
+      ? { quotedNumericSegments: params.quotedNumericSegments }
+      : {}),
     setPath:
       coercedRef && resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments
         ? resolved.refPathSegments
         : params.requestedPath,
     value: params.value,
-    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(resolved
+      ? { touchedSecretTargetPath: formatConfigSetPath(resolved.pathSegments, params.pathTokens) }
+      : {}),
     ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
     ...(coercedRef ? { assignedRef: coercedRef } : {}),
   };
@@ -372,12 +394,15 @@ function buildValueAssignmentOperation(params: {
 
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
   return entries.map((entry, index) => {
-    const pathTokens = parseConcreteConfigPathTokens(entry.path);
+    const { tokens: pathTokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(
+      entry.path,
+    );
     const path = pathTokens.map(String);
     if (entry.ref !== undefined) {
       return buildRefAssignmentOperation({
         requestedPath: path,
         pathTokens,
+        quotedNumericSegments,
         ref: parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
         inputMode: "json",
       });
@@ -394,6 +419,8 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
       return {
         inputMode: "json",
         requestedPath: path,
+        pathTokens,
+        quotedNumericSegments,
         setPath: path,
         value: validated.data,
         schemaValidated: true,
@@ -403,6 +430,7 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
     return buildValueAssignmentOperation({
       requestedPath: path,
       pathTokens,
+      quotedNumericSegments,
       value: entry.value,
       inputMode: "json",
     });
@@ -415,7 +443,10 @@ function buildSingleSetOperations(params: {
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
   const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const pathTokens = pathProvided ? parseConcreteConfigPathTokens(params.path as string) : null;
+  const parsedConcretePath = pathProvided
+    ? parseConcreteConfigPathWithProvenance(params.path as string)
+    : null;
+  const pathTokens = parsedConcretePath?.tokens ?? null;
   const parsedPath = pathTokens?.map(String) ?? null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
@@ -444,6 +475,7 @@ function buildSingleSetOperations(params: {
       buildRefAssignmentOperation({
         requestedPath: parsedPath,
         pathTokens: pathTokens ?? undefined,
+        quotedNumericSegments: parsedConcretePath?.quotedNumericSegments,
         ref: parseSecretRefBuilder({
           provider: params.opts.refProvider,
           source: params.opts.refSource,
@@ -466,6 +498,10 @@ function buildSingleSetOperations(params: {
       {
         inputMode: "builder",
         requestedPath: parsedPath,
+        ...(pathTokens ? { pathTokens } : {}),
+        ...(parsedConcretePath
+          ? { quotedNumericSegments: parsedConcretePath.quotedNumericSegments }
+          : {}),
         setPath: parsedPath,
         value: buildProviderFromBuilder(params.opts),
         schemaValidated: true,
@@ -484,6 +520,7 @@ function buildSingleSetOperations(params: {
     buildValueAssignmentOperation({
       requestedPath: parsedPath,
       pathTokens: pathTokens ?? undefined,
+      quotedNumericSegments: parsedConcretePath?.quotedNumericSegments,
       value: parseConfigSetValue(params.value, strictJson),
       inputMode: modeResolution.mode === "json" ? "json" : "value",
     }),
@@ -557,13 +594,16 @@ export function buildUnsetOperation(
   return {
     inputMode: "unset",
     requestedPath: path,
+    ...(pathTokens ? { pathTokens } : {}),
     setPath: path,
     value: undefined,
     mutation: "delete",
     ...(touchesSecretProviderCollection(path) || touchesSecretDefaults(path)
       ? { touchesAllSecretRefs: true }
       : {}),
-    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(resolved
+      ? { touchedSecretTargetPath: formatConfigSetPath(resolved.pathSegments, pathTokens) }
+      : {}),
     ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
   };
 }

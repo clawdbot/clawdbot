@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
-import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -347,105 +346,20 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.degradedOwners).toMatchObject([
       {
-        ownerKind: "plugin-route",
-        ownerId: runtimePluginManifestSecretOwnerId("webhooks", "routes.cold.secret"),
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.cold.secret",
         state: "unavailable",
         paths: ["plugins.entries.webhooks.config.routes.cold.secret"],
         reason: "secret reference was not found",
       },
       {
-        ownerKind: "plugin-route",
-        ownerId: runtimePluginManifestSecretOwnerId("webhooks", "routes.inlineCold.secret"),
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.inlineCold.secret",
         state: "unavailable",
         paths: ["plugins.entries.webhooks.config.routes.inlineCold.secret"],
         reason: "secret reference was not found",
       },
     ]);
-  });
-
-  it("retains a route credential only when its declared owner contract stays unchanged", async () => {
-    const secret = { source: "env" as const, provider: "default", id: "ROUTE_SECRET" };
-    const manifestRegistry = {
-      plugins: [
-        {
-          id: "owner-fixture",
-          origin: "config" as const,
-          configContracts: {
-            secretInputs: {
-              paths: [
-                {
-                  path: "routes.*.secret",
-                  ownerKind: "route" as const,
-                  ownerContractFields: ["endpoint", "secret"],
-                },
-              ],
-            },
-          },
-        } as never,
-      ],
-    };
-    const config = (endpoint: string, description: string, sibling: string) =>
-      asConfig({
-        ...explicitMainRoster(),
-        plugins: {
-          entries: {
-            "owner-fixture": {
-              enabled: true,
-              config: {
-                routes: { "sales.eu": { endpoint, description, secret } },
-                sibling,
-              },
-            },
-          },
-        },
-      });
-    const prepare = (endpoint: string, description: string, sibling: string, env = {}) =>
-      prepareSecretsRuntimeSnapshot({
-        config: config(endpoint, description, sibling),
-        env,
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: new Map([["owner-fixture", "config" as const]]),
-        manifestRegistry,
-      });
-
-    activateSecretsRuntimeSnapshotState({
-      snapshot: await prepare("https://first.example.invalid", "first", "first", {
-        ROUTE_SECRET: "resolved-route",
-      }),
-      refreshContext: null,
-      refreshHandler: null,
-    });
-
-    const stale = await prepare("https://first.example.invalid", "changed", "changed");
-    const ownerId = runtimePluginManifestSecretOwnerId(
-      "owner-fixture",
-      'routes["sales.eu"].secret',
-    );
-    expect(stale.degradedOwners).toMatchObject([
-      {
-        ownerKind: "plugin-route",
-        ownerId,
-        paths: ['plugins.entries.owner-fixture.config.routes["sales.eu"].secret'],
-        degradationState: "stale",
-      },
-    ]);
-    expect(stale.config.plugins?.entries?.["owner-fixture"]?.config).toMatchObject({
-      routes: { "sales.eu": { secret: "resolved-route" } },
-    });
-
-    const cold = await prepare("https://second.example.invalid", "changed", "changed");
-    expect(cold.degradedOwners).toMatchObject([
-      {
-        ownerKind: "plugin-route",
-        ownerId,
-        paths: ['plugins.entries.owner-fixture.config.routes["sales.eu"].secret'],
-        degradationState: "cold",
-      },
-    ]);
-    expect(cold.config.plugins?.entries?.["owner-fixture"]?.config).toMatchObject({
-      routes: { "sales.eu": { secret } },
-    });
   });
 
   it("registers every resolved value for exact redaction", async () => {

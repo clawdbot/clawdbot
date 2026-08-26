@@ -180,57 +180,6 @@ describe("resolveConfigEnvVars", () => {
           configPath: 'plugins.entries.fixture.config.headers["0"]',
         },
         {
-          name: "record key containing brackets remains quoted",
-          config: {
-            plugins: {
-              entries: { fixture: { config: { headers: { "trace[0]": "${MISSING}" } } } },
-            },
-          },
-          env: {},
-          varName: "MISSING",
-          configPath: 'plugins.entries.fixture.config.headers["trace[0]"]',
-        },
-        {
-          name: "record key containing quotes uses JSON escapes",
-          config: {
-            plugins: {
-              entries: { fixture: { config: { headers: { 'trace"key': "${MISSING}" } } } },
-            },
-          },
-          env: {},
-          varName: "MISSING",
-          configPath: 'plugins.entries.fixture.config.headers["trace\\"key"]',
-        },
-        {
-          name: "record key containing backslashes uses JSON escapes",
-          config: {
-            plugins: {
-              entries: { fixture: { config: { headers: { "trace\\key": "${MISSING}" } } } },
-            },
-          },
-          env: {},
-          varName: "MISSING",
-          configPath: 'plugins.entries.fixture.config.headers["trace\\\\key"]',
-        },
-        {
-          name: "unpaired surrogate remains distinct from a literal escape",
-          config: {
-            plugins: { entries: { fixture: { config: { headers: { "\ud800": "${MISSING}" } } } } },
-          },
-          env: {},
-          varName: "MISSING",
-          configPath: 'plugins.entries.fixture.config.headers["\\ud800"]',
-        },
-        {
-          name: "literal surrogate escape remains distinct from an unpaired surrogate",
-          config: {
-            plugins: { entries: { fixture: { config: { headers: { "\\ud800": "${MISSING}" } } } } },
-          },
-          env: {},
-          varName: "MISSING",
-          configPath: 'plugins.entries.fixture.config.headers["\\\\ud800"]',
-        },
-        {
           name: "existing non-plugin root record paths stay unchanged",
           config: { "root.key": "${MISSING}" },
           env: {},

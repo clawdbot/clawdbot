@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
   beginSecretsRuntimeIsolationForTest,
@@ -136,28 +141,11 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
         loadAuthStore,
       });
-      const pluginOwners = [
-        {
-          ownerKind: "plugin-route" as const,
-          ownerId: "audit.auth-profiles.route:routes.main.token",
-          path: "plugins.entries.audit.auth-profiles.route.config.routes.main.token",
-        },
-        {
-          ownerKind: "plugin-capability" as const,
-          ownerId: "audit:auth-profiles.capability",
-          path: "plugins.entries.audit.config.auth-profiles.capability.token",
-        },
-        {
-          ownerKind: "plugin-provider" as const,
-          ownerId: "audit.auth-profiles.provider:provider",
-          path: 'plugins.entries.audit.auth-profiles.provider.config.headers["X.Trace"]',
-        },
-      ];
-      const pluginWarnings = pluginOwners.map(({ ownerKind, path }) => ({
-        code: "SECRETS_OWNER_UNAVAILABLE" as const,
-        path,
-        message: `${ownerKind} remains unavailable.`,
-      }));
+      const discordTokenPath = "channels.discord.accounts.ops.token";
+      setConfigResolutionFacts(
+        prepared.config,
+        createConfigResolutionFacts([], new Map([[discordTokenPath, "DISCORD_BOT_TOKEN"]])),
+      );
       prepared.secretOwners = [
         ...(prepared.secretOwners ?? []),
         {
@@ -165,11 +153,6 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           ownerId: "discord:ops",
           refKeys: ["env:default:DISCORD_BOT_TOKEN"],
         },
-        ...pluginOwners.map(({ ownerKind, ownerId }) => ({
-          ownerKind,
-          ownerId,
-          refKeys: [`env:default:${ownerId}`],
-        })),
       ];
       prepared.degradedOwners = [
         {
@@ -181,15 +164,6 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           refKeys: ["env:default:DISCORD_BOT_TOKEN"],
           reason: "secret reference could not be resolved",
         },
-        ...pluginOwners.map(({ ownerKind, ownerId, path }) => ({
-          ownerKind,
-          ownerId,
-          state: "unavailable" as const,
-          degradationState: "cold" as const,
-          paths: [path],
-          refKeys: [`env:default:${ownerId}`],
-          reason: "secret reference could not be resolved",
-        })),
       ];
       prepared.warnings = [
         {
@@ -197,22 +171,14 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           path: "channels.discord.accounts.ops.token",
           message: "Discord account ops remains unavailable.",
         },
-        ...pluginWarnings,
-        {
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "models.providers.openai.apiKey",
-          message: "Old provider warning must be replaced.",
-        },
-        {
-          code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-          path: `${agentDir}.auth-profiles.openai:default.key`,
-          message: "Old auth profile warning must be replaced.",
-        },
       ];
       activateSecretsRuntimeSnapshot(prepared);
 
       activeRef = secondRef;
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+      expect(
+        getAuthoredConfigSecretRef(expectActiveSecretsRuntimeSnapshot().config, discordTokenPath),
+      ).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
       expect(expectActiveSecretsRuntimeSnapshot().secretOwners).toContainEqual({
         ownerKind: "account",
         ownerId: "discord:ops",
@@ -223,23 +189,6 @@ describe("secrets runtime snapshot auth refresh failure", () => {
           (owner) => owner.ownerId === "discord:ops",
         ),
       ).toHaveLength(1);
-      for (const { ownerKind, ownerId } of pluginOwners) {
-        expect(expectActiveSecretsRuntimeSnapshot().secretOwners).toContainEqual(
-          expect.objectContaining({ ownerKind, ownerId }),
-        );
-        expect(listActiveDegradedSecretOwners()).toContainEqual(
-          expect.objectContaining({ ownerKind, ownerId }),
-        );
-      }
-      expect(expectActiveSecretsRuntimeSnapshot().warnings).toEqual(
-        expect.arrayContaining(pluginWarnings),
-      );
-      expect(expectActiveSecretsRuntimeSnapshot().warnings).not.toContainEqual(
-        expect.objectContaining({ message: "Old provider warning must be replaced." }),
-      );
-      expect(expectActiveSecretsRuntimeSnapshot().warnings).not.toContainEqual(
-        expect.objectContaining({ message: "Old auth profile warning must be replaced." }),
-      );
       await writeSecrets(false);
 
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
@@ -258,20 +207,6 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         path: "channels.discord.accounts.ops.token",
         message: "Discord account ops remains unavailable.",
       });
-      expect(expectActiveSecretsRuntimeSnapshot().warnings).toEqual(
-        expect.arrayContaining([
-          ...pluginWarnings,
-          expect.objectContaining({
-            code: "SECRETS_OWNER_UNAVAILABLE",
-            path: `${agentDir}.auth-profiles.openai:default.key`,
-          }),
-        ]),
-      );
-      for (const { ownerKind, ownerId } of pluginOwners) {
-        expect(listActiveDegradedSecretOwners()).toContainEqual(
-          expect.objectContaining({ ownerKind, ownerId }),
-        );
-      }
       const profile = expectActiveSecretsRuntimeSnapshot().authStores.find(
         (entry) => entry.agentDir === agentDir,
       )?.store.profiles["openai:default"];

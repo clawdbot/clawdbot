@@ -670,7 +670,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       config,
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
-      warnings: mergeProviderAuthRuntimeWarnings(activeSnapshot, candidate.snapshot),
+      warnings: mergeProviderAuthRuntimeWarnings(
+        activeSnapshot.warnings,
+        candidate.snapshot.warnings,
+      ),
       degradedOwners: mergeProviderAuthDegradedOwners(activeSnapshot, candidate.snapshot),
       secretOwners: mergeProviderAuthSecretOwners(activeSnapshot, candidate.snapshot),
     };

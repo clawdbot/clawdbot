@@ -848,7 +848,7 @@ async function expectOpenClawCoverageBatchResolved(
 ): Promise<void> {
   logCoverageBatch(label, batch);
   const config = {} as OpenClawConfig;
-  const env: Record<string, string> = {};
+  const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
   for (const [index, entry] of batch.entries()) {
     const envId = toCoverageEnvRefId("OPENCLAW_SECRET_TARGET", entry.id);
     const runtimeEnvId = resolveCoverageEnvId(entry, envId);
