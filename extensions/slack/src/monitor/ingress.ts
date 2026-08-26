@@ -279,6 +279,7 @@ export function createSlackDurableIngress(
     deliver: async (raw, lifecycle, claim) => {
       const laneKey = claim.laneKey ?? inspectSlackIngress(raw).laneKey;
       let releaseSession: (() => void) | undefined;
+      let releaseChannel: (() => void) | undefined;
       let routedSession: string | undefined;
       let migrationAwaitedChannelTurns = false;
       let downstreamDeferred = false;
@@ -286,6 +287,10 @@ export function createSlackDurableIngress(
       const settleSession = () => {
         settled = true;
         releaseSession?.();
+      };
+      const settleTurn = () => {
+        settleSession();
+        releaseChannel?.();
       };
       const routedLifecycle: SlackIngressTurnLifecycle = {
         ...lifecycle,
@@ -307,24 +312,36 @@ export function createSlackDurableIngress(
             ? previousTurn.then(() => releasedCurrentTurn)
             : releasedCurrentTurn;
           activeSessionTurns.set(sessionKey, currentTurn);
+          let resolveChannelTurn: () => void = () => {};
+          const channelTurn = new Promise<void>((resolve) => {
+            resolveChannelTurn = resolve;
+          });
           const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
-          channelTurns.add(currentTurn);
+          channelTurns.add(channelTurn);
           activeChannelTurns.set(laneKey, channelTurns);
           const releaseCurrentSession = () => {
             lifecycle.abortSignal.removeEventListener("abort", releaseCurrentSession);
             resolveCurrentTurn();
           };
+          const releaseCurrentChannel = () => {
+            lifecycle.abortSignal.removeEventListener("abort", releaseCurrentChannel);
+            resolveChannelTurn();
+          };
           void currentTurn.then(() => {
             if (activeSessionTurns.get(sessionKey) === currentTurn) {
               activeSessionTurns.delete(sessionKey);
             }
-            channelTurns.delete(currentTurn);
+          });
+          void channelTurn.then(() => {
+            channelTurns.delete(channelTurn);
             if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
               activeChannelTurns.delete(laneKey);
             }
           });
           releaseSession = releaseCurrentSession;
+          releaseChannel = releaseCurrentChannel;
           lifecycle.abortSignal.addEventListener("abort", releaseSession, { once: true });
+          lifecycle.abortSignal.addEventListener("abort", releaseChannel, { once: true });
           // Preserve shipped channel lanes until the prepared route proves its
           // session; channel-ID migration therefore still fences all traffic.
           lifecycle.onDeferred();
@@ -341,12 +358,14 @@ export function createSlackDurableIngress(
           try {
             await lifecycle.onAdopted();
           } finally {
-            settleSession();
+            settleTurn();
           }
         },
         onDeferred: () => {
           downstreamDeferred = true;
           lifecycle.onDeferred();
+          // Reply handoff releases session order; migration remains fenced
+          // until the durable turn is actually adopted or abandoned.
           settleSession();
           monitor.requestDrain();
         },
@@ -354,7 +373,7 @@ export function createSlackDurableIngress(
           try {
             await lifecycle.onAbandoned();
           } finally {
-            settleSession();
+            settleTurn();
           }
         },
       };
@@ -400,7 +419,7 @@ export function createSlackDurableIngress(
           await routedLifecycle.onAdopted();
         }
       } catch (error) {
-        settleSession();
+        settleTurn();
         throw error;
       }
     },

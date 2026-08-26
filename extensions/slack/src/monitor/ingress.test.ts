@@ -536,7 +536,10 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it("serializes channel-ID migration behind an already routed message through Bolt", async () => {
+  it.each([
+    { name: "an already routed message", deferred: false },
+    { name: "a deferred message", deferred: true },
+  ])("serializes channel-ID migration behind $name through Bolt", async ({ deferred }) => {
     await withQueue(async (queue) => {
       let markMessageStarted: () => void = () => {};
       let releaseMessage: () => void = () => {};
@@ -573,6 +576,9 @@ describe("Slack durable ingress", () => {
         const lifecycle = resolveSlackIngressTurnLifecycle(context);
         await lifecycle?.onSessionRouted?.("agent:main:slack:thread:C_NEW");
         starts.push("message");
+        if (deferred) {
+          lifecycle?.onDeferred();
+        }
         markMessageStarted();
         await messageGate;
         await lifecycle?.onAdopted();
