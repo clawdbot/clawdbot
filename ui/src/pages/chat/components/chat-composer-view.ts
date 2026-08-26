@@ -242,15 +242,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       : nothing;
   // Dictation previews at the captured selection. The textarea remains
   // read-only until stop commits the same insertion into the real draft.
-  const dictationPreviewDraft =
-    dictation?.active && dictation.partial
-      ? insertComposerDictation(
-          visibleDraft,
-          dictation.partial,
-          state.dictationSelection?.start ?? visibleDraft.length,
-          state.dictationSelection?.end ?? visibleDraft.length,
-        ).value
-      : visibleDraft;
+  const dictationPreviewDraft = dictation?.active
+    ? insertComposerDictation(
+        state.dictationSelection?.value ?? visibleDraft,
+        dictation.transcript,
+        state.dictationSelection?.start ?? visibleDraft.length,
+        state.dictationSelection?.end ?? visibleDraft.length,
+      ).value
+    : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
   const interruptedStatus = props.runError
     ? nothing
