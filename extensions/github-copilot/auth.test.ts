@@ -176,6 +176,89 @@ describe("resolveFirstGithubToken", () => {
     ).resolves.toEqual({ githubToken: testCase.expectedToken, hasProfile: true });
   });
 
+  it.each([
+    {
+      label: "a public GitHub OAuth account",
+      enterpriseUrl: undefined,
+      expected: { githubToken: "durable-github-token", hasProfile: true },
+    },
+    {
+      label: "an enterprise GitHub OAuth account",
+      enterpriseUrl: "acme.ghe.com",
+      expected: {
+        githubToken: "durable-github-token",
+        githubDomain: "acme.ghe.com",
+        hasProfile: true,
+      },
+    },
+    {
+      label: "an OAuth account without a durable credential",
+      enterpriseUrl: undefined,
+      refresh: "",
+      expected: { githubToken: "", hasProfile: true },
+    },
+    {
+      label: "an OAuth account with a whitespace-only durable credential",
+      enterpriseUrl: undefined,
+      refresh: "   ",
+      expected: { githubToken: "", hasProfile: true },
+    },
+  ])("uses the durable credential when explicit order selects $label", async (testCase) => {
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "first-token",
+        },
+        "github-copilot:preferred": {
+          type: "oauth",
+          provider: "github-copilot",
+          access: "short-lived-copilot-token",
+          refresh: testCase.refresh ?? " durable-github-token ",
+          expires: Date.now() + 60_000,
+          ...(testCase.enterpriseUrl ? { enterpriseUrl: testCase.enterpriseUrl } : {}),
+        },
+      },
+    });
+    listProfilesForProviderMock.mockReturnValue([
+      "github-copilot:first",
+      "github-copilot:preferred",
+    ]);
+
+    await expect(
+      resolveFirstGithubToken({
+        config: { auth: { order: { "github-copilot": ["github-copilot:preferred"] } } },
+        env: {},
+      }),
+    ).resolves.toEqual(testCase.expected);
+  });
+
+  it("rejects an explicitly ordered OAuth account with an unsupported enterprise domain", async () => {
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "github-copilot:preferred": {
+          type: "oauth",
+          provider: "github-copilot",
+          access: "short-lived-copilot-token",
+          refresh: "durable-github-token",
+          expires: Date.now() + 60_000,
+          enterpriseUrl: "attacker.example",
+        },
+      },
+    });
+    listProfilesForProviderMock.mockReturnValue(["github-copilot:preferred"]);
+
+    await expect(
+      resolveFirstGithubToken({
+        config: { auth: { order: { "github-copilot": ["github-copilot:preferred"] } } },
+        env: {},
+      }),
+    ).rejects.toThrow(/attacker\.example/);
+  });
+
   it("keeps the first stored account without an explicit order or cooldown mutation", async () => {
     const expiredCooldown = Date.now() - 60_000;
     const store = {

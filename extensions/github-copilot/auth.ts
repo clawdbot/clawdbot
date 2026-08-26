@@ -16,6 +16,7 @@ import {
   resolveRequiredConfiguredSecretRefInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import { PROVIDER_ID } from "./models.js";
+import { formatGithubCopilotApiKey, parseGithubCopilotApiKey } from "./oauth.js";
 
 export async function resolveFirstGithubToken(params: {
   agentDir?: string;
@@ -25,6 +26,7 @@ export async function resolveFirstGithubToken(params: {
   authProfileMode?: ProviderPrepareDynamicModelContext["authProfileMode"];
 }): Promise<{
   githubToken: string;
+  githubDomain?: string;
   hasProfile: boolean;
 }> {
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -92,6 +94,12 @@ export async function resolveFirstGithubToken(params: {
           provider: PROVIDER_ID,
         })[0];
   const profile = profileId ? authStore.profiles[profileId] : undefined;
+  if (profile?.type === "oauth") {
+    return {
+      ...parseGithubCopilotApiKey(formatGithubCopilotApiKey(profile)),
+      hasProfile,
+    };
+  }
   if (profile?.type !== "token") {
     return { githubToken: "", hasProfile };
   }
