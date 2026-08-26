@@ -6,7 +6,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
-import type { CallRecord, NormalizedEvent } from "../types.js";
+import { TerminalStates, type CallRecord, type NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
@@ -168,6 +168,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     providerCallIdMap: ctx.providerCallIdMap,
     callIdOrProviderCallId: event.callId,
   });
+  // Set when a late provider callback folds into a persisted terminal record;
+  // such an echo must not re-run live event side effects (see try block).
+  let foldedTerminalRecord = false;
 
   const providerCallId = event.providerCallId;
   const eventDirection =
@@ -220,6 +223,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     const persisted = findCallByProviderCallIdInStore(ctx.storePath, providerCallId);
     if (persisted) {
       call = persisted;
+      foldedTerminalRecord = TerminalStates.has(persisted.state);
     } else {
       call = createWebhookCall({
         ctx,
@@ -285,6 +289,17 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     }
     if (shouldCommitReplayKey) {
       appendCallReplayKey(activeCall.processedEventIds, dedupeKey);
+    }
+
+    // A late provider callback folded into a terminal record is a stale status
+    // echo. Absorb it (persist + dedupe) without re-running live side effects —
+    // answerCall, duration timers, onCallAnswered — on an already-ended call.
+    if (foldedTerminalRecord) {
+      persistCallRecord(ctx.storePath, activeCall);
+      if (shouldCommitReplayKey) {
+        rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+      }
+      return { kind: "processed" };
     }
 
     switch (event.type) {

@@ -6,7 +6,7 @@ import {
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
 } from "../manager.test-harness.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
+import type { AnswerCallInput, CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
 import { finalizeCall } from "./lifecycle.js";
 import { speakInitialMessage } from "./outbound.js";
@@ -573,6 +573,72 @@ describe("processEvent (functional)", () => {
     expect(owner!.agentId).toBe("agent-sales");
     const history = await getCallHistoryFromStore(ctx.storePath, 50);
     expect(history.every((call) => call.callId === "call-real-agent")).toBe(true);
+  });
+
+  it("does not answer a late inbound call.initiated on a finalized call", async () => {
+    // Sibling coverage for #130059: a late provider callback that folds into a
+    // terminal record must not re-run live side effects. The call.initiated
+    // handler queues answerCall for inbound calls; on an already-ended call
+    // that would send an answer action to the carrier for a dead call.
+    const now = Date.now();
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+      provider,
+    });
+    const providerCallId = "CA-late-inbound";
+    const realCall: CallRecord = {
+      callId: "call-real-inbound",
+      providerCallId,
+      provider: "plivo",
+      direction: "inbound",
+      state: "answered",
+      from: "+15550001234",
+      to: "+15550000000",
+      agentId: "agent-sales",
+      startedAt: now - 30_000,
+      answeredAt: now - 25_000,
+      transcript: [],
+      processedEventIds: [],
+    };
+    ctx.activeCalls.set(realCall.callId, realCall);
+    ctx.providerCallIdMap.set(providerCallId, realCall.callId);
+
+    finalizeCall({ ctx, call: realCall, endReason: "completed" });
+    expect(ctx.activeCalls.size).toBe(0);
+    expect(ctx.providerCallIdMap.has(providerCallId)).toBe(false);
+
+    // The provider's late "initiated" status echo arrives after finalization.
+    const result = processEvent(ctx, {
+      id: "evt-late-initiated",
+      type: "call.initiated",
+      callId: providerCallId,
+      providerCallId,
+      timestamp: now,
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550000000",
+    });
+    expect(result.kind).toBe("processed");
+    // No answer request to the carrier for an already-ended call.
+    expect(answerCalls).toHaveLength(0);
+
+    // No phantom: the store owns only snapshots of the original real call.
+    const matches = await findCallMatchesInStore(ctx.storePath, providerCallId);
+    const owner = matches.byProviderCallId;
+    expect(owner).toBeDefined();
+    expect(owner!.callId).toBe("call-real-inbound");
+    expect(owner!.agentId).toBe("agent-sales");
   });
 
   it.each([
