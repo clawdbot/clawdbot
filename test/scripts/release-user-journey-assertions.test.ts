@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -16,6 +17,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const CLICKCLACK_FIXTURE_SCRIPT = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
+const CLICKCLACK_PLUGIN_WRITER_SCRIPT =
+  "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -416,6 +419,72 @@ describe("release user journey assertions", () => {
       }
       await stopChild(fixture);
     }
+  });
+
+  it("preserves runtime state in generated ClickClack status snapshots", async () => {
+    type GeneratedClickClackPlugin = {
+      status: {
+        buildAccountSnapshot: (params: {
+          account: { accountId: string; enabled: boolean; configured: boolean; baseUrl: string };
+          runtime?: {
+            running?: boolean;
+            lastStartAt?: number;
+            lastStopAt?: number;
+            lastError?: string;
+          };
+        }) => Record<string, unknown>;
+      };
+    };
+
+    const pluginDir = path.join(tempDirs.make("openclaw-release-clickclack-plugin-"), "plugin");
+    const writer = spawnSync(process.execPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
+      encoding: "utf8",
+    });
+    expect(writer.status, writer.stderr).toBe(0);
+
+    const generatedModule = (await import(
+      pathToFileURL(path.join(pluginDir, "index.mjs")).href
+    )) as {
+      default: {
+        register: (api: {
+          registerChannel: (registration: { plugin: GeneratedClickClackPlugin }) => void;
+        }) => void;
+      };
+    };
+    let plugin: GeneratedClickClackPlugin | undefined;
+    generatedModule.default.register({
+      registerChannel: (registration) => {
+        plugin = registration.plugin;
+      },
+    });
+    if (!plugin) {
+      throw new Error("generated ClickClack plugin did not register its channel");
+    }
+
+    expect(
+      plugin.status.buildAccountSnapshot({
+        account: {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+        },
+        runtime: {
+          running: true,
+          lastStartAt: 123,
+          lastStopAt: 45,
+          lastError: "prior disconnect",
+        },
+      }),
+    ).toMatchObject({
+      accountId: "default",
+      configured: true,
+      enabled: true,
+      running: true,
+      lastStartAt: 123,
+      lastStopAt: 45,
+      lastError: "prior disconnect",
+    });
   });
 
   it("cancels successful ClickClack inbound response bodies", async () => {
