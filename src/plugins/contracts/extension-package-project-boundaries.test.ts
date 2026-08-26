@@ -144,8 +144,10 @@ function collectCodeFiles(relativeDir: string): string[] {
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
+  // Test-support modules are test code under the repo-wide *.test-support.ts
+  // convention; sibling package contracts exclude them the same way.
   return collectCodeFiles(relativeDir)
-    .filter((file) => !file.endsWith(".test.ts"))
+    .filter((file) => !file.endsWith(".test.ts") && !file.endsWith(".test-support.ts"))
     .filter((file) => {
       const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
       return source.includes("../../../../src/") || source.includes("../../../src/");
