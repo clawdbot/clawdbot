@@ -1243,9 +1243,9 @@ class Monitor {
     if (!completion || !state.requesterSessionKey || !state.taskRuntimeScope) {
       return;
     }
-    // Codex owns completion input while a parent turn is running. Wait until
-    // its reply is finalized before waking it for any still-undelivered child.
-    if (state.owners.size > 0 && state.turnIds.size > 0) {
+    // Codex owns completion input from registration through reply finalization,
+    // including turn startup before its id is bound. Only wake detached parents.
+    if (state.owners.size > 0) {
       return;
     }
     if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
