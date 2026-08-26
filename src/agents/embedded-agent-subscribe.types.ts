@@ -76,6 +76,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
     source?: string;
   }) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
+  /** Durable trajectory sink for request/tool/approval/compaction lifecycle facts. */
+  trajectoryRecordEvent?: (type: string, data?: Record<string, unknown>) => void;
   onToolStreamBoundary?: () => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   /** "finishing" defers both success and error terminal ownership to the caller. */

@@ -326,8 +326,8 @@ function trimSqliteTrajectoryRuntimeWindow(
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
-  const removableSeqs = oldestTrajectorySeqsPastByteWindow(rows, maxRuntimeBytes);
-  if (removableSeqs.length === 0) {
+  const trimBoundary = oldestTrajectoryTrimBoundary(rows, maxRuntimeBytes);
+  if (trimBoundary === undefined) {
     return;
   }
   executeSqliteQuerySync(
@@ -335,24 +335,24 @@ function trimSqliteTrajectoryRuntimeWindow(
     db
       .deleteFrom("trajectory_runtime_events")
       .where("session_id", "=", sessionId)
-      .where("seq", "in", removableSeqs),
+      .where("seq", "<=", trimBoundary),
   );
 }
 
-function oldestTrajectorySeqsPastByteWindow(
+function oldestTrajectoryTrimBoundary(
   rows: readonly TrajectoryRuntimeRow[],
   maxRuntimeBytes: number,
-): number[] {
+): number | undefined {
   let totalBytes = rows.reduce((total, row) => total + trajectoryJsonlRowBytes(row.event_json), 0);
-  const removableSeqs: number[] = [];
+  let trimBoundary: number | undefined;
   for (const row of rows) {
     if (totalBytes <= maxRuntimeBytes) {
       break;
     }
-    removableSeqs.push(row.seq);
+    trimBoundary = row.seq;
     totalBytes -= trajectoryJsonlRowBytes(row.event_json);
   }
-  return removableSeqs;
+  return trimBoundary;
 }
 
 function trajectoryJsonlRowBytes(eventJson: string): number {

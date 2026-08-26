@@ -82,6 +82,8 @@ type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
 };
 
 type TrajectoryRuntimeSink = {
+  /** SQLite capture commits promptly so live readers can observe in-flight rows. */
+  commitOnWrite?: boolean;
   describeFlushState: () => string | undefined;
   flush: () => Promise<void>;
   nextSourceSeq?: () => number;
@@ -369,6 +371,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
   let pendingEvents: TrajectoryEvent[] = [];
   let queuedBytes = 0;
   return {
+    commitOnWrite: true,
     describeFlushState: () =>
       pendingEvents.length > 0
         ? `pendingRows=${pendingEvents.length} queuedBytes=${queuedBytes} activeOperation=sqlite-append`
@@ -494,6 +497,11 @@ export function createTrajectoryRuntimeRecorder(
         return;
       }
       sink.write(built.event, built.line);
+      if (sink.commitOnWrite) {
+        queueMicrotask(() => {
+          void sink.flush().catch(() => undefined);
+        });
+      }
     },
     flush: async () => {
       await sink.flush();

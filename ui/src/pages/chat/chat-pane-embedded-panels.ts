@@ -29,6 +29,8 @@ type SidebarPanelDefinitionParams = {
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
+  trajectoryAvailable: boolean;
+  trajectoryPresented: boolean;
   hasBoard: boolean;
   chat: TemplateResult;
   workspace: TemplateResult | typeof nothing;
@@ -63,7 +65,8 @@ type SidebarPanelTextKey =
   | "files"
   | "review"
   | "tasks"
-  | "terminal";
+  | "terminal"
+  | "trajectory";
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -116,6 +119,15 @@ export function sidebarPanelDefinitions(
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
       : null;
+  const trajectory =
+    state && params?.trajectoryAvailable
+      ? html`<openclaw-trajectory-panel
+          .client=${state.connected ? state.client : null}
+          .sessionKey=${state.sessionKey}
+          .agentId=${params.agentId}
+          .presented=${params.trajectoryPresented}
+        ></openclaw-trajectory-panel>`
+      : null;
   const companion = params
     ? html`<openclaw-chat-session-rail
         embedded
@@ -166,6 +178,9 @@ export function sidebarPanelDefinitions(
       icons.diff,
       detailContent && params ? params.renderDetail(detailContent) : null,
     ),
+    definePanel("trajectory", "trajectory", icons.gitBranch, trajectory, {
+      available: params?.trajectoryAvailable === true,
+    }),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel),

@@ -292,6 +292,10 @@ openclaw-chat-sidebar-region,
   border-bottom: 0;
 }
 
+.sidebar-region--expanded:not(.sidebar-region--narrow) .side-panel__header {
+  padding-inline-start: 80px;
+}
+
 /* Width model: the tabs region takes the free space, but the strip itself sizes
    to its tabs and is the only thing that clips. The new-tab control sits outside
    that clip, so it hugs the last tab when everything fits and stays pinned at
@@ -624,7 +628,8 @@ openclaw-chat-sidebar-region,
     openclaw-session-discussion,
     openclaw-terminal-panel,
     openclaw-browser-panel,
-    openclaw-desktop-panel
+    openclaw-desktop-panel,
+    openclaw-trajectory-panel
   ) {
   display: flex;
   width: 100%;

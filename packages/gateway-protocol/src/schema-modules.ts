@@ -49,6 +49,7 @@ export * from "./schema/system-event.js";
 export * from "./schema/task-suggestions.js";
 export * from "./schema/tasks.js";
 export * from "./schema/terminal.js";
+export * from "./schema/trajectory.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/plugin-approvals.js";
 export * from "./schema/plugins.js";

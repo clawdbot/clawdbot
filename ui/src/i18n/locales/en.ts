@@ -3457,6 +3457,11 @@ export const en: TranslationMap = {
       description:
         "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
     },
+    trajectory: {
+      title: "Trajectory view",
+      description:
+        "Inspect the recorded execution path for a session in a timeline, event ledger, and local details panel.",
+    },
     hostDesktop: {
       title: "Host Desktop",
       description:
@@ -5922,12 +5927,29 @@ export const en: TranslationMap = {
       companionEmpty: "Ask a focused question about this session.",
       tasks: "Tasks",
       tasksEmpty: "Follow active and recently completed background tasks.",
+      trajectory: "Trajectory",
+      trajectoryEmpty: "Inspect this session's recorded execution path.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       discussion: "Discussion",
       discussionEmpty: "Open the shared discussion for this session.",
       boardChat: "Board chat",
       boardChatEmpty: "Open the board conversation alongside its dashboard.",
+    },
+    trajectory: {
+      duration: "Duration",
+      turns: "Turns",
+      calls: "Calls",
+      search: "Search trajectory",
+      loading: "Loading trajectory…",
+      loadEarlier: "Load earlier history",
+      loadingEarlier: "Loading earlier history…",
+      trimmed: "Older trajectory history was trimmed.",
+      jumpLatest: "Jump to latest",
+      empty: "No trajectory recorded yet.",
+      disabled: "Trajectory capture was disabled for this session.",
+      failed: "Could not load trajectory: {error}",
+      eventDetails: "Event details",
     },
     thread: {
       search: "Search messages",

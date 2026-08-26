@@ -113,6 +113,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "memory-search": () =>
     import("./server-methods/memory-search.js").then((module) => module.memorySearchHandlers),
   terminal: () => import("./server-methods/terminal.js").then((module) => module.terminalHandlers),
+  trajectory: () =>
+    import("./server-methods/trajectory.js").then((module) => module.trajectoryHandlers),
   "ui-command": () =>
     import("./server-methods/ui-command.js").then((module) => module.uiCommandHandlers),
   "models-auth-status": () =>

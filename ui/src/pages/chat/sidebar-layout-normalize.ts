@@ -18,6 +18,7 @@ function isSlotId(value: unknown): value is SidebarSlotId {
     value === "discussion" ||
     value === "tasks" ||
     value === "terminal" ||
+    value === "trajectory" ||
     value === "workspace"
   );
 }

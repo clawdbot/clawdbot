@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type {
   ProgressCard,
@@ -5,6 +6,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -94,11 +96,23 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const config = this.context.runtimeConfig.state.configSnapshot?.config;
+    const gatewayConfig = isRecord(config) ? config.gateway : undefined;
+    const controlUiConfig = isRecord(gatewayConfig) ? gatewayConfig.controlUi : undefined;
+    const trajectoryAvailable =
+      isRecord(controlUiConfig) &&
+      controlUiConfig.trajectory === true &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.trajectory.page") ===
+        true &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.trajectory.detail") ===
+        true;
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
     const browserPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
     const desktopPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const trajectoryPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "trajectory");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
@@ -108,6 +122,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
+      trajectoryAvailable,
+      trajectoryPresented,
       hasBoard: board.hasBoard,
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),

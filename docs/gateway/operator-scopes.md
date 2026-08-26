@@ -250,6 +250,12 @@ labels. `operator.read` is not a per-user or hostile multi-tenant privacy
 boundary. Operators who must keep this data separate need separate Gateway
 trust domains.
 
+The experimental `sessions.trajectory.page` and
+`sessions.trajectory.detail` methods also use `operator.read`. An administrator
+must first enable the Trajectory view Lab. Once enabled, read-scoped operators
+in that Gateway trust domain may inspect its bounded, display-safe session
+projection.
+
 ## Device pairing approvals
 
 Device pairing records are the durable source of approved roles and scopes.

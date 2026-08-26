@@ -108,6 +108,18 @@ describe("SQLite trajectory runtime store", () => {
     expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
   });
 
+  it("trims whale batches without binding one SQL variable per event", async () => {
+    const event = createTrajectoryEvent({ type: "whale-event" });
+    appendSqliteTrajectoryRuntimeEvents(
+      { maxRuntimeBytes: 1, sessionId: "session-1", storePath },
+      Array.from({ length: 33_000 }, () => event),
+    );
+
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+    ).resolves.toEqual([]);
+  });
+
   it("loads a bounded trailing window in storage order", () => {
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
       createTrajectoryEvent({ type: "event-1" }),

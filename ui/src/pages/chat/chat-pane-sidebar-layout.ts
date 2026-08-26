@@ -50,6 +50,10 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  trajectory: [
+    "openclaw-trajectory-panel",
+    () => import("../../components/trajectory/trajectory-panel.ts"),
+  ],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
   discussion: [
     "openclaw-session-discussion",

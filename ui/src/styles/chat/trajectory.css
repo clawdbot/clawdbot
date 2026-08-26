@@ -1,0 +1,433 @@
+.trajectory-panel {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.trajectory-toolbar {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  padding: 4px 7px;
+  border-block-end: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.trajectory-toolbar button {
+  min-block-size: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+}
+
+.trajectory-inspector__tabs button {
+  min-block-size: 28px;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.trajectory-toolbar button[aria-pressed="true"] {
+  border-color: var(--border-strong);
+}
+
+.trajectory-toolbar input {
+  min-inline-size: 120px;
+  min-block-size: 30px;
+  flex: 1;
+  padding-inline: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.trajectory-timeline {
+  overflow-x: auto;
+  padding: 3px 7px;
+  border-block-end: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.trajectory-timeline__canvas {
+  min-inline-size: 100%;
+  max-inline-size: 400%;
+}
+
+.trajectory-timeline__lane {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  align-items: center;
+  min-block-size: 14px;
+}
+
+.trajectory-timeline__label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.trajectory-timeline__track {
+  position: relative;
+  block-size: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.trajectory-timeline__mark {
+  position: absolute;
+  inset-block: 1px;
+  min-inline-size: 3px;
+  border: 0;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.trajectory-timeline__mark--input {
+  background: var(--ok);
+}
+
+.trajectory-timeline__mark--tools {
+  background: var(--warn);
+}
+
+.trajectory-timeline__mark.is-selected,
+.trajectory-timeline__mark.is-range {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.trajectory-main {
+  display: flex;
+  min-block-size: 0;
+}
+
+.trajectory-ledger-column {
+  position: relative;
+  min-inline-size: 0;
+  flex: 1;
+}
+
+.trajectory-ledger {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.trajectory-ledger__sizer {
+  position: relative;
+  min-inline-size: 100%;
+}
+
+.trajectory-ledger__virtual-row {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: 52px;
+  padding: 1px 6px;
+}
+
+.trajectory-turn-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  block-size: 48px;
+  padding-inline: 8px;
+  border-block-end: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+}
+
+.trajectory-turn-header span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.trajectory-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  block-size: 48px;
+  padding-inline: 8px;
+  border-block-end: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.trajectory-group-header strong {
+  color: var(--text);
+}
+
+.trajectory-group-header span {
+  min-inline-size: 0;
+  margin-inline-start: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trajectory-record {
+  display: grid;
+  grid-template-columns: 2px minmax(58px, auto) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  inline-size: 100%;
+  block-size: 48px;
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+}
+
+.trajectory-record:hover,
+.trajectory-record.is-selected {
+  border-color: transparent;
+  background: var(--bg-muted);
+}
+
+.trajectory-record__rail {
+  align-self: stretch;
+  border-radius: 4px;
+  background: var(--ok);
+}
+
+.trajectory-record__rail--pending {
+  background: var(--warn);
+}
+
+.trajectory-record__rail--failed {
+  background: var(--danger);
+}
+
+.trajectory-record__event,
+.trajectory-record__content,
+.trajectory-record__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-inline-size: 0;
+}
+
+.trajectory-record__content > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.trajectory-record__meta {
+  align-items: flex-end;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trajectory-kind,
+.trajectory-request-pill {
+  inline-size: fit-content;
+  padding: 2px 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.trajectory-request-pill {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.trajectory-load-earlier-row {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  display: grid;
+  place-items: center;
+  block-size: 52px;
+  border-block-end: 1px solid var(--border);
+}
+
+.trajectory-jump-latest {
+  position: absolute;
+  z-index: 3;
+  inset-inline-end: 16px;
+  inset-block-end: 16px;
+  border-radius: 999px;
+}
+
+.trajectory-state {
+  display: grid;
+  place-items: center;
+  block-size: 100%;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.trajectory-state--error {
+  color: var(--danger);
+}
+
+.trajectory-inspector {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  inline-size: min(var(--trajectory-inspector-width), 50%);
+  min-inline-size: 260px;
+  border-inline-start: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.trajectory-inspector__resize {
+  position: absolute;
+  z-index: 3;
+  inset-block: 0;
+  inset-inline-start: -4px;
+  inline-size: 8px;
+  cursor: col-resize;
+}
+
+.trajectory-inspector > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-block-end: 1px solid var(--border);
+}
+
+.trajectory-inspector > header > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.trajectory-inspector__tabs {
+  display: flex;
+  gap: 10px;
+  padding: 0 7px;
+  overflow-x: auto;
+  border-block-end: 1px solid var(--border);
+}
+
+.trajectory-inspector__tabs button[aria-selected="true"] {
+  border-block-end-color: var(--accent);
+  color: var(--accent);
+}
+
+.trajectory-inspector__body {
+  overflow: auto;
+  padding: 8px;
+}
+
+.trajectory-inspector pre {
+  max-inline-size: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.trajectory-summary {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.trajectory-summary > div {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 8px;
+}
+
+.trajectory-summary dt {
+  color: var(--muted);
+}
+
+.trajectory-summary dd {
+  margin: 0;
+}
+
+.trajectory-summary__preview {
+  grid-template-columns: 1fr !important;
+}
+
+@media (max-width: 768px) {
+  .trajectory-main {
+    position: relative;
+  }
+
+  .trajectory-inspector {
+    position: absolute;
+    z-index: 5;
+    inset: auto 0 0;
+    inline-size: 100%;
+    min-inline-size: 0;
+    max-block-size: 62%;
+    border-block-start: 1px solid var(--border);
+    border-inline-start: 0;
+  }
+
+  .trajectory-inspector__resize {
+    display: none;
+  }
+
+  .trajectory-record {
+    grid-template-columns: 2px 58px minmax(0, 1fr);
+  }
+
+  .trajectory-record__meta {
+    display: none;
+  }
+}
+
+@container (max-width: 768px) {
+  .trajectory-main {
+    position: relative;
+  }
+
+  .trajectory-inspector {
+    position: absolute;
+    z-index: 5;
+    inset: auto 0 0;
+    inline-size: 100%;
+    min-inline-size: 0;
+    max-block-size: 62%;
+    border-block-start: 1px solid var(--border);
+    border-inline-start: 0;
+  }
+
+  .trajectory-inspector__resize {
+    display: none;
+  }
+
+  .trajectory-record {
+    grid-template-columns: 2px 58px minmax(0, 1fr);
+  }
+
+  .trajectory-record__meta {
+    display: none;
+  }
+}
+
+@container (max-width: 400px) {
+  .trajectory-turn-header span {
+    display: none;
+  }
+}

@@ -629,6 +629,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { controlPlaneWrite: true },
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  // Experimental trajectory reads append so every older advertised index stays stable.
+  ["sessions.trajectory.page", "trajectory", "operator.read", "2026.8"],
+  ["sessions.trajectory.detail", "trajectory", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

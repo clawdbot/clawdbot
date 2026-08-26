@@ -257,6 +257,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sessionRailMode = this.selectedSessionRailMode(this.state?.sessionKey ?? "");
     const toggleSessionRail = () => this.requestSessionRail("toggle");
     const panelMenuActions: HeaderMenuQuickAction[] = [];
+    if (this.narrow) {
+      panelMenuActions.push({
+        id: "side-panel",
+        label: t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
+        icon: sidePanelOpen ? icons.panelRightClose : icons.panelRightOpen,
+        active: sidePanelOpen,
+        onActivate: toggleSidePanel,
+      });
+    }
     if (sessionWorkspace.onToggleTerminal) {
       panelMenuActions.push({
         id: "terminal",

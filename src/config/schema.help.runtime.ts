@@ -204,6 +204,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.toolTitles":
     "Opt-in AI purpose titles for tool calls in Control UI chat (default off). When enabled, the chat.toolTitles method generates short titles for complex tool calls with the agent's utility model (an explicit utilityModel may route bounded tool arguments to the operator-chosen provider like every utility task; the derived default stays on the session's provider) and caches them in the per-agent state database. Setting utilityModel to an empty string disables titles too. Leave off to keep tool rendering fully deterministic with no background model calls.",
+  "gateway.controlUi.trajectory":
+    "Expose the experimental Trajectory page type in the Control UI chat side panel (default off). Capture remains controlled separately and is on by default; this setting only enables the operator view.",
   "gateway.controlUi.github.token":
     "SecretRef-backed service credential for Control UI GitHub previews and project discovery. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed. Agent tool identities are never used here.",
   "gateway.controlUi.sessionObserver":

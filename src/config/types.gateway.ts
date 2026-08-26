@@ -148,6 +148,8 @@ export type GatewayControlUiConfig = {
    * utility-model routing and caches them per agent.
    */
   toolTitles?: boolean;
+  /** Expose the experimental session Trajectory view in the Control UI (default false). */
+  trajectory?: boolean;
   /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
   sessionObserver?: boolean;
   /**

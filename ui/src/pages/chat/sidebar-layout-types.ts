@@ -7,6 +7,7 @@ export type SidebarSlotId =
   | "discussion"
   | "tasks"
   | "terminal"
+  | "trajectory"
   | "workspace";
 export type SidebarPanel = { id: string; slot: SidebarSlotId };
 export type SidebarDock = "bottom" | "right";

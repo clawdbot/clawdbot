@@ -185,6 +185,167 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Decoding"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Duration"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Model"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Parent"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Request"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Session cumulative (loaded window)"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Started"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Status"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "This request"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Throughput"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Tool schema was not recorded for this call."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "Total duration"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-inspector-view.ts",
+      "text": "TTFT"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Close event details"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Resize event details"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Trajectory controls"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Trajectory timeline"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Input · Output · Think · Time"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Loading details…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Request #"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/trajectory/trajectory-panel.ts",
+      "text": "Between turns"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",

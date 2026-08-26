@@ -5,6 +5,7 @@ import {
   SessionsResolveResultSchema,
 } from "./sessions-resolve.js";
 import * as sessions from "./sessions.js";
+import * as trajectory from "./trajectory.js";
 
 export const SessionCoreProtocolSchemas = {
   SessionPermissionMode: sessions.SessionPermissionModeSchema,
@@ -52,4 +53,8 @@ export const SessionCoreProtocolSchemas = {
   SessionsCompanionStateResult: sessions.SessionsCompanionStateResultSchema,
   SessionsObserverVisibilityParams: sessions.SessionsObserverVisibilityParamsSchema,
   SessionsObserverVisibilityResult: sessions.SessionsObserverVisibilityResultSchema,
+  SessionsTrajectoryPageParams: trajectory.SessionsTrajectoryPageParamsSchema,
+  SessionsTrajectoryPageResult: trajectory.SessionsTrajectoryPageResultSchema,
+  SessionsTrajectoryDetailParams: trajectory.SessionsTrajectoryDetailParamsSchema,
+  SessionsTrajectoryDetailResult: trajectory.SessionsTrajectoryDetailResultSchema,
 } as const;

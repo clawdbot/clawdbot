@@ -52,6 +52,7 @@ export type ModelCallDiagnosticContext = {
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  recordTrajectoryEvent?: (type: string, data?: Record<string, unknown>) => void;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
 };
@@ -443,6 +444,16 @@ export function createModelLifecycle(params: {
   }
   params.ctx.onStarted?.();
   const startedAt = Date.now();
+  params.ctx.recordTrajectoryEvent?.("model.call.started", {
+    callId,
+    provider: eventBase.provider,
+    model: eventBase.model,
+    api: eventBase.api,
+    transport: eventBase.transport,
+    startedAt,
+    ...(params.requestTimeoutMs !== undefined ? { requestTimeoutMs: params.requestTimeoutMs } : {}),
+    ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
+  });
   const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
   return {
     eventBase,
@@ -451,9 +462,26 @@ export function createModelLifecycle(params: {
     startedAt,
     emitCompleted() {
       emitModelCallCompleted(eventBase, startedAt, observer, params.ctx.ownerGeneration);
+      params.ctx.recordTrajectoryEvent?.("model.call.completed", {
+        callId,
+        provider: eventBase.provider,
+        model: eventBase.model,
+        durationMs: Date.now() - startedAt,
+        ...observer.sizeTimingFields(),
+        ...observer.usageField(),
+      });
     },
     emitError(err: unknown) {
       emitModelCallError(eventBase, startedAt, observer, err, params.ctx.ownerGeneration);
+      params.ctx.recordTrajectoryEvent?.("model.call.error", {
+        callId,
+        provider: eventBase.provider,
+        model: eventBase.model,
+        durationMs: Date.now() - startedAt,
+        ...observer.sizeTimingFields(),
+        ...observer.usageField(),
+        ...modelCallErrorFields(err),
+      });
     },
   };
 }

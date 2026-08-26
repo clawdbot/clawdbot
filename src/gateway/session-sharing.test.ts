@@ -807,6 +807,14 @@ describe("session sharing policy", () => {
         { method: "sessions.get", requestParams: { key: requestedKey } },
         { method: "sessions.preview", requestParams: { keys: [requestedKey] } },
         { method: "sessions.search", requestParams: { sessionKeys: [requestedKey] } },
+        {
+          method: "sessions.trajectory.page",
+          requestParams: { sessionKey: requestedKey },
+        },
+        {
+          method: "sessions.trajectory.detail",
+          requestParams: { sessionKey: requestedKey, recordId: "runtime:0" },
+        },
       ];
 
       for (const visibleClient of [admin, solo]) {

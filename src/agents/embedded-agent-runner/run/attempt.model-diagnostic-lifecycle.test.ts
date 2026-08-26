@@ -130,6 +130,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       now += 125;
       return "kept";
     };
+    const recordTrajectoryEvent = vi.fn();
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       (() => originalStream) as unknown as StreamFn,
       {
@@ -140,6 +141,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
         transport: "http",
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-timeline-success",
+        recordTrajectoryEvent,
       },
     );
 
@@ -171,6 +173,23 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       },
     });
     expect(events[0]?.status).toBeUndefined();
+    expect(recordTrajectoryEvent).toHaveBeenNthCalledWith(
+      1,
+      "model.call.started",
+      expect.objectContaining({
+        callId: "call-timeline-success",
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
+    expect(recordTrajectoryEvent).toHaveBeenNthCalledWith(
+      2,
+      "model.call.completed",
+      expect.objectContaining({
+        callId: "call-timeline-success",
+        durationMs: 125,
+      }),
+    );
   });
 
   it("records legacy response status without inferring provider acceptance", async () => {

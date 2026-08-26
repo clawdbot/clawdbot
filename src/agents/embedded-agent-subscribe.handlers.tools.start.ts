@@ -390,6 +390,12 @@ export function handleToolExecutionStart(
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
         : {}),
     });
+    ctx.params.trajectoryRecordEvent?.("tool.call", {
+      toolCallId,
+      name: toolName,
+      arguments: args,
+      startedAt,
+    });
     traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {

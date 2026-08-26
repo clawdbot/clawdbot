@@ -225,6 +225,10 @@ export const validateSessionsCompanionResetParams = compile(S.SessionsCompanionR
 export const validateSessionsObserverVisibilityParams = compile(
   S.SessionsObserverVisibilityParamsSchema,
 );
+export const validateSessionsTrajectoryPageParams = compile(S.SessionsTrajectoryPageParamsSchema);
+export const validateSessionsTrajectoryDetailParams = compile(
+  S.SessionsTrajectoryDetailParamsSchema,
+);
 export const validateSessionVisibilitySetParams = compile(S.SessionVisibilitySetParamsSchema);
 export const validateSessionMembersListParams = compile(S.SessionMembersListParamsSchema);
 export const validateSessionMemberAddParams = compile(S.SessionMemberAddParamsSchema);

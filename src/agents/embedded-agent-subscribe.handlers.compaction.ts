@@ -101,6 +101,7 @@ export function handleCompactionStart(
     consoleMessage: `embedded run ${kind} start: runId=${ctx.params.runId} reason=${reason}`,
   });
   emitCompactionAgentEvent(ctx, { phase: "start" });
+  ctx.params.trajectoryRecordEvent?.("compaction.started", { reason, startedAt: Date.now() });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
@@ -209,6 +210,14 @@ export function handleCompactionEnd(
     willRetry,
     outcome: outcome.status,
     ...(outcomeReason ? { reason: outcomeReason } : {}),
+  });
+  ctx.params.trajectoryRecordEvent?.("compaction.completed", {
+    reason,
+    outcome: outcome.status,
+    completed,
+    willRetry,
+    ...(outcomeReason ? { outcomeReason } : {}),
+    ...(completed ? { tokensAfter: outcome.tokensAfter } : {}),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
