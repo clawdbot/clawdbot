@@ -4,10 +4,7 @@ import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import {
-  adaptMemoryEmbeddingProviderAdapter,
-  type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -775,9 +772,7 @@ export default definePluginEntry({
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRiskLazily(api);
     }
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(lazyOllamaMemoryEmbeddingProviderAdapter),
-    );
+    api.registerEmbeddingProvider(lazyOllamaMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(lazyOllamaMediaUnderstandingProvider);
     if (startupPluginConfig.nodeInference?.enabled !== false) {
       for (const command of createLazyOllamaNodeHostCommands()) {
@@ -1034,7 +1029,13 @@ export default definePluginEntry({
           provider: embeddingProvider || OLLAMA_PROVIDER_ID,
         });
         return {
-          ...provider,
+          id: provider.id,
+          model: provider.model,
+          maxInputTokens: provider.maxInputTokens,
+          embedQuery: async (text, options) =>
+            await provider.embed(text, { ...options, inputType: "query" }),
+          embedBatch: async (texts, options) =>
+            await provider.embedBatch(texts, { ...options, inputType: "document" }),
           client,
         };
       },

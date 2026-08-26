@@ -85,9 +85,10 @@ type RuntimeFacadeModule = {
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
   createEmbeddingProvider: (
-    options: MemoryEmbeddingProviderCreateOptions & {
+    options: Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
       provider: string;
       fallback: string;
+      outputDimensionality?: number;
     },
   ) => Promise<EmbeddingProviderResult>;
   removeGroundedShortTermCandidates: (params: {
