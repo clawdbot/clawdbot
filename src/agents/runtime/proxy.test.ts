@@ -685,14 +685,12 @@ describe("streamProxy", () => {
     expect(cancel).toHaveBeenCalledWith(expect.any(Error));
   });
 
-  it("awaits terminal stream cancellation before releasing the response reader", async () => {
+  it("releases the response reader when terminal stream cancellation never settles", async () => {
     let resolveReleased: (() => void) | undefined;
-    let cancellationCompleted = false;
     const released = new Promise<void>((resolve) => {
       resolveReleased = resolve;
     });
     const releaseLock = vi.fn(() => {
-      expect(cancellationCompleted).toBe(true);
       resolveReleased?.();
     });
     vi.stubGlobal(
@@ -705,10 +703,7 @@ describe("streamProxy", () => {
             usage,
           })}\n\n`,
           releaseLock,
-          async () => {
-            await Promise.resolve();
-            cancellationCompleted = true;
-          },
+          () => new Promise<void>(() => {}),
         ),
       ),
     );
@@ -717,8 +712,14 @@ describe("streamProxy", () => {
       authToken: "token",
       proxyUrl: "https://proxy.example",
     }).result();
-    await released;
+    const lockReleased = await Promise.race([
+      released.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 100);
+      }),
+    ]);
 
+    expect(lockReleased).toBe(true);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 

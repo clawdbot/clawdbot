@@ -413,7 +413,8 @@ export function streamProxy(
     } finally {
       try {
         if (reader && !readerReachedEof) {
-          await cancelReader(cleanupReason);
+          // Upstream cancellation may never settle; it must not prevent reader release.
+          void cancelReader(cleanupReason);
         }
         reader?.releaseLock();
       } catch {
