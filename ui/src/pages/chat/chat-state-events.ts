@@ -447,22 +447,24 @@ export function handlePageGatewayEvent(
     const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
     const shouldRefreshPullRequests =
       shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
-    const terminal =
-      payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
+    const terminalPayload =
+      payload &&
+      (payload.state === "final" || payload.state === "aborted" || payload.state === "error")
+        ? payload
+        : undefined;
     // Missing ownership must not fall back to correlation-only run IDs, which
     // can collide across sessions.
     const outboxScope =
-      terminal &&
-      payload?.sessionKey &&
+      terminalPayload &&
       resolveStoredChatOutboxScope(
         state,
-        payload.sessionKey,
-        isUiGlobalSessionKey(payload.sessionKey)
-          ? selectedGlobalEventAgentId(state, payload.agentId ?? null)
-          : payload.agentId,
+        terminalPayload.sessionKey,
+        isUiGlobalSessionKey(terminalPayload.sessionKey)
+          ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
+          : terminalPayload.agentId,
       );
     const delivered = outboxScope
-      ? rememberDeliveredQueuedUserTurn(state, payload?.runId, outboxScope)
+      ? rememberDeliveredQueuedUserTurn(state, terminalPayload.runId, outboxScope)
       : null;
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
@@ -470,8 +472,8 @@ export function handlePageGatewayEvent(
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
-    if (terminal && sessionMatches) {
-      clearPendingQueueItemsForRun(state, payload?.runId);
+    if (terminalPayload && sessionMatches) {
+      clearPendingQueueItemsForRun(state, terminalPayload.runId);
     }
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
@@ -480,9 +482,9 @@ export function handlePageGatewayEvent(
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
     replayPendingSessionMessageReload(state, payload, isPresented);
-    if (terminal) {
+    if (terminalPayload) {
       if (outboxScope) {
-        removeDeliveredQueuedChatSendForRun(state, payload?.runId, outboxScope);
+        removeDeliveredQueuedChatSendForRun(state, terminalPayload.runId, outboxScope);
       }
       void resumeStoredChatOutboxes(state);
       if (sessionMatches) {
