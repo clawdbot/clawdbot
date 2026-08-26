@@ -8,6 +8,7 @@ type CronServiceParams = ConstructorParameters<typeof CronService>[0];
 type RunIsolatedAgentJob = NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
 type IsolatedAgentRunResult = Awaited<ReturnType<RunIsolatedAgentJob>>;
 type FailureAlertConfig = NonNullable<CronServiceParams["cronConfig"]>["failureAlert"];
+type SendCronFailureAlert = NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-failure-alert-",
@@ -43,12 +44,12 @@ async function withFailureAlertCron(
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeat: ReturnType<typeof vi.fn>;
-    sendCronFailureAlert: ReturnType<typeof vi.fn>;
+    sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
@@ -217,16 +218,14 @@ describe("CronService failure alerts", () => {
     await withFailureAlertCron(
       { failureAlert: { enabled: true, after: 1 } },
       async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
-        sendCronFailureAlert.mockImplementationOnce(
-          async (alert: { onDeliveryAttempt?: (reachedRecipient: boolean) => void }) => {
-            if (testCase.recipientReached !== undefined) {
-              alert.onDeliveryAttempt?.(testCase.recipientReached);
-            }
-            if (testCase.rejects) {
-              throw new Error("failure alert delivery failed");
-            }
-          },
-        );
+        sendCronFailureAlert.mockImplementationOnce(async (alert) => {
+          if (testCase.recipientReached !== undefined) {
+            alert.onDeliveryAttempt?.(testCase.recipientReached);
+          }
+          if (testCase.rejects) {
+            throw new Error("failure alert delivery failed");
+          }
+        });
         const job = await addJob("recipient custody", { delivery: createTelegramDelivery() });
 
         await cron.run(job.id, "force");
