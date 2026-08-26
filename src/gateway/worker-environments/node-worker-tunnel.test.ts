@@ -21,6 +21,7 @@ import {
   environment,
   startRequest,
   transport,
+  workspaceCommandPayload,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
@@ -875,32 +876,46 @@ describe("node worker tunnel manager", () => {
     expect(manager.status("environment-1")).toBe("stopped");
   });
 
-  it("recaptures the node manifest and rejects divergence before reconciliation", async () => {
+  it.each([
+    {
+      name: "divergence",
+      result: { stdout: `sha256:${"f".repeat(64)}\n` },
+      error: "changed during final reconciliation",
+    },
+    {
+      name: "missing manifest",
+      result: {
+        code: 1,
+        stderr: "ENOENT: no such file or directory, open '/worker/manifests/result.json'\n",
+      },
+      error: "Node workspace manifest capture failed: ENOENT: no such file or directory",
+    },
+    {
+      name: "timeout without stderr",
+      result: { code: null, signal: "SIGTERM", killed: true, termination: "timeout" },
+      error: "Node workspace manifest capture failed: timeout (exit code null, signal SIGTERM)",
+    },
+    {
+      name: "invalid reference",
+      result: { stdout: "invalid\n" },
+      error: "Node workspace manifest capture failed: invalid manifest reference",
+    },
+  ] as const)("reports $name during final manifest verification", async ({ result, error }) => {
     const record = environment();
     const localPath = tempDirs.make("node-worker-verify-stable-");
     const remoteWorkspaceDir = path.join(localPath, "remote");
     await fs.mkdir(remoteWorkspaceDir);
     const raw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
     const baseManifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-    const divergentManifestRef = `sha256:${"f".repeat(64)}`;
-    const spawnResult = (stdout: string) =>
-      JSON.stringify({
-        workspaceDir: remoteWorkspaceDir,
-        stdout,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
     const nodeTransport = transport();
     nodeTransport.invoke = vi.fn(async ({ params }) => {
       const input = params as { transfer?: { direction?: string } };
       return {
         ok: true,
-        payloadJSON: spawnResult(
-          input.transfer ? `${baseManifestRef}\n` : `${divergentManifestRef}\n`,
-        ),
+        payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
+          stdout: `${baseManifestRef}\n`,
+          ...(!input.transfer ? result : {}),
+        }),
       };
     });
     const transfer = {
@@ -944,7 +959,7 @@ describe("node worker tunnel manager", () => {
         baseManifestRef,
         journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
       }),
-    ).rejects.toThrow("changed during final reconciliation");
+    ).rejects.toThrow(error);
   });
 
   it("does not republish an accepted manifest already current on the node", async () => {
@@ -954,16 +969,6 @@ describe("node worker tunnel manager", () => {
     const manifest = { version: 1 as const, baseCommit: null, entries: [] };
     const raw = serializeWorkerWorkspaceManifest(manifest);
     const baseManifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-    const spawnResult = (stdout: string) =>
-      JSON.stringify({
-        workspaceDir: remoteWorkspaceDir,
-        stdout,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
     const transferDirections: string[] = [];
     const nodeTransport = transport();
     const invoke = vi.fn(async ({ params }) => {
@@ -971,7 +976,12 @@ describe("node worker tunnel manager", () => {
       if (input.transfer?.direction) {
         transferDirections.push(input.transfer.direction);
       }
-      return { ok: true, payloadJSON: spawnResult(`${baseManifestRef}\n`) };
+      return {
+        ok: true,
+        payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
+          stdout: `${baseManifestRef}\n`,
+        }),
+      };
     });
     nodeTransport.invoke = invoke;
     const publishSnapshot = vi.fn(() => "accepted-download-token");
