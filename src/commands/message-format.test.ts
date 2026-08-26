@@ -294,6 +294,41 @@ describe("formatMessageCliText send results", () => {
   );
 });
 
+describe("formatMessageCliText provider-reported failures", () => {
+  it.each([
+    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, "disabled"],
+    [
+      "rejected added reaction",
+      "react",
+      { ok: false, warning: "Unavailable", added: "✅" },
+      "Unavailable",
+    ],
+    [
+      "rejected delete",
+      "delete",
+      { ok: false, deleted: false, warning: "Not deleted" },
+      "Not deleted",
+    ],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
+  ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
+    const result = {
+      kind: action === "send" || action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain(expected);
+    expect(output).not.toContain("✅");
+  });
+});
+
 describe("formatMessageCliText poll results", () => {
   it("formats direct core poll results as direct deliveries", () => {
     const result = {

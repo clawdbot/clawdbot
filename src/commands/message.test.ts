@@ -665,6 +665,49 @@ describe("messageCommand", () => {
     },
   );
 
+  it.each([
+    [
+      "disabled reaction",
+      "react",
+      { ok: false, hint: "Reactions are disabled." },
+      "Reactions are disabled.",
+    ],
+    [
+      "rejected added reaction",
+      "react",
+      { ok: false, warning: "Unavailable", added: "✅" },
+      "Unavailable",
+    ],
+    [
+      "rejected delete",
+      "delete",
+      { ok: false, deleted: false, warning: "Not deleted" },
+      "Not deleted",
+    ],
+    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
+    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
+  ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: action === "send" || action === "poll" ? action : "action",
+      channel: "telegram",
+      action,
+      to: "123456",
+      handledBy: "plugin",
+      payload,
+      dryRun: false,
+    } as MessageActionResult);
+
+    await runMessageCommand({ action });
+
+    const json = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+    expect(json).toMatchObject({
+      ok: false,
+      error: { type: "cli_error", message: expected },
+    });
+    expect(json.payload).toEqual(payload);
+    expect(json).not.toHaveProperty("deliveryStatus");
+  });
+
   it("rejects unknown message actions before dispatch", async () => {
     await expect(runMessageCommand({ action: "nope" })).rejects.toThrow("Unknown message action");
     expect(runMessageActionMock).not.toHaveBeenCalled();
