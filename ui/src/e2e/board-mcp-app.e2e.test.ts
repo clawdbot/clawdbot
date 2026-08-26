@@ -259,6 +259,65 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     });
   });
 
+  it("drops a pending app view across reconnect and mounts the current lease", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+      viewport: { width: 1280, height: 800 },
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["board.widget.appView"],
+      sessionKey,
+      featureMethods: [
+        "board.get",
+        "board.widget.appView",
+        "chat.history",
+        "chat.metadata",
+        "chat.startup",
+        "mcp.app.view",
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot(1),
+        "board.widget.appView": {
+          viewId: "current-view",
+          expiresAtMs: Date.now() + 3_600_000,
+        },
+        "mcp.app.view": appViewPayload(),
+      },
+    });
+
+    await openDashboard(page);
+    await gateway.waitForRequest("board.widget.appView");
+    const boardGetCount = (await gateway.getRequests("board.get")).length;
+    await gateway.closeLatest();
+    await expect
+      .poll(async () => (await gateway.getRequests("board.get")).length)
+      .toBeGreaterThan(boardGetCount);
+    await expect
+      .poll(async () => (await gateway.getRequests("board.widget.appView")).length)
+      .toBe(2);
+
+    await gateway.resolveDeferred("board.widget.appView", {
+      viewId: "retired-view",
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    await waitForMountedApp(page);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("mcp.app.view")).map((request) => request.params),
+      )
+      .toContainEqual({
+        sessionKey,
+        viewId: "current-view",
+      });
+    expect(await gateway.getRequests("mcp.app.view")).not.toContainEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ viewId: "retired-view" }),
+      }),
+    );
+  });
+
   it("retains one board runtime across Chat, Split, and Dashboard", async () => {
     const context = await browser.newContext({
       permissions: ["local-network-access"],
