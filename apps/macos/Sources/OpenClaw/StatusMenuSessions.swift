@@ -50,7 +50,7 @@ final class StatusMenuSessions: NSObject {
     func configureSessionItem(_ item: NSMenuItem, row: SessionRow) {
         item.title = StatusMenuMetrics.fittedTitle(row.label)
         item.isEnabled = true
-        StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row))
+        StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
         if let submenu = item.submenu {
             self.updateSessionSubmenu(submenu, row: row)
@@ -100,6 +100,7 @@ extension StatusMenuSessions {
     private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
 
         menu.addItem(self.makePreviewItem(
@@ -232,6 +233,7 @@ extension StatusMenuSessions {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.showsStateColumn = true
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         let selected = levels.contains(current ?? "") ? current ?? "off" : "off"
 
@@ -273,6 +275,7 @@ extension StatusMenuSessions {
 
     private func buildPreviewSubmenu(sessionKey: String) -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         menu.addItem(self.makePreviewItem(
             sessionKey: sessionKey,

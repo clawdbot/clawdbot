@@ -6,6 +6,79 @@ import QuartzCore
 import SwiftUI
 
 @MainActor
+final class HostedMenuRowView: NSView {
+    private var content: AnyView
+    private let hosting: NSHostingView<AnyView>
+    private let selection = NSVisualEffectView()
+
+    var isHighlighted = false {
+        didSet {
+            guard self.isHighlighted != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.selection.isHidden = !self.isHighlighted
+            self.hosting.rootView = AnyView(self.content.environment(\.menuItemHighlighted, self.isHighlighted))
+            CATransaction.commit()
+        }
+    }
+
+    init(rootView: AnyView) {
+        self.content = rootView
+        self.hosting = NSHostingView(rootView: AnyView(rootView.environment(\.menuItemHighlighted, false)))
+        super.init(frame: .zero)
+
+        self.selection.material = .selection
+        self.selection.blendingMode = .behindWindow
+        self.selection.isEmphasized = true
+        self.selection.state = .active
+        self.selection.wantsLayer = true
+        self.selection.layer?.cornerRadius = 5
+        self.selection.layer?.masksToBounds = true
+        self.selection.isHidden = true
+        self.addSubview(self.selection)
+        self.addSubview(self.hosting)
+        self.update(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: StatusMenuMetrics.width, height: self.hosting.fittingSize.height)
+    }
+
+    override func layout() {
+        super.layout()
+        self.selection.frame = self.bounds.insetBy(dx: 5, dy: 1)
+        self.hosting.frame = self.bounds
+    }
+
+    func update(rootView: AnyView) {
+        self.content = rootView
+        self.hosting.rootView = AnyView(rootView.environment(\.menuItemHighlighted, self.isHighlighted))
+        self.hosting.invalidateIntrinsicContentSize()
+        self.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: StatusMenuMetrics.width, height: self.hosting.fittingSize.height))
+        self.invalidateIntrinsicContentSize()
+        self.needsLayout = true
+    }
+}
+
+@MainActor
+final class StatusMenuHighlightDelegate: NSObject, NSMenuDelegate {
+    static let shared = StatusMenuHighlightDelegate()
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        for candidate in menu.items {
+            (candidate.view as? HostedMenuRowView)?.isHighlighted = candidate === item && candidate.isEnabled
+        }
+    }
+}
+
+@MainActor
 final class StatusMenuRenderer: NSObject {
     private enum RenderEntry {
         case content(StatusMenuDescriptor.Entry)
@@ -150,8 +223,17 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    static func configureHostedView(_ item: NSMenuItem, rootView: some View) {
+    static func configureHostedView(_ item: NSMenuItem, rootView: some View, highlights: Bool = false) {
         let rootView = AnyView(rootView.frame(width: StatusMenuMetrics.width, alignment: .leading))
+        if highlights {
+            if let existing = item.view as? HostedMenuRowView {
+                existing.update(rootView: rootView)
+            } else {
+                item.view = HostedMenuRowView(rootView: rootView)
+            }
+            return
+        }
+
         let hosting: NSHostingView<AnyView>
         if let existing = item.view as? NSHostingView<AnyView> {
             // Keep the attached view stable while AppKit tracks an open menu.
@@ -183,11 +265,6 @@ final class StatusMenuRenderer: NSObject {
                 ? String(localized: "Stop Talk Mode")
                 : String(localized: "Start Talk Mode")
             symbol = "waveform.circle.fill"
-        case .canvas:
-            title = self.state.canvasPanelVisible
-                ? String(localized: "Close Canvas")
-                : String(localized: "Open Canvas")
-            symbol = "rectangle.inset.filled.on.rectangle"
         case .allSessions:
             title = String(localized: "All Sessions…")
             symbol = "rectangle.stack"
@@ -250,8 +327,6 @@ final class StatusMenuRenderer: NSObject {
             QuickChatController.shared.toggle()
         case .talkMode:
             Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
-        case .canvas:
-            AppNavigationActions.toggleCanvas()
         case .allSessions:
             Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.sessionsPagePath) }
         case .settings:

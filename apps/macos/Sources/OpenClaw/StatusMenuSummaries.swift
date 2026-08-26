@@ -429,10 +429,11 @@ extension StatusMenuSummaries {
             item.title = StatusMenuMetrics.fittedTitle(NodeMenuEntryFormatter.primaryName(node))
             item.target = self
             item.action = #selector(Self.copyNodeValue(_:))
+            item.isEnabled = true
             if let id = item.representedObject as? String {
                 self?.copiedValues[id] = NodeMenuEntryFormatter.summaryText(node)
             }
-            StatusMenuRenderer.configureHostedView(item, rootView: NodeMenuRowView(entry: node))
+            StatusMenuRenderer.configureHostedView(item, rootView: NodeMenuRowView(entry: node), highlights: true)
             self?.configureNodeSubmenu(for: item, node: node)
         }
     }
@@ -530,6 +531,7 @@ extension StatusMenuSummaries {
         } else {
             menu = NSMenu()
             menu.autoenablesItems = false
+            menu.delegate = StatusMenuHighlightDelegate.shared
             StatusMenuAppearance.pin(menu)
             parent.submenu = menu
         }
