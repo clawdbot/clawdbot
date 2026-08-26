@@ -83,26 +83,23 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
 }
 
 const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
-  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+  /(rate[_ ]limit|too many requests|\b(?:429|5\d\d)\b|resource has been exhausted|cloudflare|tokens per day)/i;
 
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
 
-const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b)/i;
 
-function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
-  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
-}
-
-export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
+  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
   return (
-    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
-    isRetryableMemoryEmbeddingTransportError(message)
+    RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
+    (!isSplittableMemoryEmbeddingBatchError(message) &&
+      RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message))
   );
 }
 

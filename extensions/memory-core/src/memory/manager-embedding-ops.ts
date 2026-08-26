@@ -51,7 +51,7 @@ import {
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
-  isSplittableMemoryEmbeddingTransportError,
+  isSplittableMemoryEmbeddingBatchError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -679,7 +679,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               return result;
             },
             isRetryable: isRetryableMemoryEmbeddingError,
-            isSplittable: isSplittableMemoryEmbeddingTransportError,
+            isSplittable: isSplittableMemoryEmbeddingBatchError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(
                 delayMs,
@@ -690,7 +690,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
-                `memory embeddings transport failed after retries; splitting ${label} of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+                `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${splitAt} + ${itemCount - splitAt}`,
               );
             },
           }),
