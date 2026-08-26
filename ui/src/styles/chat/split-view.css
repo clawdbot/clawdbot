@@ -338,7 +338,6 @@ openclaw-chat-pane {
   .chat-main__conversation-column > .chat-pane__header .chat-pane__workspace-chip span {
     display: block;
   }
-
 }
 
 /* Identity trail: project, then session. One flex row owns the alignment of
@@ -918,7 +917,7 @@ openclaw-chat-pane {
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__workspace-menu + .chat-pane__crumb-sep {
+  .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
 

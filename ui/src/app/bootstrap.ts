@@ -105,6 +105,7 @@ function createApplicationTheme(
   let settings = initialSettings;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
+  let chromeBreakpointCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
   let presentationGeneration = 0;
@@ -146,6 +147,18 @@ function createApplicationTheme(
       systemThemeCleanup = () => mediaQuery.removeListener(onChange);
     }
   };
+
+  if (typeof globalThis.matchMedia === "function") {
+    const mediaQuery = globalThis.matchMedia("(max-width: 768px)");
+    const onChange = () => syncControlUiSystemChrome();
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeEventListener("change", onChange);
+    } else if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(onChange);
+      chromeBreakpointCleanup = () => mediaQuery.removeListener(onChange);
+    }
+  }
 
   syncSystemThemeListener();
   publish();
@@ -195,6 +208,7 @@ function createApplicationTheme(
     dispose() {
       presentationGeneration += 1;
       detachSystemThemeListener();
+      chromeBreakpointCleanup?.();
       listeners.clear();
     },
   };

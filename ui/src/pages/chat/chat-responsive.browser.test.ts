@@ -1272,19 +1272,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-split-view__cell" style="width: 640px;">
             <div class="chat-pane__header">
               <div class="chat-pane__crumbs">
-                <wa-dropdown class="chat-pane__workspace-menu">
-                  <button class="chat-pane__workspace-chip" type="button">
-                    ${iconSvg()}<span>openclaw</span>
+                <div class="chat-pane__project-row">
+                  <wa-dropdown class="chat-pane__workspace-menu">
+                    <button class="chat-pane__workspace-chip" type="button">
+                      ${iconSvg()}<span>openclaw</span>
+                    </button>
+                  </wa-dropdown>
+                </div>
+                <div class="chat-pane__session-trail">
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__parent-session" type="button">
+                    <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
                   </button>
-                </wa-dropdown>
-                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
-                <button class="chat-pane__parent-session" type="button">
-                  <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
-                </button>
-                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
-                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
-                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
-                </button>
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                    <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                  </button>
+                </div>
               </div>
               <div class="chat-pane__actions">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>

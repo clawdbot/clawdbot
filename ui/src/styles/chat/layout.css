@@ -7080,9 +7080,7 @@ button.chat-pr__diff {
   }
 
   .chat-main__conversation > .chat-thread {
-    padding-top: calc(
-      var(--chat-mobile-pane-header-height, 48px) + clamp(20px, 3vh, 28px)
-    );
+    padding-top: calc(var(--chat-mobile-pane-header-height, 48px) + clamp(20px, 3vh, 28px));
   }
 
   .chat-inline-approval {
