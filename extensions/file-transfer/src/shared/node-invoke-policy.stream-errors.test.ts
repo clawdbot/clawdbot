@@ -77,6 +77,7 @@ function createDirFetchContext(): OpenClawPluginNodeInvokePolicyContext {
     params: { path: "/tmp/project" },
     config: {},
     pluginConfig: {
+      policyVersion: 2,
       nodes: {
         "node-1": {
           allowReadPaths: ["/tmp/**"],

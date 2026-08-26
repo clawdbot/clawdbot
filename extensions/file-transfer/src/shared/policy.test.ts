@@ -1,12 +1,11 @@
 // File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the plugin-sdk runtime-config surface so we can drive the policy
 // reader from the test without booting a gateway. mutateConfigFile is also
-// mocked so persistAllowAlways tests can assert what would have been written
+// mocked so literal-grant tests can assert what would have been written
 // without touching ~/.openclaw/openclaw.json.
 const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
@@ -19,7 +18,7 @@ vi.mock("openclaw/plugin-sdk/config-mutation", () => ({
 }));
 
 // Imported AFTER vi.mock so the mocked module is what policy.ts binds to.
-const { evaluateFilePolicy, persistAllowAlways } = await import("./policy.js");
+const { evaluateFilePolicy, persistLiteralGrant } = await import("./policy.js");
 
 beforeEach(() => {
   getRuntimeConfigMock.mockReset();
@@ -44,7 +43,7 @@ function withConfig(fileTransfer: Record<string, unknown> | undefined) {
       plugins: {
         entries: {
           "file-transfer": {
-            config: { nodes: fileTransfer },
+            config: { policyVersion: 2, nodes: fileTransfer },
           },
         },
       },
@@ -87,6 +86,7 @@ describe("evaluateFilePolicy — default deny", () => {
         entries: {
           "file-transfer": {
             config: {
+              policyVersion: 2,
               nodes: {
                 n1: { allowReadPaths: ["/tmp/**"] },
               },
@@ -106,6 +106,35 @@ describe("evaluateFilePolicy — default deny", () => {
       },
     });
     expectResultFields(r, { ok: true, reason: "matched-allow" });
+  });
+
+  it("fails closed with the one-command handoff for unreviewed legacy positive policy", () => {
+    getRuntimeConfigMock.mockReturnValue({
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: {
+              nodes: { Shared: { allowReadPaths: ["/tmp/report-*.txt"] } },
+            },
+          },
+        },
+      },
+    });
+
+    const result = evaluateFilePolicy({
+      nodeId: "node-a",
+      nodeDisplayName: "Shared",
+      kind: "read",
+      command: "file.fetch",
+      path: "/tmp/report-secret.txt",
+    });
+
+    expectResultFields(result, {
+      ok: false,
+      code: "POLICY_MIGRATION_REQUIRED",
+      askable: false,
+    });
+    expect(result.ok ? "" : result.reason).toContain("openclaw file-transfer approvals migrate");
   });
 });
 
@@ -432,8 +461,17 @@ describe("evaluateFilePolicy — node-id resolution", () => {
   });
 });
 
-describe("persistAllowAlways", () => {
-  it("appends path to allowReadPaths under the existing matching key", async () => {
+describe("literal standing grants", () => {
+  it.each([
+    ["asterisk", "/tmp/report-*.txt", "/tmp/report-secret.txt"],
+    ["question mark", "/tmp/report-?.txt", "/tmp/report-a.txt"],
+    ["character class", "/tmp/report-[ab].txt", "/tmp/report-a.txt"],
+    ["brace expansion", "/tmp/report-{a,b}.txt", "/tmp/report-a.txt"],
+    ["extglob", "/tmp/report-+(a|b).txt", "/tmp/report-a.txt"],
+    ["POSIX backslash", "/tmp/report\\*.txt", "/tmp/report/*.txt"],
+    ["Windows separators", "C:\\Temp\\report-*.txt", "C:\\Temp\\report-a.txt"],
+    ["UNC path", "\\\\server\\share\\report-?.txt", "\\\\server\\share\\report-a.txt"],
+  ])("keeps an approved path containing %s literal", async (_label, approvedPath, siblingPath) => {
     let captured: Record<string, unknown> | null = null;
     mutateConfigFileMock.mockImplementation(
       async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
@@ -441,77 +479,7 @@ describe("persistAllowAlways", () => {
           plugins: {
             entries: {
               "file-transfer": {
-                config: { nodes: { n1: { allowReadPaths: ["/tmp/**"] } } },
-              },
-            },
-          },
-        };
-        mutate(draft);
-        captured = draft;
-      },
-    );
-    await persistAllowAlways({ nodeId: "n1", kind: "read", path: "/srv/added.png" });
-
-    expect(mutateConfigFileMock).toHaveBeenCalledOnce();
-    // Drill back into the captured draft to assert the added path.
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths: string[] }> };
-          };
-        };
-      };
-    };
-    const node = expectDefined(
-      root.plugins.entries["file-transfer"].config.nodes.n1,
-      "n1 file-transfer node",
-    );
-    expect(node.allowReadPaths).toContain("/srv/added.png");
-  });
-
-  it("creates a new node entry keyed by displayName when no entry exists", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {};
-        mutate(draft);
-        captured = draft;
-      },
-    );
-
-    await persistAllowAlways({
-      nodeId: "n1",
-      nodeDisplayName: "Lobster",
-      kind: "write",
-      path: "/srv/out.txt",
-    });
-
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowWritePaths: string[] }> };
-          };
-        };
-      };
-    };
-    const node = expectDefined(
-      root.plugins.entries["file-transfer"].config.nodes.Lobster,
-      "Lobster file-transfer node",
-    );
-    expect(node.allowWritePaths).toContain("/srv/out.txt");
-  });
-
-  it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
-    let captured: Record<string, unknown> | null = null;
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {
-          plugins: {
-            entries: {
-              "file-transfer": {
-                config: { nodes: { "*": { allowReadPaths: ["/var/log/**"] } } },
+                config: { policyVersion: 2, nodes: { n1: { ask: "on-miss" } } },
               },
             },
           },
@@ -521,60 +489,35 @@ describe("persistAllowAlways", () => {
       },
     );
 
-    await persistAllowAlways({
+    await persistLiteralGrant({
       nodeId: "n1",
-      nodeDisplayName: "Lobster",
-      kind: "read",
-      path: "/srv/added.png",
+      command: "file.fetch",
+      requestedPath: approvedPath,
+      canonicalPath: approvedPath,
     });
+    getRuntimeConfigMock.mockReturnValue(captured);
 
-    const root = captured as unknown as {
-      plugins: {
-        entries: {
-          "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths?: string[] }> };
-          };
-        };
-      };
-    };
-    // The "*" entry must not have been mutated.
-    const nodes = root.plugins.entries["file-transfer"].config.nodes;
-    expect(expectDefined(nodes["*"], "wildcard file-transfer node").allowReadPaths).toEqual([
-      "/var/log/**",
-    ]);
-    // A new entry keyed by displayName (not "*") must hold the new path.
-    expect(expectDefined(nodes.Lobster, "Lobster file-transfer node").allowReadPaths).toEqual([
-      "/srv/added.png",
-    ]);
-  });
-
-  it("rejects unsafe keys (__proto__, prototype, constructor) that would mutate prototype chain", async () => {
-    mutateConfigFileMock.mockImplementation(
-      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
-        const draft: Record<string, unknown> = {};
-        mutate(draft);
-      },
-    );
-
-    await expect(
-      persistAllowAlways({
+    expectResultFields(
+      evaluateFilePolicy({
         nodeId: "n1",
-        nodeDisplayName: "__proto__",
+        command: "file.fetch",
         kind: "read",
-        path: "/etc/passwd",
+        path: approvedPath,
       }),
-    ).rejects.toThrow(/unsafe key.*__proto__/);
-
-    await expect(
-      persistAllowAlways({
-        nodeId: "constructor",
+      { ok: true, reason: "matched-literal", expectedCanonicalPath: approvedPath },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        command: "file.fetch",
         kind: "read",
-        path: "/etc/passwd",
+        path: siblingPath,
       }),
-    ).rejects.toThrow(/unsafe key.*constructor/);
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
   });
 
-  it("dedupes when path already present", async () => {
+  it("does not replay a standing approval onto another node with the same display name", async () => {
     let captured: Record<string, unknown> | null = null;
     mutateConfigFileMock.mockImplementation(
       async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
@@ -582,7 +525,7 @@ describe("persistAllowAlways", () => {
           plugins: {
             entries: {
               "file-transfer": {
-                config: { nodes: { n1: { allowReadPaths: ["/tmp/x"] } } },
+                config: { policyVersion: 2, nodes: { Shared: { ask: "on-miss" } } },
               },
             },
           },
@@ -591,21 +534,82 @@ describe("persistAllowAlways", () => {
         captured = draft;
       },
     );
-    await persistAllowAlways({ nodeId: "n1", kind: "read", path: "/tmp/x" });
+
+    await persistLiteralGrant({
+      nodeId: "node-a",
+      command: "file.fetch",
+      requestedPath: "/tmp/report.txt",
+      canonicalPath: "/tmp/report.txt",
+    });
+    getRuntimeConfigMock.mockReturnValue(captured);
+
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report.txt",
+      }),
+      { ok: true, reason: "matched-literal" },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-b",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
+  });
+
+  it("dedupes the exact tuple without changing authored policy", async () => {
+    let captured: Record<string, unknown> | null = null;
+    mutateConfigFileMock.mockImplementation(
+      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        const draft: Record<string, unknown> = {
+          plugins: {
+            entries: {
+              "file-transfer": {
+                config: {
+                  policyVersion: 2,
+                  nodes: { Shared: { ask: "on-miss", denyPaths: ["**/.ssh/**"] } },
+                },
+              },
+            },
+          },
+        };
+        mutate(draft);
+        captured = draft;
+      },
+    );
+    const grant = {
+      nodeId: "n1",
+      command: "file.fetch" as const,
+      requestedPath: "/tmp/x",
+      canonicalPath: "/private/tmp/x",
+    };
+    await persistLiteralGrant(grant);
+    await persistLiteralGrant(grant);
 
     const root = captured as unknown as {
       plugins: {
         entries: {
           "file-transfer": {
-            config: { nodes: Record<string, { allowReadPaths: string[] }> };
+            config: {
+              nodes: Record<string, unknown>;
+              literalGrants: unknown[];
+            };
           };
         };
       };
     };
-    const list = expectDefined(
-      root.plugins.entries["file-transfer"].config.nodes.n1,
-      "n1 file-transfer node",
-    ).allowReadPaths;
-    expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
+    const config = root.plugins.entries["file-transfer"].config;
+    expect(config.nodes).toEqual({
+      Shared: { ask: "on-miss", denyPaths: ["**/.ssh/**"] },
+    });
+    expect(config.literalGrants).toEqual([grant]);
   });
 });

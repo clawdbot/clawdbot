@@ -33,8 +33,9 @@
 //   always    — prompt operator on every call (denyPaths still hard-deny)
 //
 // `denyPaths` always wins, even in `ask: always`.
-// `allow-always` from the prompt appends the path back into allowReadPaths /
-// allowWritePaths via mutateConfigFile.
+// `allow-always` grants are stored separately from operator-authored globs.
+// They are scoped to a stable node ID, command, requested path, and the
+// node-authoritative canonical path returned by the successful operation.
 //
 // `followSymlinks` (default false): if false, the node-side handler
 // realpaths the requested path (or its parent for new-file writes) BEFORE
@@ -54,12 +55,30 @@ import {
   asNullableRecord,
   asOptionalObjectRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  FILE_TRANSFER_NODE_INVOKE_COMMANDS,
+  type FileTransferNodeInvokeCommand,
+} from "./node-invoke-policy-commands.js";
 
 export type FilePolicyKind = "read" | "write";
 type FilePolicyAskMode = "off" | "on-miss" | "always";
+export const FILE_TRANSFER_POLICY_VERSION = 2;
+
+export type FileTransferLiteralGrant = {
+  nodeId: string;
+  command: FileTransferNodeInvokeCommand;
+  requestedPath: string;
+  canonicalPath: string;
+};
 
 type FilePolicyDecision =
-  | { ok: true; reason: "matched-allow"; maxBytes?: number; followSymlinks: boolean }
+  | {
+      ok: true;
+      reason: "matched-allow" | "matched-literal";
+      maxBytes?: number;
+      followSymlinks: boolean;
+      expectedCanonicalPath?: string;
+    }
   | {
       ok: true;
       reason: "ask-always";
@@ -69,7 +88,7 @@ type FilePolicyDecision =
     }
   | {
       ok: false;
-      code: "NO_POLICY" | "POLICY_DENIED";
+      code: "NO_POLICY" | "POLICY_DENIED" | "POLICY_MIGRATION_REQUIRED";
       reason: string;
       askable: boolean;
       askMode?: FilePolicyAskMode;
@@ -88,17 +107,29 @@ type NodeFilePolicyConfig = {
 
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
+type FileTransferPolicyConfig = {
+  policyVersion?: number;
+  nodes?: FilePolicyConfig;
+  literalGrants?: unknown;
+};
+
 function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
   return asNullableRecord(value) as FilePolicyConfig | null;
 }
 
-function readFilePolicyConfigFromPluginConfig(pluginConfig: unknown): FilePolicyConfig | null {
+function readFileTransferConfigFromPluginConfig(
+  pluginConfig: unknown,
+): FileTransferPolicyConfig | null {
   const pluginRecord = asNullableRecord(pluginConfig);
   if (!pluginRecord) {
     return null;
   }
-  const nodes = pluginRecord.nodes;
-  return asFilePolicyConfig(nodes);
+  return {
+    policyVersion:
+      typeof pluginRecord.policyVersion === "number" ? pluginRecord.policyVersion : undefined,
+    nodes: asFilePolicyConfig(pluginRecord.nodes) ?? undefined,
+    literalGrants: pluginRecord.literalGrants,
+  };
 }
 
 function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
@@ -118,10 +149,64 @@ function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
   return asNullableRecord(entry.config);
 }
 
-function readFilePolicyConfig(pluginConfig?: Record<string, unknown>): FilePolicyConfig | null {
+function readFileTransferConfig(
+  pluginConfig?: Record<string, unknown>,
+): FileTransferPolicyConfig | null {
   return (
-    readFilePolicyConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
-    readFilePolicyConfigFromPluginConfig(pluginConfig)
+    readFileTransferConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
+    readFileTransferConfigFromPluginConfig(pluginConfig)
+  );
+}
+
+function readNodes(config: FileTransferPolicyConfig): FilePolicyConfig | null {
+  return asFilePolicyConfig(config.nodes);
+}
+
+function hasLegacyPositiveRules(config: FileTransferPolicyConfig): boolean {
+  const nodes = readNodes(config);
+  if (!nodes) {
+    return false;
+  }
+  return Object.values(nodes).some(
+    (entry) =>
+      (Array.isArray(entry.allowReadPaths) && entry.allowReadPaths.length > 0) ||
+      (Array.isArray(entry.allowWritePaths) && entry.allowWritePaths.length > 0),
+  );
+}
+
+function readLiteralGrants(config: FileTransferPolicyConfig): FileTransferLiteralGrant[] {
+  if (
+    config.policyVersion !== FILE_TRANSFER_POLICY_VERSION ||
+    !Array.isArray(config.literalGrants)
+  ) {
+    return [];
+  }
+  return config.literalGrants.flatMap((value) => {
+    const grant = asNullableRecord(value);
+    if (
+      !grant ||
+      typeof grant.nodeId !== "string" ||
+      !isFileTransferCommand(grant.command) ||
+      typeof grant.requestedPath !== "string" ||
+      typeof grant.canonicalPath !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        nodeId: grant.nodeId,
+        command: grant.command,
+        requestedPath: grant.requestedPath,
+        canonicalPath: grant.canonicalPath,
+      },
+    ];
+  });
+}
+
+function isFileTransferCommand(value: unknown): value is FileTransferNodeInvokeCommand {
+  return (
+    typeof value === "string" &&
+    FILE_TRANSFER_NODE_INVOKE_COMMANDS.some((command) => command === value)
   );
 }
 
@@ -220,13 +305,19 @@ function containsParentRefSegment(p: string): boolean {
   return unified.split("/").includes("..");
 }
 
-export function evaluateFilePolicy(input: {
+type FilePolicyInput = {
   nodeId: string;
   nodeDisplayName?: string;
   kind: FilePolicyKind;
+  command?: FileTransferNodeInvokeCommand;
   path: string;
   pluginConfig?: Record<string, unknown>;
-}): FilePolicyDecision {
+};
+
+function evaluateFilePolicyInternal(
+  input: FilePolicyInput,
+  constraintsOnly: boolean,
+): FilePolicyDecision {
   // Reject literal traversal sequences before consulting any allow/deny
   // glob list. minimatch on the raw string can wrongly accept
   // "/allowed/../etc/passwd" against "/allowed/**".
@@ -238,13 +329,26 @@ export function evaluateFilePolicy(input: {
       askable: false,
     };
   }
-  const config = readFilePolicyConfig(input.pluginConfig);
-  if (!config) {
+  const pluginPolicy = readFileTransferConfig(input.pluginConfig);
+  const config = pluginPolicy ? readNodes(pluginPolicy) : null;
+  if (!pluginPolicy || !config) {
     return {
       ok: false,
       code: "NO_POLICY",
       reason:
         "no plugins.entries.file-transfer.config.nodes config; file-transfer is deny-by-default until configured",
+      askable: false,
+    };
+  }
+  if (
+    pluginPolicy.policyVersion !== FILE_TRANSFER_POLICY_VERSION &&
+    hasLegacyPositiveRules(pluginPolicy)
+  ) {
+    return {
+      ok: false,
+      code: "POLICY_MIGRATION_REQUIRED",
+      reason:
+        "older file-transfer permissions need review; run `openclaw file-transfer approvals migrate`",
       askable: false,
     };
   }
@@ -280,12 +384,16 @@ export function evaluateFilePolicy(input: {
     };
   }
 
+  if (constraintsOnly) {
+    return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
+  }
+
   // 2. ask=always: prompt every time even if matched.
   if (askMode === "always") {
     return { ok: true, reason: "ask-always", askMode, maxBytes, followSymlinks };
   }
 
-  // 3. Match against allow list for this kind.
+  // 3. Match operator-authored glob policy for this kind.
   const allowPatterns =
     input.kind === "read"
       ? normalizeGlobs(nodeConfig.allowReadPaths)
@@ -295,7 +403,28 @@ export function evaluateFilePolicy(input: {
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
-  // 4. No allow match. Either askable on miss or hard-deny.
+  // 4. Match exact standing grants by stable identity and command. These
+  // strings are opaque node paths: never normalize them or feed them to a
+  // glob matcher on the Gateway.
+  if (input.command) {
+    const literal = readLiteralGrants(pluginPolicy).find(
+      (grant) =>
+        grant.nodeId === input.nodeId &&
+        grant.command === input.command &&
+        grant.requestedPath === input.path,
+    );
+    if (literal) {
+      return {
+        ok: true,
+        reason: "matched-literal",
+        expectedCanonicalPath: literal.canonicalPath,
+        maxBytes,
+        followSymlinks,
+      };
+    }
+  }
+
+  // 5. No allow match. Either askable on miss or hard-deny.
   if (askMode === "on-miss") {
     return {
       ok: false,
@@ -322,73 +451,47 @@ export function evaluateFilePolicy(input: {
   };
 }
 
-/**
- * Persist an "allow-always" approval by appending the path to the
- * relevant allowReadPaths / allowWritePaths list for the node. Uses
- * mutateConfigFile so the change survives gateway restarts.
- *
- * Inserts under whichever key matched the policy (per-node entry, or
- * the "*" wildcard if that's what was hit). If no entry exists yet,
- * creates one keyed by nodeDisplayName ?? nodeId.
- */
-/**
- * Reject special object keys that would mutate the prototype chain when
- * used as a property name (e.g. `__proto__` setter on a plain object).
- * The nodeDisplayName comes from paired-node metadata which we don't
- * fully control; refuse to persist policy under a key that could corrupt
- * the plugin policy container's prototype.
- */
-function assertSafeConfigKey(key: string): string {
-  if (key === "__proto__" || key === "prototype" || key === "constructor") {
-    throw new Error(`refusing to persist file-transfer policy under unsafe key: ${key}`);
-  }
-  return key;
+export function evaluateFilePolicy(input: FilePolicyInput): FilePolicyDecision {
+  return evaluateFilePolicyInternal(input, false);
 }
 
-export async function persistAllowAlways(input: {
-  nodeId: string;
-  nodeDisplayName?: string;
-  kind: FilePolicyKind;
-  path: string;
-}): Promise<void> {
-  const field = input.kind === "read" ? "allowReadPaths" : "allowWritePaths";
+export function evaluateFilePolicyConstraints(input: FilePolicyInput): FilePolicyDecision {
+  return evaluateFilePolicyInternal(input, true);
+}
+
+/** Persist an exact standing grant only after node canonical-path validation. */
+export async function persistLiteralGrant(input: FileTransferLiteralGrant): Promise<void> {
+  if (!isFileTransferCommand(input.command)) {
+    throw new Error(`unsupported file-transfer command: ${input.command}`);
+  }
+  if (!input.nodeId || !input.requestedPath || !input.canonicalPath) {
+    throw new Error("file-transfer literal grant requires node, requested, and canonical paths");
+  }
   await mutateConfigFile({
-    afterWrite: { mode: "none", reason: "file-transfer allow-always policy update" },
+    afterWrite: { mode: "none", reason: "file-transfer literal approval update" },
     mutate: (draft) => {
-      // Plugin config is intentionally plugin-owned; the root OpenClawConfig
-      // type only guarantees `Record<string, unknown>` here.
       const plugins = (draft.plugins ??= {}) as Record<string, unknown>;
       const entries = (plugins.entries ??= {}) as Record<string, unknown>;
       const pluginEntry = (entries["file-transfer"] ??= {}) as Record<string, unknown>;
       const pluginConfig = (pluginEntry.config ??= {}) as Record<string, unknown>;
-      const fileTransfer = (pluginConfig.nodes ??= {}) as Record<string, NodeFilePolicyConfig>;
-
-      // SECURITY: never persist allow-always under the "*" wildcard. An
-      // operator approving a path on node A must not silently grant the
-      // same path on every other node sharing the wildcard entry. Always
-      // write under the specific node's own entry, creating it if needed.
-      const candidates = [input.nodeId, input.nodeDisplayName].filter(
-        (k): k is string => typeof k === "string" && k.length > 0,
+      const policyConfig = pluginConfig as FileTransferPolicyConfig;
+      if (
+        policyConfig.policyVersion !== FILE_TRANSFER_POLICY_VERSION &&
+        hasLegacyPositiveRules(policyConfig)
+      ) {
+        throw new Error(
+          "older file-transfer permissions need review; run `openclaw file-transfer approvals migrate`",
+        );
+      }
+      policyConfig.policyVersion = FILE_TRANSFER_POLICY_VERSION;
+      const grants = readLiteralGrants(policyConfig).filter(
+        (grant) =>
+          grant.nodeId !== input.nodeId ||
+          grant.command !== input.command ||
+          grant.requestedPath !== input.requestedPath,
       );
-      // Use hasOwnProperty so a node with displayName "constructor" doesn't
-      // accidentally hit Object.prototype.constructor and pretend to match.
-      let entry: NodeFilePolicyConfig | undefined;
-      for (const candidate of candidates) {
-        entry = Object.entries(fileTransfer).find(([key]) => key === candidate)?.[1];
-        if (entry) {
-          break;
-        }
-      }
-      if (!entry) {
-        const key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
-        entry = {};
-        fileTransfer[key] = entry;
-      }
-      const list = Array.isArray(entry[field]) ? entry[field] : [];
-      if (!list.includes(input.path)) {
-        list.push(input.path);
-      }
-      entry[field] = list;
+      grants.push({ ...input });
+      policyConfig.literalGrants = grants;
     },
   });
 }
