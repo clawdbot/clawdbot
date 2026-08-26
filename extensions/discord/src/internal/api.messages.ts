@@ -4,9 +4,13 @@ import {
   type APIChannel,
   type APIMessage,
   type APIThreadMember,
+  type RESTGetAPIChannelMessagesPinsResult,
 } from "discord-api-types/v10";
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient, RequestData } from "./rest.js";
+
+const DISCORD_MAX_CHANNEL_PINS = 250;
+const DISCORD_PIN_PAGE_SIZE = 50;
 
 export async function getChannel(rest: RequestClient, channelId: string): Promise<APIChannel> {
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
@@ -78,7 +82,7 @@ export async function pinChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<void> {
-  await rest.put(Routes.channelPin(channelId, messageId));
+  await rest.put(Routes.channelMessagesPin(channelId, messageId));
 }
 
 export async function unpinChannelMessage(
@@ -86,14 +90,69 @@ export async function unpinChannelMessage(
   channelId: string,
   messageId: string,
 ): Promise<void> {
-  await rest.delete(Routes.channelPin(channelId, messageId));
+  await rest.delete(Routes.channelMessagesPin(channelId, messageId));
 }
 
 export async function listChannelPins(
   rest: RequestClient,
   channelId: string,
 ): Promise<APIMessage[]> {
-  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
+  const messages: APIMessage[] = [];
+  const seenCursors = new Set<string>();
+  let before: string | undefined;
+
+  // Discord caps each page at 50 pins but may return fewer, so only the total bounds pages.
+  for (let pageCount = 0; pageCount < DISCORD_MAX_CHANNEL_PINS; pageCount += 1) {
+    const response = await rest.get(Routes.channelMessagesPins(channelId), {
+      limit: DISCORD_PIN_PAGE_SIZE,
+      ...(before ? { before } : {}),
+    });
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      throw new Error("Discord returned an invalid channel pin response");
+    }
+
+    const page = response as RESTGetAPIChannelMessagesPinsResult;
+    if (
+      !Array.isArray(page.items) ||
+      page.items.length > DISCORD_PIN_PAGE_SIZE ||
+      typeof page.has_more !== "boolean"
+    ) {
+      throw new Error("Discord returned an invalid channel pin response");
+    }
+    for (const pin of page.items) {
+      if (
+        !pin ||
+        typeof pin !== "object" ||
+        typeof pin.pinned_at !== "string" ||
+        !pin.pinned_at.trim() ||
+        !pin.message ||
+        typeof pin.message !== "object" ||
+        Array.isArray(pin.message)
+      ) {
+        throw new Error("Discord returned an invalid channel pin");
+      }
+      messages.push(pin.message);
+    }
+    if (messages.length > DISCORD_MAX_CHANNEL_PINS) {
+      throw new Error(`Discord channel pin pagination exceeded ${DISCORD_MAX_CHANNEL_PINS} pins`);
+    }
+    if (!page.has_more) {
+      return messages;
+    }
+
+    // Pin pagination uses the last pin timestamp, not the message snowflake.
+    const nextCursor = page.items.at(-1)?.pinned_at.trim();
+    if (!nextCursor) {
+      throw new Error("Discord channel pin pagination returned a missing cursor");
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error("Discord channel pin pagination returned a repeated cursor");
+    }
+    seenCursors.add(nextCursor);
+    before = nextCursor;
+  }
+
+  throw new Error(`Discord channel pin pagination exceeded ${DISCORD_MAX_CHANNEL_PINS} pins`);
 }
 
 export async function sendChannelTyping(rest: RequestClient, channelId: string): Promise<void> {

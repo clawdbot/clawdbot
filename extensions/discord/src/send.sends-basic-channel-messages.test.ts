@@ -1786,8 +1786,8 @@ describe("pin helpers", () => {
     deleteMock.mockResolvedValue({});
     await pinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
     await unpinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
+    expect(putMock).toHaveBeenCalledWith(Routes.channelMessagesPin("chan1", "m1"));
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessagesPin("chan1", "m1"));
   });
 });
 
