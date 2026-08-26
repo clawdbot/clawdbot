@@ -4,7 +4,6 @@ import {
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -304,11 +303,11 @@ export function bootstrapApplication(
     history.replace(applicationLocation);
   }
   const focusLocation = parseControlUiFocusLocation(applicationLocation, basePath);
+  // Focus documents render before the shell; starting the application router
+  // would rewrite their reserved presentation route into an ordinary page.
+  const startsApplicationRouter = documentMode === null && focusLocation === null;
   const firstRunDefaultLanding =
-    documentMode === null &&
-    focusLocation === null &&
-    isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
-  const firstRunRedirectEnabled = firstRunDefaultLanding;
+    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
     dependencies.sessionPathBuilderReady ??
     (documentMode ||
@@ -334,16 +333,8 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const startupRouteId = routeIdFromPath(applicationLocation.pathname, basePath);
-  const releasedSessionQuery =
-    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
-    sessionRouteNamespaceFromPath(applicationLocation.pathname, basePath) === null &&
-    startupSearchParams.has("session");
   const deferInitialLocationUntilGateway =
-    documentMode === null &&
-    !releasedSessionQuery &&
-    firstRunDefaultLanding &&
-    !parseAgentSessionKey(settings.sessionKey);
+    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {
@@ -423,9 +414,6 @@ export function bootstrapApplication(
   const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
-  // Focus documents render before the shell; starting the application router
-  // would rewrite their reserved presentation route into an ordinary page.
-  const startsApplicationRouter = documentMode === null && focusLocation === null;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -589,7 +577,7 @@ export function bootstrapApplication(
       steps.push(() =>
         startModelSetupFirstRunRedirectAfterLocation({
           context,
-          enabled: firstRunRedirectEnabled,
+          enabled: firstRunDefaultLanding,
           history,
           initialLocationReady: deferInitialLocationUntilGateway
             ? Promise.resolve(applicationLocation)
