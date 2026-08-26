@@ -2949,6 +2949,99 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("live followup");
   });
 
+  it("retires all source cancellations when admitted overflow delivery freezes", async () => {
+    const key = `test-overflow-summary-freeze-retire-${Date.now()}`;
+    const { calls, done } = createDrainRecorder();
+    const sourceCancellationRetirements = [vi.fn(), vi.fn()];
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+
+    for (const [index, prompt] of ["first dropped", "second dropped"].entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          abortSignal: new AbortController().signal,
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onCancellationRetired: sourceCancellationRetirements[index],
+            onSettled: () => {},
+          },
+        },
+        settings,
+      );
+    }
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+        await run.turnAdoptionLifecycle?.onAdopted?.();
+        run.turnAdoptionLifecycle?.onCancellationRetired?.();
+        expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
+        expect(sourceCancellationRetirements[1]).toHaveBeenCalledTimes(1);
+        run.turnAdoptionLifecycle?.onSettled?.();
+        return;
+      }
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toBe("live followup");
+  });
+
+  it("retires a singleton cancel-only overflow source when the summary freezes", async () => {
+    const key = `test-overflow-summary-singleton-freeze-retire-${Date.now()}`;
+    const { calls, done } = createDrainRecorder();
+    const sourceCancellationRetirement = vi.fn();
+    const sourceComplete = vi.fn();
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+
+    // Two dropped sources but only one has a turnAdoptionLifecycle with
+    // cancel-only admission. The other is a plain run. This exercises the
+    // singleton-cancel-only path in runSyntheticOverflowSummary where
+    // onAdmitted is undefined (needsAdmission=false because no source has
+    // exclusive admission and only one source has a lifecycle).
+    enqueueFollowupRun(key, createRun({ prompt: "dropped plain" }), settings);
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped cancel-only" }),
+        abortSignal: new AbortController().signal,
+        turnAdoptionLifecycle: {
+          admission: "cancel-only",
+          onAdopted: async () => {},
+          onCancellationRetired: sourceCancellationRetirement,
+          onSettled: sourceComplete,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+        // The synthetic lifecycle must exist even for singleton cancel-only
+        // sources so that freeze-time retirement reaches the source.
+        expect(run.turnAdoptionLifecycle).toBeDefined();
+        await run.turnAdoptionLifecycle?.onAdopted?.();
+        run.turnAdoptionLifecycle?.onCancellationRetired?.();
+        expect(sourceCancellationRetirement).toHaveBeenCalledTimes(1);
+        run.turnAdoptionLifecycle?.onSettled?.();
+        return;
+      }
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(sourceComplete).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toBe("live followup");
+  });
+
   it("admits one lifecycle-owned overflow source before delivery", async () => {
     const key = `test-overflow-summary-single-admission-${Date.now()}`;
     const events: string[] = [];
@@ -3320,6 +3413,41 @@ describe("followup queue collect routing", () => {
     expect(sourceCompletions[0]).toHaveBeenCalledTimes(1);
     expect(sourceCompletions[1]).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
+  });
+
+  it("retires all source cancellations when an admitted collect group freezes", async () => {
+    const key = `test-collect-freeze-retire-${Date.now()}`;
+    const done = createDeferred();
+    const sourceCancellationRetirements = [vi.fn(), vi.fn()];
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    for (const [index, prompt] of ["first", "second"].entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          abortSignal: new AbortController().signal,
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onCancellationRetired: sourceCancellationRetirements[index],
+            onSettled: () => {},
+          },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      if (run.prompt.includes("first") || run.prompt.includes("second")) {
+        await run.turnAdoptionLifecycle?.onAdopted?.();
+        run.turnAdoptionLifecycle?.onCancellationRetired?.();
+        expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
+        expect(sourceCancellationRetirements[1]).toHaveBeenCalledTimes(1);
+        run.turnAdoptionLifecycle?.onSettled?.();
+      }
+      done.resolve();
+    });
+    await done.promise;
   });
 
   it("keeps queue cancellation connected after collect admission", async () => {

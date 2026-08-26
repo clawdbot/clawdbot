@@ -896,4 +896,83 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       toolsAllow: ["message"],
     });
   });
+
+  it("retires queued cancellation ownership when execution freezes", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      replyOperation,
+    });
+
+    expect(onCancellationRetired).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retire queued cancellation ownership on a pre-start failure that is retryable", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    // resolveCurrentTurnImages fails before execution starts — the follow-up
+    // runner classifies this as retryable, so the queued Gateway entry must
+    // remain abortable for the retry attempt.
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("image resolution failed"));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await expect(
+      executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun, replyOperation })),
+    ).rejects.toThrow("image resolution failed");
+
+    // Cancellation must NOT be retired — the follow-up runner will retry
+    // this turn, and the operator must still be able to abort it.
+    expect(onCancellationRetired).not.toHaveBeenCalled();
+  });
+
+  it("retires queued cancellation ownership when a started execution throws", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    // The embedded agent starts execution (model_call_started) but then
+    // throws. The internal error handler converts this to a terminal
+    // failure payload (kind: "final"), so executeAgentTurn returns
+    // normally. The follow-up runner classifies this as non-retryable
+    // (executionStarted=true → consumed), so the queued Gateway entry
+    // must be retired — a late chat.abort must not report the run aborted
+    // while the follow-up runner is settling the terminal failure.
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("test-provider", "test-model");
+      return { result, provider: "test-provider", model: "test-model", attempts: [] };
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      throw new Error("model execution failed after start");
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, replyOperation }),
+    );
+
+    // The test helper maps outcome.kind === "rejected" to kind === "final".
+    expect(result.kind).toBe("final");
+    expect(onCancellationRetired).toHaveBeenCalledTimes(1);
+  });
 });

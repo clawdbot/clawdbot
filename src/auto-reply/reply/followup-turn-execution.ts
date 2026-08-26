@@ -12,6 +12,7 @@ import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { retireFollowupRunCancellation } from "./queue/types.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -312,6 +313,12 @@ export async function executeFollowupTurn(params: {
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
   if (turn.preflightFailurePayload) {
+    // Terminal preflight failure bypasses executeAgentTurn, so
+    // commitTerminalOutcome never retires the queued cancellation.
+    // Retire it here so a late chat.abort cannot mark the finalizing
+    // delivery as aborted. preflightError is not retired here because
+    // it is retryable — its queued entry must remain abortable.
+    retireFollowupRunCancellation(turn.queued);
     execution = {
       runId: turn.runId,
       outcome: { kind: "rejected", payload: turn.preflightFailurePayload },

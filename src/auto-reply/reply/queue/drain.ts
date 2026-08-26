@@ -1099,28 +1099,38 @@ async function runSyntheticOverflowSummary(params: {
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
-    ...(params.onAdmitted
-      ? {
-          turnAdoptionLifecycle: {
-            // Synthetic aggregate owner — not a durable exclusive ingress identity.
-            admission: "cancel-only" as const,
-            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
-              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-              : {}),
-            onAdopted: async () => {
-              await params.onAdmitted?.();
-              admitted = true;
-            },
-            onSettled: () => {
-              if (admitted) {
-                for (const source of params.sources) {
-                  completeFollowupRunLifecycle(source);
-                }
-              }
-            },
-          },
+    turnAdoptionLifecycle: {
+      // Synthetic aggregate owner — not a durable exclusive ingress identity.
+      admission: "cancel-only" as const,
+      ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
+        ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+        : {}),
+      onAdopted: params.onAdmitted
+        ? async () => {
+            await params.onAdmitted!();
+            admitted = true;
+          }
+        : async () => {},
+      onCancellationRetired: () => {
+        // The aggregate run is non-abortable once execution freezes; the
+        // synthetic owner has no queued entry of its own, so retire the
+        // real sources it stands for.
+        for (const source of params.sources) {
+          retireFollowupRunCancellation(source);
         }
-      : {}),
+      },
+      onSettled: () => {
+        // When onAdmitted exists, sources are only completed after admission
+        // succeeds. Without onAdmitted, sources need no admission gate and
+        // are completed unconditionally on settlement.
+        if (params.onAdmitted && !admitted) {
+          return;
+        }
+        for (const source of params.sources) {
+          completeFollowupRunLifecycle(source);
+        }
+      },
+    },
     ...resolveOriginRoutingMetadata([params.source]),
     ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
@@ -1448,6 +1458,11 @@ export function scheduleFollowupDrain(
                           ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
                           : {}),
                         onAdopted: admitGroupSources,
+                        onCancellationRetired: () => {
+                          for (const item of activeGroupItems) {
+                            retireFollowupRunCancellation(item);
+                          }
+                        },
                         onSettled: () => {
                           if (admitted) {
                             completeGroup();
