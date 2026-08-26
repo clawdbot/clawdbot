@@ -313,7 +313,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +1: WhatsApp poll_vote_received plugin hook event contract.
-      4341,
+      // +2: embedded foreground prompt context builder and its public context type.
+      4343,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -405,7 +406,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      2581,
+      // +1: embedded foreground prompt context builder.
+      2582,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

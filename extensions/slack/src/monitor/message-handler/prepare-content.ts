@@ -116,16 +116,9 @@ export async function resolveSlackMessageContent(params: {
       : null;
 
   const effectiveDirectMedia = attachmentContent?.media.length ? attachmentContent.media : null;
-  const mediaPlaceholder = effectiveDirectMedia
-    ? effectiveDirectMedia.map((item) => item.placeholder).join(" ")
-    : undefined;
+  const mediaPlaceholder = effectiveDirectMedia?.map((item) => item.placeholder).join(" ");
 
-  const fallbackFiles = attachmentContent?.files ?? [];
-  const fileOnlyFallback =
-    !mediaPlaceholder && fallbackFiles.length > 0
-      ? fallbackFiles.map((file) => formatSlackFileReference(file)).join(", ")
-      : undefined;
-  const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
+  const fileOnlyFallback = attachmentContent?.files?.map(formatSlackFileReference).join(", ");
 
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {
@@ -180,7 +173,7 @@ export async function resolveSlackMessageContent(params: {
       renderedAttachmentText,
       renderedBotAttachmentText,
       mediaPlaceholder,
-      fileOnlyPlaceholder,
+      fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined,
     ]
       .filter(Boolean)
       .join("\n") || "";
@@ -193,12 +186,5 @@ export async function resolveSlackMessageContent(params: {
       } unavailable]`,
     });
   }
-  if (!rawBody) {
-    return null;
-  }
-
-  return {
-    rawBody,
-    effectiveDirectMedia,
-  };
+  return rawBody ? { rawBody, effectiveDirectMedia } : null;
 }

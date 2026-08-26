@@ -31,8 +31,6 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
-          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
-          const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
           const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
@@ -40,6 +38,11 @@ export function registerNodesLocationCommands(nodes: Command) {
             desiredAccuracyRaw === "precise"
               ? desiredAccuracyRaw
               : undefined;
+          if (opts.accuracy !== undefined && desiredAccuracy === undefined) {
+            throw new Error("invalid --accuracy (use coarse|balanced|precise)");
+          }
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
+          const maxAgeMs = parseOptionalNodeNonNegativeInteger(opts.maxAge, "--max-age");
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.locationTimeout,
             "--location-timeout",

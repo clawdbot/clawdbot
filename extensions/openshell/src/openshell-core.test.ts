@@ -46,6 +46,8 @@ const cliMocks = vi.hoisted(() => ({
 const sandboxMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
+  cleanupPreparedExec: vi.fn(),
   remoteRoot: "",
   remoteAgentRoot: "",
 }));
@@ -61,6 +63,7 @@ async function installOpenShellBackendMocks() {
     return {
       ...actual,
       disposeSshSandboxSession: sandboxMocks.disposeSshSandboxSession,
+      prepareSshSandboxExec: sandboxMocks.prepareSshSandboxExec,
       runSshSandboxCommand: sandboxMocks.runSshSandboxCommand,
     };
   });
@@ -89,6 +92,23 @@ function resetOpenShellBackendMocks() {
     configPath: "/tmp/openclaw-openshell-test-ssh-config",
     host: "openshell-test",
   });
+  sandboxMocks.cleanupPreparedExec.mockResolvedValue(undefined);
+  sandboxMocks.prepareSshSandboxExec.mockImplementation(
+    async (params: {
+      session: { command: string; configPath: string; host: string };
+      tty?: boolean;
+    }) => ({
+      argv: [
+        params.session.command,
+        "-F",
+        params.session.configPath,
+        ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        params.session.host,
+        "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
+      ],
+      cleanup: sandboxMocks.cleanupPreparedExec,
+    }),
+  );
   sandboxMocks.runSshSandboxCommand.mockImplementation(
     async (params: { remoteCommand: string; stdin?: Buffer | string; allowFailure?: boolean }) => {
       const remoteCommand = params.remoteCommand
@@ -135,16 +155,13 @@ describe("openshell cli helpers", () => {
     expect(shellEscape(`a'b`)).toBe(`'a'"'"'b'`);
   });
 
-  it("wraps exec commands with env and workdir", () => {
+  it("wraps exec commands with workdir when no environment is supplied", () => {
     const command = buildExecRemoteCommand({
       command: "pwd && printenv TOKEN",
       workdir: "/sandbox/project",
-      env: {
-        TOKEN: "abc 123",
-      },
+      env: {},
     });
-    expect(command).toContain(`'env'`);
-    expect(command).toContain(`'TOKEN=abc 123'`);
+    expect(command).not.toContain(`'env'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
   });
 
@@ -336,6 +353,29 @@ describe("openshell backend manager", () => {
     );
   });
 
+  it.each([
+    ["gateway authentication expired", "gateway authentication expired"],
+    ["", "openshell sandbox get failed"],
+  ])(
+    "does not create a sandbox after a failed control-plane lookup: %s",
+    async (stderr, expected) => {
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 1, stdout: "", stderr });
+      const factory = createOpenShellSandboxBackendFactory({
+        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+      });
+      const backend = await factory({
+        sessionKey: "agent:main:turn",
+        scopeKey: "agent:main",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: createOpenShellBackendSandboxConfig(),
+      });
+
+      await expect(backend.runShellCommand({ script: "true" })).rejects.toThrow(expected);
+      expect(cliMocks.runOpenShellCli).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not execute a registered legacy sandbox that is no longer ready", async () => {
     const scopeKey = "agent:main";
     const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
@@ -470,7 +510,7 @@ describe("openshell backend manager", () => {
   it("checks runtime status with config override from OpenClaw config", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
-      stdout: "{}",
+      stdout: JSON.stringify({ phase: "Ready" }),
       stderr: "",
     });
 
@@ -521,11 +561,41 @@ describe("openshell backend manager", () => {
         sandboxName: "openclaw-session-1234",
         config: expectedConfig,
       },
-      args: ["sandbox", "get", "openclaw-session-1234"],
+      args: ["sandbox", "get", "openclaw-session-1234", "--output", "json"],
     });
   });
 
-  it("removes runtimes via openshell sandbox delete", async () => {
+  it.each(["Provisioning", "Stopped", "Error", "Deleting"])(
+    "does not report an OpenShell runtime in phase %s as running",
+    async (phase) => {
+      cliMocks.runOpenShellCli.mockResolvedValue({
+        code: 0,
+        stdout: JSON.stringify({ phase }),
+        stderr: "",
+      });
+      const manager = createOpenShellSandboxBackendManager({
+        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+      });
+
+      await expect(
+        manager.describeRuntime({
+          entry: {
+            containerName: "openclaw-session-1234",
+            backendId: "openshell",
+            runtimeLabel: "openclaw-session-1234",
+            sessionKey: "agent:main",
+            createdAtMs: 1,
+            lastUsedAtMs: 1,
+            image: "openclaw",
+            configLabelKind: "Source",
+          },
+          config: {},
+        }),
+      ).resolves.toMatchObject({ running: false });
+    },
+  );
+
+  it("removes runtimes using the current OpenShell control-plane configuration", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
       stdout: "",
@@ -564,6 +634,76 @@ describe("openshell backend manager", () => {
       },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
+
+    await manager.removeRuntime({
+      entry: {
+        containerName: "openclaw-session-5678",
+        backendId: "openshell",
+        runtimeLabel: "openclaw-session-5678",
+        sessionKey: "agent:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw",
+        configLabelKind: "Source",
+      },
+      config: {
+        plugins: {
+          entries: {
+            openshell: {
+              enabled: true,
+              config: {
+                command: "/opt/openshell/bin/openshell",
+                gateway: "research",
+                workspace: "team-1",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
+      context: {
+        sandboxName: "openclaw-session-5678",
+        config: resolveOpenShellPluginConfig({
+          command: "/opt/openshell/bin/openshell",
+          gateway: "research",
+          workspace: "team-1",
+        }),
+      },
+      args: ["sandbox", "delete", "openclaw-session-5678"],
+    });
+  });
+
+  it.each([
+    ["gateway unavailable", "gateway unavailable"],
+    ["", "openshell sandbox delete failed"],
+  ])("preserves deletion failures for sandbox lifecycle owners: %s", async (stderr, expected) => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr,
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+
+    await expect(
+      manager.removeRuntime({
+        entry: {
+          containerName: "openclaw-session-5678",
+          backendId: "openshell",
+          runtimeLabel: "openclaw-session-5678",
+          sessionKey: "agent:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw",
+          configLabelKind: "Source",
+        },
+        config: {},
+      }),
+    ).rejects.toThrow(expected);
   });
 
   it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
@@ -588,6 +728,86 @@ describe("openshell backend manager", () => {
       }),
     ).rejects.toThrow(/unresolved placeholder token <name>/);
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "stages exec environment outside SSH argv and finalizes %s before session disposal",
+    async (status) => {
+      const sentinel = "synthetic-openshell-env-value";
+      cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+        stdout: Buffer.from("1\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: "/tmp/openclaw-synthetic-workspace",
+        mode: "remote",
+      });
+
+      const execSpec = await backend.buildExecSpec({
+        command: "printenv SYNTHETIC_VALUE",
+        workdir: "/sandbox",
+        env: { SYNTHETIC_VALUE: sentinel },
+        usePty: true,
+      });
+
+      expect(sandboxMocks.prepareSshSandboxExec).toHaveBeenCalledWith({
+        session: expect.objectContaining({ host: "openshell-test" }),
+        remoteCommand: expect.stringContaining("printenv SYNTHETIC_VALUE"),
+        env: { SYNTHETIC_VALUE: sentinel },
+        tty: true,
+      });
+      expect(execSpec.argv.join(" ")).not.toContain(sentinel);
+      expect(execSpec.argv).toContain("-tt");
+      expect(execSpec.argv.join(" ")).not.toContain("SetEnv");
+      expect(execSpec.stdinMode).toBe("pipe-open");
+
+      sandboxMocks.disposeSshSandboxSession.mockClear();
+      await backend.finalizeExec?.({
+        status,
+        exitCode: status === "completed" ? 0 : 1,
+        timedOut: false,
+        token: execSpec.finalizeToken,
+      });
+
+      expect(sandboxMocks.cleanupPreparedExec).toHaveBeenCalledOnce();
+      expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "openshell-test" }),
+      );
+      expect(sandboxMocks.cleanupPreparedExec.mock.invocationCallOrder[0]).toBeLessThan(
+        expectDefined(
+          sandboxMocks.disposeSshSandboxSession.mock.invocationCallOrder[0],
+          "OpenShell SSH session disposal invocation",
+        ),
+      );
+    },
+  );
+
+  it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    sandboxMocks.prepareSshSandboxExec.mockRejectedValueOnce(
+      new Error("synthetic staging failure"),
+    );
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/openclaw-synthetic-workspace",
+      mode: "remote",
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "true",
+        env: { SYNTHETIC_VALUE: "synthetic-openshell-env-value" },
+        usePty: false,
+      }),
+    ).rejects.toThrow("synthetic staging failure");
+
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {
@@ -854,6 +1074,36 @@ describe("openshell fs bridges", () => {
   beforeAll(installOpenShellBackendMocks);
   afterAll(uninstallOpenShellBackendMocks);
   beforeEach(resetOpenShellBackendMocks);
+
+  it.each(["/sandbox/../outside.txt", "/sandbox/nested/../../outside.txt"])(
+    "rejects workspace container paths that escape the managed root: %s",
+    async (filePath) => {
+      await using workspace = await createOpenShellTestWorkspace("fs-path");
+      const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+
+      expect(() => bridge.resolvePath({ filePath })).toThrow("Sandbox path escapes allowed mounts");
+    },
+  );
+
+  it("rejects agent container paths that escape the managed root", async () => {
+    await using workspace = await createOpenShellTestWorkspace("fs-path");
+    await using agentWorkspace = await createOpenShellTestWorkspace("fs-agent");
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir: workspace.dir,
+        agentWorkspaceDir: agentWorkspace.dir,
+        workspaceAccess: "rw",
+        containerWorkdir: "/sandbox",
+      },
+    });
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend: createMirrorBackendMock() });
+
+    expect(() => bridge.resolvePath({ filePath: "/agent/../outside.txt" })).toThrow(
+      "Sandbox path escapes allowed mounts",
+    );
+  });
 
   it.each(["remote", "mirror"] as const)(
     "keeps the factory backend as the canonical owner of the %s filesystem bridge",

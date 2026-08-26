@@ -11,11 +11,12 @@ import { pathToFileURL } from "node:url";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
+import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 import {
-  collectPackageDistImports,
-  collectPackageDistImportErrors,
-  expandPackageDistImportClosure,
-} from "./lib/package-dist-imports.mjs";
+  comparePackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+} from "./lib/package-dist-inventory-contract.mts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 
 type PackageManifest = Record<string, unknown> & {
@@ -368,7 +369,6 @@ const warnings: string[] = [];
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
-const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
@@ -608,90 +608,60 @@ for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
     errors.push(`forbidden local build metadata tar entry ${forbiddenEntry}`);
   }
 }
-if (!entrySet.has("dist/postinstall-inventory.json")) {
-  errors.push("missing dist/postinstall-inventory.json");
+if (!entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
+  errors.push(`missing ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
 }
-let packageDistImports: ReturnType<typeof collectPackageDistImports> | null = null;
-if (entrySet.has("dist/postinstall-inventory.json")) {
+if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
       isLegacyPackageAcceptanceCompatVersion(packageVersion);
-    const inventory = JSON.parse(readTarEntry("dist/postinstall-inventory.json"));
+    const inventory = JSON.parse(readTarEntry(PACKAGE_DIST_INVENTORY_RELATIVE_PATH));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
-      errors.push("invalid dist/postinstall-inventory.json");
+      errors.push(`invalid ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
     } else {
       const inventoryEntries = inventory as string[];
-      const normalizedInventory = inventoryEntries.map((entry) => entry.replace(/\\/gu, "/"));
-      const normalizedInventorySet = new Set(normalizedInventory);
-      if (requiresCodeModeWorker && !normalizedInventorySet.has(CODE_MODE_WORKER_PATH)) {
-        errors.push(`postinstall inventory omits ${CODE_MODE_WORKER_PATH}`);
-      }
-      if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+      if (
+        inventoryEntries.some(
+          (entry) => entry.replace(/\\/gu, "/") === PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+        )
+      ) {
         errors.push(
           `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
         );
       }
-      if (typeof packageJson?.scripts?.postinstall === "string") {
-        // Postinstall prunes every uninventoried dist file, including dashboard
-        // assets that cannot be recovered from the JavaScript import graph.
-        const requiredControlUiInventoryEntries = new Set([
-          ...REQUIRED_TARBALL_ENTRIES.filter((entry) => entry.startsWith("dist/")),
-          ...normalized.filter(
-            (entry) =>
-              REQUIRED_TARBALL_ENTRY_PREFIXES.some((prefix) => entry.startsWith(prefix)) &&
-              fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
-          ),
-        ]);
-        for (const requiredEntry of requiredControlUiInventoryEntries) {
-          if (!normalizedInventorySet.has(requiredEntry)) {
-            errors.push(`postinstall inventory omits Control UI file ${requiredEntry}`);
-          }
-        }
-      }
-      packageDistImports = runPhase("dist import graph", () =>
-        collectPackageDistImports({
-          files: normalized,
-          readText: readTarEntry,
-        }),
-      );
-      for (const inventoryEntry of inventoryEntries) {
-        const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
-        if (!entrySet.has(normalizedEntry)) {
-          if (
-            allowLegacyPrivateQaInventoryOmissions &&
-            isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)
-          ) {
-            warnings.push(
-              `legacy inventory references omitted private QA tar entry ${normalizedEntry}`,
-            );
-            continue;
-          }
-          errors.push(`inventory references missing tar entry ${normalizedEntry}`);
-        }
-      }
-      const expandedInventory = expandPackageDistImportClosure({
-        files: normalized,
-        seedFiles: normalizedInventory,
-        readText: readTarEntry,
-        imports: packageDistImports,
+      const parity = comparePackageDistInventory({
+        files: normalized.filter(
+          (entry) =>
+            entry.startsWith("dist/") &&
+            fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
+        ),
+        inventory: inventoryEntries,
       });
-      for (const importedEntry of expandedInventory) {
-        if (!normalizedInventorySet.has(importedEntry)) {
-          errors.push(`inventory omits imported dist file ${importedEntry}`);
+      if (typeof packageJson?.scripts?.postinstall === "string") {
+        for (const missingEntry of parity.packagedFilesMissingFromInventory) {
+          errors.push(`postinstall inventory omits packaged dist file ${missingEntry}`);
         }
+      }
+      for (const missingEntry of parity.inventoryEntriesMissingFromPackage) {
+        if (
+          allowLegacyPrivateQaInventoryOmissions &&
+          isLegacyOmittedPrivateQaInventoryEntry(missingEntry)
+        ) {
+          warnings.push(`legacy inventory references omitted private QA tar entry ${missingEntry}`);
+          continue;
+        }
+        errors.push(`inventory references missing tar entry ${missingEntry}`);
       }
     }
   } catch (error) {
-    errors.push(`unreadable dist/postinstall-inventory.json: ${coerceErrorMessage(error)}`);
+    errors.push(`unreadable ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${coerceErrorMessage(error)}`);
   }
 }
 
 errors.push(
-  ...collectPackageDistImportErrors({
-    files: normalized,
-    readText: readTarEntry,
-    imports: packageDistImports ?? undefined,
-  }),
+  ...runPhase("dist import graph", () =>
+    collectPackageDistImportErrors({ files: normalized, readText: readTarEntry }),
+  ),
 );
 
 if (errors.length > 0) {

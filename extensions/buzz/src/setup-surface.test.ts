@@ -271,7 +271,14 @@ describe("Buzz guided setup", () => {
           buzz: {
             relayUrl: "wss://buzz.example.com",
             privateKey: "11".repeat(32),
-            groups: { [ROOM_A]: { enabled: false, requireMention: false } },
+            groups: {
+              [ROOM_A]: {
+                enabled: false,
+                requireMention: false,
+                groupPolicy: "allowlist",
+                groupAllowFrom: [],
+              },
+            },
           },
         },
       } as OpenClawConfig,
@@ -288,6 +295,8 @@ describe("Buzz guided setup", () => {
     expect(result.cfg.channels?.buzz?.groups?.[ROOM_A]).toEqual({
       enabled: false,
       requireMention: false,
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
     });
     expect(result.cfg.channels?.defaults?.groupPolicy).toBe("disabled");
   });

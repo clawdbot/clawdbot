@@ -39,6 +39,7 @@ const platformEntry: ModelCatalogEntry = {
   contextWindow: 1_000_000,
   contextTokens: 272_000,
   reasoning: true,
+  thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
   input: ["text", "image"],
   params: { platformOnly: true },
   compat: { supportsTools: false },
@@ -53,6 +54,7 @@ const chatGPTEntry: ModelCatalogEntry = {
   contextWindow: 400_000,
   contextTokens: 300_000,
   reasoning: true,
+  thinkingLevelMap: { off: null, xhigh: null, max: "max" },
   input: ["text"],
   params: { chatGPTOnly: true },
   compat: { supportsTools: true },
@@ -103,6 +105,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 1_000_000,
       contextTokens: 272_000,
       reasoning: true,
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
       input: ["text", "image"],
     });
 
@@ -121,6 +124,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 400_000,
       contextTokens: 300_000,
       reasoning: true,
+      thinkingLevelMap: { off: null, xhigh: null, max: "max" },
       input: ["text"],
     });
   });
@@ -177,7 +181,13 @@ describe("projectModelCatalogEntryForRoute", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            models: [{ id: "gpt-5.5", contextTokens: 160_000 }],
+            models: [
+              {
+                id: "gpt-5.5",
+                contextTokens: 160_000,
+                thinkingLevelMap: { off: "none", max: null },
+              },
+            ],
           },
         },
       },
@@ -198,6 +208,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       contextTokens: 160_000,
+      thinkingLevelMap: { off: "none", max: null },
     });
   });
 

@@ -603,6 +603,67 @@ describe("listThinkingLevels", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
+  it("honors provider-owned thinking maps before compat and derives OpenClaw Ultra", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "reasoning-model",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: "none",
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+        compat: { supportedReasoningEfforts: ["high", "xhigh", "max"] },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "reasoning-model", catalog, "openclaw")).toEqual([
+      "off",
+      "high",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "custom",
+        model: "reasoning-model",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe("high");
+    expect(listThinkingLevels("custom", "reasoning-model", catalog, "codex")).toEqual([
+      "off",
+      "high",
+      "max",
+    ]);
+  });
+
+  it("exposes mapped advanced efforts without requiring duplicate compat metadata", () => {
+    const catalog = [
+      {
+        provider: "custom",
+        id: "mapped-model",
+        reasoning: true,
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      },
+    ];
+
+    expect(listThinkingLevels("custom", "mapped-model", catalog, "openclaw")).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+  });
+
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
       context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
@@ -714,6 +775,7 @@ describe("listThinkingLevels", () => {
         provider: "zai",
         id: "glm-4.7",
         name: "GLM 4.7",
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
         compat: { supportedReasoningEfforts: ["xhigh"] },
       },
     ];

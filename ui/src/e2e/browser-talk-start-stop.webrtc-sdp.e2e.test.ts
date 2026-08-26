@@ -36,6 +36,9 @@ suite.define(() => {
       await installWebRtcSdpFailureFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await expect
+        .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
+        .toBe(0);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
 
@@ -82,6 +85,9 @@ suite.define(() => {
       await installOversizedWebRtcSdpFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      await expect
+        .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
+        .toBe(0);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
 

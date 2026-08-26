@@ -86,10 +86,19 @@ and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
 ./path` copies a local skill directory. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
-still inspect the local skills visible to the current workspace and config.
-Workspace-backed commands resolve the target workspace from `--agent <id>`,
-then the current working directory when it is inside a configured agent
-workspace, then the default agent.
+and bare `openclaw skills` request the selected Gateway's authoritative skill
+inventory. A configured remote Gateway or an explicit `OPENCLAW_GATEWAY_URL`
+never falls back to client-local skills: missing URLs, connection failures, and
+authentication errors remain visible. Only an implicitly selected local Gateway
+can fall back to local inventory when it is unavailable. Workspace-backed
+commands resolve the target workspace from `--agent <id>`, then the current
+working directory when it is inside a configured agent workspace, then the
+default agent.
+
+Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
+the same target boundary. They never read or mutate client-local state after an
+explicitly selected Gateway fails; intentional offline behavior remains
+available only for an implicitly selected local Gateway.
 
 Git and local directory installs expect `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is valid, then
@@ -142,7 +151,8 @@ Notes:
 | `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
-| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Weekly collection review does not use this state.                                                                                                                                                                                                             |
+| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events and the latest collection and experience review outcomes per workspace.                                                                                                                                                                               |
+| `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
 
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.

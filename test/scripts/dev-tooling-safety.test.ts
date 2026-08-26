@@ -940,7 +940,7 @@ describe("script-specific dev tooling hardening", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic prompt gateway descendants on parent signal",
+    "cleans Anthropic prompt gateway descendants when the child attaches after parent signal",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-parent-signal-"));
       tempDirs.push(tempRoot);
@@ -972,13 +972,21 @@ describe("script-specific dev tooling hardening", () => {
           `const { testing } = await import(${JSON.stringify(
             pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
           )});`,
+          "const signalController = testing.createPromptProbeParentSignalController();",
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
           "const stopGateway = () => {",
           "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 100);",
           "  return stopPromise;",
           "};",
-          "testing.installGatewayPromptParentSignalHandlers(child, stopGateway);",
+          "process.on('SIGTERM', () => {",
+          "  signalController.attach({",
+          "    stop: stopGateway,",
+          "    forceKill: () => {",
+          "      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }",
+          "    },",
+          "  });",
+          "});",
           `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
           "setInterval(() => {}, 1000);",
         ].join("\n"),

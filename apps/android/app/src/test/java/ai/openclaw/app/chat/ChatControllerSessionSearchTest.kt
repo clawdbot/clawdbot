@@ -49,17 +49,18 @@ class ChatControllerSessionSearchTest {
       ?.content
 
   @Test
-  fun filterSessionEntriesMatchesDisplayNameLabelAndKey() {
+  fun filterSessionEntriesMatchesDisplayNameLabelCategoryAndKey() {
     val sessions =
       listOf(
         ChatSessionEntry(key = "agent:main:topic-a", updatedAtMs = 2, displayName = "Trip planning"),
-        ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries"),
+        ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries", category = "Team Planning"),
         ChatSessionEntry(key = "agent:main:trip-notes", updatedAtMs = 3, displayName = "Notes"),
       )
     assertEquals(
       listOf("agent:main:topic-a", "agent:main:trip-notes"),
       filterSessionEntries(sessions, "TRIP").map { it.key },
     )
+    assertEquals(listOf("agent:main:topic-b"), filterSessionEntries(sessions, "TEAM PLANNING").map { it.key })
     assertEquals(sessions, filterSessionEntries(sessions, "  "))
   }
 

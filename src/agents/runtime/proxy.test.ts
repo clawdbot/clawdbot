@@ -182,6 +182,50 @@ describe("streamProxy", () => {
     });
   });
 
+  it("accepts data lines without a space after the colon", async () => {
+    // The SSE spec makes the space optional; proxies emitting `data:{...}`
+    // must not have their events silently dropped.
+    const proxyEvents = [
+      { type: "text_start", contentIndex: 0, contentSignature: "sig" },
+      { type: "text_delta", contentIndex: 0, delta: "Working..." },
+      { type: "text_end", contentIndex: 0 },
+      { type: "done", reason: "stop", usage },
+    ];
+    const body = [
+      `data:${JSON.stringify(proxyEvents[0])}`,
+      "",
+      `data: ${JSON.stringify(proxyEvents[1])}`,
+      "",
+      `data:${JSON.stringify(proxyEvents[2])}`,
+      "",
+      `data:${JSON.stringify(proxyEvents[3])}`,
+      "",
+    ].join("\n");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromText(body)),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Working..." }],
+    });
+  });
+
   it("delays tool argument previews while preserving exact terminal arguments", async () => {
     const initialContent = "a".repeat(128);
     const checkpointContent = "b".repeat(400);

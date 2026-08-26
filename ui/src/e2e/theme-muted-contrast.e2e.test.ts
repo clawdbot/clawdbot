@@ -17,6 +17,8 @@ const themeCases = [
   { family: "knot", mode: "light", resolved: "openknot-light" },
   { family: "dash", mode: "dark", resolved: "dash" },
   { family: "dash", mode: "light", resolved: "dash-light" },
+  { family: "absolutely", mode: "dark", resolved: "absolutely" },
+  { family: "absolutely", mode: "light", resolved: "absolutely-light" },
 ] as const;
 
 const textTokens = [
@@ -30,7 +32,10 @@ const textTokens = [
 
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
-function themeConfigResponse(family: "claw" | "knot" | "dash", mode: "dark" | "light") {
+function themeConfigResponse(
+  family: "claw" | "knot" | "dash" | "absolutely",
+  mode: "dark" | "light",
+) {
   const config = {
     ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode } },
   };

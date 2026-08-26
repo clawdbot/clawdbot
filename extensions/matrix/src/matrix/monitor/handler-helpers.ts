@@ -1,4 +1,5 @@
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -144,17 +145,32 @@ export function resolveMatrixPendingHistoryText(params: {
   content: RoomMessageEventContent;
   mediaUrl?: string;
 }): string {
-  if (params.mentionPrecheckText) {
-    return params.mentionPrecheckText;
-  }
   if (!params.mediaUrl) {
-    return "";
+    return params.mentionPrecheckText;
   }
   const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
     typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return formatMatrixMessageText({ body, filename, msgtype }) ?? "";
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? params.mentionPrecheckText;
+}
+
+export function resolveMatrixInboundMediaContent(content: RoomMessageEventContent) {
+  const file = content.file && typeof content.file === "object" ? content.file : undefined;
+  const info =
+    content.info && typeof content.info === "object"
+      ? (content.info as { mimetype?: string; size?: number })
+      : undefined;
+  const body = normalizeOptionalString(content.body);
+
+  return {
+    url: normalizeOptionalString(content.url) ?? normalizeOptionalString(file?.url),
+    file,
+    body: body ?? "",
+    contentType: info?.mimetype,
+    sizeBytes: typeof info?.size === "number" ? info.size : undefined,
+    originalFilename: normalizeOptionalString(content.filename) ?? body,
+  };
 }
 
 export function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {
@@ -177,22 +193,12 @@ export function shouldDeferMatrixAudioPreflightForRoomIngress(params: {
   if (!isMatrixAudioMediaEnabled(params.cfg)) {
     return false;
   }
-  const content = params.content;
-  const contentUrl = "url" in content && typeof content.url === "string" ? content.url : undefined;
-  const contentFile =
-    "file" in content && content.file && typeof content.file === "object"
-      ? content.file
-      : undefined;
-  const mediaUrl = contentUrl ?? contentFile?.url;
-  const contentInfo =
-    "info" in content && content.info && typeof content.info === "object"
-      ? (content.info as { mimetype?: string })
-      : undefined;
+  const mediaContent = resolveMatrixInboundMediaContent(params.content);
   return (
-    mediaUrl?.startsWith("mxc://") === true &&
+    mediaContent.url?.startsWith("mxc://") === true &&
     isMatrixAudioContent({
-      msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-      mimetype: contentInfo?.mimetype,
+      msgtype: typeof params.content.msgtype === "string" ? params.content.msgtype : undefined,
+      mimetype: mediaContent.contentType,
     })
   );
 }

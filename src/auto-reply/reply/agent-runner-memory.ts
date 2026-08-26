@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
@@ -71,6 +72,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -782,9 +784,16 @@ export async function runPreflightCompactionIfNeeded(params: {
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
-  const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
+  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
+  const reserveTokensFloor =
+    memoryFlushPlan?.reserveTokensFloor ??
+    resolveEffectiveCompactionReserveTokens({
+      contextTokenBudget: contextWindowTokens,
+      reserveTokens: 20_000,
+    });
+  const softThresholdTokens =
+    memoryFlushPlan?.softThresholdTokens ??
+    Math.min(4_000, Math.floor((contextWindowTokens - reserveTokensFloor) / 2));
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -794,10 +803,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
-  const threshold = Math.max(
-    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
-    responsesServerCompactionThreshold ?? 0,
-  );
+  const threshold = resolveMemoryFlushThreshold({
+    contextWindowTokens,
+    reserveTokensFloor,
+    softThresholdTokens,
+    minimumThresholdTokens: responsesServerCompactionThreshold,
+  });
   const freshNeedsOutputRead =
     typeof freshPersistedTokens === "number" &&
     typeof promptTokenEstimate === "number" &&
@@ -1139,16 +1150,6 @@ export async function runMemoryFlushIfNeeded(params: {
   const activeSessionStore = params.sessionStore;
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
-  let memoryFlushPlan: MemoryFlushPlan | null;
-  try {
-    memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  } catch (error) {
-    return await recordFailure(error);
-  }
-  if (!memoryFlushPlan) {
-    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
-  }
-
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
@@ -1160,6 +1161,15 @@ export async function runMemoryFlushIfNeeded(params: {
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
+  let memoryFlushPlan: MemoryFlushPlan | null;
+  try {
+    memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
+  } catch (error) {
+    return await recordFailure(error);
+  }
+  if (!memoryFlushPlan) {
+    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+  }
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -1173,8 +1183,11 @@ export async function runMemoryFlushIfNeeded(params: {
       : undefined;
   const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
 
-  const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+  const flushThreshold = resolveMemoryFlushThreshold({
+    contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+    softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+  });
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -1330,7 +1343,11 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
   );
   const prepareMemoryFlushAttempt = async () => {
-    const plan = resolveMemoryFlushPlan({ cfg: params.cfg, nowMs: memoryDeps.now() });
+    const plan = resolveMemoryFlushPlan({
+      cfg: params.cfg,
+      nowMs: memoryDeps.now(),
+      contextWindowTokens,
+    });
     if (!plan) {
       return null;
     }

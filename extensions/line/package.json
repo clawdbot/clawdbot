@@ -33,7 +33,7 @@
       "id": "line",
       "configuredState": {
         "env": {
-          "anyOf": [
+          "allOf": [
             "LINE_CHANNEL_ACCESS_TOKEN",
             "LINE_CHANNEL_SECRET"
           ]

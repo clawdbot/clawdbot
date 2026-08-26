@@ -36,10 +36,13 @@ import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./w
 export const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
 
 // Stream structured patch snapshots so large generated edits keep the turn active.
+// OpenClaw opts into these under-development features deliberately, so silence
+// Codex's chat warning that tells operators to edit the managed codex-home config.
 const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
 };
 
 const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {

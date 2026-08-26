@@ -65,8 +65,6 @@ import {
 
 export {
   getActiveEmbeddedRunCount,
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
@@ -410,6 +408,18 @@ function isEmbeddedRunHandleAbortable(
   }
 }
 
+function isEmbeddedRunHandleSupersedable(runId: string, handle: EmbeddedAgentQueueHandle): boolean {
+  if (!isEmbeddedRunHandleAbortable(runId, handle)) {
+    return false;
+  }
+  try {
+    return handle.isStopped?.() !== true && handle.isAborted?.() !== true;
+  } catch (err) {
+    diag.warn(`supersede failed: runId=${runId} reason=lifecycle_check_failed err=${String(err)}`);
+    return false;
+  }
+}
+
 export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -427,6 +437,9 @@ export function supersedeEmbeddedAgentRunByRunId(runId: string, beforeCancel: ()
   }
   const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId);
   if (handle) {
+    if (!isEmbeddedRunHandleSupersedable(normalizedRunId, handle)) {
+      return false;
+    }
     beforeCancel();
     if (handle.cancel) {
       handle.cancel("superseded");

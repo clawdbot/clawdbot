@@ -272,10 +272,6 @@ suite.define(() => {
 
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
-      await activeThread.getByText("User history question 10").waitFor({
-        timeout: 10_000,
-      });
-      await scrollChatThreadToTop(page);
       await activeThread.getByText("User history question 0").waitFor({
         timeout: 10_000,
       });
@@ -734,7 +730,11 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -878,7 +878,11 @@ suite.define(() => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ state: "detached" });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });

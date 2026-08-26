@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { OpenClawConfig } from "./runtime-support.js";
 
 type RecordedZaloRequest = {
   body: Record<string, unknown>;

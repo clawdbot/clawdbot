@@ -343,6 +343,7 @@ export function createSlackMessageHandler(params: {
                   releaseClaims();
                   return;
                 }
+                await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
                 // Commit at adoption (durable turn ownership), release on abandonment;
                 // deferred turns hand settlement to the reply lane with the claim held.
                 prepared.turnAdoptionLifecycle = {

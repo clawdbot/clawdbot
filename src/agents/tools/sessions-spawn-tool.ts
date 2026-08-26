@@ -610,6 +610,7 @@ export function createSessionsSpawnTool(
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             workspaceDir: opts?.workspaceDir,
+            sessionPermissionPolicy: opts?.sessionPermissionPolicy,
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
             requesterRunId: opts?.requesterRunId,

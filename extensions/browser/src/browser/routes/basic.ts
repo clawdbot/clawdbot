@@ -41,28 +41,6 @@ function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
 }
 
-async function probeChromeMcpPageReady(
-  profileCtx: ProfileContext,
-  timeoutMs: number,
-  signal: AbortSignal,
-) {
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    abort.abort(new Error(`Chrome MCP page-readiness probe timed out after ${timeoutMs}ms.`));
-  }, timeoutMs);
-  try {
-    return await profileCtx.isReachable(timeoutMs, {
-      ephemeral: true,
-      signal: AbortSignal.any([signal, abort.signal]),
-    });
-  } catch {
-    signal.throwIfAborted();
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
@@ -153,20 +131,14 @@ async function buildBrowserStatus(
   const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
         const statusStartedAtMs = Date.now();
+        let pageReachable = false;
         const transportReady = await profileCtx.isTransportAvailable(
           STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
           signal,
-        );
-        if (!transportReady) {
-          return [false, false, false] as const;
-        }
-        // Status-safe page probe: ephemeral so a passive status call does not seed
-        // a persistent cached Chrome MCP session. Keep the whole status route inside
-        // the public client timeout; page probe failures degrade to pageReady=false.
-        const pageReachable = await probeChromeMcpPageReady(
-          profileCtx,
-          remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
-          signal,
+          {
+            timeoutMs: () => remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
+            onResult: (tabCount) => (pageReachable = tabCount !== null),
+          },
         );
         return [transportReady, transportReady, pageReachable] as const;
       })()

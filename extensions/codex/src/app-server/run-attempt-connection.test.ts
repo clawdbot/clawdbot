@@ -378,7 +378,7 @@ describe("prepareCodexAttemptConnection", () => {
     );
   });
 
-  it("lets a workspace session mode override explicitly configured full exec", async () => {
+  it("defaults a rootless workspace session boundary while overriding full exec", async () => {
     const sessionFile = path.join(tempDir, "workspace-session-policy.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-session-policy");
     const params = createParams(sessionFile, workspaceDir);
@@ -387,7 +387,6 @@ describe("prepareCodexAttemptConnection", () => {
     // Dispatch owns mode→exec preparation; connection consumes the prepared override.
     params.execOverrides = { ...params.execOverrides, mode: "auto" };
     params.permissionMode = "workspace";
-    params.sessionRoot = workspaceDir;
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");

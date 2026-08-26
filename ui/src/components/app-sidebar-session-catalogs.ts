@@ -135,13 +135,10 @@ export function visibleCatalogHosts(
 export type CatalogBackingSessionDisplay = {
   label: string;
   catalogIdentityKey: string;
-  marqueeKey?: string;
-  catalogMenuOpen?: boolean;
-  catalogMenuTriggerRef?: (element: Element | undefined) => void;
+  catalogMenuOpen: boolean;
+  rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
-  focusedControl?: "link" | "child-toggle" | "pin" | "menu";
-  restoreControlFocus?: (element: Element | undefined) => void;
 };
 
 export type CatalogSessionMenuRequest = {

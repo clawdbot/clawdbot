@@ -316,13 +316,6 @@ export async function openNewSessionPlusMenu(page: Page) {
   return menu;
 }
 
-export async function selectNewSessionDraft(page: Page) {
-  const menu = await openNewSessionPlusMenu(page);
-  await menu.getByRole("menuitem", { name: "Draft" }).click();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Draft", exact: true }).waitFor();
-}
-
 export async function navigateInApp(page: Page, routeId: string, search = "") {
   await page.evaluate(
     ({ targetRouteId, targetSearch }) => {

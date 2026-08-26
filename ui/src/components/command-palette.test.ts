@@ -49,6 +49,7 @@ function createGateway(
       return snapshot;
     },
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,

@@ -41,12 +41,12 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
+import { releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
   CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  CHAT_MODAL_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
   CHAT_SPACE_ACTIVATION_SELECTOR,
   keyboardEventPathMatches,
@@ -310,6 +310,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       const visible =
         state.sidebarLayout.open === true &&
         state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+      if (visible) {
+        releaseAttachmentWorkspaceOwner(state, slot);
+      }
       state.updateSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
@@ -351,7 +354,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       event.key.length === 1 &&
       !keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) &&
       !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
-      !document.querySelector(CHAT_MODAL_SELECTOR)
+      !document.openClawModalLayers?.size &&
+      !document.querySelector("[aria-modal='true']")
     ) {
       const composer = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       if (composer && !composer.disabled && !composer.readOnly) {

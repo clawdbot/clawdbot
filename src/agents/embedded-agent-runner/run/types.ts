@@ -287,6 +287,8 @@ export type EmbeddedRunAttemptResult = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */

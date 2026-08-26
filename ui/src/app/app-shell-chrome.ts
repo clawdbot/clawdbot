@@ -486,7 +486,7 @@ export class ShellChromeOwner {
         ?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
       host.approvalOverlay?.dialogOpen === true ||
-      document.querySelector("dialog[open]")
+      document.openClawModalLayers?.size
     ) {
       return true;
     }

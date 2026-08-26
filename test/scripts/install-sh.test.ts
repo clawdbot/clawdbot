@@ -1465,6 +1465,84 @@ EOF
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
+  it.each([
+    {
+      args: "--install-method git --git-dir /cli-target",
+      envGitDir: "/env-target",
+      expected: "/cli-target",
+      name: "prefers --git-dir over the environment and detected checkout",
+    },
+    {
+      args: "--install-method git --dir '/target with spaces'",
+      expected: "/target with spaces",
+      name: "prefers --dir with spaces over the detected checkout",
+    },
+    {
+      args: "--install-method git",
+      envGitDir: "/env-target",
+      expected: "/env-target",
+      name: "prefers OPENCLAW_GIT_DIR over the detected checkout",
+    },
+    {
+      args: "--install-method git --git-dir /effective-home/openclaw",
+      expected: "/effective-home/openclaw",
+      name: "honors an explicit target equal to the default",
+    },
+    {
+      args: "--install-method git --git-dir /first --dir /last",
+      expected: "/last",
+      name: "uses the last explicit target",
+    },
+    {
+      args: "--install-method git --git-dir './relative target'",
+      expected: "./relative target",
+      name: "preserves an explicit relative target for the install owner",
+    },
+    {
+      args: "--install-method git",
+      expected: "/detected-checkout",
+      name: "uses the detected checkout when no target is explicit",
+    },
+    {
+      args: "--install-method git --git-dir ''",
+      envGitDir: "/env-target",
+      expected: "/detected-checkout",
+      name: "treats an empty CLI target as non-explicit",
+    },
+  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+    const result = runInstallShell(
+      `
+        source "${SCRIPT_PATH}"
+        parse_args ${args}
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_os_or_die() { OS=linux; }
+        detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        load_nvm_for_node_detection() { :; }
+        check_node() { return 0; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        npm() { return 1; }
+        install_openclaw_from_git() {
+          printf 'target=%s\\n' "$1"
+          return 23
+        }
+        main
+      `,
+      {
+        OPENCLAW_GIT_DIR: envGitDir,
+        OPENCLAW_HOME: "/effective-home",
+        TERM: "dumb",
+      },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`target=${expected}\n`);
+  });
+
   it("uses a blobless partial clone for new git installs", () => {
     const result = runInstallShell(`
       set -euo pipefail

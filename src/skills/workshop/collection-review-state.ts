@@ -23,7 +23,6 @@ import {
 } from "./store-sqlite-schema.js";
 
 const CURATOR_STATE_ID = 1;
-const REVIEW_INTERVAL_MS = 7 * 24 * 60 * 60_000;
 const REVIEW_CLAIM_MS = 11 * 60_000;
 // Bound per-workspace history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
@@ -193,19 +192,6 @@ function recordWorkspaceReview(
         .onConflict((conflict) => conflict.column("id").doUpdateSet(updatedState)),
     );
   }, options);
-}
-
-export function isSkillCollectionReviewDue(
-  workspaceDir: string,
-  nowMs: number,
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  const reviewState = readReviewState(options);
-  const key = workspaceKey(workspaceDir);
-  // Old success-only state is cache-class data. Ignoring it causes one extra review after upgrade.
-  const lastAttempt = reviewMap<SkillCollectionReviewStatus>(reviewState, "collectionReviews")[key]
-    ?.attemptedAtMs;
-  return lastAttempt === undefined || nowMs - lastAttempt >= REVIEW_INTERVAL_MS;
 }
 
 function parseStoredNames(value: string, field: string): string[] {

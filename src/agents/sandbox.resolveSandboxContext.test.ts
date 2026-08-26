@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
@@ -169,6 +170,63 @@ describe("resolveSandboxContext", () => {
       ).resolves.toBeNull();
 
       expect(backendFactory).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("provisions and marks a required sandbox when the agent sandbox mode is off", async () => {
+    const sessionKey = "agent:main:guest";
+    const workspaceDir = await createSandboxFixtureDir("required-sandbox");
+    const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
+    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const backendFactory = vi.fn(async () => ({
+      id: "required-backend",
+      runtimeId: "required-runtime",
+      runtimeLabel: "Required Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["required-backend", "exec"],
+        env: {},
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("required-backend", backendFactory);
+
+    try {
+      const sandbox = await resolveSandboxContext({
+        config: {
+          session: { store: storePath },
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
+                backend: "required-backend",
+                scope: "session",
+                workspaceAccess: "rw",
+                prune: { idleHours: 0, maxAgeDays: 0 },
+              },
+            },
+            list: [{ id: "main" }],
+          },
+        },
+        sessionKey,
+        workspaceDir,
+      });
+
+      expect(sandbox).toMatchObject({
+        enabled: true,
+        required: true,
+        backendId: "required-backend",
+        sessionKey,
+      });
+      expect(backendFactory).toHaveBeenCalledOnce();
     } finally {
       restore();
     }
@@ -397,6 +455,49 @@ describe("resolveSandboxContext", () => {
         code: "sandbox_provisioning",
         backendId: "broken-backend",
         message: "Sandbox image not found: missing:test",
+        cause: backendFailure,
+      });
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("fails closed when a required sandbox cannot be provisioned with agent sandbox mode off", async () => {
+    const sessionKey = "agent:main:guest";
+    const workspaceDir = await createSandboxFixtureDir("required-sandbox-failure");
+    const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
+    const entry = { sessionId: "guest-session", updatedAt: 1, sandbox: "required" as const };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const backendFailure = new Error("Required sandbox backend unavailable");
+    const restore = registerSandboxBackend("required-broken-backend", async () => {
+      throw backendFailure;
+    });
+
+    try {
+      await expect(
+        resolveSandboxContext({
+          config: {
+            session: { store: storePath },
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "off",
+                  backend: "required-broken-backend",
+                  scope: "session",
+                  workspaceAccess: "rw",
+                  prune: { idleHours: 0, maxAgeDays: 0 },
+                },
+              },
+              list: [{ id: "main" }],
+            },
+          },
+          sessionKey,
+          workspaceDir,
+        }),
+      ).rejects.toMatchObject({
+        code: "sandbox_provisioning",
+        backendId: "required-broken-backend",
+        message: "Required sandbox backend unavailable",
         cause: backendFailure,
       });
     } finally {

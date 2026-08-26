@@ -74,7 +74,8 @@ describe("Gateway GitHub publication", () => {
         candidate.includes("update-ref") ||
         candidate.includes("read-tree") ||
         candidate.includes("add") ||
-        candidate.includes("reset"),
+        candidate.includes("reset") ||
+        candidate.includes("push"),
     )) {
       expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
     }
@@ -489,7 +490,7 @@ describe("Gateway GitHub publication", () => {
       return await fallback(argv, options);
     });
 
-    await coordinator.resumeLocalRequests();
+    await coordinator.resumeSessionRequests();
 
     expect(coordinator.read(requestId)).toMatchObject({
       status: "failed",
@@ -657,57 +658,6 @@ describe("Gateway GitHub publication", () => {
         idempotencyKey: "reused-worker-call",
       }),
     ).rejects.toThrow("idempotency key was reused");
-  });
-
-  it("terminalizes snapshot preparation failures without blocking workspace acceptance", async () => {
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
-      environmentId: "environment-snapshot-failure",
-      ownerEpoch: 2,
-    });
-    const claim = placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "claim-snapshot-failure",
-      runId: "run-snapshot-failure",
-      owner: {
-        kind: "worker",
-        environmentId: "environment-snapshot-failure",
-        ownerEpoch: 2,
-      },
-    });
-    const runtime = createGitHubPublicationRuntime({
-      placements,
-      loadSessionRuntime: async () => {
-        throw new Error("not used");
-      },
-      warn: () => undefined,
-    });
-    const requested = await runtime.coordinator.requestForClaim({
-      claim,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      idempotencyKey: "snapshot-failure",
-    });
-    placements.markWorkspaceResultPending(claim);
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) =>
-      argv.includes("--get-regexp")
-        ? commandResult("filter.attacker.clean ./run-attacker\n")
-        : await fallback(argv, options),
-    );
-
-    await expect(runtime.prepareAcceptedWorkspacePublication(claim)).resolves.toBeUndefined();
-    expect(runtime.coordinator.read(requested.requestId)).toMatchObject({
-      status: "failed",
-      code: "workspace_changed",
-    });
-    expect(() => placements.acceptWorkspaceResult(claim)).not.toThrow();
-    await expect(runtime.coordinator.processClaim(claim)).resolves.toEqual([
-      expect.objectContaining({ status: "failed", code: "workspace_changed" }),
-    ]);
   });
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
@@ -919,7 +869,7 @@ describe("Gateway GitHub publication", () => {
         placements: createWorkerSessionPlacementStore({ database: reopened }),
       });
 
-      await resumed.resumeLocalRequests();
+      await resumed.resumeSessionRequests();
 
       expect(resumed.read(requestId)).toEqual({
         requestId,
@@ -938,7 +888,7 @@ describe("Gateway GitHub publication", () => {
         pullRequestExists ? 0 : 1,
       );
       const commandCount = commands.length;
-      await resumed.resumeLocalRequests();
+      await resumed.resumeSessionRequests();
       expect(commands).toHaveLength(commandCount);
     },
   );

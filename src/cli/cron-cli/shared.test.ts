@@ -353,6 +353,46 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
   });
 
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it("shows disabled stream sources and their actionable failure reason", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain("disabled");
+    expect(row).not.toContain("idle");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+  });
+
   it("shows on-exit schedules in list and show output", () => {
     const job = createBaseJob({
       id: "on-exit-job",

@@ -1952,6 +1952,7 @@ describe("qa suite runtime launcher", () => {
 
   it("runs script scenarios after flow Gateways stop without serializing Playwright", async () => {
     const repoRoot = await makeTempRepo("qa-suite-script-isolation-");
+    vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
     const flow = blockNextQaFlowSuite();
 
     const runPromise = runQaSuite({
@@ -1985,11 +1986,63 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        progress: expect.any(Function),
         scenarios: [
           expect.objectContaining({ execution: expect.objectContaining({ kind: "script" }) }),
         ],
       }),
     );
+  });
+
+  it("streams native owner progress without exposing child output to CI", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-safe-native-progress-");
+    vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      params.progress?.("native docker-batch start scenarios=1 timeoutMs=60000");
+      expect(stderrWrite).toHaveBeenCalledWith(
+        expect.stringContaining("[qa-suite] native docker-batch start"),
+      );
+      const childOutput = Buffer.from(
+        [
+          "OPENAI_API_KEY=synthetic-provider-secret",
+          'warning: invalid value " channels.buzz.authTag:',
+          "[",
+          '  "synthetic-auth-secret"',
+          "]",
+          "::stop-commands::synthetic-runner-attack",
+          "##[error]synthetic-runner-attack",
+        ].join("\n"),
+      );
+      params.onCommandOutput?.("stdout", childOutput);
+      params.onCommandOutput?.("stderr", childOutput);
+      return await defaultTestFileImplementation(params);
+    });
+
+    try {
+      await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/safe-native-progress",
+        scenarioIds: ["docker-npm-onboard-channel-agent"],
+      });
+
+      const runnerParams = runQaTestFileScenarios.mock.calls[0]?.[0];
+      expect(runnerParams?.progress).toEqual(expect.any(Function));
+      expect(runnerParams).not.toHaveProperty("onCommandOutput");
+      const output = [...stdoutWrite.mock.calls, ...stderrWrite.mock.calls]
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(output).toContain("[qa-suite] native docker-batch start");
+      expect(output).not.toContain("synthetic-provider-secret");
+      expect(output).not.toContain("synthetic-auth-secret");
+      expect(output).not.toContain("::stop-commands::");
+      expect(output).not.toContain("##[error]");
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
   });
 
   it("settles flow and native work, then runs serial scripts before a bounded parallel tail", async () => {

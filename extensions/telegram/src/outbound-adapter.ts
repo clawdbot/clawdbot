@@ -10,6 +10,7 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -35,8 +36,10 @@ import {
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { resolveTelegramTextChunkLimit, TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
-export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
+export { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
+
 const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
@@ -333,7 +336,9 @@ export async function sendTelegramPayloadMessages(params: {
     presentation: payload.presentation,
     interactive: payload.interactive,
   });
-  const replyToMessageId = params.baseOpts.replyToMessageId;
+  const replyToMessageId = parseStrictPositiveInteger(
+    telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
+  );
   const promptContextSource = resolveTelegramPromptContextSource(params.payload);
   const projectionCursor = promptContextSource
     ? createTelegramPromptContextProjectionCursor(promptContextSource)
@@ -572,8 +577,8 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>
+      resolveTelegramTextChunkLimit({ cfg, accountId, formatting }),
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,

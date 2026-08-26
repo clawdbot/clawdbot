@@ -24,7 +24,7 @@ import {
   trackServiceCronRunReceiptSettlement,
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
+import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type CronJobRunResult,
@@ -273,9 +273,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         assertRunCurrent,
         executionIdentity: opts?.executionIdentity,
       };
-      const corePromise = withCronTaskRunId(opts?.runId, () =>
-        executeJobCore(state, job, runAbortController.signal, coreOptions),
-      );
+      const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
         return await deliverPrimaryWebhook(
@@ -360,9 +358,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       assertRunCurrent,
       executionIdentity: opts?.executionIdentity,
     };
-    const corePromise = withCronTaskRunId(opts?.runId, () =>
-      executeJobCore(state, job, runAbortController.signal, coreOptions),
-    );
+    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     watchdog.start();
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
@@ -445,12 +441,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
 export function authorCronRunCompletion<
   T extends Pick<
     CronJobRunResult,
-    "status" | "error" | "deliveryError" | "delivered" | "deliveryAttempted"
+    "status" | "error" | "deliveryError" | "delivery" | "delivered" | "deliveryAttempted"
   >,
 >(_state: CronServiceState, job: CronJob, result: T) {
   const deliveryState = resolveDeliveryState({
     job,
     runStatus: result.status,
+    delivery: result.delivery,
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     error: result.deliveryError ?? result.error,

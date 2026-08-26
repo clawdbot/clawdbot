@@ -426,6 +426,13 @@ class ChatQuestionPanel extends LitElement {
       this.toggleOption(model, question, question.options[optionIndex].label);
       return;
     }
+    if (question.isOther && optionIndex === question.options.length) {
+      event.preventDefault();
+      this.querySelector<HTMLInputElement>(".chat-question-panel__other")?.focus({
+        preventScroll: true,
+      });
+      return;
+    }
     if (
       event.key === "Enter" &&
       !(event.target instanceof HTMLButtonElement) &&
@@ -516,6 +523,7 @@ class ChatQuestionPanel extends LitElement {
                 </button>
               </div>`
             : nothing}
+          <span class="chat-question-panel__progress">${progress}</span>
           <button
             class="chat-question-panel__collapse"
             type="button"
@@ -527,7 +535,6 @@ class ChatQuestionPanel extends LitElement {
         </div>
 
         <div class="chat-question-panel__heading">
-          <span class="chat-question-panel__progress">${progress}</span>
           <span class="chat-question-panel__prompt">${question.question}</span>
         </div>
 
@@ -572,17 +579,27 @@ class ChatQuestionPanel extends LitElement {
 
         ${question.isOther || question.options.length === 0
           ? html`
-              <input
-                class="chat-question-panel__other"
-                type="text"
-                autocomplete="off"
-                placeholder=${t("chat.questions.other")}
-                aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
-                .value=${this.freeTextById.get(question.questionId) ?? ""}
-                ?disabled=${disabled}
-                @input=${(event: Event) =>
-                  this.setFreeText(model, question, (event.target as HTMLInputElement).value)}
-              />
+              <label
+                class="chat-question-panel__option chat-question-panel__option--other ${this.freeTextById
+                  .get(question.questionId)
+                  ?.trim()
+                  ? "chat-question-panel__option--selected"
+                  : ""}"
+              >
+                <span class="chat-question-panel__option-marker" aria-hidden="true"></span>
+                <input
+                  class="chat-question-panel__other"
+                  type="text"
+                  autocomplete="off"
+                  placeholder=${t("chat.questions.other")}
+                  aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
+                  .value=${this.freeTextById.get(question.questionId) ?? ""}
+                  ?disabled=${disabled}
+                  @input=${(event: Event) =>
+                    this.setFreeText(model, question, (event.target as HTMLInputElement).value)}
+                />
+                <kbd>${question.options.length + 1}</kbd>
+              </label>
             `
           : nothing}
 

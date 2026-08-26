@@ -96,3 +96,25 @@ export function normalizeDirectCronDeliveryPayloads(params: {
 
   return { kind: "deliver", payload: payloads };
 }
+
+/**
+ * Appends the Control UI run-inspection link to the last visible payload.
+ * Callers invoke this only after silent-reply suppression so a link cannot turn
+ * a silent or empty run into a visible announcement; the payload is replaced
+ * rather than mutated because payload objects can be aliased by the caller.
+ */
+export function appendCronRunInspectionLink(
+  payloads: ReplyPayload[],
+  inspectionUrl: string | undefined,
+): ReplyPayload[] {
+  const index = payloads.findLastIndex((payload) => payload.text?.trim());
+  if (!inspectionUrl || index < 0) {
+    return payloads;
+  }
+  const payload = payloads[index]!;
+  const linked = copyReplyPayloadMetadata(payload, {
+    ...payload,
+    text: `${payload.text}\nInspect: ${inspectionUrl}`,
+  });
+  return payloads.map((entry, at) => (at === index ? linked : entry));
+}
