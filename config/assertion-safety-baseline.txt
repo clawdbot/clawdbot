@@ -2652,7 +2652,7 @@ src/config/config-env-vars.ts	5
 src/config/config-journal-snapshot.ts	2
 src/config/config-path-mutation.ts	1
 src/config/context-visibility.ts	1
-src/config/defaults.ts	7
+src/config/defaults.ts	6
 src/config/doc-baseline.ts	8
 src/config/docs-config-examples.ts	1
 src/config/future-version-guard.ts	2
