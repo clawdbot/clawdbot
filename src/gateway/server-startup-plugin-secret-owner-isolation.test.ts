@@ -210,7 +210,8 @@ describe("Gateway startup manifest-owned plugin secret isolation", () => {
             paths: [`${coldPathPrefix}.${relativePath}`],
           })),
         ];
-        const assertIsolatedPluginOwners = () => {
+        const pluginIo = vi.fn();
+        const assertIsolatedPluginOwners = (phase: "startup" | "provider-auth-refresh") => {
           const snapshot = getActiveSecretsRuntimeSnapshot();
           expect(snapshot?.degradedOwners).toMatchObject(expectedDegraded);
           expect(snapshot?.secretOwners).toEqual(
@@ -303,11 +304,31 @@ describe("Gateway startup manifest-owned plugin secret isolation", () => {
                 warningPath === `${healthyPathPrefix}.headers["X.Trace"]`,
             ),
           ).toBe(false);
+
+          pluginIo.mockClear();
+          const invokePluginIo = (ownerId: string) => {
+            assertSecretOwnerAvailable("plugin-capability", ownerId);
+            pluginIo(ownerId);
+          };
+          expect(() => invokePluginIo(healthySharedOwnerId)).not.toThrow();
+          expect(() => invokePluginIo(coldSharedOwnerId)).toThrow("configured but unavailable");
+          expect(pluginIo).toHaveBeenCalledOnce();
+          expect(pluginIo).toHaveBeenCalledWith(healthySharedOwnerId);
+          if (process.env.OPENCLAW_SECRET_OWNER_PROOF === "1") {
+            console.info(
+              `[secret-owner-proof] ${JSON.stringify({
+                phase,
+                readyStatus: ready.status,
+                allowed: { ownerId: healthySharedOwnerId, pluginIoReached: true },
+                forbidden: { ownerId: coldSharedOwnerId, rejectedBeforePluginIo: true },
+              })}`,
+            );
+          }
         };
 
-        assertIsolatedPluginOwners();
+        assertIsolatedPluginOwners("startup");
         await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
-        assertIsolatedPluginOwners();
+        assertIsolatedPluginOwners("provider-auth-refresh");
       },
     );
   });
