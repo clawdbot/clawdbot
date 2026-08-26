@@ -10,7 +10,6 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
-  formatWorkerConnectionFailure,
   WorkerAdmissionDeadlineExceededError,
   type WorkerAdmissionDeadlineResult,
 } from "./worker-connection-contract.js";
@@ -98,12 +97,10 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
-  let lastConnectionFailure: Error | undefined;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
     onConnectionFailure: (error) => {
-      lastConnectionFailure = error;
       options.onConnectionFailure?.(error?.message);
     },
   });
@@ -153,10 +150,9 @@ export async function runWorkerDescriptor(
         return {
           status: "not-started",
           reason: "admission-deadline",
-          errorText: `${error.message}: ${formatWorkerConnectionFailure(
-            descriptor.connectionEndpoint,
-            lastConnectionFailure ?? error,
-          )}`,
+          // The deadline error message already carries the formatted, redacted
+          // last-failure diagnosis (see WorkerConnection.failAdmissionDeadline).
+          errorText: error.message,
         };
       }
       throw error;

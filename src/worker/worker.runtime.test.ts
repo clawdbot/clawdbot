@@ -1293,7 +1293,11 @@ describe("worker runtime", () => {
         endpoint: launch.connectionEndpoint,
         connectParams: buildWorkerConnectParams(launch),
       });
-      const deadline = new WorkerAdmissionDeadlineExceededError();
+      // Production formats the last failure into the deadline message
+      // (WorkerConnection.failAdmissionDeadline); model that here.
+      const deadline = new WorkerAdmissionDeadlineExceededError(
+        "no admission after 3 attempts to gateway.sock: connect ECONNREFUSED",
+      );
       const start = vi.spyOn(connection, "start");
       if (phase === "initial admission") {
         start.mockRejectedValue(deadline);
