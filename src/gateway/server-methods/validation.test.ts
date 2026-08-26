@@ -9,15 +9,17 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } f
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 describe("typed gateway method validation", () => {
-  it("binds core method names to their schema-derived payloads", () => {
+  it("binds core method names to their schema-derived payloads", async () => {
     expectTypeOf<
       GatewayCoreRequestParams["conversations.list"]
     >().toEqualTypeOf<ConversationListParams>();
 
-    if (false) {
-      // @ts-expect-error A method must use its own protocol payload validator.
-      defineValidatedGatewayMethod("conversations.list", validateUiCommandParams, () => undefined);
-    }
+    expectTypeOf(validateConversationListParams).toMatchTypeOf<
+      Parameters<typeof defineValidatedGatewayMethod<"conversations.list">>[1]
+    >();
+    expectTypeOf(validateUiCommandParams).not.toMatchTypeOf<
+      Parameters<typeof defineValidatedGatewayMethod<"conversations.list">>[1]
+    >();
 
     const respond = vi.fn<RespondFn>();
     const handler = defineValidatedGatewayMethod(
@@ -37,12 +39,12 @@ describe("typed gateway method validation", () => {
       context: {} as GatewayRequestContext,
     };
 
-    handler(options);
+    await handler(options);
 
     expect(respond).toHaveBeenCalledWith(true, { agentId: "main", limit: 5 });
   });
 
-  it("rejects malformed payloads before invoking the typed handler", () => {
+  it("rejects malformed payloads before invoking the typed handler", async () => {
     const action = vi.fn();
     const respond = vi.fn<RespondFn>();
     const handler = defineValidatedGatewayMethod(
@@ -51,7 +53,7 @@ describe("typed gateway method validation", () => {
       action,
     );
 
-    handler({
+    await handler({
       req: { type: "req", id: "typed-2", method: "conversations.list" },
       params: { agentId: "main", limit: "five" },
       client: null,
