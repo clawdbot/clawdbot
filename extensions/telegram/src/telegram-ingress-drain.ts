@@ -18,6 +18,7 @@ import {
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import {
+  getCachedTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
 } from "./bot/helpers.js";
@@ -191,11 +192,26 @@ function canReconcileTelegramLegacyLane(params: {
     (chatType === "group" || chatType === "supergroup") && typeof chatId === "number" && chatId < 0;
   const hasValidThreadId =
     typeof threadId === "number" && Number.isSafeInteger(threadId) && threadId > 0;
+  const chatTypeHint =
+    chatType === "channel" ||
+    chatType === "group" ||
+    chatType === "private" ||
+    chatType === "supergroup"
+      ? chatType
+      : undefined;
+  const forumFlag =
+    resolveTelegramMessageForumFlagHint({
+      chatType: chatTypeHint,
+      isForum: typeof message.chat?.is_forum === "boolean" ? message.chat.is_forum : undefined,
+      isTopicMessage:
+        typeof message.is_topic_message === "boolean" ? message.is_topic_message : undefined,
+    }) ?? (typeof chatId === "number" ? getCachedTelegramForumFlag(chatId) : undefined);
+  const isForumGroup = isGroupChat && forumFlag === true;
   if (
     typeof chatId !== "number" ||
     !Number.isSafeInteger(chatId) ||
-    (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat) ||
-    (!typedApproval && !hasValidThreadId) ||
+    (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat && !isForumGroup) ||
+    (!typedApproval && !hasValidThreadId && !isForumGroup) ||
     (typedApproval && threadId !== undefined && !hasValidThreadId)
   ) {
     return false;
@@ -203,12 +219,7 @@ function canReconcileTelegramLegacyLane(params: {
   const baseLaneKey = `telegram:${chatId}`;
   const legacyThreadId = isGroupChat
     ? resolveTelegramForumThreadId({
-        isForum: resolveTelegramMessageForumFlagHint({
-          chatType,
-          isForum: typeof message.chat?.is_forum === "boolean" ? message.chat.is_forum : undefined,
-          isTopicMessage:
-            typeof message.is_topic_message === "boolean" ? message.is_topic_message : undefined,
-        }),
+        isForum: forumFlag,
         messageThreadId: hasValidThreadId ? threadId : undefined,
       })
     : hasValidThreadId
@@ -217,7 +228,7 @@ function canReconcileTelegramLegacyLane(params: {
   const topicLaneKey = legacyThreadId ? `${baseLaneKey}:topic:${legacyThreadId}` : undefined;
   const canonicalLaneKey = typedApproval
     ? `${baseLaneKey}:approval`
-    : params.botInfo?.has_topics_enabled === true
+    : isForumGroup || params.botInfo?.has_topics_enabled === true
       ? topicLaneKey
       : baseLaneKey;
   const previousLaneKey = canonicalLaneKey === baseLaneKey ? topicLaneKey : baseLaneKey;
