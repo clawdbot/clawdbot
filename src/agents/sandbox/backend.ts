@@ -45,11 +45,20 @@ export type {
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
 
+type SandboxBackendRegistrationGeneration = {
+  registration: RegisteredSandboxBackend;
+  previous: SandboxBackendRegistrationGeneration | undefined;
+  retired: boolean;
+};
+
 // Process-wide sandbox backend registry. Tests and plugins can install temporary
 // factories while core still auto-registers the bundled container and SSH backends.
-function getSandboxBackendFactories(): Map<SandboxBackendId, RegisteredSandboxBackend> {
+function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
   const globalStore = globalThis as typeof globalThis & {
-    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<SandboxBackendId, RegisteredSandboxBackend>;
+    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<
+      SandboxBackendId,
+      SandboxBackendRegistrationGeneration
+    >;
   };
   globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
   return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
@@ -71,31 +80,54 @@ export function registerSandboxBackend(
   const normalizedId = normalizeSandboxBackendId(id);
   const resolved = typeof registration === "function" ? { factory: registration } : registration;
   const factories = getSandboxBackendFactories();
-  const previous = factories.get(normalizedId);
-  factories.set(normalizedId, resolved);
+  const generation: SandboxBackendRegistrationGeneration = {
+    registration: resolved,
+    previous: factories.get(normalizedId),
+    retired: false,
+  };
+  factories.set(normalizedId, generation);
   return () => {
-    const currentFactories = getSandboxBackendFactories();
-    if (previous) {
-      currentFactories.set(normalizedId, previous);
+    if (generation.retired) {
       return;
     }
-    currentFactories.delete(normalizedId);
+    generation.retired = true;
+    if (factories.get(normalizedId) !== generation) {
+      return;
+    }
+    // Older disposers can run before newer plugin generations retire. Skip
+    // every retired predecessor so stale sandbox authority never returns.
+    let previous = generation.previous;
+    while (previous?.retired) {
+      previous = previous.previous;
+    }
+    if (previous) {
+      factories.set(normalizedId, previous);
+      return;
+    }
+    factories.delete(normalizedId);
   };
 }
 
 /** Look up a sandbox backend factory by normalized backend id. */
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
-  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.factory ?? null;
+  return (
+    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.factory ?? null
+  );
 }
 
 /** Look up optional lifecycle management hooks for a registered backend. */
 export function getSandboxBackendManager(id: string): SandboxBackendManager | null {
-  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.manager ?? null;
+  return (
+    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.manager ?? null
+  );
 }
 
 /** Look up optional backend workdir resolution that does not start the runtime. */
 export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
-  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.resolveWorkdir ?? null;
+  return (
+    getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.registration.resolveWorkdir ??
+    null
+  );
 }
 
 /** Resolve a backend factory or throw the user-facing configuration error. */

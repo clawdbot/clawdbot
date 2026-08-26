@@ -135,24 +135,36 @@ describe("openshell remote-mode seed across gateway restart", () => {
   it("seeds an adopted sandbox whose managed roots are empty", async () => {
     const backend = await createAdoptedRemoteBackend({ probeStdout: "0\n" });
 
-    await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
+    const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
     const uploads = seedUploadCalls();
     expect(uploads.length).toBeGreaterThan(0);
     expect(uploads[0]?.[0]).toMatchObject({
       args: expect.arrayContaining([expect.stringMatching(/\/seed\.txt$/), "/sandbox/"]),
     });
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
   });
 
   it("never re-seeds when a managed root already holds content", async () => {
     const backend = await createAdoptedRemoteBackend({ probeStdout: "1\n" });
 
-    await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
+    const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
 
     expect(seedUploadCalls()).toHaveLength(0);
     const wipeCalls = sdkMocks.runSshSandboxCommand.mock.calls.filter(([params]) =>
       String(params.remoteCommand).includes("rm -rf"),
     );
     expect(wipeCalls).toHaveLength(0);
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
   });
 });

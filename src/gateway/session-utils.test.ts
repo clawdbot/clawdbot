@@ -359,6 +359,7 @@ describe("gateway session utils", () => {
       entry: entry as SessionEntry,
     });
     expect(row.unread).toBe(expected);
+    expect(row.markedUnreadAt).toBe(entry.markedUnreadAt);
   });
 
   test("projects swarm collector group ids to list and live session payloads", () => {

@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
@@ -47,8 +49,16 @@ type CreateOpenShellSandboxBackendFactoryParams = {
 type PendingExec = {
   sshSession: SshSandboxSession;
   cleanup: () => Promise<void>;
+  workspaceLease: OpenShellWorkspaceLease;
 };
 
+type OpenShellWorkspaceLease = {
+  release: () => void;
+};
+
+// A command owns both its remote runtime and host mirror until final publication finishes.
+const openShellWorkspaceOperations = new KeyedAsyncQueue();
+let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
@@ -296,6 +306,7 @@ class OpenShellSandboxBackendImpl {
   private preparedRemoteWorkspaceForNextExec: {
     workdir: string;
     promise: Promise<void>;
+    lease: OpenShellWorkspaceLease;
   } | null = null;
   private remoteSeedPending = false;
 
@@ -340,7 +351,8 @@ class OpenShellSandboxBackendImpl {
       finalizeExec: async ({ token }) => {
         await this.finalizeExec(token as PendingExec | undefined);
       },
-      runShellCommand: async (command) => await this.runRemoteShellScript(command),
+      runShellCommand: async (command) =>
+        await this.runWorkspaceOperation(async () => await this.runRemoteShellScript(command)),
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({
@@ -351,18 +363,79 @@ class OpenShellSandboxBackendImpl {
               sandbox,
               backend: handle,
             }),
-      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
+      runRemoteShellScript: async (command) =>
+        await this.runWorkspaceOperation(async () => await this.runRemoteShellScript(command)),
       mkdirpRemotePath: async (remotePath, signal) =>
-        await this.mkdirpRemotePath(remotePath, signal),
+        await this.runWorkspaceOperation(
+          async () => await this.mkdirpRemotePath(remotePath, signal),
+        ),
       removeRemotePath: async (remotePath, removeParams) =>
-        await this.removeRemotePath(remotePath, removeParams),
+        await this.runWorkspaceOperation(
+          async () => await this.removeRemotePath(remotePath, removeParams),
+        ),
       renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-        await this.renameRemotePath(fromRemotePath, toRemotePath, signal),
+        await this.runWorkspaceOperation(
+          async () => await this.renameRemotePath(fromRemotePath, toRemotePath, signal),
+        ),
       syncLocalPathToRemote: async (localPath, remotePath) =>
-        await this.syncLocalPathToRemote(localPath, remotePath),
+        await this.runWorkspaceOperation(
+          async () => await this.syncLocalPathToRemote(localPath, remotePath),
+        ),
     };
     this.handle = handle;
     return handle;
+  }
+
+  private async runWorkspaceOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const lease = await this.acquireWorkspaceLease();
+    try {
+      return await operation();
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async acquireWorkspaceLease(): Promise<OpenShellWorkspaceLease> {
+    const { config, sandboxName } = this.params.execContext;
+    const keys = [
+      `host:${path.resolve(this.params.createParams.workspaceDir)}`,
+      `runtime:${JSON.stringify([
+        config.gatewayEndpoint ?? "",
+        config.gateway ?? "",
+        config.workspace ?? process.env.OPENSHELL_WORKSPACE ?? "",
+        sandboxName,
+      ])}`,
+    ].toSorted();
+    const releases: Array<() => void> = [];
+    try {
+      for (const key of keys) {
+        const acquired = createDeferred<void>();
+        const released = createDeferred<void>();
+        void openShellWorkspaceOperations.enqueue(key, async () => {
+          acquired.resolve();
+          await released.promise;
+        });
+        await acquired.promise;
+        releases.push(released.resolve);
+      }
+    } catch (error) {
+      for (const release of releases.toReversed()) {
+        release();
+      }
+      throw error;
+    }
+    let active = true;
+    return {
+      release: () => {
+        if (!active) {
+          return;
+        }
+        active = false;
+        for (const release of releases.toReversed()) {
+          release();
+        }
+      },
+    };
   }
 
   async prepareExec(params: {
@@ -372,36 +445,44 @@ class OpenShellSandboxBackendImpl {
     usePty: boolean;
   }): Promise<{ argv: string[]; token: PendingExec }> {
     const remoteWorkdir = params.workdir ?? this.params.remoteWorkspaceDir;
-    const preparedWorkspace = this.consumePreparedRemoteWorkspaceForNextExec(remoteWorkdir);
     const remoteCommand = buildValidatedExecRemoteCommand({
       command: params.command,
       workdir: remoteWorkdir,
       env: {},
     });
-    await (preparedWorkspace ?? this.prepareRemoteWorkspaceForExec());
-    const sshSession = await createOpenShellSshSession({
-      context: this.params.execContext,
-    });
+    const preparedWorkspace = this.consumePreparedRemoteWorkspaceForNextExec(remoteWorkdir);
+    const workspaceLease = preparedWorkspace?.lease ?? (await this.acquireWorkspaceLease());
     try {
-      const prepared = await prepareSshSandboxExec({
-        session: sshSession,
-        remoteCommand,
-        env: params.env,
-        tty: params.usePty,
+      await (preparedWorkspace?.promise ?? this.prepareRemoteWorkspaceForExec());
+      const sshSession = await createOpenShellSshSession({
+        context: this.params.execContext,
       });
-      return {
-        argv: prepared.argv,
-        token: { sshSession, cleanup: prepared.cleanup },
-      };
+      try {
+        const prepared = await prepareSshSandboxExec({
+          session: sshSession,
+          remoteCommand,
+          env: params.env,
+          tty: params.usePty,
+        });
+        return {
+          argv: prepared.argv,
+          token: { sshSession, cleanup: prepared.cleanup, workspaceLease },
+        };
+      } catch (error) {
+        await disposeSshSandboxSession(sshSession);
+        throw error;
+      }
     } catch (error) {
-      await disposeSshSandboxSession(sshSession);
+      workspaceLease.release();
       throw error;
     }
   }
 
   async validateWorkdir(workdir: string): Promise<string | null> {
+    this.discardPreparedRemoteWorkspace();
+    const lease = await this.acquireWorkspaceLease();
     const preparedWorkspace = this.prepareRemoteWorkspaceForExec();
-    const reusablePreparation = { workdir, promise: preparedWorkspace };
+    const reusablePreparation = { workdir, promise: preparedWorkspace, lease };
     this.preparedRemoteWorkspaceForNextExec = reusablePreparation;
     try {
       await preparedWorkspace;
@@ -420,17 +501,23 @@ class OpenShellSandboxBackendImpl {
         const resolvedWorkdir = result.code === 0 ? result.stdout.toString("utf8").trim() : "";
         if (this.preparedRemoteWorkspaceForNextExec === reusablePreparation) {
           this.preparedRemoteWorkspaceForNextExec = resolvedWorkdir
-            ? { workdir: resolvedWorkdir, promise: preparedWorkspace }
+            ? { workdir: resolvedWorkdir, promise: preparedWorkspace, lease }
             : null;
+          if (!resolvedWorkdir) {
+            lease.release();
+          }
+        } else {
+          lease.release();
         }
         return resolvedWorkdir || null;
       } finally {
         await disposeSshSandboxSession(sshSession);
       }
     } catch (error) {
-      if (this.preparedRemoteWorkspaceForNextExec === reusablePreparation) {
+      if (this.preparedRemoteWorkspaceForNextExec?.lease === lease) {
         this.preparedRemoteWorkspaceForNextExec = null;
       }
+      lease.release();
       throw error;
     }
   }
@@ -450,20 +537,35 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  private consumePreparedRemoteWorkspaceForNextExec(workdir: string): Promise<void> | null {
+  private consumePreparedRemoteWorkspaceForNextExec(workdir: string): {
+    promise: Promise<void>;
+    lease: OpenShellWorkspaceLease;
+  } | null {
     const preparedWorkspace = this.preparedRemoteWorkspaceForNextExec;
     if (!preparedWorkspace || preparedWorkspace.workdir !== workdir) {
-      this.preparedRemoteWorkspaceForNextExec = null;
+      this.discardPreparedRemoteWorkspace();
       return null;
     }
     this.preparedRemoteWorkspaceForNextExec = null;
-    return preparedWorkspace.promise;
+    return preparedWorkspace;
   }
 
   discardPreparedWorkdir(workdir: string): void {
     if (this.preparedRemoteWorkspaceForNextExec?.workdir === workdir) {
-      this.preparedRemoteWorkspaceForNextExec = null;
+      this.discardPreparedRemoteWorkspace();
     }
+  }
+
+  private discardPreparedRemoteWorkspace(): void {
+    const preparedWorkspace = this.preparedRemoteWorkspaceForNextExec;
+    if (!preparedWorkspace) {
+      return;
+    }
+    this.preparedRemoteWorkspaceForNextExec = null;
+    void preparedWorkspace.promise.then(
+      () => preparedWorkspace.lease.release(),
+      () => preparedWorkspace.lease.release(),
+    );
   }
 
   private async prepareRemoteWorkspaceForExec(): Promise<void> {
@@ -478,18 +580,23 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  async finalizeExec(token: PendingExec | undefined): Promise<void> {
+  async finalizeExec(token?: PendingExec): Promise<void> {
+    const workspaceLease = token?.workspaceLease ?? (await this.acquireWorkspaceLease());
     try {
       if (this.params.execContext.config.mode === "mirror") {
         await this.syncWorkspaceFromRemote();
       }
     } finally {
-      if (token?.sshSession) {
-        try {
-          await token.cleanup();
-        } finally {
-          await disposeSshSandboxSession(token.sshSession);
+      try {
+        if (token?.sshSession) {
+          try {
+            await token.cleanup();
+          } finally {
+            await disposeSshSandboxSession(token.sshSession);
+          }
         }
+      } finally {
+        workspaceLease.release();
       }
     }
   }
@@ -721,6 +828,7 @@ class OpenShellSandboxBackendImpl {
     if (!/\bsandbox not found\b/iu.test(getResult.stderr)) {
       throw new Error(getResult.stderr.trim() || "openshell sandbox get failed");
     }
+    const detachedCreateSupported = await this.supportsDetachedSandboxCreation();
     const createArgs = [
       "sandbox",
       "create",
@@ -736,8 +844,7 @@ class OpenShellSandboxBackendImpl {
         ? ["--auto-providers"]
         : ["--no-auto-providers"]),
       ...this.params.execContext.config.providers.flatMap((provider) => ["--provider", provider]),
-      "--",
-      "true",
+      ...(detachedCreateSupported ? ["--detach", "--", "sleep", "infinity"] : ["--", "true"]),
     ];
     const createResult = await runOpenShellCli({
       context: this.params.execContext,
@@ -749,6 +856,45 @@ class OpenShellSandboxBackendImpl {
       throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
     }
     this.remoteSeedPending = true;
+  }
+
+  private async supportsDetachedSandboxCreation(): Promise<boolean> {
+    const { config } = this.params.execContext;
+    const cliIdentity = JSON.stringify([
+      config.command,
+      config.gatewayEndpoint ?? "",
+      config.gateway ?? "",
+      config.workspace ?? process.env.OPENSHELL_WORKSPACE ?? "",
+    ]);
+    let support =
+      openShellDetachedCreateSupport?.key === cliIdentity
+        ? openShellDetachedCreateSupport.promise
+        : undefined;
+    if (!support) {
+      support = (async () => {
+        const result = await runOpenShellCli({
+          context: this.params.execContext,
+          args: ["sandbox", "create", "--help"],
+          cwd: this.params.createParams.workspaceDir,
+        });
+        if (result.code !== 0) {
+          throw new Error(
+            result.stderr.trim() || "openshell sandbox create capability check failed",
+          );
+        }
+        // Older supported CLIs run and await trailing commands; newer ones require a live main.
+        return /^\s*--detach(?:\s|$)/mu.test(result.stdout);
+      })();
+      openShellDetachedCreateSupport = { key: cliIdentity, promise: support };
+    }
+    try {
+      return await support;
+    } catch (error) {
+      if (openShellDetachedCreateSupport?.promise === support) {
+        openShellDetachedCreateSupport = undefined;
+      }
+      throw error;
+    }
   }
 
   private async resolveLegacyRuntimePhase(): Promise<string | undefined> {

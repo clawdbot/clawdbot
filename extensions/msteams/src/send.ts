@@ -558,27 +558,50 @@ type MSTeamsMessageMutationResult = {
 export async function editMessageMSTeams(
   params: MSTeamsMessageMutationParams & { text: string },
 ): Promise<MSTeamsMessageMutationResult> {
-  const { cfg, to, activityId, text } = params;
+  return updateMSTeamsMessageActivity({
+    ...params,
+    activity: {
+      type: "message",
+      id: params.activityId,
+      text: params.text,
+    },
+  });
+}
+
+export async function editAdaptiveCardMSTeams(
+  params: MSTeamsMessageMutationParams & { card: Record<string, unknown> },
+): Promise<MSTeamsMessageMutationResult> {
+  return updateMSTeamsMessageActivity({
+    ...params,
+    activity: {
+      type: "message",
+      id: params.activityId,
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: params.card,
+        },
+      ],
+    },
+  });
+}
+
+async function updateMSTeamsMessageActivity(
+  params: MSTeamsMessageMutationParams & { activity: Record<string, unknown> },
+): Promise<MSTeamsMessageMutationResult> {
+  const { cfg, to, activityId, activity } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
-  log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
+  log.debug?.("editing proactive message", { conversationId, activityId });
 
   try {
     const baseRef = buildConversationReference(ref);
-    await updateMSTeamsActivityWithReference(
-      app,
-      baseRef,
-      activityId,
-      {
-        type: "message",
-        id: activityId,
-        text,
-      } as Record<string, unknown>,
-      { serviceUrlBoundary: sdkCloudOptions },
-    );
+    await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, {
+      serviceUrlBoundary: sdkCloudOptions,
+    });
   } catch (err) {
     throw createMSTeamsSendError("msteams edit", err);
   }

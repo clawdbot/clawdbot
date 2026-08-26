@@ -121,6 +121,9 @@ type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
 const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
+// Compare Google-owned publisher resources without changing outbound request paths.
+const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
+  /^(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\//u;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -142,6 +145,7 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  modelVersion?: string;
   promptFeedback?: {
     blockReason?: string;
     blockReasonMessage?: string;
@@ -1549,6 +1553,14 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               })(sse.firstChunk);
         for await (const chunk of chunks) {
           output.responseId ||= chunk.responseId;
+          const responseModel = normalizeOptionalString(chunk.modelVersion);
+          if (
+            responseModel &&
+            resolveGoogleModelPath(model.id.replace(GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX, "")) !==
+              resolveGoogleModelPath(responseModel.replace(GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX, ""))
+          ) {
+            output.responseModel ||= responseModel;
+          }
           updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];
           const promptFeedback = chunk.promptFeedback;

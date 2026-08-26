@@ -24,7 +24,7 @@ import {
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
 import { createEditorSubmitHandler, createSubmitBurstCoalescer } from "./tui-submit.js";
-import type { SessionInfo } from "./tui-types.js";
+import type { SessionInfo, TuiOptions } from "./tui-types.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -115,7 +115,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingSubmit?: TuiPendingSubmit | null;
   activityStatus?: string;
-  opts?: { local?: boolean };
+  opts?: Pick<TuiOptions, "local" | "timeoutMs">;
   currentSessionId?: string | null;
   sessionGeneration?: number;
   currentAgentId?: string;
@@ -580,6 +580,23 @@ describe("tui command handlers", () => {
       message: "/unregistered-command",
     });
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("scopes an explicit timeout override to one message", async () => {
+    const { handleCommand, sendMessage, sendChat, state } = createHarness();
+
+    await sendMessage("automatic hatch", 300_000);
+    state.pendingSubmit = null;
+    await handleCommand("later interactive turn");
+
+    expect(sendChat).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ message: "automatic hatch", timeoutMs: 300_000 }),
+    );
+    expect(sendChat).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ message: "later interactive turn", timeoutMs: undefined }),
+    );
   });
 
   it("projects the canonical pending user before chat.send is acknowledged", async () => {

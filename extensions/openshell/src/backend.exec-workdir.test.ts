@@ -1,6 +1,7 @@
 // Openshell tests cover backend-owned exec workdir validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
@@ -73,6 +74,26 @@ function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"
     tools: { allow: ["*"], deny: [] },
     prune: createSandboxPruneConfig(),
   };
+}
+
+async function createOpenShellBackendFixture(params: {
+  workspaceDir: string;
+  scopeKey: string;
+  command?: string;
+}) {
+  const factory = createOpenShellSandboxBackendFactory({
+    pluginConfig: resolveOpenShellPluginConfig({
+      command: params.command ?? "openshell",
+      mode: "mirror",
+    }),
+  });
+  return await factory({
+    sessionKey: `${params.scopeKey}:turn`,
+    scopeKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.workspaceDir,
+    cfg: createOpenShellBackendSandboxConfig(),
+  });
 }
 
 describe("openshell backend exec workdir validation", () => {
@@ -168,6 +189,12 @@ describe("openshell backend exec workdir validation", () => {
       ],
       cwd: workspaceDir,
     });
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
     const nestedFile = path.join(workspaceDir, "nested", "note.txt");
     const bridge = backend.createFsBridge?.({
       sandbox: createSandboxTestContext({
@@ -230,7 +257,7 @@ describe("openshell backend exec workdir validation", () => {
 
     await expect(backend.validateWorkdir?.("/workspace")).resolves.toBe("/workspace");
     backend.discardPreparedWorkdir?.("/workspace");
-    await backend.buildExecSpec({
+    const execSpec = await backend.buildExecSpec({
       command: "pwd",
       workdir: "/workspace",
       env: {},
@@ -241,5 +268,171 @@ describe("openshell backend exec workdir validation", () => {
       ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
     );
     expect(uploadCalls).toHaveLength(2);
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
+  });
+
+  it.each([
+    {
+      label: "legacy trailing exec",
+      help: "Usage: openshell sandbox create [OPTIONS]\n      --no-tty\n",
+      expectedEnding: ["--", "true"],
+    },
+    {
+      label: "persistent canonical main",
+      help: "Usage: openshell sandbox create [OPTIONS]\n      --detach  Start without attaching\n",
+      expectedEnding: ["--detach", "--", "sleep", "infinity"],
+    },
+  ])("creates compatible persistent sandboxes for $label CLIs", async (scenario) => {
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-openshell-create-",
+    });
+    tempWorkspaces.push(workspace);
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[1] === "get") {
+        return { code: 1, stdout: "", stderr: "sandbox not found" };
+      }
+      if (args[1] === "create" && args[2] === "--help") {
+        return { code: 0, stdout: scenario.help, stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    for (const scopeKey of ["agent:create:first", "agent:create:second"]) {
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir: workspace.dir,
+        scopeKey,
+        command: `openshell-${scenario.label.replaceAll(" ", "-")}`,
+      });
+      const execSpec = await backend.buildExecSpec({ command: "pwd", env: {}, usePty: false });
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: execSpec.finalizeToken,
+      });
+    }
+
+    const helpCalls = cliMocks.runOpenShellCli.mock.calls.filter(
+      ([params]) => params.args[1] === "create" && params.args[2] === "--help",
+    );
+    expect(helpCalls).toHaveLength(1);
+    const createCalls = cliMocks.runOpenShellCli.mock.calls.filter(
+      ([params]) => params.args[1] === "create" && params.args[2] !== "--help",
+    );
+    expect(createCalls).toHaveLength(2);
+    for (const [params] of createCalls) {
+      expect(params.args.slice(-scenario.expectedEnding.length)).toEqual(scenario.expectedEnding);
+    }
+  });
+
+  it.each([
+    { label: "a host workspace", sharedHost: true, sharedRuntime: false },
+    { label: "a remote runtime", sharedHost: false, sharedRuntime: true },
+  ])("holds $label until command execution and publication finish", async (scenario) => {
+    const workspaces = await Promise.all(
+      ["first", "second"].map(async (label) =>
+        tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: `openclaw-openshell-${label}-`,
+        }),
+      ),
+    );
+    tempWorkspaces.push(...workspaces);
+    const firstWorkspace = expectDefined(workspaces[0], "first OpenShell workspace");
+    const secondWorkspace = expectDefined(workspaces[1], "second OpenShell workspace");
+    const first = await createOpenShellBackendFixture({
+      workspaceDir: firstWorkspace.dir,
+      scopeKey: "agent:workspace:first",
+    });
+    const second = await createOpenShellBackendFixture({
+      workspaceDir: (scenario.sharedHost ? firstWorkspace : secondWorkspace).dir,
+      scopeKey: scenario.sharedRuntime ? "agent:workspace:first" : "agent:workspace:second",
+    });
+
+    const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
+    const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
+
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+        "get",
+      ]);
+    } finally {
+      await first.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: firstExec.finalizeToken,
+      });
+    }
+
+    const secondExec = await secondPreparation;
+    expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+      "get",
+      "download",
+      "get",
+    ]);
+    await second.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: secondExec.finalizeToken,
+    });
+  });
+
+  it("keeps operations against different workspaces parallel", async () => {
+    const workspaces = await Promise.all(
+      ["first", "second"].map(async (label) =>
+        tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: `openclaw-openshell-${label}-`,
+        }),
+      ),
+    );
+    tempWorkspaces.push(...workspaces);
+    const backends = await Promise.all(
+      workspaces.map(async (workspace, index) =>
+        createOpenShellBackendFixture({
+          workspaceDir: workspace.dir,
+          scopeKey: `agent:workspace:${index}`,
+        }),
+      ),
+    );
+    const first = expectDefined(backends[0], "first OpenShell backend");
+    const second = expectDefined(backends[1], "second OpenShell backend");
+    const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
+    const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
+    let secondExec: Awaited<typeof secondPreparation> | undefined;
+    try {
+      await vi.waitFor(() => {
+        const startedRuntimeIds = cliMocks.runOpenShellCli.mock.calls
+          .filter(([params]) => params.args[1] === "get")
+          .map(([params]) => params.args[2]);
+        expect(startedRuntimeIds).toEqual([first.runtimeId, second.runtimeId]);
+      });
+      secondExec = await secondPreparation;
+    } finally {
+      await first.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: firstExec.finalizeToken,
+      });
+      secondExec ??= await secondPreparation;
+      await second.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: secondExec.finalizeToken,
+      });
+    }
   });
 });
