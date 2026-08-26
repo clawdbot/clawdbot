@@ -1112,11 +1112,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
             const runtime = await loadFeishuChannelRuntime();
-            const maybeSendMedia = runtime.feishuOutbound.sendMedia;
-            if (mediaUrl && !maybeSendMedia) {
+            const sendMedia = runtime.feishuOutbound.sendMedia;
+            if (mediaUrl && !sendMedia) {
               throw new Error("Feishu media sending is not available.");
             }
-            const sendMedia = maybeSendMedia;
             let result;
             if (presentationFellBack && presentation) {
               const sendPayload = runtime.feishuOutbound.sendPayload;
@@ -1159,12 +1158,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 replyToMessageId,
                 replyInThread,
               });
-            } else if (mediaUrl) {
-              result = await sendMedia!({
+            } else {
+              const outboundContext = {
                 cfg: ctx.cfg,
                 to,
                 text: text ?? "",
-                mediaUrl,
                 accountId: ctx.accountId ?? undefined,
                 ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
                 mediaLocalRoots: ctx.mediaLocalRoots,
@@ -1172,17 +1170,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 ...(replyInThread
                   ? { threadId: replyToMessageId }
                   : { replyToId: replyToMessageId }),
-                ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-              });
-            } else {
-              result = await runtime.sendMessageFeishu({
-                cfg: ctx.cfg,
-                to,
-                text: text!,
-                accountId: ctx.accountId ?? undefined,
-                replyToMessageId,
-                replyInThread,
-              });
+              };
+              if (mediaUrl) {
+                result = await sendMedia!({
+                  ...outboundContext,
+                  mediaUrl,
+                  ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+                });
+              } else {
+                const { target, ...delivery } = await (
+                  await resolveFeishuTextSender()
+                )(outboundContext);
+                result = { ...delivery, chatId: target?.id };
+              }
             }
             return jsonActionResult({
               ok: true,
