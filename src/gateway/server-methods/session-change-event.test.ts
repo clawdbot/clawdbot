@@ -92,7 +92,11 @@ describe("sessions.changed coalescing", () => {
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
     });
 
-    emitSessionsChanged(context, { reason: "patch", sessionKey: "agent:main:chat" });
+    emitSessionsChanged(context, {
+      reason: "patch",
+      sessionKey: "agent:main:chat",
+      modelCatalog: mocks.modelCatalog,
+    });
 
     expect(mocks.loadRow).toHaveBeenCalledWith("agent:main:chat", {
       agentId: "main",
