@@ -438,6 +438,7 @@ async function runSkillExperienceReviewInner(
     isControlUiVisible: false,
     projectSessionActive: false,
     projectSessionLifecycle: false,
+    projectSessionMessages: false,
   });
   try {
     let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;

@@ -79,6 +79,7 @@ describe("experience review auto apply", () => {
         stream: string,
         controlUiVisible?: boolean,
         projectSessionLifecycle?: boolean,
+        projectSessionMessages?: boolean,
         sessionKey?: string,
       ]
     > = [];
@@ -91,6 +92,7 @@ describe("experience review auto apply", () => {
         event.stream,
         event.controlUiVisible,
         event.projectSessionLifecycle,
+        event.projectSessionMessages,
         event.sessionKey,
       ]);
     });
@@ -135,9 +137,9 @@ describe("experience review auto apply", () => {
     }
 
     expect(observed).toEqual([
-      ["assistant", false, false, undefined],
-      ["tool", false, false, undefined],
-      ["lifecycle", false, false, "agent:main:main"],
+      ["assistant", false, false, false, undefined],
+      ["tool", false, false, false, undefined],
+      ["lifecycle", false, false, false, "agent:main:main"],
     ]);
     expect(getAgentRunContext(reviewRunId)).toBeUndefined();
   });
