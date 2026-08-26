@@ -7,8 +7,6 @@ import {
 import type { PluginsInspectResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 
-export type PluginCapabilityConsentDetails = CapabilityConsentErrorDetails;
-
 export function inspectPlugin(
   client: GatewayBrowserClient,
   pluginId: string,

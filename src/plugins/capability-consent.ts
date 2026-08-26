@@ -121,15 +121,9 @@ function resolvePluginArtifactManifests(rootDir: string, env: NodeJS.ProcessEnv 
     ) {
       throw new Error("package.json openclaw.extensions must be an array of strings");
     }
-    const extensions = resolvePackageExtensionEntries({
-      ...(packageMetadata
-        ? {
-            [MANIFEST_KEY]: {
-              ...(rawExtensions ? { extensions: rawExtensions } : {}),
-            },
-          }
-        : {}),
-    });
+    const extensions = resolvePackageExtensionEntries(
+      packageMetadata ? { [MANIFEST_KEY]: rawExtensions ? { extensions: rawExtensions } : {} } : {},
+    );
     if (extensions.status === "invalid") {
       throw new Error(extensions.error);
     }
@@ -432,7 +426,7 @@ export async function resolvePluginCapabilityConsent(params: {
       return;
     }
     if (!params.acknowledge) {
-      return throwManagedPluginCapabilityConsentRequired(review);
+      throwManagedPluginCapabilityConsentRequired(review);
     }
     const records = await loadInstalledPluginIndexInstallRecords({ env });
     const persistedRecord = records[installOwner];
@@ -451,7 +445,7 @@ export async function resolvePluginCapabilityConsent(params: {
     });
     // Bind the submitted acknowledgment to bytes reread after loading authoritative install state.
     if (params.acknowledge.reviewToken !== currentReview.reviewToken) {
-      return throwManagedPluginCapabilityConsentRequired(currentReview);
+      throwManagedPluginCapabilityConsentRequired(currentReview);
     }
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
