@@ -474,6 +474,7 @@ describe("installDownloadSpec extraction safety", () => {
     expect(result.stderr).toContain("verify the publisher checksum");
     expect(result.stderr).not.toContain("do-not-disclose");
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    await expect(fileExists(path.join(targetDir, "runtime.tar.bz2"))).resolves.toBe(false);
     if (existing) {
       await expect(fs.readdir(toolsRoot)).resolves.toEqual(["runtime"]);
       await expect(fs.readdir(targetDir)).resolves.toEqual(["existing.txt"]);
@@ -481,7 +482,8 @@ describe("installDownloadSpec extraction safety", () => {
         "preserved",
       );
     } else {
-      await expect(fileExists(toolsRoot)).resolves.toBe(false);
+      await expect(fs.readdir(toolsRoot)).resolves.toEqual([]);
+      await expect(fileExists(targetDir)).resolves.toBe(false);
     }
   });
 
@@ -602,12 +604,20 @@ describe("installDownloadSpec extraction safety", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.runIf(process.platform !== "win32")(
-    "fails closed when the lexical tools root is rebound before the final copy",
-    async () => {
-      const entry = buildEntry("base-rebind");
+  it.runIf(process.platform !== "win32").each([
+    { name: "a legacy download", verified: false },
+    { name: "a matching-digest download", verified: true },
+  ])(
+    "fails closed when $name rebinds the lexical tools root before the final copy",
+    async ({ verified }) => {
+      const entry = buildEntry(`base-rebind-${verified ? "verified" : "legacy"}`);
       const safeToolsRoot = resolveSkillToolsRootDir(entry);
-      const outsideRoot = path.join(workspaceDir, "outside-root");
+      const outsideRoot = path.join(
+        workspaceDir,
+        `outside-root-${verified ? "verified" : "legacy"}`,
+      );
+      const payload = Buffer.from("payload");
+      await fs.mkdir(safeToolsRoot, { recursive: true });
       await fs.mkdir(outsideRoot, { recursive: true });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -618,7 +628,7 @@ describe("installDownloadSpec extraction safety", () => {
           headers: new Headers(),
           body: Readable.from(
             (async function* () {
-              yield Buffer.from("payload");
+              yield payload;
               const reboundRoot = `${safeToolsRoot}-rebound`;
               await fs.rename(safeToolsRoot, reboundRoot);
               await fs.symlink(outsideRoot, safeToolsRoot);
@@ -636,6 +646,7 @@ describe("installDownloadSpec extraction safety", () => {
           url: "https://example.invalid/payload.bin",
           extract: false,
           targetDir: "runtime",
+          ...(verified ? { sha256: createHash("sha256").update(payload).digest("hex") } : {}),
         },
         timeoutMs: 30_000,
       });

@@ -90,13 +90,11 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
 
 async function downloadFile(params: {
   url: string;
-  rootDir: string;
   relativePath: string;
-  pinnedRoot?: Root;
+  pinnedRoot: Root;
   sha256?: string;
   timeoutMs: number;
 }): Promise<{ bytes: number }> {
-  const destPath = path.resolve(params.rootDir, params.relativePath);
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempPath) => {
     const { response, release } = await fetchWithSsrFGuard({
       url: params.url,
@@ -148,14 +146,8 @@ async function downloadFile(params: {
           );
         }
       }
-      let destinationRoot = params.pinnedRoot;
-      if (!destinationRoot) {
-        await ensureDir(params.rootDir);
-        destinationRoot = await fsRoot(params.rootDir);
-      }
-      await destinationRoot.copyIn(params.relativePath, tempPath);
-      const stat = await fs.promises.stat(destPath);
-      return { bytes: stat.size };
+      await params.pinnedRoot.copyIn(params.relativePath, tempPath);
+      return { bytes: file.bytesWritten };
     } finally {
       await release();
     }
@@ -191,20 +183,19 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalRoot = root;
+  let canonicalRoot;
   let targetDir;
-  let pinnedRoot: Root | undefined;
+  let pinnedRoot: Root;
   try {
-    if (!spec.sha256) {
-      await ensureDir(root);
-      await assertCanonicalPathWithinBase({
-        baseDir: root,
-        candidatePath: root,
-        boundaryLabel: "skill tools directory",
-      });
-      canonicalRoot = await fs.promises.realpath(root);
-      pinnedRoot = await fsRoot(canonicalRoot);
-    }
+    await ensureDir(root);
+    await assertCanonicalPathWithinBase({
+      baseDir: root,
+      candidatePath: root,
+      boundaryLabel: "skill tools directory",
+    });
+    canonicalRoot = await fs.promises.realpath(root);
+    // Bind root identity before fetching so a concurrent replacement cannot redirect publication.
+    pinnedRoot = await fsRoot(canonicalRoot);
 
     const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
     const targetRelativePath = path.relative(root, requestedTargetDir);
@@ -234,7 +225,6 @@ export async function installDownloadSpec(params: {
   try {
     const result = await downloadFile({
       url,
-      rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       pinnedRoot,
       sha256: spec.sha256,
