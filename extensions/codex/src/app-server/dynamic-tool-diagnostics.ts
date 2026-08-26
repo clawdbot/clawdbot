@@ -31,21 +31,16 @@ function dynamicToolDiagnosticEventBase(params: DynamicToolDiagnosticContext) {
   };
 }
 
-/** Emits a start event for one Codex dynamic tool call. */
-export function emitDynamicToolStartedDiagnostic(params: DynamicToolDiagnosticContext): void {
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.started",
-    ...dynamicToolDiagnosticEventBase(params),
-  });
-}
-
 /** Starts one diagnostic child and installs it around the dynamic handler. */
 export function startDynamicToolDiagnosticExecution<T>(
   params: DynamicToolDiagnosticContext,
   execute: () => T,
 ) {
   const trace = freezeDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope());
-  emitDynamicToolStartedDiagnostic({ ...params, trace });
+  emitTrustedDiagnosticEvent({
+    type: "tool.execution.started",
+    ...dynamicToolDiagnosticEventBase({ ...params, trace }),
+  });
   return {
     trace,
     execution: runWithDiagnosticTraceContext(trace, execute),
