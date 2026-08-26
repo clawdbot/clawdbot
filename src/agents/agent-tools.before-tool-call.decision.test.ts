@@ -315,39 +315,45 @@ describe("generic tool action decision receipts", () => {
     });
   });
 
-  it("does not follow an owner-native plugin allow receipt with a generic allow fact", async () => {
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "owner-plugin",
-      hookName: "before_tool_call",
-      handler: (() => ({ params: { ownerAdjusted: true } })) as PluginHookRegistration["handler"],
-    });
-    setActivePluginRegistry(registry);
-    initializeGlobalHookRunner(registry);
-    const works: ExecutionDecisionWork[] = [];
-    const ownerReceipts: DecisionReceiptV1[] = [];
-    const clearOwnerSink = configureRuntimeActionDecisionSink((receipt) => {
-      ownerReceipts.push(receipt);
-      return true;
-    });
-    const tool = wrapToolWithBeforeToolCallHook(
-      assembledTool("data", "hook_allow_subject", vi.fn().mockResolvedValue({ content: [] })),
-    );
+  it.each([
+    { label: "returns adjusted params", result: { params: { ownerAdjusted: true } } },
+    { label: "returns void", result: undefined },
+  ] as const)(
+    "does not follow an owner-native plugin allow receipt with a generic allow fact when it $label",
+    async ({ result }) => {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "owner-plugin",
+        hookName: "before_tool_call",
+        handler: (() => result) as PluginHookRegistration["handler"],
+      });
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      const works: ExecutionDecisionWork[] = [];
+      const ownerReceipts: DecisionReceiptV1[] = [];
+      const clearOwnerSink = configureRuntimeActionDecisionSink((receipt) => {
+        ownerReceipts.push(receipt);
+        return true;
+      });
+      const tool = wrapToolWithBeforeToolCallHook(
+        assembledTool("data", "hook_allow_subject", vi.fn().mockResolvedValue({ content: [] })),
+      );
 
-    try {
-      await admittedRun({ works, run: () => tool.execute("hook-allow-call", {}) });
-    } finally {
-      clearOwnerSink();
-    }
+      try {
+        await admittedRun({ works, run: () => tool.execute("hook-allow-call", {}) });
+      } finally {
+        clearOwnerSink();
+      }
 
-    expect(works).toEqual([]);
-    expect(ownerReceipts).toHaveLength(1);
-    expect(ownerReceipts[0]).toMatchObject({
-      decision: { outcome: "allowed", reasonCode: "plugin_hook_allowed" },
-      source: { owner: "plugin-hook" },
-    });
-  });
+      expect(works).toEqual([]);
+      expect(ownerReceipts).toHaveLength(1);
+      expect(ownerReceipts[0]).toMatchObject({
+        decision: { outcome: "allowed", reasonCode: "plugin_hook_allowed" },
+        source: { owner: "plugin-hook" },
+      });
+    },
+  );
 
   it("does not duplicate an owner-native approval receipt", async () => {
     const registry = createEmptyPluginRegistry();

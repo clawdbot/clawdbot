@@ -410,7 +410,7 @@ export async function runBeforeToolCallHook(args: {
       blocked: false as const,
       params: finalParams,
     };
-    if (hookResult || finalApprovalResolution) {
+    if (hasBeforeToolCallHooks || finalApprovalResolution) {
       markPrivateDecision(allowed, "ownerDecision");
     }
     if (finalApprovalResolution) {
