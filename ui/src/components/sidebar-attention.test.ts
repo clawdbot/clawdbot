@@ -237,6 +237,40 @@ describe("sidebar attention refresh ownership", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+    const provider = createApplicationContextProvider({
+      gateway: {
+        snapshot: { phase: "connected", client: null, hello: null },
+        connection: { gatewayUrl: "" },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      overlays: {
+        snapshot: { approvalQueue: [] },
+        subscribe: () => () => undefined,
+      },
+      agentSelection: {
+        state: { selectedId: null, scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      scopeUpgrade: hiddenScopeUpgradeCapability,
+    } as unknown as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+
+    await waitForFast(() =>
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+
+    await waitForFast(() => {
+      const panel = element.querySelector(".sidebar-issues-panel");
+      expect(panel).not.toBeNull();
+      expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
+    });
+  });
+
   it("keeps the latest refresh when an older load on the same client finishes last", async () => {
     const firstCron = deferred<unknown>();
     const firstAuth = deferred<unknown>();
@@ -621,6 +655,7 @@ describe("update attention", () => {
       canDismiss,
       dismissal,
       forced,
+      requiresAction: true,
       severity: "warning",
       visible: true,
     });
@@ -769,6 +804,7 @@ describe("sidebar Inbox projection", () => {
       canDismiss: true,
       dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
       forced: true,
+      requiresAction: true,
       severity: "warning",
       visible: true,
     });
@@ -797,6 +833,31 @@ describe("sidebar Inbox projection", () => {
       "scopeUpgrade",
       "attention",
     ]);
+  });
+
+  it("keeps informational updates visible without adding them to attention counts", () => {
+    const update = buildUpdateInboxEntry({
+      canDismiss: false,
+      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
+      forced: false,
+      requiresAction: false,
+      severity: "warning",
+      visible: true,
+    });
+    const entries = buildSidebarInboxEntries({
+      approvals: [],
+      attention: [],
+      scopeUpgrade: null,
+      update,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(sidebarInboxTabCounts(entries)).toEqual({
+      all: 0,
+      approvals: 0,
+      automations: 0,
+      system: 0,
+    });
   });
 });
 

@@ -1183,18 +1183,6 @@
         "model"
       ]
     },
-    "sessions_yield": {
-      "emoji": "⏸️",
-      "title": "Yield"
-    },
-    "tts": {
-      "emoji": "🔊",
-      "title": "TTS",
-      "detailKeys": [
-        "text",
-        "channel"
-      ]
-    },
     "continue_delegate": {
       "emoji": "🔄",
       "title": "Continue Delegate",
@@ -1217,6 +1205,18 @@
       "title": "Request Compaction",
       "detailKeys": [
         "reason"
+      ]
+    },
+    "sessions_yield": {
+      "emoji": "⏸️",
+      "title": "Yield"
+    },
+    "tts": {
+      "emoji": "🔊",
+      "title": "TTS",
+      "detailKeys": [
+        "text",
+        "channel"
       ]
     }
   }

@@ -164,6 +164,41 @@ describe("cron trigger CLI options", () => {
     );
   });
 
+  it.each([
+    { label: "generic timeout only", args: ["--timeout-seconds", "30"] },
+    {
+      label: "generic and script-specific timeouts",
+      args: ["--timeout-seconds", "30", "--script-timeout-seconds", "60"],
+    },
+  ])("rejects script creation with $label", async ({ args }) => {
+    const scriptPath = path.join(fixtureRoot, "job.js");
+    await fs.writeFile(scriptPath, "return { notify: 'done' }", "utf8");
+    const program = new Command().exitOverride();
+    registerCronAddCommand(program);
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`exit:${code}`);
+    });
+
+    try {
+      await expect(
+        program.parseAsync(
+          ["add", "--name", "script job", "--every", "30s", "--script", scriptPath, ...args],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("exit:1");
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
+        ),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("reads script payload updates client-side", async () => {
     const scriptPath = path.join(fixtureRoot, "edit-job.js");
     await fs.writeFile(scriptPath, "return { state: { ok: true } }\n", "utf8");

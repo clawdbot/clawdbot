@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
@@ -402,8 +403,7 @@ async function requestHttp(params: {
 }
 
 function describeProbeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 500);
+  return sliceUtf16Safe(error instanceof Error ? error.message : String(error), 0, 500);
 }
 
 function formatProbeResult(name: string, probe: TimedProbe & { status?: number }): string {
@@ -431,12 +431,12 @@ function captureChildOutput(child: ChildProcessWithoutNullStreams): {
   let output = "";
   let stderr = "";
   const appendOutput = (chunk: Buffer) => {
-    output = `${output}${chunk.toString("utf8")}`.slice(-64 * 1_024);
+    output = sliceUtf16Safe(`${output}${chunk.toString("utf8")}`, -64 * 1_024);
   };
   child.stdout.on("data", appendOutput);
   child.stderr.on("data", (chunk: Buffer) => {
     appendOutput(chunk);
-    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-64 * 1_024);
+    stderr = sliceUtf16Safe(`${stderr}${chunk.toString("utf8")}`, -64 * 1_024);
   });
   return {
     readOutput: () => output,

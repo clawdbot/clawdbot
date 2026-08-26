@@ -97,6 +97,46 @@ import Testing
         }
     }
 
+    @Test(arguments: [
+        "failed-start", "failed-stop", "failed-restart", "json-success", "plain-success", "json-failure",
+    ])
+    func `node lifecycle respects process exit and optional JSON status`(_ scenario: String) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_NODE_SERVICE_TEST_CASE": scenario],
+            defaults: ["openclaw.gatewayProjectRootPath": nil])
+        {
+            CommandResolver.setProjectRoot(root.path)
+            let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
+            try makeExecutableForTests(at: executable)
+            let script = """
+            #!/bin/sh
+            case "$OPENCLAW_NODE_SERVICE_TEST_CASE" in
+              failed-*) printf '{"ok":true}'; printf 'cleanup failed' >&2; exit 23 ;;
+              json-failure) printf '{"ok":false,"error":"reported failure"}' ;;
+              plain-success) printf 'service started' ;;
+              *) printf '{"ok":true}' ;;
+            esac
+            """
+            try script.write(to: executable, atomically: false, encoding: .utf8)
+
+            let action = switch scenario {
+            case "failed-stop": "stop"
+            case "failed-restart": "restart"
+            default: "start"
+            }
+            let expectedError: String? = switch scenario {
+            case "failed-start", "failed-stop", "failed-restart": "cleanup failed"
+            case "json-failure": "reported failure"
+            default: nil
+            }
+
+            #expect(await self.runNodeServiceAction(action, profile: AppProfile(environment: [:])) == expectedError)
+        }
+    }
+
     @Test func `reads node service ownership command directly from launchd`() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-node-\(UUID().uuidString).plist")

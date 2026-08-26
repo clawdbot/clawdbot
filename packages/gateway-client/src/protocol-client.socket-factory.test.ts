@@ -248,6 +248,69 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
     client.stop();
   });
+
+  it.each([true, false])(
+    "contains a terminal asynchronous reconnect failure (rethrow: %s)",
+    async (rethrow) => {
+      vi.useFakeTimers();
+      let socketAttempts = 0;
+      let disconnect: ((code: number, reason: string) => void) | undefined;
+      const onConnectError = vi.fn<(error: Error) => void>();
+      const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+      const onReconnectStopped = vi.fn<(error: Error) => void>();
+      const client = new GatewayProtocolClient<Record<string, never>>({
+        createSocket: (handlers) => {
+          socketAttempts += 1;
+          if (socketAttempts > 1) {
+            throw new Error("loopback proxy policy rejected");
+          }
+          let open = true;
+          disconnect = (code, reason) => {
+            open = false;
+            handlers.close(code, reason);
+          };
+          return {
+            isOpen: () => open,
+            send: vi.fn(),
+            close: (code, reason) => disconnect?.(code ?? 1000, reason ?? ""),
+          };
+        },
+        createRequestId: () => "request-1",
+        buildConnectPlan: () => ({}),
+        buildConnectParams: (plan) => plan,
+        resolveClose: () => ({ retry: true, notify: true }),
+        onConnectError,
+        onCallbackError,
+        onReconnectStopped,
+        shouldRetrySocketFactoryError: () => rethrow,
+        rethrowSocketFactoryError: () => rethrow,
+        handshake: { mode: "require-challenge", timeoutMs: 100 },
+        reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+      });
+      client.start();
+      disconnect?.(1012, "service restart");
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(socketAttempts).toBe(2);
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      if (rethrow) {
+        expect(onCallbackError).toHaveBeenCalledExactlyOnceWith(
+          "reconnect",
+          expect.objectContaining({ message: "loopback proxy policy rejected" }),
+        );
+      } else {
+        expect(onCallbackError).not.toHaveBeenCalled();
+      }
+      expect(onReconnectStopped).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      client.stop();
+    },
+  );
 });
 
 describe("GatewayClient socket factory recovery", () => {

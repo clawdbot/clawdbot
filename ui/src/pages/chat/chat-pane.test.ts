@@ -8,6 +8,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
+  getRenderedModalDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
@@ -693,6 +694,62 @@ describe("chat pane initialization", () => {
 });
 
 describe("chat pane keyboard shortcuts", () => {
+  it("does not steal typing focus from a shadow-root confirmation", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const container = document.body.appendChild(document.createElement("div"));
+    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const cancel = modal.appendChild(document.createElement("button"));
+
+    try {
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
+      expect(document.querySelector("dialog[open]")).toBeNull();
+      cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+
+      cancel.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+      restoreDialogPolyfill();
+    }
+  });
+
+  it("does not steal typing focus from a light-DOM confirmation", () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const modal = document.body.appendChild(document.createElement("div"));
+    modal.setAttribute("aria-modal", "true");
+
+    try {
+      pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      modal.remove();
+    }
+  });
+
   it("toggles only the active pane's session workspace", () => {
     const client = createGatewayBrowserClientFixture();
     const sessions = createSessionCapabilityFixture();

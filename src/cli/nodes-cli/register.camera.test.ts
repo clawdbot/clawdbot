@@ -46,7 +46,7 @@ vi.mock("./rpc.js", async () => {
       return {
         payload: {
           format: "jpg",
-          base64: "redacted-base64",
+          base64: "cmVkYWN0ZWQtYmFzZTY0",
           width: 1600,
           height: 1200,
         },

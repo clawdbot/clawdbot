@@ -3046,7 +3046,9 @@ function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
-  if (!/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md)$/u.test(changedPath)) {
+  if (
+    !/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md(?:\.diff)?)$/u.test(changedPath)
+  ) {
     return null;
   }
   return ["test/scripts/prompt-snapshots.test.ts"];

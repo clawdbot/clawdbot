@@ -335,6 +335,53 @@ describe("lmstudio plugin", () => {
     });
   });
 
+  it.each([
+    {
+      name: "the local placeholder when no credential exists",
+      resolvedApiKey: null,
+      expectedApiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    },
+    {
+      name: "a preserved credential profile",
+      resolvedApiKey: { key: "profile-api-key", source: "profile" as const },
+      expectedApiKey: "profile-api-key",
+    },
+    {
+      name: "an environment credential",
+      resolvedApiKey: { key: "environment-api-key", source: "env" as const },
+      expectedApiKey: "environment-api-key",
+    },
+  ])("uses $name with the post-reset empty config", async ({ resolvedApiKey, expectedApiKey }) => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
+    });
+    const ctx = createLmstudioResetValidationContext(
+      {
+        customBaseUrl: "http://lmstudio.internal:1234/v1",
+        customModelId: "qwen/qwen3.5-9b",
+      },
+      resolvedApiKey,
+    );
+
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(true);
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledExactlyOnceWith({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      apiKey: expectedApiKey,
+      timeoutMs: 5000,
+    });
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    expect(ctx.config).toEqual({});
+  });
+
   it("rejects an unreachable LM Studio endpoint before destructive reset", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: false, models: [] });
     const ctx = createLmstudioResetValidationContext({
@@ -349,19 +396,26 @@ describe("lmstudio plugin", () => {
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("rejects LM Studio authentication failures before destructive reset", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 401, models: [] });
-    const ctx = createLmstudioResetValidationContext({
-      customBaseUrl: "http://lmstudio.internal:1234/v1",
-    });
+  it.each([401, 403, 404, 408, 425, 429, 500, 503])(
+    "preserves the existing HTTP %i reset failure guidance",
+    async (httpStatus) => {
+      fetchLmstudioModelsMock.mockResolvedValue({
+        reachable: true,
+        status: httpStatus,
+        models: [],
+      });
+      const ctx = createLmstudioResetValidationContext({
+        customBaseUrl: "http://lmstudio.internal:1234/v1",
+      });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
+      await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "LM Studio returned HTTP 401 while listing models at http://lmstudio.internal:1234/v1.\nCheck the base URL and API key, then re-run setup.",
-    );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(ctx.runtime.error).toHaveBeenCalledExactlyOnceWith(
+        `LM Studio returned HTTP ${httpStatus} while listing models at http://lmstudio.internal:1234/v1.\nCheck the base URL and API key, then re-run setup.`,
+      );
+      expect(ctx.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    },
+  );
 
   it("rejects a missing requested LM Studio model before destructive reset", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({

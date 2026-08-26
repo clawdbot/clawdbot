@@ -434,6 +434,42 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     );
   });
 
+  it("preserves encrypted media-only history when a blank top-level URL masks its file URL", async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$encrypted-media-a",
+        originServerTs: 1000,
+        content: {
+          msgtype: "m.image",
+          body: " \t ",
+          url: "",
+          file: {
+            url: "mxc://example.org/encrypted-media-a",
+            key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+            iv: "iv",
+            hashes: { sha256: "hash" },
+            v: "v2",
+          },
+        },
+      }),
+    );
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$trigger-encrypted-media", body: "trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "[matrix image attachment]",
+    );
+  });
+
   it("includes skipped poll updates in next trigger history", async () => {
     const getEvent = vi.fn(async () => ({
       event_id: "$poll",

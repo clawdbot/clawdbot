@@ -38,7 +38,7 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     enrollment.mode === "connect"
       ? `connect --target-file "$setup_code_file" --ephemeral --display-name ${shellQuote(enrollment.displayName)}`
       : `node run --ephemeral --display-name ${shellQuote(enrollment.displayName)}`;
-  const prepareCodex = (binary: string): string[] => {
+  const prepareCodex = (): string[] => {
     if (executionMode !== "remote-exec") {
       return [];
     }
@@ -71,8 +71,8 @@ export function createCrabboxNodeEnrollmentSetup(params: {
       "}",
     ].join("");
     return [
-      `  ${binary} plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
-      `  OPENCLAW_STATE_DIR="$state_dir" ${binary} plugins enable codex`,
+      `"$@" plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
+      'OPENCLAW_STATE_DIR="$state_dir" "$@" plugins enable codex',
     ];
   };
   const command = [
@@ -106,12 +106,12 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     "fi",
     'package_spec="$(cat "$package_spec_file")"',
     'if [ "$package_spec" = "@global" ]; then',
-    ...prepareCodex("openclaw"),
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
+    "  set -- openclaw",
     "else",
-    ...prepareCodex('npx --yes --package "$package_spec" -- openclaw'),
-    `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
+    '  set -- npx --yes --package "$package_spec" -- openclaw',
     "fi",
+    ...prepareCodex(),
+    `setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" "$@" ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
     'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$pid_file" ] && break; sleep 0.1; done',
     'test -s "$pid_file"',
   ].join("\n");
