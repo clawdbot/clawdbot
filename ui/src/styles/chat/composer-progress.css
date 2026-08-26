@@ -225,7 +225,12 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .session-progress-card__summary:hover {
+  /* Collapsed, the visible card extends past the summary (underlap arcs beside
+     the composer's rounded corners), so the highlight lives on the container to
+     fill the whole shape; a summary-only fill leaves slivers of the resting
+     background at those corners. */
+  .session-progress-card--composer:not([open]):hover,
+  .session-progress-card--composer[open] .session-progress-card__summary:hover {
     background: color-mix(
       in srgb,
       var(--text-strong) 5%,
