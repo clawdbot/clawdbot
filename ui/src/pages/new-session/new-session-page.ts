@@ -583,7 +583,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
                   Boolean(this.submission.pendingPlacement.sessionKey),
                 disabledReason: this.submission.submitting ? t("newSession.starting") : undefined,
                 mode: this.submission.permission.value,
-                sessionRoot: this.place.workspacePath(),
                 onSelect: (permissionMode) =>
                   this.submission.permission.set(permissionMode ?? undefined),
               }),
