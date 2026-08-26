@@ -106,6 +106,9 @@ export async function runGatewaySuspend(
       );
       return;
     }
+    if (latest.status === "draining") {
+      throw new Error("Gateway suspension unexpectedly entered drain mode");
+    }
 
     if (deadlineMs === undefined) {
       if (options.json) {

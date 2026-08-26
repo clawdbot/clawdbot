@@ -74,7 +74,10 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   normalizeAgentId,
@@ -1177,9 +1180,16 @@ export function buildGatewayCronService(params: {
         }
       };
       try {
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
+        const persistCompletion = async () => {
           await cron.updateWithPrecondition(job.id, { enabled: false }, completionToken);
-        });
+        };
+        if (getGatewaySuspendAdmissionPhase() === "draining") {
+          // The exact live watcher already blocks suspension; finish only its
+          // preconditioned terminal write without admitting unrelated work.
+          await persistCompletion();
+        } else {
+          await runWithGatewayIndependentRootWorkAdmission(persistCompletion);
+        }
         return () => {
           releaseCompletionToken();
           void reconcileExitWatchers();

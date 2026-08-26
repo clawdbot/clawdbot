@@ -19,6 +19,8 @@ import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-own
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
@@ -902,6 +904,56 @@ describe("buildGatewayCronService", () => {
       expect(state.cron.getJob(job.id)?.enabled).toBe(false);
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("persists an existing watcher exit during drain but fences its new scheduled run", async () => {
+    resetGatewayWorkAdmission();
+    const commandExit = createDeferred<RunExit>();
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-draining",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(),
+      wait: () => commandExit.promise,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const state = loadCronService(createCronConfig("server-cron-on-exit-draining"));
+    let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
+
+    try {
+      const job = await addCronJob(
+        state,
+        "watch and drain naturally",
+        { kind: "systemEvent", text: "done" },
+        {
+          schedule: { kind: "on-exit", command: "true" },
+          sessionTarget: "main",
+          wakeMode: "now",
+        },
+      );
+      await state.reconcileExitWatchers();
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+
+      state.cron.pauseScheduling();
+      suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspensionAdmission?.drain()).toBe(true);
+      commandExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
+
+      await vi.waitFor(() => expect(state.cron.getJob(job.id)?.enabled).toBe(false));
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+
+      state.cron.resumeScheduling();
+      expect(suspensionAdmission?.release()).toBe(true);
+    } finally {
+      commandExit.resolve(runExit());
+      state.cron.resumeScheduling();
+      suspensionAdmission?.release();
+      await state.cron.stopAndDrain?.();
+      resetGatewayWorkAdmission();
     }
   });
 

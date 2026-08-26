@@ -151,6 +151,72 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
+  it("settles already-admitted cron notifications while draining rejects unrelated work", async () => {
+    const webhookDelivery = createVoidDeferred();
+    const failureDelivery = createVoidDeferred();
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async () => {
+      await webhookDelivery.promise;
+      return {
+        response: new Response(null, { status: 204 }),
+        finalUrl: "https://example.invalid/cron",
+        release: vi.fn(async () => {}),
+      };
+    });
+    mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(async () => {
+      await failureDelivery.promise;
+    });
+    const job = createCompletionWebhookJob();
+    const parentAdmission = tryBeginGatewayRootWorkAdmission();
+    if (!parentAdmission) {
+      throw new Error("expected parent Gateway work admission");
+    }
+    const suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspensionAdmission?.drain()).toBe(true);
+
+    try {
+      let failureAlert: Promise<void> | undefined;
+      await parentAdmission.run(async () => {
+        dispatchGatewayCronFinishedNotifications({
+          evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+          job,
+          deps: {} as CliDeps,
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+        });
+        failureAlert = sendGatewayCronFailureAlert({
+          deps: {} as CliDeps,
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+          job,
+          payload: { text: "cron failed" },
+          channel: "discord",
+          to: "channel:ops",
+          mode: "announce",
+        });
+        await waitForFast(() => {
+          expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+          expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledOnce();
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(3);
+      });
+      parentAdmission.release();
+
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      webhookDelivery.resolve();
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+      failureDelivery.resolve();
+      await failureAlert;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+    } finally {
+      webhookDelivery.resolve();
+      failureDelivery.resolve();
+      parentAdmission.release();
+      suspensionAdmission?.release();
+    }
+  });
+
   it("keeps webhook delivery cold when its token owner is unavailable", async () => {
     const logger = { warn: vi.fn() };
     const job = createCompletionWebhookJob();

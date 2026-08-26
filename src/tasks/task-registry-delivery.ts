@@ -5,7 +5,7 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -200,7 +200,7 @@ async function runTaskDeliveryWithIndependentAdmission(
   ensureTaskRegistryReady();
   let admitted = false;
   try {
-    return await runWithGatewayIndependentRootWorkAdmission(async () => {
+    return await runWithGatewayIndependentRootWorkContinuation(async () => {
       admitted = true;
       return await deliver();
     });

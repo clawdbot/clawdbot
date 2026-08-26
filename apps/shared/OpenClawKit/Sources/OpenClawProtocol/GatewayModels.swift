@@ -1878,18 +1878,22 @@ public struct GatewaySuspendBlocker: Codable, Sendable {
 public struct GatewaySuspendPrepareParams: Codable, Sendable {
     public let requestid: String
     public let terminalpolicy: AnyCodable?
+    public let drain: Bool?
 
     public init(
         requestid: String,
-        terminalpolicy: AnyCodable? = nil)
+        terminalpolicy: AnyCodable? = nil,
+        drain: Bool? = nil)
     {
         self.requestid = requestid
         self.terminalpolicy = terminalpolicy
+        self.drain = drain
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
         case terminalpolicy = "terminalPolicy"
+        case drain
     }
 }
 
@@ -1917,6 +1921,40 @@ public struct GatewaySuspendPrepareBusyResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case status
         case reason
+        case retryafterms = "retryAfterMs"
+        case activecount = "activeCount"
+        case blockers
+    }
+}
+
+public struct GatewaySuspendPrepareDrainingResult: Codable, Sendable {
+    public let status: String
+    public let suspensionid: String
+    public let expiresatms: Int
+    public let retryafterms: Int
+    public let activecount: Int
+    public let blockers: [GatewaySuspendBlocker]
+
+    public init(
+        status: String,
+        suspensionid: String,
+        expiresatms: Int,
+        retryafterms: Int,
+        activecount: Int,
+        blockers: [GatewaySuspendBlocker])
+    {
+        self.status = status
+        self.suspensionid = suspensionid
+        self.expiresatms = expiresatms
+        self.retryafterms = retryafterms
+        self.activecount = activecount
+        self.blockers = blockers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case suspensionid = "suspensionId"
+        case expiresatms = "expiresAtMs"
         case retryafterms = "retryAfterMs"
         case activecount = "activeCount"
         case blockers
@@ -1974,6 +2012,36 @@ public struct GatewaySuspendStatusRunningResult: Codable, Sendable {
         status: String)
     {
         self.status = status
+    }
+}
+
+public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
+    public let status: String
+    public let expiresatms: Int
+    public let retryafterms: Int
+    public let activecount: Int
+    public let blockers: [GatewaySuspendBlocker]
+
+    public init(
+        status: String,
+        expiresatms: Int,
+        retryafterms: Int,
+        activecount: Int,
+        blockers: [GatewaySuspendBlocker])
+    {
+        self.status = status
+        self.expiresatms = expiresatms
+        self.retryafterms = retryafterms
+        self.activecount = activecount
+        self.blockers = blockers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case expiresatms = "expiresAtMs"
+        case retryafterms = "retryAfterMs"
+        case activecount = "activeCount"
+        case blockers
     }
 }
 
@@ -20939,6 +21007,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
 
 public enum GatewaySuspendPrepareResult: Codable, Sendable {
     case busy(GatewaySuspendPrepareBusyResult)
+    case draining(GatewaySuspendPrepareDrainingResult)
     case ready(GatewaySuspendPrepareReadyResult)
 
     private enum CodingKeys: String, CodingKey {
@@ -20950,6 +21019,7 @@ public enum GatewaySuspendPrepareResult: Codable, Sendable {
         let discriminator = try container.decode(String.self, forKey: .discriminator)
         switch discriminator {
         case "busy": self = try .busy(GatewaySuspendPrepareBusyResult(from: decoder))
+        case "draining": self = try .draining(GatewaySuspendPrepareDrainingResult(from: decoder))
         case "ready": self = try .ready(GatewaySuspendPrepareReadyResult(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
@@ -20963,6 +21033,7 @@ public enum GatewaySuspendPrepareResult: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .busy(let value): try value.encode(to: encoder)
+        case .draining(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
         }
     }
@@ -20970,6 +21041,7 @@ public enum GatewaySuspendPrepareResult: Codable, Sendable {
 
 public enum GatewaySuspendStatusResult: Codable, Sendable {
     case running(GatewaySuspendStatusRunningResult)
+    case draining(GatewaySuspendStatusDrainingResult)
     case ready(GatewaySuspendStatusReadyResult)
 
     private enum CodingKeys: String, CodingKey {
@@ -20981,6 +21053,7 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
         let discriminator = try container.decode(String.self, forKey: .discriminator)
         switch discriminator {
         case "running": self = try .running(GatewaySuspendStatusRunningResult(from: decoder))
+        case "draining": self = try .draining(GatewaySuspendStatusDrainingResult(from: decoder))
         case "ready": self = try .ready(GatewaySuspendStatusReadyResult(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
@@ -20994,6 +21067,7 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .running(let value): try value.encode(to: encoder)
+        case .draining(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
         }
     }
