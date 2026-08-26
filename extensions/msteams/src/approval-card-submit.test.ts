@@ -203,6 +203,20 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(getMSTeamsApprovalCardBinding(token)).not.toBeNull();
   });
 
+  it("rejects a default-account card submitted through a named-account listener", async () => {
+    const token = "receiver-account-mismatch";
+    registerBinding({ token });
+    const deps = createDeps();
+    deps.accountId = "support";
+
+    await expect(
+      maybeHandleMSTeamsApprovalCardSubmit({ context: createContext({ token }), deps }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(getMSTeamsApprovalCardBinding(token)).not.toBeNull();
+  });
+
   it("requires an allowlisted AAD identity and preserves tokens for the authorized approver", async () => {
     const token = "authorization";
     registerBinding({ token, approvalKind: "plugin", decision: "deny" });

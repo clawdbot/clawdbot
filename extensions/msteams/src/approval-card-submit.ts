@@ -50,7 +50,9 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     ignored("unknown or expired card token");
     return true;
   }
-  if (binding.accountId !== DEFAULT_ACCOUNT_ID) {
+  // A card is valid only on the bot instance that issued it. Without this
+  // receiver check, another account's listener could resolve the approval.
+  if (binding.accountId !== DEFAULT_ACCOUNT_ID || binding.accountId !== deps.accountId) {
     ignored("card token account mismatch");
     return true;
   }
