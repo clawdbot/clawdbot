@@ -775,21 +775,7 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
         {
           "path": "routes.*.secret",
           "expected": "string",
-          "ownerKind": "route",
-          "ownerContractFields": ["endpoint", "secret"]
-        },
-        {
-          "path": "feature.token",
-          "expected": "string",
-          "ownerKind": "capability",
-          "ownerId": "example-feature",
-          "ownerContractFields": ["endpoint", "token"]
-        },
-        {
-          "path": "provider.apiKey",
-          "expected": "string",
-          "ownerKind": "provider",
-          "ownerId": "example-provider"
+          "ownerKind": "route"
         }
       ]
     }
@@ -813,18 +799,12 @@ Each `dangerousFlags` entry supports:
 
 `secretInputs` supports:
 
-| Field                   | Required | Type       | What it means                                                                                                                                                                                                           |
-| ----------------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.         |
-| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional exact runtime ownership. |
+| Field                   | Required | Type       | What it means                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
+| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
 
-`ownerKind` accepts only `"route"`, `"capability"`, or `"provider"`; their isolated runtime owner kinds are `"plugin-route"`, `"plugin-capability"`, and `"plugin-provider"`, respectively. These namespaces are separate from core route, capability, and model-provider owners. A route owner uses its exact concrete plugin-relative matched config path as its local owner ID and must not declare `ownerId`. Capability and provider owners require a nonempty static, plugin-local `ownerId`.
-
-OpenClaw builds each plugin runtime owner ID as `<encoded-plugin-id>:<encoded-local-owner-id>`, encoding both components independently without rejecting unpaired UTF-16 surrogates. Different plugins can safely declare the same local ID, and identifiers containing `:` or `%` cannot collide through an alternate split. For example, plugin `example` with local capability owner ID `example-feature` has runtime owner ID `example:example-feature`; plugin `alpha:beta` with local owner ID `gamma` has runtime owner ID `alpha%3Abeta:gamma`. For the route pattern `routes.*.secret`, plugin `webhooks` with a concrete route key `a` has runtime owner `plugin-route:webhooks:routes.a.secret`. Missing or invalid ownership remains unknown and fails closed; it never grants ownership of the entire plugin.
-
-Concrete paths preserve actual configuration structure. Safe record keys use dotted notation, actual array indices use brackets such as `routes[0]`, and ambiguous record keys use JSON-quoted bracket notation. For example, a literal header key `X.Trace` becomes `headers["X.Trace"]`, while nested keys `X` and `Trace` remain `headers.X.Trace`; a record key `"0"` becomes `headers["0"]` and cannot collide with array index `[0]`. Plugin IDs containing dots or other ambiguous characters are also quoted, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
-
-Owned paths may declare `ownerContractFields` to limit last-known-good credential reuse to the listed behavior-bearing fields on the exact matched config block. Every declared field must exist on that block; if any field is missing, the owner contract is unknown and an unavailable credential becomes cold instead of reusing its last-known-good value. For example, include destination and credential fields while excluding operator-only descriptions. If `ownerContractFields` is omitted, the existing complete-plugin owner contract remains unchanged. Changing the plugin ID also changes the runtime owner identity, so an unavailable credential under the new ID is correctly treated as cold rather than reusing the previous plugin's last-known-good value.
+Concrete paths preserve literal record keys and array indices: `headers["X.Trace"]` remains distinct from `headers.X.Trace`, and record key `["0"]` remains distinct from array index `[0]`. Plugin IDs containing dots are quoted the same way, such as `plugins.entries["example.plugin"].config.headers["X.Trace"]`.
 
 ## mediaUnderstandingProviderMetadata reference
 
