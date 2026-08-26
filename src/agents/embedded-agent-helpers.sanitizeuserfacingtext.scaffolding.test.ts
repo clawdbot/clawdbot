@@ -32,6 +32,13 @@ describe("user-facing internal scaffolding", () => {
       input: `Visible answer.\n\n\`\`\`text\n${conversationContext}\n\`\`\``,
     },
     { name: "Markdown quote", input: `Visible answer.\n\n> ${conversationContext}` },
+    {
+      name: "multiline Markdown quote",
+      input: `Visible answer.\n\n${conversationContext
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")}`,
+    },
   ])("never preserves an exact private prompt inside a $name", ({ input }) => {
     const result = sanitizeUserFacingText(input, { conversationContext });
 

@@ -214,4 +214,19 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered[0]).not.toContain("private history");
     expect(delivered[0]).not.toContain("private inbound paragraph");
   });
+
+  it("never delivers an exact private prompt quoted on every Markdown line", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private inbound paragraph",
+    });
+    const quotedContext = conversationContext
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+
+    await prepareAndDispatch({ text: `${quotedContext}\n\nVisible answer.` }, conversationContext);
+
+    expect(delivered).toEqual(["Visible answer."]);
+  });
 });

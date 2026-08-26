@@ -92,8 +92,12 @@ function stripVerifiedConversationContext(
   const normalizedSource = source.replace(/\r\n?/gu, "\n");
   let result = text;
   if (containsConversationMarker) {
-    const promptPattern = normalizedSource.split("\n").map(escapeRegExp).join("\\r?\\n");
-    const copiedPrompt = new RegExp(promptPattern, "gu");
+    const quotedLinePrefix = "(?:[ \\t]{0,3}>[ \\t]?)*";
+    const promptPattern = normalizedSource
+      .split("\n")
+      .map(escapeRegExp)
+      .join(`\\r?\\n${quotedLinePrefix}`);
+    const copiedPrompt = new RegExp(`(?:^[ \\t]{0,3}(?:>[ \\t]?)+)?${promptPattern}`, "gmu");
     // Markdown formatting does not make an exact owner-bound private prompt safe to disclose.
     result = text.replace(copiedPrompt, "");
   }
@@ -110,7 +114,14 @@ function stripVerifiedConversationContext(
   let candidateStart = result.indexOf(sourceStart, searchStart);
   while (candidateStart !== -1) {
     const suffix = result.slice(candidateStart).replace(/\r\n?/gu, "\n");
-    if (suffix.length < normalizedSource.length && normalizedSource.startsWith(suffix)) {
+    const unquotedSuffix = suffix
+      .replace(/\n(?:[ \t]{0,3}>[ \t]?)+/gu, "\n")
+      .replace(/\n[ \t]{1,3}$/u, "\n");
+    if (
+      (suffix.length < normalizedSource.length && normalizedSource.startsWith(suffix)) ||
+      (unquotedSuffix.length < normalizedSource.length &&
+        normalizedSource.startsWith(unquotedSuffix))
+    ) {
       // A later stream update can complete private prompt bytes that cannot be retracted once sent.
       return result.slice(0, candidateStart);
     }

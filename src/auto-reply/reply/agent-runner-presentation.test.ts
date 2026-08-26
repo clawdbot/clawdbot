@@ -123,6 +123,43 @@ describe("agent runner streaming presentation", () => {
     ).toEqual({ text: "Visible streamed answer.", skip: false });
   });
 
+  it.each([
+    { name: "standard", prefix: "> " },
+    { name: "indented", prefix: "  > " },
+    { name: "nested", prefix: ">> " },
+    { name: "spaced nested", prefix: "> > " },
+  ])(
+    "withholds $name blockquoted prompt bytes before private stream text is visible",
+    ({ prefix }) => {
+      const conversationContext = [
+        "[Chat messages since your last reply - for context]",
+        "Alice: private history",
+        "",
+        "[Current message - respond to this]",
+        "private inbound paragraph",
+      ].join("\n");
+      const quotedContext = conversationContext
+        .split("\n")
+        .map((line) => `${prefix}${line}`)
+        .join("\n");
+      const presentation = createPresentation({ conversationContext });
+
+      for (let length = 1; length <= quotedContext.length; length += 1) {
+        const visibleText =
+          presentation.normalizeStreamingText({ text: quotedContext.slice(0, length) }).text ?? "";
+
+        expect(visibleText).not.toContain("Alice");
+        expect(visibleText).not.toContain("private inbound");
+      }
+
+      expect(
+        presentation.normalizeStreamingText({
+          text: `${quotedContext}\n\nVisible streamed answer.`,
+        }),
+      ).toEqual({ text: "Visible streamed answer.", skip: false });
+    },
+  );
+
   it("withholds a trailing copied-prompt prefix without hiding safe preceding streamed text", () => {
     const conversationContext = [
       "[Current message - respond to this]",
