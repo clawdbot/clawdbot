@@ -84,6 +84,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           );
         }
         worktreePath = worktree.path;
+        // Automatic reclaim must recheck admission after fencing, before interrupting live work.
+        authorize?.();
         const released = await interruptSessionWorkAdmissions({
           scope: target.storePath,
           identities: lifecycleIdentities,
