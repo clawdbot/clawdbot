@@ -131,8 +131,9 @@ To filter channel activity (WhatsApp/Telegram/etc), use:
 openclaw channels logs --channel whatsapp
 ```
 
-`--channel` defaults to `all`; `--lines <n>` (default 200) and `--json` are also
-available.
+`--channel` defaults to `all`; `--level <level>` accepts `fatal`, `error`, `warn`,
+`info`, `debug`, or `trace` and keeps that level plus more severe entries.
+`--lines <n>` (default 200) and `--json` are also available.
 
 ## Log formats
 
