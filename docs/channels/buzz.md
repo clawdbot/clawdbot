@@ -316,6 +316,9 @@ query or Gateway polling.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
+Each room can override `groupPolicy`, `groupAllowFrom`, or both. An omitted room
+setting inherits the account-wide value; an explicitly empty room allowlist
+denies every sender when its effective policy is `"allowlist"`.
 Set `requireMention: true` only when the Buzz client used by those members can
 address the bot identity.
 
@@ -355,6 +358,24 @@ For a narrower sender policy:
     buzz: {
       groupPolicy: "allowlist",
       groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+    },
+  },
+}
+```
+
+To restrict one room while keeping other configured rooms open:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groupPolicy: "open",
+      groups: {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["<64_CHARACTER_HEX_SENDER_PUBLIC_KEY>"],
+        },
+      },
     },
   },
 }

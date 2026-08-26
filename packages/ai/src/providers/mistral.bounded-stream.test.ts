@@ -26,6 +26,20 @@ async function readAllChunks(body: ReadableStream<Uint8Array> | null): Promise<{
   return { total };
 }
 
+async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe("Mistral bounded-stream-read real wire proof (loopback http.createServer)", () => {
   it("caps an oversized body streamed chunked over real wire", async () => {
     const fetcher = createBoundedMistralFetcher(MAX);
@@ -165,6 +179,31 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
     // Synthetic stream chunks are exactly 1 MiB aligned, so cap+1 reads
     // give exactly cap + 1 MiB = 16 MiB + 1 MiB = 17 825 792 bytes.
     expect(got).toBe(16777216 + CHUNK);
+  });
+
+  it("finishes wrapped response cancellation after handing cleanup upstream", async () => {
+    let cancelStarted = false;
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelStarted = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    const fetcher = createBoundedMistralFetcher(
+      MAX,
+      async () => new Response(upstreamBody, { status: 200 }),
+    );
+    const wrapped = await fetcher("http://unused.invalid/");
+    const reader = wrapped.body?.getReader();
+    if (!reader) {
+      throw new Error("bounded Mistral response did not expose a body reader");
+    }
+
+    await expect(
+      settleWithin(reader.cancel("done"), "wrapped response cancel"),
+    ).resolves.toBeUndefined();
+    expect(cancelStarted).toBe(true);
+    reader.releaseLock();
   });
 });
 

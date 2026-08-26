@@ -42,6 +42,7 @@ import {
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
+  ExecProcessPreflightError,
   type ExecProcessHandle,
   type ExecProcessOutcome,
   normalizePathPrepend,
@@ -236,7 +237,8 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+      const effectiveDefaultMode =
+        elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -290,6 +292,7 @@ export function createExecTool(
         requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxRequired: defaults?.sandboxRequired,
       });
       const host: ExecHost = target.effectiveHost;
 
@@ -561,10 +564,6 @@ export function createExecTool(
           });
         }
 
-        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
-        if (gatewayApprovalDenied) {
-          return attachExecApprovalReview(gatewayApprovalDenied, approvalReview);
-        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
@@ -590,6 +589,7 @@ export function createExecTool(
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           onUpdate,
+          beforeSpawn: revalidateGatewayApproval,
           onSettledBeforeNotify: (outcome) => {
             settledOutcome = outcome;
             finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
@@ -598,7 +598,7 @@ export function createExecTool(
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         discardPreparedSandboxWorkdir?.();
-        throw error;
+        return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
       let yielded = false;

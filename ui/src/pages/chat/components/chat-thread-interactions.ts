@@ -29,6 +29,7 @@ import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
@@ -77,6 +78,7 @@ export type ChatThreadProps = {
   streamStartedAt: number | null;
   runId?: string | null;
   runOutputTokens?: number | null;
+  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
@@ -99,6 +101,7 @@ export type ChatThreadProps = {
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -112,9 +115,9 @@ export type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;

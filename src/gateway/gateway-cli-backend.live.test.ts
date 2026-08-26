@@ -284,11 +284,6 @@ describeLive("gateway live (cli backend)", () => {
 
       clearRuntimeConfigSnapshot();
       applyCliBackendLiveEnv(preservedEnv);
-      if (CLI_CACHE_PROBE) {
-        // Cache proof crosses the production prepared-runtime and MCP dispatch boundary.
-        // Minimal Gateway mode intentionally omits that publication and cannot prove this path.
-        setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-      }
 
       const token = `test-${randomUUID()}`;
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);

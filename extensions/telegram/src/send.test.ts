@@ -5779,33 +5779,50 @@ describe("sendPollTelegram", () => {
     });
   });
 
-  it("maps durationSeconds to open_period", async () => {
-    const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
-        makeTelegramPollMessage({ poll: { id: "p1" } }),
+  it.each([5, 600, 601, 3_600, 86_400, 604_800])(
+    "maps supported poll duration %i seconds to open_period",
+    async (durationSeconds) => {
+      const api = makeTelegramApiTestMock({
+        sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+          makeTelegramPollMessage({ poll: { id: "p1" } }),
+        ),
+      });
+
+      const res = await sendPollTelegram(
+        "123",
+        { question: " Q ", options: [" A ", "B "], durationSeconds },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
+      );
+
+      expect(res).toMatchObject({
+        messageId: "123",
+        chatId: "555",
+        pollId: "p1",
+        pollAnswerRouting: "unavailable",
+      });
+      expect(api.sendPoll).toHaveBeenCalledTimes(1);
+      const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
+      const sendPollCall = firstMockCall(sendPollMock, "send poll call");
+      expect(sendPollCall[0]).toBe("123");
+      expect(sendPollCall[1]).toBe("Q");
+      expect(sendPollCall[2]).toEqual(["A", "B"]);
+      expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(durationSeconds);
+      expect(wasSentByBot("123", 123)).toBe(true);
+    },
+  );
+
+  it.each([4, 604_801])("rejects unsupported poll duration %i seconds", async (durationSeconds) => {
+    const api = makeTelegramApiTestMock({ sendPoll: vi.fn<Bot["api"]["sendPoll"]>() });
+
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"], durationSeconds },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
       ),
-    });
+    ).rejects.toThrow("Telegram poll durationSeconds must be between 5 and 604800");
 
-    const res = await sendPollTelegram(
-      "123",
-      { question: " Q ", options: [" A ", "B "], durationSeconds: 60 },
-      { cfg: TELEGRAM_TEST_CFG, token: "t", api },
-    );
-
-    expect(res).toMatchObject({
-      messageId: "123",
-      chatId: "555",
-      pollId: "p1",
-      pollAnswerRouting: "unavailable",
-    });
-    expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
-    const sendPollCall = firstMockCall(sendPollMock, "send poll call");
-    expect(sendPollCall[0]).toBe("123");
-    expect(sendPollCall[1]).toBe("Q");
-    expect(sendPollCall[2]).toEqual(["A", "B"]);
-    expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
-    expect(wasSentByBot("123", 123)).toBe(true);
+    expect(api.sendPoll).not.toHaveBeenCalled();
   });
 
   it("records a public poll origin with its resolved topic", async () => {

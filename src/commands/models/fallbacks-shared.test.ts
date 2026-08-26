@@ -57,4 +57,33 @@ describe("listFallbacksCommand", () => {
       fallbacks: [testCase.model],
     });
   });
+
+  it.each([
+    { label: "Fallbacks", key: "model" as const, model: "anthropic/claude-sonnet-4-6" },
+    { label: "Image fallbacks", key: "imageModel" as const, model: "openai/gpt-image-1" },
+  ])("writes populated plain $label directly to stdout", async (testCase) => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: {
+        defaults: {
+          [testCase.key]: { fallbacks: [testCase.model] },
+        },
+      },
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    await listFallbacksCommand(
+      { label: testCase.label, key: testCase.key },
+      { plain: true },
+      runtime,
+    );
+
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith(testCase.model);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 });

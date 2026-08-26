@@ -43,6 +43,8 @@ export const ApprovalProtocolSchemas = {
   ExecApprovalRequestParams: execApprovals.ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: execApprovals.ExecApprovalResolveParamsSchema,
   QuestionOption: questions.QuestionOptionSchema,
+  QuestionSecretStoreBinding: questions.QuestionSecretStoreBindingSchema,
+  QuestionSecretStoreExisting: questions.QuestionSecretStoreExistingSchema,
   Question: questions.QuestionSchema,
   QuestionRequestQuestion: questions.QuestionRequestQuestionSchema,
   QuestionAnswers: questions.QuestionAnswersSchema,

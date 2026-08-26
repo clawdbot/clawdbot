@@ -279,6 +279,50 @@ describe("Git-backed SQLite snapshots", () => {
     expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
+  it("backs up a configured external agent database for explicit and all scopes", async () => {
+    const root = await fs.realpath(await tempRoot());
+    const { stateDir } = createStateDatabaseFixture(root);
+    const agentDir = path.join(root, "external-agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(agentDir, { recursive: true });
+    const { closeOpenClawAgentDatabaseByPath, openOpenClawAgentDatabase } =
+      await import("../state/openclaw-agent-db.js");
+    const agentDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    closeOpenClawAgentDatabaseByPath(agentDatabase.path);
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
+
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      async () => {
+        for (const { scope, selection } of [
+          { scope: "explicit", selection: { agents: ["main"] } },
+          { scope: "all", selection: { all: true } },
+        ]) {
+          const repositoryPath = path.join(root, `${scope}-repository`);
+          const result = await backupGitCreateCommand(createTestRuntime(), {
+            repository: repositoryPath,
+            ...selection,
+          });
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(repositoryPath, "agents", "main", "manifest.json"), "utf8"),
+          ) as { identity: { role: string; agentId: string } };
+
+          expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
+          expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
+          if (scope === "all") {
+            await expect(
+              fs.stat(path.join(repositoryPath, "global", "manifest.json")),
+            ).resolves.toBeDefined();
+          }
+        }
+      },
+    );
+  });
+
   it("stages only backup-owned paths in an adopted repository", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);

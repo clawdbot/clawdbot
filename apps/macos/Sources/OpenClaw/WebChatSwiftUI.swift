@@ -658,17 +658,18 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         archived: Bool?,
         unread: Bool?) async throws
     {
-        let target = self.sessionTarget(for: key)
-        let request = OpenClawChatGatewayRequests.patchSession(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID,
-            expectedSessionID: expectedSessionID,
-            label: label,
-            category: category,
-            pinned: pinned,
-            archived: archived,
-            unread: unread)
-        _ = try await self.connection.request(request)
+        if let routeLease = await self.acquireSessionMutationRouteLease() {
+            try await routeLease.patchSession(
+                key: key,
+                expectedSessionID: expectedSessionID,
+                label: label,
+                category: category,
+                pinned: pinned,
+                archived: archived,
+                unread: unread)
+            return
+        }
+        throw OpenClawChatTransportSendError.notDispatched
     }
 
     func deleteSession(key: String) async throws {

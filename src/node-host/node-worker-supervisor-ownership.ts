@@ -38,7 +38,6 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
 export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   state: "observed";
   outcome: NodeWorkerTerminalOutcome;
-  persistenceError?: unknown;
 };
 
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;

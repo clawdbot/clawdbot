@@ -69,11 +69,7 @@ export {
 } from "./provider-auth-write-compat.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { readCodexCliCredentialsCached } from "../agents/cli-credentials.js";
-export {
-  type ClaudeCliCredential,
-  type ClaudeCliCredentialReadOptions,
-  readClaudeCliCredentialsCached,
-} from "./provider-auth-claude-compat.js";
+export { readClaudeCliCredentialsCached } from "./provider-auth-claude-compat.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   CUSTOM_LOCAL_AUTH_MARKER,

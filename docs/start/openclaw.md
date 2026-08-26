@@ -166,12 +166,12 @@ Example:
 ## Heartbeats (proactive mode)
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable recurring cadence. Targeted event-driven wakes, such as background exec completion follow-ups, remain available and do not create a recurring schedule. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
 - If no scratch exists, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK`, optionally with at most 300 characters of remaining text, OpenClaw suppresses outbound delivery for that heartbeat. The 300-character budget is fixed.
+- If the agent replies with `NO_REPLY`, OpenClaw suppresses outbound delivery for that heartbeat. Legacy `HEARTBEAT_OK` replies remain supported with a fixed 300-character acknowledgment budget.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns - shorter intervals burn more tokens.
 

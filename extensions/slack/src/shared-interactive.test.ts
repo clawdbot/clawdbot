@@ -76,7 +76,22 @@ describe("buildSlackInteractiveBlocks", () => {
     ]);
   });
 
-  it("truncates Slack render strings to Block Kit limits", () => {
+  it("preserves long legacy text, whitespace, protected entities, and surrogate pairs", () => {
+    const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
+    const blocks = buildSlackInteractiveBlocks({ blocks: [{ type: "text", text }] });
+    const sections = blocks.map((block) =>
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? block.text.text
+        : "",
+    );
+
+    expect(sections.join("")).toBe(text);
+    expect(sections).toHaveLength(2);
+    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
+    expect(sections.some((section) => section.includes("&amp;🚀"))).toBe(true);
+  });
+
+  it("keeps Slack sections and interactive controls within Block Kit limits", () => {
     const long = "x".repeat(120);
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
@@ -85,15 +100,24 @@ describe("buildSlackInteractiveBlocks", () => {
         { type: "buttons", buttons: [{ label: long, value: long }] },
       ],
     });
-    const section = blocks[0] as { text?: { text?: string } };
-    const selectBlock = blocks[1] as {
+    const sections = blocks.flatMap((block) =>
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? [block.text.text]
+        : [],
+    );
+    const selectBlock = blocks.find(
+      (block) => block.type === "actions" && block.block_id === "openclaw_reply_select_1",
+    ) as {
       elements?: Array<{ placeholder?: { text?: string } }>;
     };
-    const buttonBlock = blocks[2] as {
+    const buttonBlock = blocks.find(
+      (block) => block.type === "actions" && block.block_id === "openclaw_reply_buttons_1",
+    ) as {
       elements?: Array<{ value?: string }>;
     };
 
-    expect((section.text?.text ?? "").length).toBeLessThanOrEqual(3000);
+    expect(sections.join("")).toBe("y".repeat(3_100));
+    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
     expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
@@ -388,6 +412,31 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it.each(["text", "context"] as const)(
+    "preserves long %s presentation blocks without truncating their mrkdwn",
+    (type) => {
+      const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
+      const presentation: MessagePresentation = { blocks: [{ type, text }] };
+      const blocks = buildSlackPresentationBlocks(presentation);
+      const chunks = blocks.flatMap((block) => {
+        if (block.type === "section" && "text" in block && block.text?.type === "mrkdwn") {
+          return [block.text.text];
+        }
+        const element =
+          block.type === "context" && "elements" in block ? block.elements[0] : undefined;
+        return element?.type === "mrkdwn" ? [element.text] : [];
+      });
+
+      expect(canRenderSlackPresentation(presentation)).toBe(true);
+      expect(chunks.join("")).toBe(text);
+      expect(chunks).toHaveLength(2);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+      expect(
+        blocks.every((block) => block.type === (type === "text" ? "section" : "context")),
+      ).toBe(true);
+    },
+  );
+
   it("renders question choices with compact private indices", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     expect(

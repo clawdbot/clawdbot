@@ -371,6 +371,14 @@ side effects finish. Both helpers accept the same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 
+Pass `ctx.foregroundPromptContext` built with
+`buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
+`EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop
+experience review rebuilds its system prompt and tool catalog from that
+context, so the review shares the foreground turn's prompt-cache prefix.
+Omit it only for runs that have no foreground prompt, such as CLI hook
+contexts; the review is skipped for those.
+
 ### User input and tool surfaces
 
 Native harnesses that expose a runtime-level user-input request should use the

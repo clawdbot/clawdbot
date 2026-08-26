@@ -1001,7 +1001,7 @@ describe("qa cli runtime", () => {
     },
   );
 
-  it("filters QA-channel-pinned scenarios from an implicit Crabline smoke profile", async () => {
+  it("filters QA-channel-pinned scenarios from an implicit Crabline driver profile", async () => {
     runQaSuite.mockImplementationOnce(async (params) => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
       const observedCells = executionCellsForSuiteParams(params);
@@ -1049,7 +1049,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("dispatches the Matrix restart scenario through the Crabline smoke profile", async () => {
+  it("dispatches the Matrix restart scenario through the Crabline driver profile", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "smoke-ci",

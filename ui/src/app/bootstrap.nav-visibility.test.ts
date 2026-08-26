@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
   withSidebarNavCollapseIntent,
 } from "../app-session-route-paths.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
-import { loadSettings, saveSettings } from "./settings.ts";
+import { loadSettings, saveSettings, setSettingsChangeListener } from "./settings.ts";
 
 const SIDEBAR_COLLAPSE_SEARCH = new URLSearchParams({
   [SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name]: SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
@@ -83,6 +83,33 @@ describe("normalizeInitialApplicationLocation", () => {
     } finally {
       runtime?.stop();
       window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it("keeps sidebar visibility in memory without rewriting persisted settings", () => {
+    const previousSettings = loadSettings();
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+    const onPersistedSettingsChanged = vi.fn();
+
+    try {
+      runtime = bootstrapApplication({
+        sessionPathBuilderReady: new Promise<void>(() => {}),
+      });
+      setSettingsChangeListener(onPersistedSettingsChanged);
+
+      runtime.context.navigation.update({ navCollapsed: true });
+
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(true);
+      expect(onPersistedSettingsChanged).not.toHaveBeenCalled();
+
+      runtime.context.navigation.update({ navWidth: previousSettings.navWidth + 1 });
+
+      expect(onPersistedSettingsChanged).toHaveBeenCalledOnce();
+      expect(loadSettings().navWidth).toBe(previousSettings.navWidth + 1);
+    } finally {
+      runtime?.stop();
+      setSettingsChangeListener(null);
       saveSettings(previousSettings);
     }
   });

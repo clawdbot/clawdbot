@@ -529,6 +529,9 @@ See [BTW side questions](/tools/btw) for the full behavior.
   <Accordion title="Fast path and inline shortcuts">
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
+    - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
+    - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
+    - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - Unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text.
 
   </Accordion>

@@ -484,6 +484,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    sessionPersistence: params.sessionPersistence,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,

@@ -91,16 +91,17 @@ async function loadCatalogForBrowse<T>(params: {
       agentId: params.agentId,
       view,
     });
-  // Provider-policy wildcards newly escalate ordinary inventory views to live discovery.
-  // Keep those implicit loads within the browse deadline; explicit all/configured loads retain
-  // their existing completion semantics unless the caller requests a timeout.
+  // Implicit inventory reads stay bounded; explicit refreshes complete unless their caller
+  // explicitly requests a full-discovery deadline.
   const shouldTimeoutFullDiscovery =
-    params.timeoutFullDiscovery ||
-    (requiresFullDiscovery && (view === "default" || view === "provider-config"));
-  if (requiresFullDiscovery && !shouldTimeoutFullDiscovery) {
+    params.timeoutFullDiscovery === true ||
+    (params.refresh !== true &&
+      requiresFullDiscovery &&
+      (view === "default" || view === "provider-config"));
+  if ((requiresFullDiscovery || params.refresh === true) && !shouldTimeoutFullDiscovery) {
     return await params.loadCatalog({
-      readOnly: false,
-      ...(params.refresh ? { refresh: true } : {}),
+      readOnly: !requiresFullDiscovery,
+      ...(requiresFullDiscovery && params.refresh ? { refresh: true } : {}),
     });
   }
 

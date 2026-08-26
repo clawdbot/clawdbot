@@ -1,9 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -296,6 +301,57 @@ function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
 }
 
+function runGatewayPendingWorkContinuation<T>(params: {
+  method: string;
+  client: GatewayRequestOptions["client"];
+  requestParams: unknown;
+  context: GatewayRequestContext;
+  run: () => Promise<T>;
+}): Promise<T> | null {
+  if (getGatewaySuspendAdmissionPhase() !== "draining" || !isRecord(params.requestParams)) {
+    return null;
+  }
+  const request = params.requestParams;
+  if (params.client?.connect.role === "node") {
+    const invokeId =
+      params.method === "node.invoke.progress"
+        ? request.invokeId
+        : params.method === "node.invoke.result"
+          ? request.id
+          : undefined;
+    if (typeof invokeId !== "string" || typeof request.nodeId !== "string") {
+      return null;
+    }
+    return params.context.nodeRegistry.runPendingInvokeContinuation({
+      invokeId,
+      nodeId: request.nodeId,
+      connId: params.client.connId,
+      run: params.run,
+    });
+  }
+  if (params.client?.connect.role !== "operator" || typeof request.id !== "string") {
+    return null;
+  }
+  if (params.method === "question.resolve" || params.method === "question.get") {
+    return params.context.questionManager?.runPendingContinuation(request.id, params.run) ?? null;
+  }
+  const manager =
+    params.method === "exec.approval.resolve"
+      ? params.context.execApprovalManager
+      : params.method === "plugin.approval.resolve"
+        ? params.context.pluginApprovalManager
+        : params.method === "approval.resolve"
+          ? request.kind === "exec"
+            ? params.context.execApprovalManager
+            : request.kind === "plugin"
+              ? params.context.pluginApprovalManager
+              : request.kind === "system-agent"
+                ? params.context.systemAgentApprovalManager
+                : undefined
+          : undefined;
+  return manager?.runPendingContinuation(request.id, params.run) ?? null;
+}
+
 async function authorizeAuthenticatedProfileForMethod(params: {
   client: GatewayRequestOptions["client"];
   method: string;
@@ -510,6 +566,20 @@ export async function runWithGatewayRequestEnvelope<T>(
     isTargetedNonSafeGatewayRestartRequest(options.requestParams)
       ? tryBeginGatewayPreparedRestartRootWorkAdmission()
       : null);
+  if (!rootWorkAdmission) {
+    // Completion frames arrive on their own socket chains. Only their exact
+    // live owner can re-enter the already-admitted root that is waiting for them.
+    const continuation = runGatewayPendingWorkContinuation({
+      method,
+      client,
+      requestParams: options.requestParams,
+      context: options.context,
+      run: () => runWithGatewayRequestEnvelope(method, client, fn, options),
+    });
+    if (continuation) {
+      return await continuation;
+    }
+  }
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -530,7 +600,9 @@ export async function runWithGatewayRequestEnvelope<T>(
           retryAfterMs: 1_000,
           details: {
             method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            reason: restartDraining
+              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
             phase: getGatewaySuspendAdmissionPhase(),
           },
         },

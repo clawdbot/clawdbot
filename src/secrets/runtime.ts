@@ -655,7 +655,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     if (!runtimeConfig || !runtimeSourceConfig || !runtimeMetadata) {
       return false;
     }
-    const config = { ...runtimeConfig };
+    const config = cloneConfigWithResolutionFacts(runtimeConfig);
     const modelsPatch = patchResolvedSecretRefLeaves({
       current: runtimeConfig.models,
       source: providerAuthConfig.models,

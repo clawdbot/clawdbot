@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 9,
+      "state": 11,
       "agent": 17
     }
   },
@@ -63,6 +63,8 @@
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
+    "!dist/plugin-sdk/channel-ingress-test-runtime.js",
+    "!dist/plugin-sdk/channel-ingress-test-runtime.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
     "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",
@@ -74,6 +76,7 @@
     "!dist/plugin-sdk/channel-test-helpers.d.ts",
     "!dist/plugin-sdk/chat-channel-ids.d.ts",
     "!dist/plugin-sdk/cli-backend.d.ts",
+    "!dist/plugin-sdk/claude-model-runtime.d.ts",
     "!dist/plugin-sdk/cli-runtime.d.ts",
     "!dist/plugin-sdk/codex-mcp-projection.d.ts",
     "!dist/plugin-sdk/codex-session-transcript-runtime.d.ts",
@@ -370,13 +373,6 @@
     "!docs/releases/**",
     "!docs/**/*.jpg",
     "!docs/**/*.png",
-    "src/agents/templates/",
-    "scripts/crabbox-routing-policy.mts",
-    "scripts/crabbox-wrapper-providers.mts",
-    "scripts/crabbox-wrapper.mjs",
-    "scripts/crabbox-wrapper.mts",
-    "scripts/testbox-lease-freshness.mts",
-    "scripts/lib/tsx-cli-shim.mjs",
     "patches/",
     "skills/",
     "custodian-skills/",
@@ -791,6 +787,9 @@
     },
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
+    },
+    "./plugin-sdk/claude-model-runtime": {
+      "default": "./dist/plugin-sdk/claude-model-runtime.js"
     },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
@@ -1524,7 +1523,7 @@
     "audit:seams": "node --import tsx scripts/audit-seams.mts",
     "build": "node --import tsx scripts/build-all.mts",
     "build:ci-artifacts": "node --import tsx scripts/build-all.mts ciArtifacts",
-    "build:docker": "node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
+    "build:docker": "pnpm plugins:assets:build && node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
     "build:package": "node --import tsx scripts/build-all.mts package",
     "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
@@ -1965,6 +1964,7 @@
     "test:startup:bench:update": "node --import tsx scripts/test-update-cli-startup-bench.mts",
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
+    "test:sessions:hydration-memory": "node --import tsx scripts/bench-session-manager-hydration-memory.ts",
     "test:startup:memory": "node --import tsx scripts/ensure-cli-startup-build.mts && node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && node --import tsx scripts/ensure-playwright-chromium.mts && pnpm --dir ui test",
     "test:ui:e2e": "node --import tsx scripts/ensure-playwright-chromium.mts && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",
@@ -1975,8 +1975,8 @@
     "test:watch": "node --import tsx scripts/test-projects.mts --watch",
     "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
     "test:windows:ci:1": "node --import tsx scripts/test-projects.mts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/state-migrations.audit-logs.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/shared/runtime-import.test.ts src/shared/worker-bundle-archive.test.ts src/node-host/node-worker-bundle-installer.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts src/gateway/worker-environments/workspace-quiescence.windows.test.ts",
-    "test:windows:ci:2": "node --import tsx scripts/test-projects.mts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
-    "test:windows:schtasks:integration": "node --import tsx scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
+    "test:windows:ci:2": "node --import tsx scripts/test-projects.mts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/agents/sessions/exec.real.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/process/supervisor/supervisor.anchored-shell.real.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
+    "test:windows:schtasks:integration": "node --import tsx scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -2115,7 +2115,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "esbuild": "0.28.2",
     "ipaddr.js": "2.5.0",
     "jscpd": "5.0.16",
@@ -2140,7 +2140,7 @@
     "tsx": "4.23.12",
     "unrun": "0.3.1",
     "vite": "8.2.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

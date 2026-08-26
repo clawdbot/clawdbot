@@ -9,17 +9,10 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
-import {
-  cleanupManagedOutgoingMediaRecords,
-  createManagedOutgoingMediaBlocks,
-} from "../managed-image-attachments.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { createManagedOutgoingMediaBlocks } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
-import { hasRegisteredChatRunForSessionKey } from "./session-active-runs.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
-const chatHistoryManagedMediaCleanupState = new Map<string, Promise<void>>();
 
 export type AssistantDisplayContentBlock = Record<string, unknown>;
 
@@ -433,41 +426,4 @@ export function hasManagedOutgoingAssistantContent(
         (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
     ),
   );
-}
-
-export function scheduleChatHistoryManagedMediaCleanup(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
-}) {
-  const cleanupKey = params.agentId
-    ? `agent:${params.agentId}:${params.sessionKey}`
-    : params.sessionKey;
-  if (chatHistoryManagedMediaCleanupState.has(cleanupKey)) {
-    return;
-  }
-  const pending = cleanupManagedOutgoingMediaRecords({
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    hasActiveSessionRun: (sessionKey, agentId) =>
-      hasRegisteredChatRunForSessionKey({
-        context: params.context,
-        sessionKey,
-        agentId,
-        defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey),
-      }),
-  })
-    .then(() => undefined)
-    .catch((error: unknown) => {
-      params.context.logGateway.debug(
-        `chat.history managed media cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
-      );
-    })
-    .finally(() => {
-      if (chatHistoryManagedMediaCleanupState.get(cleanupKey) === pending) {
-        chatHistoryManagedMediaCleanupState.delete(cleanupKey);
-      }
-    });
-  chatHistoryManagedMediaCleanupState.set(cleanupKey, pending);
 }

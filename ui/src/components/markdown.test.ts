@@ -820,6 +820,14 @@ PY
   });
 
   describe("large text handling", () => {
+    it("does not build cache keys for replies larger than the cache limit", () => {
+      const locale = vi.spyOn(i18n, "getLocale");
+
+      expect(toSanitizedMarkdownHtml("x".repeat(50_001))).toContain("x".repeat(100));
+      expect(locale).not.toHaveBeenCalled();
+      locale.mockRestore();
+    });
+
     it("uses plain text fallback for oversized content", () => {
       // MARKDOWN_PARSE_LIMIT is 40_000 chars
       const input = Array.from(

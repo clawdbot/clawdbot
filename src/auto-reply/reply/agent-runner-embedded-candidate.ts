@@ -9,10 +9,6 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -42,7 +38,7 @@ import type { createAgentTurnPresentation } from "./agent-runner-presentation.js
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
-import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
@@ -191,15 +187,8 @@ export async function runEmbeddedFallbackCandidate(params: {
     runId: params.runId,
     sessionKey: turn.sessionKey,
     getLifecycleGeneration: params.getLifecycleGeneration,
-    resolveTerminationFields: (error) => ({
-      ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
-      ...(isReplyOperationRestartAbort(turn.replyOperation)
-        ? {
-            aborted: true as const,
-            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          }
-        : {}),
-    }),
+    resolveTerminationFields: (error) =>
+      resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
   const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };

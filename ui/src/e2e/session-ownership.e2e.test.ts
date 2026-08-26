@@ -6,11 +6,7 @@ import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  openNewSessionPlusMenu,
-  replaceGatewayClient,
-  selectNewSessionDraft,
-} from "./new-session-page.test-support.ts";
+import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
   routeAvatarFixtures,
@@ -602,12 +598,13 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const menu = await openNewSessionPlusMenu(currentPage);
-    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
+    // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
-    await menu.getByRole("menuitem", { name: "Draft" }).click();
-    await currentPage.keyboard.press("Escape");
-    await currentPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
+    await draftToggle.check();
+    await expectBrowser(draftToggle).toBeChecked();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
@@ -644,7 +641,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -652,7 +649,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [],
@@ -712,7 +709,7 @@ suite.define(() => {
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
-    expect(await gateway.getRequests("session.members.list")).toHaveLength(0);
+    expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(0);
 
     const message = "visibility change rejected";
     await gateway.rejectDeferred("session.visibility.set", {
@@ -742,7 +739,7 @@ suite.define(() => {
         "chat.metadata",
         "chat.startup",
         "session.visibility.set",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
       ],
@@ -750,7 +747,7 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
@@ -763,7 +760,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
     await publish.waitFor();
@@ -821,7 +818,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
-        "session.members.list",
+        "session.members.listEvidence",
         "session.members.add",
         "session.members.remove",
         "session.visibility.set",
@@ -859,7 +856,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "sessions.list": sessions,
-        "session.members.list": {
+        "session.members.listEvidence": {
           sessionKey: "agent:main:ada",
           members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
           identities: [...humanIdentities, ...nonHumanIdentities],
@@ -872,7 +869,7 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
-    await gateway.waitForRequest("session.members.list");
+    await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
     await dropdown.evaluate(async (element) => {
@@ -1019,7 +1016,9 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    await selectNewSessionDraft(currentPage);
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    await draftToggle.check();
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
       hasMultipleSessionSharingIdentities: false,
@@ -1034,9 +1033,9 @@ suite.define(() => {
       hasMultipleSessionSharingIdentities: true,
     });
     await replaceGatewayClient(currentPage);
-    const menu = await openNewSessionPlusMenu(currentPage);
-    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
-    expect(await currentPage.getByRole("button", { name: "Draft", exact: true }).count()).toBe(0);
+    await currentPage.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    await draftToggle.waitFor();
+    expect(await draftToggle.isChecked()).toBe(false);
   });
 
   it("keeps create-as-draft dormant for one owner", async () => {

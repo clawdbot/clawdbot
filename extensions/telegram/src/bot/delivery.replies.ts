@@ -21,6 +21,7 @@ import {
   buildOutboundMediaLoadOptions,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -81,6 +82,7 @@ type TelegramReplyChannelData = {
   pin?: boolean;
   reaction?: {
     emoji?: unknown;
+    replyToId?: unknown;
   };
 };
 
@@ -588,6 +590,9 @@ async function maybePinFirstDeliveredMessage(params: {
       disable_notification: !notify,
     });
   } catch (err) {
+    if (typeof params.pin === "object" && params.pin.required === true) {
+      throw err;
+    }
     logVerbose(
       `telegram pinChatMessage failed chat=${params.chatId} message=${params.firstDeliveredMessageId}: ${formatErrorMessage(err)}`,
     );
@@ -802,7 +807,8 @@ export async function deliverReplies(params: {
       typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    if (reactionEmoji && typeof replyToId !== "number") {
+    const targetId = parseStrictPositiveInteger(telegramData?.reaction?.replyToId ?? replyToId);
+    if (reactionEmoji && typeof targetId !== "number") {
       params.runtime.error?.(danger("Telegram reaction requires a reply target"));
       continue;
     }
@@ -875,9 +881,9 @@ export async function deliverReplies(params: {
         }),
       );
       let firstDeliveredMessageId: number | undefined;
-      if (reactionEmoji && typeof replyToId === "number") {
+      if (reactionEmoji && typeof targetId === "number") {
         await params.onPlatformSendDispatch?.();
-        const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
+        const reactionResult = await reactMessageTelegram(params.chatId, targetId, reactionEmoji, {
           cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
           token: params.token,
           accountId: params.accountId,
@@ -912,6 +918,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          acceptedMessageIds,
           recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
         });

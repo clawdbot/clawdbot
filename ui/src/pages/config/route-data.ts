@@ -1,6 +1,30 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { INTERNAL_MEMORY_PATH_PARAM } from "../../app-route-paths.ts";
 
+export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" } as const;
+
+export const APPEARANCE_SETTINGS_TARGET_IDS = {
+  language: "settings-language",
+  theme: "settings-appearance-theme",
+  accent: "settings-appearance-accent",
+  textSize: "settings-appearance-text-size",
+  sidebar: "settings-appearance-sidebar",
+  chat: "settings-appearance-chat",
+  connection: "settings-appearance-connection",
+} as const;
+
+const appearanceSettingsRouteTarget = (targetId: string) =>
+  ({ routeId: "appearance", search: "?section=__appearance__", hash: `#${targetId}` }) as const;
+
+export const SETTINGS_ROUTE_TARGETS = {
+  modelBehavior: {
+    routeId: "model-providers",
+    hash: `#${MODEL_SETTINGS_TARGET_IDS.behavior}`,
+  },
+  appearanceLanguage: appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.language),
+  appearanceSidebar: appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.sidebar),
+} as const;
+
 export type ConfigRouteData = {
   pathname: string;
   search: string;

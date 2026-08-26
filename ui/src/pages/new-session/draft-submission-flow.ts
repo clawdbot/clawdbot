@@ -39,6 +39,7 @@ import type {
   DraftSubmissionCallbacks,
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
+import { NewSessionPermissionSelection } from "./permission-selection.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import {
   PendingSessionPlacementRecoveryState,
@@ -47,6 +48,7 @@ import {
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 import {
   PAGE_RENDERED_GATES,
+  resolveCloudPlacementDisabledReason,
   resolveNewSessionSubmitBlock,
   type NewSessionSubmitBlock,
 } from "./submit-gates.ts";
@@ -57,7 +59,7 @@ export class DraftSubmissionFlow {
   private messageValue = "";
   private submittingValue = false;
   private blockedSubmitGate: string | null = null;
-  private submissionOutcomeUnknownValue: SubmissionOutcomeReason | null = null;
+  submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
   private submitRequestToken = 0;
@@ -65,6 +67,7 @@ export class DraftSubmissionFlow {
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState();
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
+  readonly permission = new NewSessionPermissionSelection(() => this.callbacks.requestUpdate());
   readonly draftPersistence: NewSessionDraftPersistence;
   readonly capabilities: NewSessionCapabilityController;
 
@@ -76,6 +79,7 @@ export class DraftSubmissionFlow {
   ) {
     this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
     this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
+    this.permission.setMutationCallback(() => (this.startedSession.current = null));
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
@@ -113,16 +117,12 @@ export class DraftSubmissionFlow {
     return this.submittingValue || this.sessionStartup.active;
   }
 
-  get submissionOutcomeUnknown(): SubmissionOutcomeReason | null {
-    return this.submissionOutcomeUnknownValue;
-  }
-
   resumeInterruptedSubmission() {
     const startup = this.sessionStartup.resume();
     if (startup.kind === "resume") {
       void this.submit(startup);
     } else if (startup.kind !== "wait") {
-      this.submissionOutcomeUnknownValue = "gateway-changed";
+      this.submissionOutcomeUnknown = "gateway-changed";
       this.callbacks.requestUpdate();
     }
   }
@@ -145,11 +145,15 @@ export class DraftSubmissionFlow {
     attachments: ChatAttachment[];
     visibility: NewSessionVisibility;
     toolOverrides?: NewSessionCapabilityController["toolOverrides"];
+    permissionMode?: SessionCreateParams["permissionMode"];
   }) {
     this.draftPersistence.noteDraftReplaced();
     this.messageValue = state.message;
     this.visibilityValue = state.visibility;
     this.capabilities.restoreToolOverrides(state.toolOverrides);
+    if ("permissionMode" in state) {
+      this.permission.restore(state.permissionMode);
+    }
     this.attachmentDraft.restore(state.attachments);
   }
 
@@ -183,7 +187,7 @@ export class DraftSubmissionFlow {
 
   markPendingPlacementUnavailable(outcome: SubmissionOutcomeReason) {
     this.pendingPlacement.retryAllowed = false;
-    this.submissionOutcomeUnknownValue = outcome;
+    this.submissionOutcomeUnknown = outcome;
     this.callbacks.requestUpdate();
   }
 
@@ -232,6 +236,7 @@ export class DraftSubmissionFlow {
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
       toolOverrides: this.capabilities.toolOverrides,
+      permissionMode: this.permission.value,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
       projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
@@ -311,7 +316,7 @@ export class DraftSubmissionFlow {
         pendingPlacement: this.pendingPlacement,
         submitting: this.submittingValue,
         message: this.messageValue,
-        submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
+        submissionOutcomeUnknown: this.submissionOutcomeUnknown,
         pendingAttachmentReads: this.attachmentDraft.pendingReads,
         hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
         hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
@@ -348,19 +353,7 @@ export class DraftSubmissionFlow {
     });
   }
 
-  cloudDisabledReason(): string | undefined {
-    const runtimeReason = this.place.modelControl.cloudRuntimeUnsupportedReason();
-    if (runtimeReason) {
-      return runtimeReason;
-    }
-    if (this.place.repository.kind === "checking") {
-      return t("newSession.checkingGit");
-    }
-    if (this.place.repository.kind === "unavailable" && !this.place.worktreeAvailable()) {
-      return t("newSession.gitCheckUnavailable");
-    }
-    return this.place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
-  }
+  cloudDisabledReason = () => resolveCloudPlacementDisabledReason(this.place);
 
   invalidate(outcomeUnknown: SubmissionOutcomeReason | null = null) {
     this.submitRequestToken += 1;
@@ -369,7 +362,7 @@ export class DraftSubmissionFlow {
       (outcomeUnknown && this.submittingValue && !this.sessionStartup.interrupt()) ||
       this.sessionStartup.retireChangedOwner()
     ) {
-      this.submissionOutcomeUnknownValue = outcomeUnknown;
+      this.submissionOutcomeUnknown = outcomeUnknown;
     }
     this.submittingValue = false;
     this.callbacks.requestUpdate();
@@ -380,11 +373,12 @@ export class DraftSubmissionFlow {
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     this.blockedSubmitGate = null;
     this.invalidate();
-    this.submissionOutcomeUnknownValue = preservePendingPlacement
-      ? (this.submissionOutcomeUnknownValue ?? "placement-interrupted")
+    this.submissionOutcomeUnknown = preservePendingPlacement
+      ? (this.submissionOutcomeUnknown ?? "placement-interrupted")
       : null;
     this.visibilityValue = "normal";
     this.capabilities.reset();
+    this.permission.reset();
     this.attachmentDraft.reset({ release: true });
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {
@@ -406,22 +400,21 @@ export class DraftSubmissionFlow {
 
   clearPendingPlacementRecovery() {
     this.pendingPlacement.clear();
-    this.submissionOutcomeUnknownValue = null;
+    this.submissionOutcomeUnknown = null;
     this.callbacks.requestUpdate();
   }
 
   releasePendingPlacementOwner() {
     this.pendingPlacement.reset();
-    this.submissionOutcomeUnknownValue = null;
+    this.submissionOutcomeUnknown = null;
     this.callbacks.requestUpdate();
   }
 
   restorePendingPlacementRecovery(gatewayUrl: string, recoveryScope: string) {
     const recovery = this.pendingPlacement.restore(gatewayUrl, recoveryScope);
-    if (!recovery) {
-      return;
+    if (recovery) {
+      this.applyRecoveryDraft(recovery);
     }
-    this.applyRecoveryDraft(recovery);
   }
 
   async submit(startup?: { params: SessionCreateParams; startedAt: number }) {

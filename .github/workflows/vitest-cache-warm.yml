@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: vitest-cache-warm
+  group: vitest-cache-warm-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -60,11 +60,14 @@ jobs:
             [
               `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
               "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
+              "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1",
             ].join("\n") + "\n",
           );
           EOF
 
       - name: Warm transform and compile caches
+        id: warm-caches
+        continue-on-error: true
         env:
           # Match the CI shard lanes running the same envelopes: without the
           # raised ceiling a heavy suite's worker can die under default heap
@@ -147,3 +150,11 @@ jobs:
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
+
+      - name: Assert cache warming succeeded
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.warm-caches.outcome }}" != "success" ]; then
+            echo "::error::Vitest cache warming failed"
+            exit 1
+          fi

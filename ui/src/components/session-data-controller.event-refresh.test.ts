@@ -180,6 +180,97 @@ function createFilteredSessionController(statusFilter: "archived" | "all", rowCo
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it.each(["archived", "all"] as const)(
+    "clears a recovered %s list failure without erasing a same-text action failure",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+
+      expect(controller.sessionMutationError).toBeNull();
+      expect(controller.sessionsResult?.sessions).toHaveLength(1);
+
+      list.mockRejectedValueOnce(new Error("Session request failed"));
+      await controller.refreshSidebarSessions();
+
+      const mutation = controller.beginSessionMutation();
+      expect(mutation).not.toBeNull();
+      controller.publishSessionMutationError(mutation!, new Error("Session request failed"));
+
+      list.mockRejectedValueOnce(new Error("Background session list failed"));
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+      expect(controller.sessionMutationError).toBe("Session request failed");
+
+      controller.hostDisconnected();
+      expect(controller.sessionMutationError).toBeNull();
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires the %s list failure when its selected filter changes",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Retired session list failed"));
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Retired session list failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+
+      expect(controller.sessionMutationError).toBeNull();
+      controller.hostDisconnected();
+    },
+  );
+
+  it("dismisses a filtered list failure without restoring it on recovery", async () => {
+    const { controller, list } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    list.mockRejectedValueOnce(new Error("Dismissed session list failed"));
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBe("Dismissed session list failed");
+
+    controller.dismissSessionMutationError();
+    expect(controller.sessionMutationError).toBeNull();
+
+    await controller.refreshSidebarSessions();
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
+  it("ignores a retired filter's delayed failure after the replacement scope binds", async () => {
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
+    controller.hostConnected();
+    let rejectList!: (error: Error) => void;
+    const delayedList = new Promise<Awaited<ReturnType<typeof list>>>((_, reject) => {
+      rejectList = reject;
+    });
+    list.mockImplementationOnce(async () => await delayedList);
+
+    const retiredRefresh = controller.refreshSidebarSessions();
+    selectStatusFilter("all");
+    rejectList(new Error("Retired archived request failed"));
+    await retiredRefresh;
+
+    expect(controller.sessionMutationError).toBeNull();
+    controller.hostDisconnected();
+  });
+
   it("evicts cached sessions when an agent leaves the authoritative roster", () => {
     const { controller, publishAgentRoster, resultForKeys } =
       createFilteredSessionController("all");

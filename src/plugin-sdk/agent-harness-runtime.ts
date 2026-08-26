@@ -538,6 +538,8 @@ export {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "../agents/harness/agent-end-side-effects.js";
+export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
+export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";
 export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,

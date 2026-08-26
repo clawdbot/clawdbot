@@ -646,6 +646,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
+| `channels.feishu.accounts.<id>.replyToMode`              | Per-account reply-reference mode                                                     | inherited                            |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
@@ -658,6 +659,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |

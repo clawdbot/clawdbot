@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { chromium, type BrowserContext } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chromeProductRoots,
   generateChromeExtensionIdForPath,
@@ -14,6 +14,7 @@ import {
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
@@ -205,7 +206,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           nodePath: tsxPath,
           nativeHostPath,
         };
-        const gatewayServer = http.createServer((_req, res) => {
+        const gatewayServer = http.createServer((req, res) => {
+          if (req.url === "/browser-owner-proof") {
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end("<title>OpenClaw selected tab</title>");
+            return;
+          }
           res.writeHead(426);
           res.end();
         });
@@ -466,6 +472,69 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }, screenshotDataUrl);
         expect(orangePixels).toBeGreaterThan(20);
         process.stderr.write(`[browser-extension-e2e] screenshot proof ${proofPath}\n`);
+
+        const distractingPage = await context.newPage();
+        const distractingUrl = `data:text/html,${encodeURIComponent("<title>Unrelated tab</title>")}`;
+        await distractingPage.goto(distractingUrl);
+        await expect
+          .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
+          .toBe(true);
+        const liveTabsResponse = await dispatcher.dispatch({
+          method: "GET",
+          path: "/tabs",
+          query: { profile: "e2e" },
+        });
+        const liveTabs = (
+          liveTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs;
+        const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
+        const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
+        if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
+          throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
+        }
+        expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
+        const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
+        const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
+        const actedPage = await getPageForTargetId({
+          cdpUrl: extensionCdpUrl,
+          targetId: selectedTab.targetId,
+          ssrfPolicy: browserState.resolved.ssrfPolicy,
+        });
+        const detachedNavigation = vi
+          .spyOn(actedPage, "goto")
+          .mockRejectedValueOnce(new Error("page.goto: Frame has been detached"));
+        try {
+          const navigationResponse = await dispatcher.dispatch({
+            method: "POST",
+            path: "/navigate",
+            query: { profile: "e2e" },
+            body: {
+              targetId: selectedTab.targetId,
+              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+            },
+          });
+          expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
+          expect(navigationResponse.body).toMatchObject({
+            ok: true,
+            targetId: selectedTab.targetId,
+            url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
+          });
+          expect(detachedNavigation).toHaveBeenCalledTimes(1);
+          const recoveredPage = await getPageForTargetId({
+            cdpUrl: extensionCdpUrl,
+            targetId: selectedTab.targetId,
+            ssrfPolicy: browserState.resolved.ssrfPolicy,
+          });
+          expect(recoveredPage).not.toBe(actedPage);
+          expect(distractingPage.url()).toBe(distractingUrl);
+          process.stderr.write(
+            "[browser-extension-e2e] injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n",
+          );
+        } finally {
+          detachedNavigation.mockRestore();
+          browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+        }
 
         const registration = status.registrations.find(
           (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",

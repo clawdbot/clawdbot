@@ -4743,18 +4743,27 @@ Update and merge these partial structured summaries.`,
     }
   });
 
-  it("answers heartbeat prompts without spawning extra subagents", async () => {
+  it.each([
+    {
+      name: "legacy workspace heartbeat",
+      prompt:
+        "System: Gateway restart config-apply ok\nSystem: QA-SUBAGENT-RECOVERY-1234\n\nRead HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      reply: "HEARTBEAT_OK",
+    },
+    {
+      name: "automation heartbeat",
+      prompt:
+        "System: Gateway restart config-apply ok\n\nFollow the heartbeat monitor scratch context when provided. If nothing needs attention, reply NO_REPLY.",
+      reply: "NO_REPLY",
+    },
+  ])("answers $name prompts without spawning extra subagents", async ({ prompt, reply }) => {
     const server = await startMockServer();
 
     const response = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "System: Gateway restart config-apply ok\nSystem: QA-SUBAGENT-RECOVERY-1234\n\nRead HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-        ),
-      ],
+      input: [makeUserInput(prompt)],
     });
 
-    expect(outputText(await response.json())).toBe("HEARTBEAT_OK");
+    expect(outputText(await response.json())).toBe(reply);
   });
 
   it("returns exact markers for visible and hot-installed skills", async () => {

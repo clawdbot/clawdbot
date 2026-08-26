@@ -10,6 +10,7 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
@@ -142,6 +143,7 @@ export function resolveBackgroundTaskContext(params: {
 export function createBackgroundTaskRecord(
   context: BackgroundTaskContext,
   startedAt: number,
+  instanceId: string,
 ): BackgroundTaskRecord | undefined {
   try {
     const task = createRunningTaskRun({
@@ -155,6 +157,10 @@ export function createBackgroundTaskRecord(
       label: context.label,
       task: context.task,
       startedAt,
+      detail: createNextAcpTaskBackingDetail({
+        childSessionKey: context.childSessionKey,
+        instanceId,
+      }),
     });
     if (!task) {
       logVerbose(

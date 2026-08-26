@@ -570,7 +570,7 @@ Periodic heartbeat runs.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-- An enrolled agent's Heartbeats system-prompt section is included automatically while that agent's cadence is enabled. Ack suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
+- Heartbeat runs use the ordinary agent system prompt. Acknowledgment suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
 - Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -832,7 +832,7 @@ Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none`
 
 - `docker`: local Docker runtime (default)
 - `ssh`: generic SSH-backed remote runtime
-- `openshell`: OpenShell runtime
+- `openshell`: OpenShell-managed local or remote runtime
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
 `plugins.entries.openshell.config`.
@@ -889,8 +889,10 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
           remoteAgentWorkspaceDir: "/agent",
           gateway: "lab", // optional
           gatewayEndpoint: "https://lab.example", // optional
-          policy: "strict", // optional OpenShell policy id
+          workspace: "research", // optional existing OpenShell workspace
+          policy: "/etc/openclaw/openshell-policy.yaml", // optional host-side YAML file
           providers: ["openai"], // optional
+          gpu: false,
           autoProviders: true,
           timeoutSeconds: 120,
         },
@@ -907,6 +909,7 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
+`workspace` selects an existing OpenShell control-plane workspace for the whole plugin; it is separate from the agent's filesystem workspace. `policy` must point to a YAML file readable by the OpenClaw Gateway, not a named policy ID. See [OpenShell](/gateway/openshell) for setup, prerequisites, and troubleshooting.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
@@ -1288,7 +1291,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.
   - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
 
-Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` and `session.suggestion` change events refresh connected clients without adding administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
 
 </Accordion>
 

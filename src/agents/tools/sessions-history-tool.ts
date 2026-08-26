@@ -40,6 +40,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
@@ -497,7 +498,10 @@ export function createSessionsHistoryTool(opts?: {
       if (!access.allowed) {
         return jsonResult({
           status: access.status,
-          error: access.error,
+          error: formatSessionToolAccessDenial(access, {
+            action: "history",
+            targetSessionKey: displayKey,
+          }),
         });
       }
 

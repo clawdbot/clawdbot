@@ -203,7 +203,10 @@ export async function readGatewayServiceState(
   // Callers that may mutate the selected service can reject persisted selector
   // drift before isLoaded/readRuntime invoke the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
-  const [loadState, runtime] = await Promise.all([
+  const [installed, loadState, runtime] = await Promise.all([
+    command !== null
+      ? true
+      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
     service.readRuntime(env, { timeoutMs }).catch(
       (error: unknown) =>
@@ -214,7 +217,7 @@ export async function readGatewayServiceState(
     ),
   ]);
   return {
-    installed: command !== null,
+    installed,
     loadState,
     running: runtime?.status === "running",
     env,

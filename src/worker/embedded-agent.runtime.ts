@@ -179,6 +179,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
+      bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
       host: "gateway",
       mode: permissionToolPolicy?.execMode ?? "full",
       security: "full",

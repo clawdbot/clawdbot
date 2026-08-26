@@ -82,6 +82,7 @@ export type EmbeddedAgentSubscribeState = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
@@ -345,6 +346,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "codeModeExecToolNames"
   | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"

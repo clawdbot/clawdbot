@@ -124,6 +124,8 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
     ["dash-light", layer(light, blocks.get(':root[data-theme="dash-light"]'))],
+    ["absolutely", layer(blocks.get(':root[data-theme="absolutely"]'))],
+    ["absolutely-light", layer(light, blocks.get(':root[data-theme="absolutely-light"]'))],
   ]);
 }
 

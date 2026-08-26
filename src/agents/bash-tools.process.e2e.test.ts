@@ -111,7 +111,19 @@ test.skipIf(process.platform === "win32").each([
 
     const outcome = await run.promise;
     const notification = peekSystemEventEntries(scopeKey)[0]?.text;
-    const poll = await pendingPoll;
+    let poll = await pendingPoll;
+    if ((poll.details as { status?: string }).status === "running") {
+      expect(poll.details).toMatchObject({
+        status: "running",
+        sessionId: run.session.id,
+        aggregated: "REAL_CHILD_OUTPUT",
+      });
+      expect(textContent(poll)).toContain("REAL_CHILD_OUTPUT");
+      poll = await processTool.execute(`process-terminal-final-poll-${name}`, {
+        action: "poll",
+        sessionId: run.session.id,
+      });
+    }
     const details = poll.details as { status?: string; exitCode?: number };
 
     expect(outcome.status).toBe(expectedStatus);
@@ -317,11 +329,11 @@ test.skipIf(process.platform === "win32")(
         )
         .toContain("READY");
 
-      const readyPoll = await processTool.execute("process-control-ready-poll", {
-        action: "poll",
-        sessionId,
-        timeout: 1_000,
-      });
+      const readyPoll = await processTool.execute(
+        "process-control-ready-poll",
+        { action: "poll", sessionId, timeout: 30_000 },
+        AbortSignal.timeout(1_000),
+      );
       expect(readyPoll.details).toMatchObject({
         status: "running",
         sessionId,

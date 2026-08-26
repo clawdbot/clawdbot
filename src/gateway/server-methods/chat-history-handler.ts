@@ -24,7 +24,7 @@ import {
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { buildGatewaySessionSnapshot } from "../server-session-events.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
@@ -36,7 +36,6 @@ import {
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryByteCounter,
@@ -336,12 +335,6 @@ async function handleChatHistoryRequest({
     messages: normalized,
     maxSingleMessageBytes: perMessageHardCap,
   });
-  scheduleChatHistoryManagedMediaCleanup({
-    sessionKey,
-    ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
-    cfg,
-    context,
-  });
   const capped = messageId
     ? (capChatHistoryAroundMessage({
         messages: replaced.messages,
@@ -453,11 +446,6 @@ async function handleChatHistoryRequest({
     agentId: activeRunAgentId,
     defaultAgentId: compatibilityOwnerAgentId,
   });
-  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
-    snapshot: inFlightRun,
-    messages: capped,
-    maxBytes: maxHistoryBytes,
-  });
   if (cursor !== undefined) {
     if (!sessionId || !storePath || resolveClaudeCliBindingSessionId(entry)) {
       respond(true, { kind: "reset" });
@@ -471,8 +459,7 @@ async function handleChatHistoryRequest({
       sessionRow: deltaSessionRow,
       agentId: sessionAgentId,
       includeSession: true,
-      hasActiveRun: activeRunState.active,
-      activeRunIds: activeRunState.runIds,
+      activeRunState,
     });
     let delta: ReturnType<typeof readChatHistoryDelta>;
     try {
@@ -501,15 +488,26 @@ async function handleChatHistoryRequest({
       return;
     }
     sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
+    const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+      snapshot: inFlightRun,
+      messages: delta.messages,
+      maxBytes: maxHistoryBytes,
+    });
     respond(true, {
       kind: "delta",
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       sessionInfo,
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
     });
     return;
   }
+  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+    snapshot: inFlightRun,
+    messages: capped,
+    maxBytes: maxHistoryBytes,
+  });
   const payload = {
     sessionKey,
     sessionId,

@@ -236,7 +236,7 @@ function wrapCopilotOpenAIResponsesStream(
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         sanitizeCopilotReplayResponsePayload(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), undefined, payload);
       },
     };
     return underlying(model, context, wrappedOptions);
