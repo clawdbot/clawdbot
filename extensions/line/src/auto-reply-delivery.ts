@@ -300,7 +300,15 @@ export async function deliverLineAutoReply(params: {
   }
 
   const textMessages: messagingApi.Message[] = chunks.map((text) => ({ type: "text", text }));
-  const richMediaMessages = [...richMessages, ...mediaMessages];
+  // Rich-only Markdown stays on the inline media path so its final media
+  // message, not an earlier Flex card, owns the visible quick replies.
+  const orderedDeliveryMessages =
+    hasQuickReplies && chunks.length === 0 ? undefined : orderedMessages;
+  const richMediaMessages = [
+    ...richMessages,
+    ...(orderedDeliveryMessages ? [] : (orderedMessages ?? [])),
+    ...mediaMessages,
+  ];
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
     textMessages.push({
       type: "text",
@@ -308,8 +316,8 @@ export async function deliverLineAutoReply(params: {
     });
   }
   if (hasQuickReplies) {
-    const targetMessages = orderedMessages?.length
-      ? orderedMessages
+    const targetMessages = orderedDeliveryMessages?.length
+      ? orderedDeliveryMessages
       : textMessages.length > 0
         ? textMessages
         : richMediaMessages;
@@ -324,8 +332,8 @@ export async function deliverLineAutoReply(params: {
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
   const messages = hasQuickReplies
-    ? [...richMediaMessages, ...(orderedMessages ?? textMessages)]
-    : [...(orderedMessages ?? textMessages), ...richMediaMessages];
+    ? [...richMediaMessages, ...(orderedDeliveryMessages ?? textMessages)]
+    : [...(orderedDeliveryMessages ?? textMessages), ...richMediaMessages];
   try {
     // A reply token carries five messages without consuming push quota. The
     // canonical batcher owns overflow and reply failure fallback for every payload.
@@ -363,6 +371,10 @@ export async function deliverLineAutoReply(params: {
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.
+      const lastRetryMessage = retryMessages.at(-1);
+      if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
+        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+      }
       try {
         await sendLineMessages(retryMessages, false);
       } catch {

@@ -455,17 +455,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     credentialBroker.clear();
     options.liveEvents?.clear();
     options.stopNodeWorkerBundleTransfers?.();
-    await environmentAccess.stopAllTunnels();
-    const reconciliation = reconcileInFlight;
-    if (reconciliation) {
-      await Promise.allSettled([reconciliation]);
+    try {
+      await environmentAccess.stopAllTunnels();
+    } finally {
+      // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
+      const reconciliation = reconcileInFlight;
+      if (reconciliation) {
+        await Promise.allSettled([reconciliation]);
+      }
+      while (activeOperations.size > 0) {
+        await Promise.allSettled(activeOperations);
+      }
+      credentialBroker.clear();
+      turnRpc.clear();
+      options.liveEvents?.clear();
     }
-    while (activeOperations.size > 0) {
-      await Promise.allSettled(activeOperations);
-    }
-    credentialBroker.clear();
-    turnRpc.clear();
-    options.liveEvents?.clear();
   };
 
   const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
@@ -495,9 +499,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const service = {
     list: environmentAccess.list,
+    supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
       return profile ? providerSupportsExecutionMode(profile.provider, mode) : false;
+    },
+    requiresNodeEnrollment: (profileId: string, providerId?: string) => {
+      const id = providerId ?? options.getConfig().cloudWorkers?.profiles?.[profileId]?.provider;
+      return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
     hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
@@ -514,11 +523,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
       }
       return environmentAccess.project(
-        await providerLifecycle.createWithProfile(
-          profileId,
-          idempotencyKey,
-          machineClass === undefined ? {} : { machineClass },
-        ),
+        await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
+          machineClass,
+          executionMode,
+        }),
       );
     },
     createFromProfileSnapshot: async (
@@ -534,7 +542,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             providerId: profile.providerId,
             profileSnapshot: profile.profileSnapshot,
           },
-          ...(machineClass === undefined ? {} : { machineClass }),
+          machineClass,
+          executionMode,
         }),
       );
     },

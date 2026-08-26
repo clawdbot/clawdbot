@@ -154,6 +154,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
+
     if (opts.useWebhook) {
       const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
       if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
@@ -176,8 +179,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         secret: opts.webhookSecret ?? account.config.webhookSecret,
         host: opts.webhookHost ?? account.config.webhookHost,
         runtime: opts.runtime as RuntimeEnv,
-        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-          .buildContext,
+        buildContext: pluginChannelRuntime?.inbound.buildContext,
+        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+        dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
@@ -278,8 +282,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         accountId: account.accountId,
         ownerAgentId,
         runtime: opts.runtime,
-        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-          .buildContext,
+        buildContext: pluginChannelRuntime?.inbound.buildContext,
+        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+        dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
         proxyFetch,
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,

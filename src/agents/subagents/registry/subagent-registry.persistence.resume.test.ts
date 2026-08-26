@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import "./subagent-registry.mocks.shared.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -133,14 +134,19 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
-  it("retries pending child delivery before a recovered requester-turn wake", async () => {
+  it.each([
+    { label: "successful", status: "ok" as const },
+    { label: "timed-out", status: "timeout" as const },
+  ])("retries pending $label child delivery after restart", async ({ label, status }) => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     const stateDir = tempStateDir;
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const runId = `run-pending-${label}-delivery`;
+      const childSessionKey = `agent:main:subagent:pending-${label}-delivery`;
       const run: SubagentRunRecord = {
-        runId: "run-pending-delivery",
+        runId,
         requesterTurnRunId: "run-requester",
-        childSessionKey: "agent:main:subagent:pending-delivery",
+        childSessionKey,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: "deliver before waking requester",
@@ -151,7 +157,7 @@ describe("subagent registry persistence resume", () => {
           status: "terminal",
           startedAt: 110,
           endedAt: 200,
-          outcome: { status: "ok" },
+          outcome: { status },
         },
         expectsCompletionMessage: true,
         completion: { required: true, resultText: "done", capturedAt: 200 },
@@ -160,12 +166,12 @@ describe("subagent registry persistence resume", () => {
           payload: {
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
-            childSessionKey: "agent:main:subagent:pending-delivery",
-            childRunId: "run-pending-delivery",
+            childSessionKey,
+            childRunId: runId,
             task: "deliver before waking requester",
             startedAt: 110,
             endedAt: 200,
-            outcome: { status: "ok" },
+            outcome: { status },
             expectsCompletionMessage: true,
           },
         },
@@ -176,8 +182,8 @@ describe("subagent registry persistence resume", () => {
         stateDir,
         agentId: "main",
         sessionKey: run.childSessionKey,
-        sessionId: "sess-pending-delivery",
-        defaultSessionId: "sess-pending-delivery",
+        sessionId: `sess-pending-${label}-delivery`,
+        defaultSessionId: `sess-pending-${label}-delivery`,
       });
 
       mod.initSubagentRegistry();
@@ -188,8 +194,9 @@ describe("subagent registry persistence resume", () => {
         interval: 10,
       });
       expect(announceSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ childRunId: "run-pending-delivery" }),
+        expect.objectContaining({ childRunId: runId, outcome: { status } }),
       );
+      expect(mod.getSubagentRunByRunId(runId)?.execution.outcome).toEqual({ status });
     });
   });
 
@@ -314,11 +321,22 @@ describe("subagent registry persistence resume", () => {
         sendRecoveryNotice: vi.fn(),
       };
       let firstLifecycleOpen = true;
-      const resolveGatewayContext = vi.fn(() =>
-        firstLifecycleOpen ? ({ recoveryRuntime } as never) : undefined,
+      const gatewayContext = {
+        recoveryRuntime,
+        resolveGatewayContext: vi.fn(),
+      };
+      gatewayContext.resolveGatewayContext.mockImplementation(() =>
+        firstLifecycleOpen ? (gatewayContext as never) : undefined,
       );
+      const resolveGatewayContext = vi.fn(() => gatewayContext as never);
       mod.activateSubagentRegistry(resolveGatewayContext);
       mod.activateSubagentRegistry(resolveGatewayContext);
+      const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
+      expect(restoredRun).toBeDefined();
+      const restoredGatewayContextResolver = getGatewayContextResolver(restoredRun!);
+      expect(restoredGatewayContextResolver).toBeDefined();
+      expect(restoredGatewayContextResolver).not.toBe(resolveGatewayContext);
+      expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
       await vi.waitFor(() => {
         expect(wakeRequester).toHaveBeenCalledOnce();
@@ -330,7 +348,9 @@ describe("subagent registry persistence resume", () => {
       );
 
       firstLifecycleOpen = false;
-      expect(resolveGatewayContext()).toBeUndefined();
+      expect(resolveGatewayContext()).toBe(gatewayContext);
+      expect(gatewayContext.resolveGatewayContext()).toBeUndefined();
+      expect(restoredGatewayContextResolver?.()).toBeUndefined();
       const replacementRuntime = {
         dispatchAgent: vi.fn(),
         waitForAgent: vi.fn(async () => ({ status: "pending" })),
@@ -339,6 +359,7 @@ describe("subagent registry persistence resume", () => {
       const resolveReplacementContext = () => ({ recoveryRuntime: replacementRuntime }) as never;
       mod.activateSubagentRegistry(resolveReplacementContext);
       mod.activateSubagentRegistry(resolveReplacementContext);
+      expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
       expect(wakeRequester).toHaveBeenCalledOnce();
       expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
       expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();

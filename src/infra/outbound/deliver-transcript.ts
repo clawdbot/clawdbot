@@ -5,7 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
+import { resolveOutboundPayloadMirrorText, type NormalizedOutboundPayload } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 const loadTranscriptRuntime = createLazyRuntimeModule(
@@ -24,7 +24,7 @@ export async function mirrorDeliveredPayloads(params: {
   }
   const deliveredMirror = {
     text: params.payloads
-      .map((payload) => payload.hookContent ?? payload.text)
+      .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
       .filter((text) => text.trim())
       .join("\n"),
     mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),

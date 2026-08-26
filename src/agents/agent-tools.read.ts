@@ -2,7 +2,7 @@
 // Adds workspace-root guards, adaptive read paging, image validation, memory
 // append-only writes, and parameter cleanup around the session file tools.
 
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -10,7 +10,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { hasErrnoCode, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -18,6 +18,7 @@ import {
 } from "../infra/fs-safe.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
+import { redactSecrets } from "../logging/redact.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -69,10 +70,14 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 4;
+// `.env` files are credential stores; `.envrc` and general config files remain source-shaped.
+const ENV_FILE_PATH_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|[^/\\]+\.env)$/i;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  cwd?: string;
+  bridge?: SandboxFsBridge;
 };
 
 type SkillReadContent = {
@@ -734,7 +739,12 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        ? await normalizeFileToolPathParamsFromKeys(
+            record,
+            ["path"],
+            options.root,
+            options.sandbox?.bridge,
+          )
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
@@ -751,7 +761,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         root: options.root,
         containerWorkdir: options.containerWorkdir,
       });
-      if (resolvedPath !== allowedAbsolutePath) {
+      if (filePath.startsWith("@") || resolvedPath !== allowedAbsolutePath) {
         throw new Error(
           `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
         );
@@ -860,6 +870,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    bridge?: SandboxFsBridge;
   },
 ): AnyAgentTool {
   const pathParamKeys =
@@ -874,7 +885,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = normalizeFileToolPathParam(rawFilePath);
+        const filePath = await normalizeFileToolPathParam(
+          rawFilePath,
+          options?.resolutionCwd ?? root,
+          options?.bridge,
+        );
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -957,6 +972,8 @@ export function createSandboxedReadTool(
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    cwd: params.root,
+    bridge: params.bridge,
   });
 }
 
@@ -969,7 +986,7 @@ export function createSandboxedWriteTool(
       operations: createSandboxWriteOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, params.root, params.bridge);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -981,7 +998,7 @@ export function createSandboxedEditTool(
       operations: createSandboxEditOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, params.root, params.bridge);
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
@@ -999,7 +1016,7 @@ export function createHostWorkspaceWriteTool(
       operations: createHostWriteOperations(options?.containmentRoot ?? root, options),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -1017,7 +1034,7 @@ export function createHostWorkspaceEditTool(
       operations: createHostEditOperations(options?.containmentRoot ?? root, options),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
 }
 
 /** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
@@ -1030,7 +1047,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"], options?.cwd, options?.bridge)
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const filePath =
@@ -1057,7 +1074,10 @@ export function createOpenClawReadTool(
         `read:${filePath}`,
         options?.imageSanitization,
       );
-      return normalizeReadResultDetails(sanitizedResult);
+      const modelVisibleResult = ENV_FILE_PATH_RE.test(filePath)
+        ? { ...sanitizedResult, content: redactSecrets(sanitizedResult.content) }
+        : sanitizedResult;
+      return normalizeReadResultDetails(modelVisibleResult);
     },
   };
 }
@@ -1231,10 +1251,96 @@ function resolveHostPath(filePath: string): string {
   return path.resolve(expandOsHomePrefix(filePath));
 }
 
+async function writeHostFileRange(
+  handle: FileHandle,
+  payload: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+) {
+  let written = 0;
+  while (written < length) {
+    const { bytesWritten } = await handle.write(
+      payload,
+      offset + written,
+      length - written,
+      position + written,
+    );
+    if (bytesWritten <= 0) {
+      throw new Error(`host file write made no progress at byte ${position + written}`);
+    }
+    written += bytesWritten;
+  }
+}
+
+async function readHostFilePrefix(handle: FileHandle, length: number) {
+  const prefix = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const { bytesRead } = await handle.read(prefix, read, length - read, read);
+    if (bytesRead <= 0) {
+      throw new Error(`host file read made no progress at byte ${read}`);
+    }
+    read += bytesRead;
+  }
+  return prefix;
+}
+
+async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, currentSize: number) {
+  const prefixLength = Math.min(payload.length, currentSize);
+  const originalPrefix = await readHostFilePrefix(handle, prefixLength);
+  let prefixStarted = false;
+  try {
+    if (payload.length > currentSize) {
+      await writeHostFileRange(
+        handle,
+        payload,
+        currentSize,
+        payload.length - currentSize,
+        currentSize,
+      );
+    }
+    prefixStarted = true;
+    await writeHostFileRange(handle, payload, 0, prefixLength, 0);
+    if (payload.length < currentSize) {
+      await handle.truncate(payload.length);
+    }
+  } catch (error) {
+    if (prefixStarted) {
+      await writeHostFileRange(handle, originalPrefix, 0, prefixLength, 0).catch(() => undefined);
+    }
+    await handle.truncate(currentSize).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function openHostFileForUpdate(resolved: string) {
+  try {
+    const existing = await fs.stat(resolved);
+    // Rollback requires the original bytes; unreadable files must fail before mutation.
+    return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
+  const handle = await openHostFileForUpdate(resolved);
+  if (!handle) {
+    await fs.writeFile(resolved, content, "utf-8");
+    return;
+  }
+  try {
+    const stat = await handle.stat();
+    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 async function statHostFile(absolutePath: string) {

@@ -14,6 +14,7 @@ import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
 } from "../../../config/sessions/session-accessor.js";
+import { normalizeStoreSessionKey } from "../../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
 import {
@@ -69,20 +70,6 @@ function freshSessionStartedAt(
   return notBeforeMs === undefined || startedAt >= notBeforeMs ? startedAt : undefined;
 }
 
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = sessionKey.trim().toLowerCase();
-  for (const [key, entry] of Object.entries(store)) {
-    if (key.trim().toLowerCase() === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 /** Load a child session entry using the agent-specific session store path. */
 export function loadSubagentSessionEntry(params: {
   childSessionKey: string;
@@ -106,7 +93,7 @@ export function loadSubagentSessionEntry(params: {
     );
     params.storeCache?.set(storePath, store);
   }
-  return findSessionEntryByKey(store, key);
+  return store[key] ?? store[normalizeStoreSessionKey(key)];
 }
 
 /** Resolve a child session entry without depending on the file-backed store shape. */

@@ -614,7 +614,6 @@ describe("runCli exit behavior", () => {
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [{ name: () => "nodes", aliases: () => [] }],
@@ -791,6 +790,33 @@ describe("runCli exit behavior", () => {
       "--json",
       "--limit",
       "all",
+    ]);
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses startup progress for plain model output before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "models", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "models",
+      "aliases",
+      "list",
+      "--plain",
     ]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
@@ -2279,6 +2305,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["plugins install", ["plugins", "install", "--help"]],
+    ["plugins list", ["plugins", "list", "--help"]],
+    ["gateway status", ["gateway", "status", "--help"]],
+  ])("renders %s help without importing the command router", async (_name, args) => {
+    const argv = ["node", "openclaw", ...args];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, args[0], argv);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
   it("propagates precomputed help metadata failures", async () => {
     outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
       throw new Error("startup metadata failed");
@@ -2531,6 +2577,8 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["cron", ["node", "openclaw", "cron", "status"]],
+    ["cron parent timeout", ["node", "openclaw", "cron", "--timeout", "250", "status"]],
+    ["automations parent port", ["node", "openclaw", "automations", "--port", "18789", "status"]],
     ["cron alias", ["node", "openclaw", "cron", "create", "daily", "message"]],
     ["cron removal alias", ["node", "openclaw", "cron", "delete", "job"]],
     ["cron scratch equals", ["node", "openclaw", "cron", "scratch", "job", "--set=text"]],
@@ -4237,7 +4285,7 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, password: "configured-remote-password" });
   });
 
-  it("falls back to gateway env auth when configured remote SecretRefs are unresolved", async () => {
+  it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
     const url = "ws://127.0.0.1:18789";
     primeBareRootConfig({
       gateway: {
@@ -4270,17 +4318,9 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expectBoundTui({ url });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {

@@ -17,10 +17,12 @@ import {
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
 import { requestSessionRecovery } from "./recover.ts";
+import { createSessionArchiveVisibility } from "./session-archive-visibility.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionCreateReconciliation,
+  SessionArchiveVisibility,
   SessionDeleteBatchResult,
   SessionDeleteOptions,
   SessionDeleteOutcome,
@@ -62,6 +64,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     { token: symbol; previous: SessionPinFields; next: SessionPinFields }
   >();
   const confirmedArchives = new Map<string, ConfirmedArchiveState>();
+  const archiveVisibility = createSessionArchiveVisibility(() =>
+    host.publish({ ...host.readState() }),
+  );
   const preparedWorkSessionKeys = new Set<string>();
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -413,6 +418,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       } else if (patchParams.archived === false) {
         confirmedArchives.delete(normalizedKey);
+        archiveVisibility.clear(normalizedKey);
       }
       confirmPinPatch();
       if (!options.deferListRefresh) {
@@ -464,6 +470,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
       confirmedArchives.delete(key.trim());
+      archiveVisibility.clear(key);
       preparedWorkSessionKeys.delete(key.trim());
       host.publish({
         ...host.readState(),
@@ -549,6 +556,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       for (const key of deleted) {
         host.retirePullRequestSummary(key);
         confirmedArchives.delete(key.trim());
+        archiveVisibility.clear(key);
         preparedWorkSessionKeys.delete(key.trim());
       }
       host.publish({
@@ -686,6 +694,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       if (!archived) {
         confirmedArchives.delete(normalizedKey);
+        archiveVisibility.clear(normalizedKey);
         return;
       }
       const previous = confirmedArchives.get(normalizedKey);
@@ -710,8 +719,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
     reset,
     retireModelOverride,
     setModelOverride,
+    archiveVisibility: archiveVisibility.get,
+    setArchiveVisibility: (key: string, visibility: SessionArchiveVisibility | undefined) =>
+      archiveVisibility.set(key, visibility),
     isPreparedWorkSession: (key: string) => preparedWorkSessionKeys.has(key.trim()),
     settlePrepared(result: SessionsListResult | null) {
+      archiveVisibility.settle(result);
       for (const row of result?.sessions ?? []) {
         if (row.worktree || row.execNode) {
           preparedWorkSessionKeys.delete(row.key);
@@ -725,6 +738,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // replacement, so it is the one that needs an explicit rollback below.
       pendingPinPatches.clear();
       confirmedArchives.clear();
+      archiveVisibility.clearAll();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
       if (Object.keys(state.modelOverrides).length > 0) {
@@ -735,6 +749,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       pendingModelPatches.clear();
       pendingPinPatches.clear();
       confirmedArchives.clear();
+      archiveVisibility.clearAll();
       preparedWorkSessionKeys.clear();
     },
   };

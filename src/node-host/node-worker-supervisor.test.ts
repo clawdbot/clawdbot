@@ -1,9 +1,11 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -69,6 +71,45 @@ async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: strin
 }
 
 describe("node worker supervisor", () => {
+  it.each([
+    { availableParallelism: 0, expected: 1 },
+    { availableParallelism: 7, expected: 7 },
+    { availableParallelism: NODE_WORKER_CAPACITY_MAX + 1, expected: NODE_WORKER_CAPACITY_MAX },
+  ])(
+    "publishes $expected default worker slots for $availableParallelism available CPUs",
+    async ({ availableParallelism, expected }) => {
+      vi.spyOn(os, "availableParallelism").mockReturnValue(availableParallelism);
+      const capacitySnapshots: Array<{ total: number; available: number }> = [];
+      const { supervisor } = fixture({
+        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+      });
+
+      try {
+        await supervisor.initialize();
+        expect(capacitySnapshots.at(-1)).toEqual({ total: expected, available: expected });
+      } finally {
+        await supervisor.close();
+      }
+    },
+  );
+
+  it("uses explicit worker capacity without resolving the CPU default", async () => {
+    const availableParallelism = vi.spyOn(os, "availableParallelism");
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
+    const { supervisor } = fixture({
+      capacity: 3,
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+    });
+
+    try {
+      await supervisor.initialize();
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 3, available: 3 });
+      expect(availableParallelism).not.toHaveBeenCalled();
+    } finally {
+      await supervisor.close();
+    }
+  });
+
   it("keeps construction and close inert without resolving process identity", async () => {
     const root = tempDirs.make("node-worker-inert-");
     const { bundleRoot, env } = writeNodeWorkerFixture(root);
@@ -178,6 +219,21 @@ describe("node worker supervisor", () => {
     await recovered.close();
   });
 
+  it("rejects a mismatched launch and turn identity before durable admission", async () => {
+    const { env, supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "launch-id");
+    input.descriptor.assignment.turnId = "other-turn-id";
+
+    try {
+      await expect(supervisor.launch(input, TEST_WORKER_ENDPOINT)).rejects.toThrow(
+        "launchId must match descriptor assignment turnId",
+      );
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)).toBeUndefined();
+    } finally {
+      await supervisor.close();
+    }
+  });
+
   it("launches idempotently and persists only bounded non-secret facts", async () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "success-launch");
@@ -202,7 +258,7 @@ describe("node worker supervisor", () => {
       supervisor.launch(
         {
           ...input,
-          descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
+          descriptor: testWorkerDescriptor(workspaceDir, "different-plan", input.launchId),
         },
         TEST_WORKER_ENDPOINT,
       ),

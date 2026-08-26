@@ -313,7 +313,10 @@ function formatSandboxRootEscapeMessage(params: {
   defaultContainerRoot: string;
 }): string {
   const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
-  const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  let workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  if (workspaceRoot.startsWith(`~${path.sep}`)) {
+    workspaceRoot = workspaceRoot.replaceAll(path.sep, path.posix.sep);
+  }
   return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
 }
 

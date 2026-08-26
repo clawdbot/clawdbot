@@ -3,7 +3,12 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
+import {
+  renderSidebarRegion,
+  resolveSidebarLayoutForBoard,
+  sidebarRegionCallbacks,
+} from "./chat-pane-sidebar-layout.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import "./components/chat-sidebar-region.runtime.ts";
 import { openSlot, setSidebarOpen, type SidebarLayout } from "./sidebar-layout.ts";
 
@@ -144,6 +149,41 @@ describe("chat pane sidebar layout", () => {
 
     expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["chat", "companion"]);
     expect(layout.columns[0]?.activePanelId).toBe("companion");
+  });
+
+  it("persists a selected Board chat tab from the rendered projection", () => {
+    const stored = openSlot({ columns: [] }, "terminal");
+    const rendered = resolveSidebarLayoutForBoard({
+      board: board("right"),
+      layout: stored,
+      paneWidth: 1_400,
+    });
+    const chatPanel = rendered.columns[0]?.panels.find((panel) => panel.slot === "chat");
+    const updateSidebarLayout = vi.fn();
+    const updateSidebarActivePanel = vi.fn();
+    const state = {
+      sidebarLayout: stored,
+      updateSidebarLayout,
+      updateSidebarActivePanel,
+    } as unknown as ChatPageHost;
+
+    sidebarRegionCallbacks({
+      state,
+      layout: rendered,
+      closePanelSlot: vi.fn(),
+      openPanelSlot: vi.fn(),
+      hideBoard: vi.fn(),
+      forgetDiscussionUrl: vi.fn(),
+      resizePanel: vi.fn(),
+      setPanelOpen: vi.fn(),
+    }).activatePanel(chatPanel!.id);
+
+    expect(updateSidebarLayout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        columns: [expect.objectContaining({ activePanelId: chatPanel!.id })],
+      }),
+    );
+    expect(updateSidebarActivePanel).toHaveBeenCalledWith(chatPanel!.id);
   });
 
   it("keeps bottom and hidden board chat outside the side panel", () => {

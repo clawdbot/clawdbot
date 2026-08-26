@@ -208,6 +208,29 @@ export function createSlackMessageHandler(params: {
             .filter((completion) => completion !== undefined);
           try {
             await (async () => {
+              const flushedEntry = entries.at(-1);
+              if (flushedEntry) {
+                const teamId = flushedEntry.opts.eventScope?.teamId;
+                const flushedKey = buildSlackDebounceKey(
+                  flushedEntry.message,
+                  ctx.accountId,
+                  teamId,
+                );
+                const topLevelConversationKey = buildTopLevelSlackConversationKey(
+                  flushedEntry.message,
+                  ctx.accountId,
+                  teamId,
+                );
+                if (flushedKey && topLevelConversationKey) {
+                  const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
+                  if (pendingKeys) {
+                    pendingKeys.delete(flushedKey);
+                    if (pendingKeys.size === 0) {
+                      pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
+                    }
+                  }
+                }
+              }
               // Logical-identity claims: Slack sends message + app_mention twins with
               // distinct event_ids for one post, so the durable queue cannot dedupe
               // them. Same-flush twins share one claim and one logical message while
@@ -271,22 +294,6 @@ export function createSlackMessageHandler(params: {
                 releaseClaims();
                 return;
               }
-              const teamId = last.opts.eventScope?.teamId;
-              const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId, teamId);
-              const topLevelConversationKey = buildTopLevelSlackConversationKey(
-                last.message,
-                ctx.accountId,
-                teamId,
-              );
-              if (flushedKey && topLevelConversationKey) {
-                const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
-                if (pendingKeys) {
-                  pendingKeys.delete(flushedKey);
-                  if (pendingKeys.size === 0) {
-                    pendingTopLevelDebounceKeys.delete(topLevelConversationKey);
-                  }
-                }
-              }
               const combinedText =
                 surviving.length === 1
                   ? (last.message.text ?? "")
@@ -336,6 +343,7 @@ export function createSlackMessageHandler(params: {
                   releaseClaims();
                   return;
                 }
+                await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
                 // Commit at adoption (durable turn ownership), release on abandonment;
                 // deferred turns hand settlement to the reply lane with the claim held.
                 prepared.turnAdoptionLifecycle = {

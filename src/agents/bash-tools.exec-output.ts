@@ -5,7 +5,7 @@
  */
 import type { TerminationReason } from "../process/supervisor/types.js";
 
-const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
+export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 const EXEC_TIMEOUT_RETRY_GUIDANCE =
   "The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.";
 

@@ -689,6 +689,54 @@ describe("createGatewayRequestContext", () => {
     expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
   });
 
+  it("disconnects only clients authenticated as the reassigned durable profile", () => {
+    const target = {
+      ...makeGatewayClient({
+        connId: "profile-target",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.admin"],
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unrelated = {
+      ...makeGatewayClient({
+        connId: "profile-unrelated",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unidentified = makeGatewayClient({
+      connId: "shared-secret",
+      clientId: GATEWAY_CLIENT_IDS.CLI,
+      scopes: ["operator.admin"],
+    });
+    const clients = new Set([target, unrelated, unidentified]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    target.socket.close.mockImplementation(() => {
+      expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    });
+
+    context.disconnectClientsForUserProfile?.("profile-ada");
+
+    expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
+      "operator-role-changed",
+    );
+    expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
+    expect(unrelated.socket.close).not.toHaveBeenCalled();
+    expect(unidentified.socket.close).not.toHaveBeenCalled();
+  });
+
   it("invalidateClientsForDevice filters by role when provided", () => {
     const primary = {
       connId: "conn-primary",

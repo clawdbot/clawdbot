@@ -35,7 +35,7 @@ import {
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
-const SUCCESS_CACHE_MS = 60_000;
+const SUCCESS_CACHE_MS = 90_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
 // showing the last-known chips with the stale warning during this window.
 const RATE_LIMIT_CACHE_MS = 5 * 60_000;
@@ -540,7 +540,9 @@ async function fetchBranchPullRequests(
     }
   }
   const capped = items.slice(0, MAX_PULL_REQUESTS);
-  const mergedHeads = mergedHeadsOf(capped);
+  // Landing detection needs every fetched merged head, not just the displayed
+  // slice: a squash-merged PR sorted past the cap still proves the tip landed.
+  const mergedHeads = mergedHeadsOf(items);
   try {
     const pullRequests = await Promise.all(
       capped.map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),
@@ -609,8 +611,8 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
-  // Normal polling keeps the short local-Git TTL; forced structural refreshes
-  // must observe the replacement checkout before publishing its branch facts.
+  // Normal polling reuses local Git facts across a poll cycle; forced
+  // structural refreshes observe the replacement checkout immediately.
   const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
     context,
     deps,

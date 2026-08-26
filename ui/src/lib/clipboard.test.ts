@@ -46,6 +46,27 @@ describe("copyToClipboard", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
+  it("skips fallback when the caller retires a rejected async write", async () => {
+    let rejectWrite: ((reason?: unknown) => void) | undefined;
+    const writeText = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const exec = mockExecCommand(true);
+    let current = true;
+
+    const copy = copyToClipboard("hello", () => current);
+    current = false;
+    rejectWrite?.(new Error("denied"));
+
+    expect(await copy).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+    expect(document.querySelector("textarea")).toBeNull();
+  });
+
   it("falls back to execCommand over plain HTTP where navigator.clipboard is undefined", async () => {
     vi.stubGlobal("navigator", {});
     const exec = mockExecCommand(true);

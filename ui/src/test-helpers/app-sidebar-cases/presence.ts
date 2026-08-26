@@ -256,10 +256,6 @@ describe("AppSidebar viewer presence", () => {
     expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
     expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
-    expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
-      "openclaw-tooltip",
-      "openclaw-tooltip",
-    ]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
       avatarUrl: "/api/users/00-self/avatar?v=4",

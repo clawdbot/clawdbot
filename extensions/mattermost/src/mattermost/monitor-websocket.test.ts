@@ -377,7 +377,7 @@ describe("mattermost websocket monitor", () => {
     });
   });
 
-  it("hands posted envelopes to ingress raw and keeps post_edited out", async () => {
+  it("hands posted envelopes to ingress raw without duplicate decoding", async () => {
     const socket = new FakeWebSocket();
     const onPosted = vi.fn(async () => {});
     const connectOnce = createMattermostConnectOnce({
@@ -398,6 +398,9 @@ describe("mattermost websocket monitor", () => {
         }),
       },
     };
+    const raw = JSON.stringify(posted);
+    const frame = Buffer.from(raw);
+    const decode = vi.spyOn(frame, "toString");
 
     const connected = connectOnce();
     socket.emitOpen();
@@ -413,14 +416,15 @@ describe("mattermost websocket monitor", () => {
       queueMicrotask(resolve);
     });
     expect(onPosted).not.toHaveBeenCalled();
-    socket.emitMessage(Buffer.from(JSON.stringify(posted)));
+    socket.emitMessage(frame);
     await vi.waitFor(() => {
       expect(onPosted).toHaveBeenCalledTimes(1);
     });
     socket.emitClose(1000);
     await connected;
 
-    expect(onPosted).toHaveBeenCalledWith(JSON.stringify(posted));
+    expect(onPosted).toHaveBeenCalledWith(raw);
+    expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {

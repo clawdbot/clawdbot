@@ -1057,7 +1057,9 @@ export async function sendMediaFeishu(params: {
       : await runBeforeFeishuMessageDispatch(() =>
           resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
         );
-  const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
+  const voiceIntentDegradedToFile =
+    routing.msgType !== "audio" &&
+    shouldSuppressFeishuTextForVoiceMedia({ mediaUrl, audioAsVoice });
 
   await runBeforeFeishuMessageDispatch(() =>
     assertFeishuUploadWithinEnvelope({ buffer, mediaMaxBytes, msgType: routing.msgType }),

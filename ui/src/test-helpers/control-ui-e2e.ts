@@ -10,7 +10,7 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
@@ -209,6 +209,7 @@ export const defaultControlUiFeatureMethods = [
   "device.scopes.waitUpgrade",
   "session.members.add",
   "session.members.list",
+  "session.members.listEvidence",
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
@@ -231,6 +232,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "sessions.search",
   "tools.github.status",
   "tools.github.configure",
   "tools.github.authorize.start",
@@ -277,6 +279,12 @@ export type ControlUiMockGatewayScenario = {
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
   serverBuildId?: string;
+  /** Exact Gateway lifecycle generation served in hello. */
+  gatewayBootId?: string;
+  /** Optional startup update snapshot for rich local mock fixtures. */
+  updateAvailable?: UpdateAvailable | null;
+  /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
+  updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
@@ -338,6 +346,8 @@ export type ControlUiMockGatewayScenario = {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
+  /** Local media preview roots served in the bootstrap config; tilde sources expand against these. */
+  localMediaPreviewRoots?: string[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -505,6 +515,7 @@ export type MockGatewayControls = {
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
+  setGatewayBootId: (bootId: string) => Promise<void>;
   setServerBuildId: (buildId: string) => Promise<void>;
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
@@ -875,6 +886,9 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
+    updateAvailable: scenario.updateAvailable ?? null,
+    updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
@@ -907,6 +921,7 @@ function normalizeScenario(
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
+    localMediaPreviewRoots: scenario.localMediaPreviewRoots ?? [],
   };
 }
 
@@ -921,7 +936,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
-    localMediaPreviewRoots: [],
+    localMediaPreviewRoots: normalizedScenario.localMediaPreviewRoots,
     serverVersion: normalizedScenario.serverVersion,
     serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
@@ -1000,6 +1015,7 @@ function installControlUiMockGateway(
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
+    setGatewayBootId: (bootId: string) => void;
     setServerBuildId: (buildId: string) => void;
     setOperatorScopes: (scopes: string[]) => void;
     setHistoryMessages: (messages: unknown[]) => void;
@@ -1020,6 +1036,9 @@ function installControlUiMockGateway(
   const scenario: BrowserScenario = input.scenario;
   const serverBuildIdStateKey = "openclaw.control-ui-e2e.serverBuildId";
   let serverBuildId = scenario.serverBuildId;
+  let gatewayBootId =
+    new URL(window.location.href).searchParams.get("mockGatewayBootId")?.trim() ||
+    scenario.gatewayBootId;
   try {
     serverBuildId = window.sessionStorage.getItem(serverBuildIdStateKey)?.trim() || serverBuildId;
   } catch {
@@ -1044,6 +1063,7 @@ function installControlUiMockGateway(
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  let sessionPatchTimestamp = 1_800_000_000_000;
   const createdSessions = new Map<string, Record<string, unknown>>();
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
@@ -1302,12 +1322,6 @@ function installControlUiMockGateway(
     if (method === "agents.list") {
       return applyAgentsList(value);
     }
-    if (method === "chat.startup" && hasOwn(value, "agentsList")) {
-      return {
-        ...value,
-        agentsList: applyAgentsList(value.agentsList),
-      };
-    }
     return value;
   }
 
@@ -1368,6 +1382,7 @@ function installControlUiMockGateway(
       "model",
       "thinkingLevel",
       "fastMode",
+      "permissionMode",
       "label",
       "category",
       "icon",
@@ -1379,6 +1394,14 @@ function installControlUiMockGateway(
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }
+    }
+    if (params.unread === true) {
+      sessionPatchTimestamp += 1;
+      patch.markedUnreadAt = sessionPatchTimestamp;
+    } else if (params.unread === false) {
+      sessionPatchTimestamp += 1;
+      patch.lastReadAt = sessionPatchTimestamp;
+      patch.markedUnreadAt = undefined;
     }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;
@@ -1686,6 +1709,7 @@ function installControlUiMockGateway(
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,
+            bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
             version: scenario.serverVersion,
@@ -1703,10 +1727,13 @@ function installControlUiMockGateway(
           },
           snapshot: {
             ...presenceSnapshot(params),
+            ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
+            ...(scenario.updateSchedule ? { updateSchedule: scenario.updateSchedule } : {}),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
+              modelConfigured: Boolean(scenario.agentModel),
               scope: "agent",
             },
           },
@@ -1774,21 +1801,6 @@ function installControlUiMockGateway(
         };
       case "chat.startup":
         return {
-          agentsList: {
-            agents: [
-              {
-                id: scenario.defaultAgentId,
-                identity: { name: scenario.assistantName },
-                ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
-                name: scenario.assistantName,
-                ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
-                workspaceGit: scenario.workspaceGit,
-              },
-            ],
-            defaultId: scenario.defaultAgentId,
-            mainKey: "main",
-            scope: "agent",
-          },
           messages: scenario.historyMessages,
           metadata: {
             models: scenario.models,
@@ -1806,6 +1818,15 @@ function installControlUiMockGateway(
         return {
           commands: [],
           models: scenario.models,
+        };
+      case "talk.catalog":
+        return {
+          modes: [],
+          transports: [],
+          brains: [],
+          speech: { providers: [] },
+          transcription: { providers: [] },
+          realtime: { ready: true, providers: [] },
         };
       case "chat.send":
         return {
@@ -1859,6 +1880,8 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.search":
+        return { results: [] };
       case "sessions.patchMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {
@@ -2291,6 +2314,9 @@ function installControlUiMockGateway(
         socket.openConnection();
       }
     },
+    setGatewayBootId(nextBootId) {
+      gatewayBootId = nextBootId;
+    },
     setServerBuildId(nextBuildId) {
       serverBuildId = nextBuildId;
       try {
@@ -2351,7 +2377,16 @@ function installControlUiMockGateway(
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   const RoutedWebSocket = function (url: string | URL, protocols?: string | string[]) {
     const resolvedUrl = String(url);
-    if (scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))) {
+    // Vite's dev client must keep its real socket: the mock would fake the
+    // open handshake, and a later setOnline(false) close would make the client
+    // believe the dev server restarted and reload the page mid-test.
+    const isViteHmr = Array.isArray(protocols)
+      ? protocols.includes("vite-hmr")
+      : protocols === "vite-hmr";
+    if (
+      isViteHmr ||
+      scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
+    ) {
       return protocols === undefined
         ? new NativeWebSocket(resolvedUrl)
         : new NativeWebSocket(resolvedUrl, protocols);
@@ -2576,6 +2611,21 @@ function createMockGatewayControls(
         }
         gateway.setOnline(nextOnline);
       }, online);
+    },
+    async setGatewayBootId(bootId) {
+      await page.evaluate((nextBootId) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setGatewayBootId: (bootId: string) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setGatewayBootId(nextBootId);
+      }, bootId);
     },
     async setServerBuildId(buildId) {
       await page.evaluate((nextBuildId) => {

@@ -197,9 +197,13 @@ struct MacNodeCodexThreadCatalogTests {
     }
 
     private func openFIFOForWriting(_ url: URL) async throws -> FileHandle {
-        try await Task.detached {
+        let handle = try await Task.detached {
             try FileHandle(forWritingTo: url)
         }.value
+        // The FIFO reader is a spawned fake child; if it exits before the exit
+        // gate write, an unsuppressed SIGPIPE kills the whole test harness.
+        try TestProcessSupport.suppressSIGPIPE(handle)
+        return handle
     }
 
     private func requestEmptyList(

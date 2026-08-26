@@ -150,6 +150,55 @@ describe("offline device placement abandonment", () => {
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
   });
 
+  it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
+    const harness = createHarness(placements);
+    const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    const claim = placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "offline-remote-exec-claim",
+      runId: "offline-remote-exec-run",
+      owner: {
+        kind: "local",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const closeToolState = vi.spyOn(placements, "closeWorkerTurnToolState");
+    const closed = vi.fn();
+    const unregister = placements.registerTurnClaimClosedHandler(closed);
+    vi.mocked(harness.environments.startTunnel).mockClear();
+
+    await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
+      state: "local",
+      turnClaim: null,
+    });
+
+    expect(closeToolState).toHaveBeenCalledExactlyOnceWith(claim);
+    expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    expect(harness.log).not.toContain("workspace:reconcile");
+    expect(placements.validateTurnClaim(claim)).toBe(false);
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(() =>
+      placements.startReconcile({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation + 1,
+      }),
+    ).toThrow("Cannot reconcile stale worker placement");
+    expect(() => placements.releaseTurn(claim)).toThrow("turn claim changed before release");
+    expect(closeToolState).toHaveBeenCalledOnce();
+    expect(closed).toHaveBeenCalledOnce();
+    unregister();
+  });
+
   it("joins a durable abandonment retry without validating or persisting the source again", async () => {
     const persistedPartials: string[] = [];
     const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {

@@ -3,6 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -14,6 +21,10 @@ import {
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 function createTerminalBridgeHarness() {
   const harness = createCodeModeHarness();
@@ -77,6 +88,79 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
+  it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const runId = "run-code-mode-inline-approval";
+    const sessionId = "session-inline-approval";
+    const sessionKey = "agent:main:inline-approval";
+    const requested = createDeferred();
+    const decision = createDeferred();
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "code-mode-approval", state: "present" },
+      },
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+    });
+    const admittedRunContext = await admission.admit("embedded");
+    const identity = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext,
+      agentId: "main",
+      sessionKey,
+      turnSourceChannel: "telegram",
+    });
+    const timeoutMs = 1_000;
+    const config = { tools: { codeMode: { enabled: true, timeoutMs } } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const context = { config, runtimeConfig: config, sessionId, sessionKey, runId, catalogRef };
+    const controls = createCodeModeTools(context);
+    const shell = pluginToolWithExecute("exec", "Run shell", async (toolCallId) => {
+      const event = { runId, sessionId, stream: "lifecycle" as const };
+      emitAgentEvent({
+        ...event,
+        data: { phase: "waiting-approval", approvalId: "approval-inline", toolCallId },
+      });
+      requested.resolve();
+      await decision.promise;
+      emitAgentEvent({
+        ...event,
+        data: { phase: "approval-resolved", approvalId: "approval-inline", toolCallId },
+      });
+      return jsonResult({ status: "completed", aggregated: "approved" });
+    });
+    applyCodeModeCatalog({ tools: [...controls, shell], ...context });
+
+    let settled = false;
+    try {
+      const execution = withGatewayToolCallerIdentity(identity, async () => {
+        const result = await expectDefined(controls[0], "Code Mode exec test invariant").execute(
+          "inline-approval",
+          { code: `return await exec({ value: "approval" });` },
+        );
+        settled = true;
+        return result;
+      });
+      await requested.promise;
+      await vi.advanceTimersByTimeAsync(timeoutMs + 1);
+
+      expect(settled).toBe(false);
+      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+
+      decision.resolve();
+      expect(resultDetails(await execution)).toMatchObject({
+        status: "completed",
+        value: { status: "completed", aggregated: "approved" },
+      });
+      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+    } finally {
+      decision.resolve();
+      admission.close();
+    }
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeUndefined();
+  });
+
   it("retains terminal bridge evidence until a yielded run completes through wait", async () => {
     const { config, catalogRef, tools } = createTerminalBridgeHarness();
     const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
@@ -121,7 +205,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.terminate).toBe(true);
   });
 
-  it("discards retained terminal bridge evidence when a yielded run fails", async () => {
+  it("preserves retained terminal bridge evidence when a yielded run fails", async () => {
     const { config, catalogRef, tools } = createTerminalBridgeHarness();
     const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
       ...jsonResult({ terminal: true }),
@@ -166,7 +250,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       status: "failed",
       error: expect.stringContaining("resumed failure"),
     });
-    expect(resumed.terminate).toBeUndefined();
+    expect(resumed.terminate).toBe(true);
   });
 
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {

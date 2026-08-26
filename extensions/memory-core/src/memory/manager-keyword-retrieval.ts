@@ -90,7 +90,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return this.toCuratedMemorySearchResults(
+    return await this.readCuratedMemoryCandidates(() =>
       readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys),
     );
   }
@@ -100,9 +100,42 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit?: number;
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return this.toCuratedMemorySearchResults(
+    return await this.readCuratedMemoryCandidates(() =>
       readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys),
     );
+  }
+
+  private async readCuratedMemoryCandidates(
+    read: () => ReturnType<typeof readCuratedMemoryTriggerCandidates>,
+  ): Promise<MemorySearchResult[]> {
+    return await this.withManagerOperation(async () => {
+      if (this.memorySourceProvenanceRepairPending) {
+        const repairPending = () =>
+          this.db
+            .prepare(
+              `SELECT 1 FROM memory_index_sources
+               WHERE source = 'memory' AND hash = '' LIMIT 1`,
+            )
+            .get() !== undefined;
+        try {
+          // Provenance schema adoption invalidates legacy source hashes. Finish that
+          // owner-classified reindex before the first automatic candidate read.
+          if (repairPending()) {
+            await this.syncAdmitted(
+              { reason: "search" },
+              { allowEmbeddingBootstrapFallback: true },
+            );
+          }
+        } catch (err) {
+          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
+        }
+        this.memorySourceProvenanceRepairPending = repairPending();
+        if (this.memorySourceProvenanceRepairPending) {
+          return [];
+        }
+      }
+      return this.toCuratedMemorySearchResults(read());
+    });
   }
 
   private toCuratedMemorySearchResults(
@@ -126,6 +159,12 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       if (typeof row.project_key === "string" && row.project_key.trim()) {
         result.projectKey = row.project_key.trim();
       }
+      result.provenance = {
+        originClass: row.origin_class,
+        sessionKind: row.session_kind,
+        observedAt: row.observed_at,
+        ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
+      };
       return result;
     });
   }

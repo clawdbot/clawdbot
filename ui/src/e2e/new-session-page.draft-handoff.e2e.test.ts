@@ -6,6 +6,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -63,6 +64,7 @@ suite.define(() => {
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await waitForCommittedNewSessionDraft(pageB, durableText, 1);
       await pageB.reload();
       await expect.poll(() => messageB.inputValue()).toBe(durableText);
       await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();

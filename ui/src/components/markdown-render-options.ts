@@ -16,7 +16,9 @@ export type MarkdownRenderOptions = {
   tableInteractions?: MarkdownTableInteractions;
 };
 
-export type MarkdownRenderEnv = Required<MarkdownRenderOptions>;
+export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
+  streamingOpenFence?: boolean;
+};
 
 export function normalizeMarkdownRenderOptions(
   options: MarkdownRenderOptions = {},

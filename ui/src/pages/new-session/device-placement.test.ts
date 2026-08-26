@@ -127,4 +127,56 @@ describe("device placement projection", () => {
       { deviceId: "unique", subtitle: undefined },
     ]);
   });
+
+  it.each([
+    {
+      name: "remote execution remains available when every worker slot is occupied",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {
+        workerSlots: { total: 2, available: 0 },
+        invocableCommands: ["codex.exec-server.stdio.v1"],
+      },
+      selectable: true,
+    },
+    {
+      name: "worker turns remain unavailable when every worker slot is occupied",
+      requirement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      environment: { workerSlots: { total: 2, available: 0 } },
+      selectable: false,
+      reason: /worker slots/i,
+    },
+    {
+      name: "declaring a command does not grant Gateway invocation authority",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: {
+        capabilities: ["codex.exec-server.stdio.v1"],
+        invocableCommands: [],
+      },
+      selectable: false,
+      reason: /enable|approv/i,
+    },
+    {
+      name: "missing command authority fails closed even when worker slots are free",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: { invocableCommands: ["camera.snap"] },
+      selectable: false,
+      reason: /enable|approv/i,
+    },
+  ])("$name", ({ requirement, environment, selectable, reason }) => {
+    const [device] = projectDevicePlacements([node(environment)], requirement);
+
+    expect(device?.selectable).toBe(selectable);
+    if (reason) {
+      expect(device?.disabledReason).toMatch(reason);
+    }
+  });
 });

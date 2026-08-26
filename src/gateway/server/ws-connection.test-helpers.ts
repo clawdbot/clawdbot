@@ -17,10 +17,12 @@ export type GatewayWsTestSocket = EventEmitter & {
     localAddress: string;
     localPort: number;
   };
+  readyState: number;
   bufferedAmount: number;
   send: ReturnType<typeof vi.fn>;
   ping?: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
 };
 
 export function createGatewayWsTestLogger() {
@@ -66,6 +68,7 @@ export function createGatewayWsTestSocket(
       localAddress: "127.0.0.1",
       localPort: 5678,
     },
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((data: string, cb?: (err?: Error) => void) => {
       params.onSend?.(data);
@@ -77,6 +80,7 @@ export function createGatewayWsTestSocket(
         socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
       }
     }),
+    terminate: vi.fn(),
   });
   return socket;
 }
@@ -115,6 +119,7 @@ export function attachGatewayWsForTest(params: {
   params.attach({
     wss,
     clients: clients as never,
+    bootId: "ws-test-boot",
     preauthConnectionBudget: { release: vi.fn() } as never,
     port: 19001,
     getResolvedAuth: () => createResolvedGatewayTokenAuth("token"),

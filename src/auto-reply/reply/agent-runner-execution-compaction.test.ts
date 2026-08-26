@@ -5,6 +5,7 @@ import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   expectBlockReplyCall,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
@@ -89,7 +90,7 @@ describe("executeAgentTurn: compaction events", () => {
     try {
       state.runWithModelFallbackMock.mockImplementationOnce(
         async (params: FallbackRunnerParams) => ({
-          result: await params.run("openai", "gpt-5.5"),
+          result: await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params)),
           provider: "openai",
           model: "gpt-5.5",
           attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],

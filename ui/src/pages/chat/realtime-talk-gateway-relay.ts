@@ -1,3 +1,5 @@
+import { validateTalkSessionCancelOutputResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
@@ -59,6 +61,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly delayedToolResults = new Set<DelayedToolResult>();
   private readonly markAckTimers = new Set<number>();
   private cancelRequestedForPlayback = false;
+  private activeOutputTurnId: string | null = null;
   private playbackOverflowed = false;
   private pendingOutputCancellations = 0;
   private speechFramesDuringPlayback = 0;
@@ -196,6 +199,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
     this.playbackOverflowed = false;
+    this.activeOutputTurnId = null;
     this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
@@ -217,7 +221,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       const abortController = this.audioAppendAbortController;
       // Live microphone frames become stale once the Gateway falls behind, so fail at
       // the ownership cap instead of silently dropping speech or growing a latency queue.
-      if (!abortController || abortController.signal.aborted) {
+      if (!abortController || abortController.signal.aborted || this.pendingOutputCancellations) {
         return;
       }
       if (this.pendingAudioAppends.size >= MAX_PENDING_AUDIO_APPENDS) {
@@ -320,14 +324,28 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           return;
         case "audio":
           if (event.audioBase64 && !this.playbackOverflowed) {
+            const turnId = event.talkEvent?.turnId?.trim();
+            if (!turnId) {
+              this.ctx.callbacks.onStatus?.(
+                "error",
+                t("chat.composer.realtimeTalkMissingTurnIdentity"),
+              );
+              this.stop();
+              return;
+            }
+            this.activeOutputTurnId = turnId;
             this.cancelRequestedForPlayback = false;
             this.speechFramesDuringPlayback = 0;
             this.playPcm16(event.audioBase64);
           }
           return;
         case "clear":
+          if (event.talkEvent?.turnId && event.talkEvent.turnId !== this.activeOutputTurnId) {
+            return;
+          }
           this.playbackOverflowed = false;
           this.stopOutput({ releaseDelayedToolResults: this.pendingOutputCancellations === 0 });
+          this.activeOutputTurnId = null;
           if (event.talkEvent?.type === "turn.cancelled") {
             this.abortConsults();
           }
@@ -671,6 +689,12 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if ((requirePlayback && !this.outputQueue.isPlaying) || this.cancelRequestedForPlayback) {
       return;
     }
+    const turnId = this.activeOutputTurnId;
+    if (!turnId) {
+      this.ctx.callbacks.onStatus?.("error", t("chat.composer.realtimeTalkMissingTurnIdentity"));
+      this.stop();
+      return;
+    }
     this.cancelRequestedForPlayback = true;
     // Keep completed consult results until the Gateway records this cancellation.
     // Releasing earlier can let the provider answer from a turn the user interrupted.
@@ -681,20 +705,26 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       .request("talk.session.cancelOutput", {
         sessionId: this.session.relaySessionId,
         reason,
+        turnId,
       })
-      .then(
-        () => {
-          this.pendingOutputCancellations -= 1;
-          if (this.pendingOutputCancellations === 0) {
-            this.flushDelayedToolResults();
-          }
-        },
-        (error: unknown) => {
-          this.pendingOutputCancellations -= 1;
-          this.reportToolResultSubmissionError(error);
-          this.stop();
-        },
-      );
+      .then((result) => {
+        if (!validateTalkSessionCancelOutputResult(result)) {
+          throw new Error(t("chat.composer.realtimeTalkCancellationRejected"));
+        }
+        const waitsForClear = result.status === undefined || result.status === "applied";
+        if (waitsForClear && result.turnId !== undefined && result.turnId !== turnId) {
+          throw new Error(t("chat.composer.realtimeTalkCancellationRejected"));
+        }
+        this.pendingOutputCancellations -= 1;
+        if (this.pendingOutputCancellations === 0) {
+          this.flushDelayedToolResults();
+        }
+      })
+      .catch((error: unknown) => {
+        this.pendingOutputCancellations -= 1;
+        this.reportToolResultSubmissionError(error);
+        this.stop();
+      });
   }
 
   private abortConsults(): void {

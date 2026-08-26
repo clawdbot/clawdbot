@@ -55,6 +55,30 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
   };
 }
 
+function createSkill(
+  name: string,
+  options: { source?: string; bundled?: boolean; blockedByAgentFilter?: boolean } = {},
+): SkillStatusEntry {
+  return {
+    name,
+    description: `${name} skill`,
+    source: options.source ?? "openclaw-managed",
+    bundled: options.bundled ?? false,
+    filePath: `/tmp/skills/${name}/SKILL.md`,
+    baseDir: `/tmp/skills/${name}`,
+    skillKey: name,
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    blockedByAgentFilter: options.blockedByAgentFilter ?? false,
+    eligible: true,
+    requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    configChecks: [],
+    install: [],
+  };
+}
+
 describe("agents tools panel (browser)", () => {
   it("renders catalog provenance and effective runtime tools", async () => {
     const container = document.createElement("div");
@@ -637,26 +661,58 @@ describe("agents tools panel (browser)", () => {
 });
 
 describe("agents skills panel (browser)", () => {
+  it("shows matches from default-collapsed groups while filtering", async () => {
+    const container = document.createElement("div");
+    const params: Parameters<typeof renderAgentSkills>[0] = {
+      agentId: "main",
+      canPatchConfig: true,
+      canUpdateConfig: true,
+      report: {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        agentId: "main",
+        skills: [
+          createSkill("Unique Built In Match", {
+            source: "openclaw-bundled",
+            bundled: true,
+          }),
+          createSkill("Installed Distractor"),
+        ],
+      },
+      loading: false,
+      error: null,
+      activeAgentId: "main",
+      configForm: { agents: { entries: { main: { default: true } } } },
+      configLoading: false,
+      configSaving: false,
+      configDirty: false,
+      filter: "",
+      onFilterChange: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      onClear: () => undefined,
+      onDisableAll: () => undefined,
+      onConfigReload: () => undefined,
+      onConfigSave: () => undefined,
+    };
+
+    render(renderAgentSkills(params), container);
+    await Promise.resolve();
+    const builtInGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(builtInGroup?.open).toBe(false);
+
+    render(renderAgentSkills({ ...params, filter: "Unique Built In Match" }), container);
+    await Promise.resolve();
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(container.textContent).toContain("1 shown");
+    expect(filteredGroup?.open).toBe(true);
+    expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
+      "Unique Built In Match",
+    );
+  });
+
   it("reflects an inherited default skill allowlist", async () => {
     const container = document.createElement("div");
-    const skill = (name: string, blockedByAgentFilter: boolean): SkillStatusEntry => ({
-      name,
-      description: `${name} skill`,
-      source: "openclaw-managed",
-      bundled: false,
-      filePath: `/tmp/skills/${name}/SKILL.md`,
-      baseDir: `/tmp/skills/${name}`,
-      skillKey: name,
-      always: false,
-      disabled: false,
-      blockedByAllowlist: false,
-      blockedByAgentFilter,
-      eligible: true,
-      requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
-      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
-      configChecks: [],
-      install: [],
-    });
 
     render(
       renderAgentSkills({
@@ -668,7 +724,7 @@ describe("agents skills panel (browser)", () => {
           managedSkillsDir: "/tmp/skills",
           agentId: "main",
           agentSkillFilter: ["github"],
-          skills: [skill("github", false), skill("weather", true)],
+          skills: [createSkill("github"), createSkill("weather", { blockedByAgentFilter: true })],
         },
         loading: false,
         error: null,

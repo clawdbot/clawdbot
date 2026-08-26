@@ -29,7 +29,7 @@ import {
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
-import { rememberSessionGroup } from "./session-organizer-catalog.ts";
+import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
@@ -58,9 +58,7 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
-    ...(typeof patch.archived === "boolean" && session.sessionId
-      ? { expectedSessionId: session.sessionId }
-      : {}),
+    ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
   if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
     host.sessionData.publishSessionMutationError(
@@ -77,7 +75,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
-      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
+      ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -164,7 +162,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
+  scope.sessions.setArchiveVisibility(session.key, "pending");
   const result = await patchSession(host, session, { archived: true }, scope);
+  scope.sessions.setArchiveVisibility(session.key, result === "completed" ? "archived" : undefined);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -395,8 +395,8 @@ export async function renameSession(
 }
 
 export async function assignSessionOwner(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: Pick<SidebarRecentSession, "key">,
   owner: Pick<SessionOwnerOption, "type" | "id">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -409,9 +409,16 @@ export async function assignSessionOwner(
   ) {
     return;
   }
-  await scope.sessions.assignOwner(session.key, owner, {
+  const assigned = await scope.sessions.assignOwner(session.key, owner, {
     agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
   });
+  if (
+    host.sessionData.isSessionMutationScopeCurrent(scope) &&
+    !assigned &&
+    scope.sessions.state.error
+  ) {
+    host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  }
 }
 
 export async function createSessionGroup(
@@ -462,19 +469,31 @@ export async function createSessionGroup(
 }
 
 export async function assignSessionCategory(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionGroupActionHost,
+  session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
   patch: { pinned?: boolean } = {},
+  options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<void> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const catalogChanged = Boolean(category && !host.knownSessionGroups().includes(category));
   if (category && (await rememberSessionGroup(host, category, scope)) !== "completed") {
     return;
   }
-  await patchSession(host, session, { category, ...patch }, scope);
+  const currentSession = options.resolveSession ? options.resolveSession() : session;
+  if (!currentSession) {
+    showToast({
+      message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
+    });
+    return;
+  }
+  if ((currentSession.category ?? null) === category && patch.pinned === undefined) {
+    return;
+  }
+  await patchSession(host, currentSession, { category, ...patch }, scope);
 }
 
 export async function forkSession(

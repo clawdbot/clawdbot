@@ -104,16 +104,19 @@ export async function channelsLogsCommand(
     maxBytes: MAX_BYTES,
     filter: (line) => matchesChannel(line, filter),
   });
-  const lines = tail.lines;
+  const { lines, truncated } = tail;
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { file: tail.file, channel, lines });
+    writeRuntimeJson(runtime, { file: tail.file, channel, truncated, lines });
     return;
   }
 
   runtime.log(theme.info(`Log file: ${tail.file}`));
   if (channel !== "all") {
     runtime.log(theme.info(`Channel: ${channel}`));
+  }
+  if (truncated) {
+    runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
   }
   if (lines.length === 0) {
     runtime.log(theme.muted("No matching log lines."));

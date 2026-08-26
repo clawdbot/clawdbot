@@ -39,6 +39,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { normalizeChatComposerDraft } from "./composer-draft.ts";
 import {
   captureDurableChatAttachments,
   chatAttachmentDraftSignature,
@@ -341,11 +342,12 @@ export function loadChatComposerSnapshot(
       }
     }
     const session = resolved.session;
-    if (!session || (!session.draft && !session.queue?.length)) {
+    const draft = normalizeChatComposerDraft(session?.draft ?? "");
+    if (!session || (!draft && !session.queue?.length)) {
       return null;
     }
     return {
-      draft: session.draft ?? "",
+      draft,
       queue: (session.queue ?? [])
         .map((item) => serializeQueueItemForScope(item, scope))
         .filter((item): item is ChatQueueItem => item !== null)
@@ -374,7 +376,9 @@ function persistChatComposerStateResult(
       sessionKey,
       options.agentId,
     );
-    const draft = Object.hasOwn(options, "draft") ? (options.draft ?? "") : state.chatMessage;
+    const draft = normalizeChatComposerDraft(
+      Object.hasOwn(options, "draft") ? (options.draft ?? "") : state.chatMessage,
+    );
     const storedDraftRevision = session?.draftRevision;
     rememberDraftRevision(storage, target.key, storeSessionKey, storedDraftRevision);
     // Draft-only rows are bounded and may evict a clear tombstone. Retain the
@@ -392,7 +396,7 @@ function persistChatComposerStateResult(
     if (!Number.isSafeInteger(draftRevision) || draftRevision <= 0) {
       return "conflict";
     }
-    const storedDraft = session?.draft ?? "";
+    const storedDraft = normalizeChatComposerDraft(session?.draft ?? "");
     const expectedDraftRevision = options.expectedDraftRevision;
     const committedMatchesExpected =
       expectedDraftRevision === undefined ||
@@ -666,13 +670,14 @@ export function restoreChatComposerState(
   state: ChatComposerPersistenceState,
   options: RestoreOptions = {},
 ): boolean {
+  state.chatMessage = normalizeChatComposerDraft(state.chatMessage);
   const sessionKey = options.sessionKey ?? state.sessionKey;
   const snapshot = loadChatComposerSnapshot(state, sessionKey);
   if (!snapshot) {
     return false;
   }
   if (!options.preserveCurrent || !state.chatMessage) {
-    state.chatMessage = snapshot.draft;
+    state.chatMessage = normalizeChatComposerDraft(snapshot.draft);
   }
   if ((!options.preserveCurrent && snapshot.queue.length > 0) || state.chatQueue.length === 0) {
     state.chatQueue = snapshot.queue;
@@ -980,7 +985,7 @@ export class ChatComposerPersistence {
           scope: durableScope,
           expectedRevision: expectedDraftRevision,
           revision: draftRevision,
-          text: state.chatMessage,
+          text: normalizeChatComposerDraft(state.chatMessage),
           attachments,
           storedAttachments: captureDurableChatAttachments(attachments),
           writeId: `${draftRevision}:${Math.random().toString(36).slice(2)}`,
@@ -988,7 +993,7 @@ export class ChatComposerPersistence {
       : undefined;
     return {
       sessionKey: state.sessionKey,
-      chatMessage: state.chatMessage,
+      chatMessage: normalizeChatComposerDraft(state.chatMessage),
       ...(scope.agentId ? { agentId: scope.agentId } : {}),
       expectedDraftRevision,
       draftRevision,
@@ -1096,7 +1101,7 @@ export class ChatComposerPersistence {
         const forceOwnerRestore = this.forceDurableOwnerRestore;
         this.forceDurableOwnerRestore = false;
         const displaced = state.chatAttachments ?? [];
-        state.chatMessage = draft.text;
+        state.chatMessage = normalizeChatComposerDraft(draft.text);
         state.chatAttachments = draft.attachments;
         releaseChatAttachmentPayloads(displaced);
         const adoptedRevision = forceOwnerRestore
@@ -1104,7 +1109,7 @@ export class ChatComposerPersistence {
           : draft.revision;
         persistChatComposerStateResult(state, state.sessionKey, {
           agentId: resolveStoredChatOutboxScope(state, state.sessionKey).agentId,
-          draft: draft.text,
+          draft: state.chatMessage,
           draftRevision: adoptedRevision,
         });
         this.committedDraftRevision = adoptedRevision;

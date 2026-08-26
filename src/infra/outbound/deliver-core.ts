@@ -98,6 +98,7 @@ export async function deliverOutboundPayloadsCore(
         // Carry its source index without polluting the persisted platform route.
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
+      onDirectAdapterHandoff: params.onDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
     });
@@ -139,7 +140,10 @@ export async function deliverOutboundPayloadsCore(
   const textLimit =
     params.formatting?.textLimit ??
     (handler.resolveEffectiveTextChunkLimit
-      ? handler.resolveEffectiveTextChunkLimit(configuredTextLimit)
+      ? handler.resolveEffectiveTextChunkLimit({
+          fallbackLimit: configuredTextLimit,
+          formatting: params.formatting,
+        })
       : configuredTextLimit);
   const chunkMode = handler.chunker
     ? (params.formatting?.chunkMode ?? resolveChunkMode(cfg, channel, accountId))

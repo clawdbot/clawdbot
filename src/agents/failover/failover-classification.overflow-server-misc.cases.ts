@@ -5,6 +5,7 @@ import {
   httpSource,
   matchesSource,
   messageRows,
+  failoverSignalRows,
   openRouterSource,
   patternsSource,
   reason,
@@ -13,219 +14,154 @@ import {
 export const overflowServerMiscCases = [
   // Transient transport and provider failures.
   {
-    id: "billing-deadline-exceeded",
-    source: billingSource,
-    signal: { message: "deadline exceeded" },
+    id: "bedrock-incomplete-terminal-stream",
+    source: "extensions/amazon-bedrock/stream.runtime.ts",
+    signal: { provider: "amazon-bedrock", message: "Bedrock stream ended before messageStop" },
     expected: reason("timeout"),
   },
   {
-    id: "billing-no-stream-chunks",
-    source: billingSource,
-    signal: { message: "request ended without sending any chunks" },
+    id: "anthropic-incomplete-terminal-stream",
+    source: "packages/ai/src/transports/anthropic-transport-stream.ts",
+    signal: { provider: "anthropic", message: "Anthropic stream ended before message_stop" },
     expected: reason("timeout"),
   },
   {
-    id: "billing-connection-error",
-    source: billingSource,
-    signal: { message: "Connection error." },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-fetch-failed",
-    source: billingSource,
-    signal: { message: "fetch failed" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-econnrefused",
-    source: billingSource,
-    signal: { message: "network error: ECONNREFUSED" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-enotfound",
-    source: billingSource,
-    signal: { message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-dns-eai-again",
-    source: billingSource,
-    signal: { message: "temporary dns failure EAI_AGAIN" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-cloudflare-521",
-    source: billingSource,
-    signal: {
-      message:
-        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
-    },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-openai-retry-guidance",
-    source: billingSource,
-    signal: {
-      provider: "openai",
-      message:
-        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
-    },
-    expected: reason("timeout"),
-  },
-  {
-    // #71620
-    id: "billing-shared-runtime-unknown-error",
-    source: billingSource,
-    signal: { message: "An unknown error occurred" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-generic-410",
-    source: billingSource,
-    signal: { message: "HTTP 410 Gone" },
-    expected: reason("timeout"),
-  },
-  {
-    // #42149
-    id: "billing-gemini-malformed-response",
-    source: billingSource,
-    signal: { provider: "google", message: "Unhandled stop reason: MALFORMED_RESPONSE" },
-    expected: reason("timeout"),
-  },
-  {
-    // #58315
-    id: "billing-operation-aborted",
-    source: billingSource,
-    signal: { message: "The operation was aborted" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-stream-aborted",
-    source: billingSource,
-    signal: { message: "stream was aborted" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-etimedout",
-    source: billingSource,
-    signal: { message: "Error: connect ETIMEDOUT 10.0.0.1:443" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-ehostunreach",
-    source: billingSource,
-    signal: { message: "Error: connect EHOSTUNREACH 10.0.0.1:443" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-epipe",
-    source: billingSource,
-    signal: { message: "Error: write EPIPE" },
-    expected: reason("timeout"),
-  },
-  {
-    // #61281
-    id: "billing-provider-network-finish-reason",
-    source: billingSource,
-    signal: { message: "Provider finish_reason: network_error" },
-    expected: reason("timeout"),
-  },
-  {
-    // #69368
-    id: "billing-undici-socket",
-    source: billingSource,
-    signal: { message: "Error: UND_ERR_SOCKET other side closed" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-undici-connect-timeout",
-    source: billingSource,
-    signal: { message: "UND_ERR_CONNECT_TIMEOUT" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-request-failed-retries",
-    source: billingSource,
-    signal: { message: "Request failed after repeated internal retries." },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-google-internal-500",
-    source: billingSource,
+    id: "google-incomplete-terminal-stream",
+    source: "packages/ai/src/providers/google-shared.ts",
     signal: {
       provider: "google",
-      message:
-        "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500",
+      message: "Google stream ended before a terminal finish reason",
     },
     expected: reason("timeout"),
   },
   {
-    id: "billing-mini-max-520",
-    source: billingSource,
-    signal: { message: '{"type":"api_error","message":"unknown error, 520 (1000)"}' },
+    id: "mistral-incomplete-terminal-stream",
+    source: "packages/ai/src/providers/mistral.ts",
+    signal: {
+      provider: "mistral",
+      message: "Mistral stream ended without a terminal finish reason",
+    },
     expected: reason("timeout"),
   },
   {
+    id: "openai-responses-incomplete-terminal-stream",
+    source: "packages/ai/src/transports/openai-responses-stream-internal.ts",
+    signal: {
+      provider: "openai",
+      message: "OpenAI Responses stream ended before a terminal response event",
+    },
+    expected: reason("timeout"),
+  },
+  {
+    id: "proxy-incomplete-terminal-stream",
+    source: "src/agents/runtime/proxy.ts",
+    signal: { message: "Proxy stream ended before terminal event" },
+    expected: reason("timeout"),
+  },
+  ...failoverSignalRows(billingSource, reason("timeout"), [
+    ["billing-deadline-exceeded", { message: "deadline exceeded" }],
+    ["billing-no-stream-chunks", { message: "request ended without sending any chunks" }],
+    ["billing-connection-error", { message: "Connection error." }],
+    ["billing-fetch-failed", { message: "fetch failed" }],
+    ["billing-econnrefused", { message: "network error: ECONNREFUSED" }],
+    [
+      "billing-enotfound",
+      { message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)" },
+    ],
+    ["billing-dns-eai-again", { message: "temporary dns failure EAI_AGAIN" }],
+    [
+      "billing-cloudflare-521",
+      {
+        message:
+          "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      },
+    ],
+    [
+      "billing-openai-retry-guidance",
+      {
+        provider: "openai",
+        message:
+          "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
+      },
+    ],
+    // #71620
+    ["billing-shared-runtime-unknown-error", { message: "An unknown error occurred" }],
+    ["billing-generic-410", { message: "HTTP 410 Gone" }],
+    // #42149
+    [
+      "billing-gemini-malformed-response",
+      { provider: "google", message: "Unhandled stop reason: MALFORMED_RESPONSE" },
+    ],
+    // #58315
+    ["billing-operation-aborted", { message: "The operation was aborted" }],
+    ["billing-stream-aborted", { message: "stream was aborted" }],
+    ["billing-etimedout", { message: "Error: connect ETIMEDOUT 10.0.0.1:443" }],
+    ["billing-ehostunreach", { message: "Error: connect EHOSTUNREACH 10.0.0.1:443" }],
+    ["billing-epipe", { message: "Error: write EPIPE" }],
+    // #61281
+    [
+      "billing-provider-network-finish-reason",
+      { message: "Provider finish_reason: network_error" },
+    ],
+    // #69368
+    ["billing-undici-socket", { message: "Error: UND_ERR_SOCKET other side closed" }],
+    ["billing-undici-connect-timeout", { message: "UND_ERR_CONNECT_TIMEOUT" }],
+    [
+      "billing-request-failed-retries",
+      { message: "Request failed after repeated internal retries." },
+    ],
+    [
+      "billing-google-internal-500",
+      {
+        provider: "google",
+        message:
+          "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500",
+      },
+    ],
+    [
+      "billing-mini-max-520",
+      { message: '{"type":"api_error","message":"unknown error, 520 (1000)"}' },
+    ],
     // #57010
-    id: "billing-anthropic-unexpected-error",
-    source: billingSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
-    },
-    expected: reason("timeout"),
-  },
-  {
+    [
+      "billing-anthropic-unexpected-error",
+      {
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
+      },
+    ],
     // #56242
-    id: "billing-zhipu-network-1234",
-    source: billingSource,
-    signal: {
-      provider: "zai",
-      message:
-        "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
-    },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-chinese-network-abnormal",
-    source: billingSource,
-    signal: { message: "网络异常，请稍后重试" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-chinese-service-busy",
-    source: billingSource,
-    signal: { message: "服务繁忙，请稍后再试" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "billing-chinese-system-error",
-    source: billingSource,
-    signal: { message: "系统错误，请稍后重试" },
-    expected: reason("timeout"),
-  },
-  {
-    id: "patterns-cloudflare-html-502",
-    source: patternsSource,
-    signal: {
-      status: 502,
-      message:
-        "<!doctype html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>",
-    },
-    expected: reason("timeout"),
-  },
-  {
-    id: "patterns-cloudflare-html-503",
-    source: patternsSource,
-    signal: {
-      status: 503,
-      message:
-        "<!doctype html><html><head><title>503</title></head><body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>",
-    },
-    expected: reason("timeout"),
-  },
+    [
+      "billing-zhipu-network-1234",
+      {
+        provider: "zai",
+        message:
+          "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      },
+    ],
+    ["billing-chinese-network-abnormal", { message: "网络异常，请稍后重试" }],
+    ["billing-chinese-service-busy", { message: "服务繁忙，请稍后再试" }],
+    ["billing-chinese-system-error", { message: "系统错误，请稍后重试" }],
+  ]),
+  ...failoverSignalRows(patternsSource, reason("timeout"), [
+    [
+      "patterns-cloudflare-html-502",
+      {
+        status: 502,
+        message:
+          "<!doctype html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>",
+      },
+    ],
+    [
+      "patterns-cloudflare-html-503",
+      {
+        status: 503,
+        message:
+          "<!doctype html><html><head><title>503</title></head><body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>",
+      },
+    ],
+  ]),
   {
     id: "retry-explicit-retry-guidance",
     source: retrySource,
@@ -385,23 +321,18 @@ export const overflowServerMiscCases = [
     },
   ]),
   // Provider-completed server errors.
-  {
-    id: "billing-openai-structured-server-error",
-    source: billingSource,
-    signal: {
-      provider: "openai",
-      message:
-        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
-    },
-    expected: reason("server_error"),
-  },
-  {
+  ...failoverSignalRows(billingSource, reason("server_error"), [
+    [
+      "billing-openai-structured-server-error",
+      {
+        provider: "openai",
+        message:
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      },
+    ],
     // #109218
-    id: "billing-provider-finish-error",
-    source: billingSource,
-    signal: { message: "Provider finish_reason: error" },
-    expected: reason("server_error"),
-  },
+    ["billing-provider-finish-error", { message: "Provider finish_reason: error" }],
+  ]),
   {
     id: "matches-provider-finish-error",
     source: matchesSource,
@@ -437,36 +368,21 @@ export const overflowServerMiscCases = [
     },
     expected: reason("model_not_found"),
   },
-  {
-    id: "retry-mistral-model-not-found",
-    source: retrySource,
-    signal: { provider: "mistral", message: "Mistral API error (404): model not found" },
-    expected: reason("model_not_found"),
-  },
-  {
-    id: "retry-gpt-preview-not-found",
-    source: retrySource,
-    signal: { message: "model gpt-5.5-preview-0429 not found" },
+  ...failoverSignalRows(retrySource, reason("model_not_found"), [
+    [
+      "retry-mistral-model-not-found",
+      { provider: "mistral", message: "Mistral API error (404): model not found" },
+    ],
     // FIXED(refactor-02): was rate_limit, now model_not_found
-    expected: reason("model_not_found"),
-  },
-  {
-    id: "retry-model-preview-not-found",
-    source: retrySource,
-    signal: { message: "model model-x-500-preview not found" },
+    ["retry-gpt-preview-not-found", { message: "model gpt-5.5-preview-0429 not found" }],
     // FIXED(refactor-02): was null, now model_not_found
-    expected: reason("model_not_found"),
-  },
-  {
-    id: "billing-session-not-found",
-    source: billingSource,
-    signal: { message: "HTTP 410: session not found" },
-    expected: reason("session_expired"),
-  },
-  {
-    id: "billing-claude-conversation-missing",
-    source: billingSource,
-    signal: { provider: "claude-cli", message: "No conversation found with session ID: abc123" },
-    expected: reason("session_expired"),
-  },
+    ["retry-model-preview-not-found", { message: "model model-x-500-preview not found" }],
+  ]),
+  ...failoverSignalRows(billingSource, reason("session_expired"), [
+    ["billing-session-not-found", { message: "HTTP 410: session not found" }],
+    [
+      "billing-claude-conversation-missing",
+      { provider: "claude-cli", message: "No conversation found with session ID: abc123" },
+    ],
+  ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];

@@ -355,11 +355,14 @@ describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["openclaw"];
+    params.pluginHarnessToolPolicyRestricted = true;
     const appServer = createAppServerOptions() as never;
+    const developerInstructions = "Host-authored ring-zero instructions.";
     const start = buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       config: { project_doc_max_bytes: 64_000 },
@@ -367,6 +370,7 @@ describe("Codex ring-zero thread config", () => {
     const resume = buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
@@ -375,6 +379,8 @@ describe("Codex ring-zero thread config", () => {
 
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
+    expect(start.developerInstructions).toBe(developerInstructions);
+    expect(resume.developerInstructions).toBe(developerInstructions);
     for (const config of [start.config, resume.config]) {
       expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
@@ -401,6 +407,47 @@ describe("Codex ring-zero thread config", () => {
     });
     expect(normal.baseInstructions).toBeUndefined();
     expect(normal.config?.["features.goals"]).toBe(false);
+  });
+
+  it("preserves project documents for ordinary policy-restricted turns", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicyRestricted = true;
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+      config: { project_doc_max_bytes: 64_000 },
+    });
+
+    expect(start.config?.project_doc_max_bytes).toBe(131_072);
+    expect(resume.config?.project_doc_max_bytes).toBe(64_000);
+    for (const threadConfig of [start.config, resume.config]) {
+      expect(threadConfig?.["features.multi_agent"]).toBe(false);
+      expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
+    }
+
+    const toolsDisabled = createAttemptParams({ provider: "openai" });
+    toolsDisabled.disableTools = true;
+    toolsDisabled.pluginHarnessToolPolicyRestricted = true;
+    const disabled = buildThreadStartParams(toolsDisabled, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      config: { project_doc_max_bytes: 64_000 },
+    });
+    expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
 });
 
@@ -884,7 +931,8 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -1452,6 +1500,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1599,6 +1648,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1729,6 +1779,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1753,6 +1804,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1813,6 +1865,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1893,6 +1946,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1928,6 +1982,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -2132,6 +2187,7 @@ describe("Codex app-server turn params", () => {
         "features.goals": false,
         "tools.update_plan.enabled": false,
         "features.apply_patch_streaming_events": true,
+        suppress_unstable_features_warning: true,
         "features.standalone_web_search": false,
         web_search: "cached",
       },
@@ -2163,7 +2219,7 @@ describe("Codex app-server turn params", () => {
     });
   });
 
-  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+  it("keeps heartbeat Codex turns in normal Default collaboration mode", () => {
     const params = createAttemptParams({ provider: "codex" });
     params.modelId = "gpt-5.4-codex";
     params.thinkLevel = "medium";
@@ -2173,27 +2229,15 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
-    );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Heartbeat = useful proactive progress",
-    );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "If `heartbeat_respond` is not already available and `tool_search` is available",
-    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toBeNull();
 
-    params.trigger = "user";
-    expect(
-      buildTurnCollaborationMode(params, {
-        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      }).settings.developer_instructions,
-    ).toContain("Turn-only workspace instructions.");
-    expect(
-      buildTurnCollaborationMode(params, {
-        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      }).settings.developer_instructions,
-    ).toContain("# Collaboration Mode: Default");
+    const workspaceInstructions = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+    }).settings.developer_instructions;
+    expect(workspaceInstructions).toContain("Turn-only workspace instructions.");
+    expect(workspaceInstructions).toContain("# Collaboration Mode: Default");
+    expect(workspaceInstructions).not.toContain("This is an OpenClaw heartbeat turn");
+    expect(workspaceInstructions).not.toContain("### Heartbeats");
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
@@ -3620,6 +3664,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         | { config?: Record<string, unknown> }
         | undefined;
       expect(threadRequest?.config).toMatchObject({
+        project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
           "request-only": { enabled: false },

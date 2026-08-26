@@ -100,6 +100,22 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps remote catalog refresh networking behind the overlay boundary", () => {
+    const startupGraph = collectStaticValueImportGraph(
+      "src/plugins/gateway-startup-plugin-providers.ts",
+    );
+    const startupPaths = [...startupGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+    const overlayGraph = collectStaticValueImportGraph("src/model-catalog/remote-overlay.ts");
+    const overlayPaths = [...overlayGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+
+    expect(startupPaths).not.toContain("src/model-catalog/remote-refresh.ts");
+    expect(overlayPaths).not.toContain("src/infra/net/fetch-guard.ts");
+  });
+
   it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
     const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
 

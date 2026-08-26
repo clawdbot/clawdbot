@@ -3,7 +3,7 @@ import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
 } from "../infra/sqlite-integrity.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationInProcess } from "../infra/sqlite-readonly-location.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -44,7 +44,7 @@ async function verifyOpenClawDatabase(
   let database: import("node:sqlite").DatabaseSync | undefined;
   let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
     try {
-      const prepared = await prepareSqliteReadOnlyLocation(target.path);
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(target.path);
       cleanup = prepared.cleanup;
       database = openNodeSqliteDatabase(prepared.location, {
         readOnly: true,

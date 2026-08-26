@@ -410,6 +410,17 @@ The second parent reuses product evidence only when GitHub proves the Release SH
 
 For a fresh Code SHA, the workflow resolves the target, dispatches manual `CI`, then dispatches `OpenClaw Release Checks`. Beta-publish maps to `release_profile=beta` and `run_release_soak=false`; its `all` run excludes broad live/E2E and QA-live lanes. Postpublish-confidence uses the exact published package with soak or explicit focused groups. Stable-publish maps to `release_profile=stable`. The final verifier summary includes slowest-job tables for each child run.
 
+Each dispatcher records the exact child run ID and attempt, then exits. Release
+Decision reports a decisive blocker without waiting for unrelated diagnostic
+tails; with `fail_fast=false`, Diagnostic Drain keeps the selected children
+running to terminal. Diagnose `blocked_diagnostics_running` immediately, but do
+not retry until the drain is terminal. Recover `orchestration_error` against
+the same exact children and never redispatch tests merely to repair collection.
+An immutable run-bound execution plan preserves the original attempt, titles,
+coverage, gates, and child tuples across collector retries. The final verifier
+consumes that plan and the exact attempt-bound Decision and Drain artifacts
+instead of polling or reclassifying child results.
+
 The product-performance child is artifact-only in this release path. The
 umbrella dispatches it with `publish_reports=false`, and validation is rejected
 unless its artifact-only guard proves that the Clawgrit report publisher stayed

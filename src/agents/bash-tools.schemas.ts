@@ -26,7 +26,8 @@ export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({
-      description: "Working directory; omit for default. Blank/whitespace is invalid.",
+      description:
+        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
     }),
   ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -93,7 +94,7 @@ export const processSchema = Type.Object({
     enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
+  sessionId: Type.Optional(Type.String({ description: "Required for every action except list." })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),

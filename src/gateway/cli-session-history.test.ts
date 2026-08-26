@@ -11,7 +11,6 @@ import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
-  augmentChatHistoryWithCliSessionImports,
   readClaudeCliFallbackSeed,
   readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
@@ -20,7 +19,7 @@ import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
-type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
+type AugmentCliHistoryParams = Parameters<typeof resolveChatHistoryWithCliSessionImports>[0];
 
 function requireFallbackSeed(
   seed: ReturnType<typeof readClaudeCliFallbackSeed>,
@@ -50,7 +49,7 @@ function augmentBoundClaudeHistory(params: {
   provider: AugmentCliHistoryParams["provider"];
   localMessages?: AugmentCliHistoryParams["localMessages"];
 }) {
-  return augmentChatHistoryWithCliSessionImports({
+  return resolveChatHistoryWithCliSessionImports({
     entry: {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -63,7 +62,7 @@ function augmentBoundClaudeHistory(params: {
     provider: params.provider,
     localMessages: params.localMessages ?? [],
     homeDir: params.homeDir,
-  });
+  }).messages;
 }
 
 function buildLegacyReseedPrompt(current = "current"): string {
@@ -1265,7 +1264,7 @@ describe("cli session history", () => {
         "utf-8",
       );
 
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1290,7 +1289,7 @@ describe("cli session history", () => {
           },
         ],
         homeDir,
-      });
+      }).messages;
 
       expect(messages).toHaveLength(2);
       expectFields(messages[0], { role: "user", content: "current recovered ask" });
@@ -1375,7 +1374,7 @@ describe("cli session history", () => {
 
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1386,7 +1385,7 @@ describe("cli session history", () => {
         provider: "claude-cli",
         localMessages: [],
         homeDir,
-      });
+      }).messages;
       expect(messages).toHaveLength(3);
       expectFields(messages[1], {
         role: "assistant",
@@ -1397,7 +1396,7 @@ describe("cli session history", () => {
 
   it("falls back to legacy claudeCliSessionId when newer fields are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentChatHistoryWithCliSessionImports({
+      const messages = resolveChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
           updatedAt: Date.now(),
@@ -1406,7 +1405,7 @@ describe("cli session history", () => {
         provider: "claude-cli",
         localMessages: [],
         homeDir,
-      });
+      }).messages;
       expect(messages).toHaveLength(3);
       expectFields(messages[0], {
         role: "user",

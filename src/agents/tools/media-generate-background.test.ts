@@ -23,18 +23,8 @@ vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 
-const {
-  createImageGenerationTaskRun,
-  createMusicGenerationTaskRun,
-  createVideoGenerationTaskRun,
-  failVideoGenerationTaskRun,
-  imageGenerationTaskLifecycle,
-  musicGenerationTaskLifecycle,
-  recordImageGenerationTaskProgress,
-  recordMusicGenerationTaskProgress,
-  recordVideoGenerationTaskProgress,
-  videoGenerationTaskLifecycle,
-} = await import("./media-generate-background.js");
+const { imageGenerationTaskLifecycle, musicGenerationTaskLifecycle, videoGenerationTaskLifecycle } =
+  await import("./media-generate-background.js");
 
 describe("image generate background helpers", () => {
   beforeEach(() => {
@@ -50,7 +40,7 @@ describe("image generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createImageGenerationTaskRun({
+    const handle = imageGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -75,7 +65,7 @@ describe("image generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordImageGenerationTaskProgress({
+    imageGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:image_generate:abc",
@@ -176,7 +166,7 @@ describe("music generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createMusicGenerationTaskRun({
+    const handle = musicGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -201,7 +191,7 @@ describe("music generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordMusicGenerationTaskProgress({
+    musicGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:music_generate:abc",
@@ -338,7 +328,7 @@ describe("video generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createVideoGenerationTaskRun({
+    const handle = videoGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -360,7 +350,7 @@ describe("video generate background helpers", () => {
   });
 
   it("records task progress updates", () => {
-    recordVideoGenerationTaskProgress({
+    videoGenerationTaskLifecycle.recordTaskProgress({
       handle: {
         taskId: "task-123",
         runId: "tool:video_generate:abc",
@@ -382,7 +372,7 @@ describe("video generate background helpers", () => {
       taskId: "task-123",
     });
 
-    const handle = createVideoGenerationTaskRun({
+    const handle = videoGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:channel:123",
       prompt: "friendly lobster surfing",
       providerId: "fal",
@@ -395,14 +385,14 @@ describe("video generate background helpers", () => {
     expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
 
     const beforeProgress = Date.now();
-    recordVideoGenerationTaskProgress({
+    videoGenerationTaskLifecycle.recordTaskProgress({
       handle,
       progressSummary: "Generating video",
     });
 
     expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
 
-    failVideoGenerationTaskRun({
+    videoGenerationTaskLifecycle.failTaskRun({
       handle,
       error: new Error("provider failed"),
     });

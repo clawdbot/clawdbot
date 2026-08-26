@@ -1,3 +1,10 @@
+import {
+  IncompleteUsageRetry,
+  isUsageIncomplete,
+  type UsageRetryState,
+} from "../../lib/incomplete-usage-retry.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
+
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
@@ -31,28 +38,85 @@ function decideUsageRefresh(params: {
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
-  reload: () => void;
+  reload: () => void | Promise<void>;
+  onIncompleteUsageExhausted?: () => void;
 };
 
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
+  private providerConvergenceOutstanding = false;
+  private providerConvergenceConnection: unknown;
   private pendingAutomaticRefresh = false;
   private reloadPending = false;
+  private readonly incompleteUsageRetry = new IncompleteUsageRetry({
+    retry: () => this.requestAndWait("poll"),
+    onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
+  });
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
-  setLastLoadedAtMs(value: number | null): void {
-    this.lastLoadedAtMs = value;
+  get incompleteUsageExhausted(): boolean {
+    return this.incompleteUsageRetry.exhausted;
   }
 
-  markLoaded(): void {
-    this.lastLoadedAtMs = Date.now();
+  setLastLoadedAtMs(
+    value: number | null,
+    params?: { incomplete?: boolean; connection?: unknown },
+  ): UsageRetryState {
+    return this.applyLoadState(value, params?.incomplete === true, params?.connection);
+  }
+
+  markLoaded(params?: { incomplete?: boolean; connection?: unknown }): UsageRetryState {
+    return this.applyLoadState(Date.now(), params?.incomplete === true, params?.connection);
+  }
+
+  markProviderUsage(
+    result: ProviderUsageRequestResult | null,
+    value: number | null,
+    connection: unknown,
+  ): UsageRetryState {
+    const incomplete =
+      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
+    return this.applyLoadState(value, incomplete, connection);
   }
 
   resetPayload(): void {
-    this.lastLoadedAtMs = null;
+    this.applyLoadState(null, false);
     this.reloadPending = false;
+  }
+
+  dispose(): void {
+    this.providerConvergenceOutstanding = false;
+    this.providerConvergenceConnection = undefined;
+    this.incompleteUsageRetry.dispose();
+  }
+
+  private applyLoadState(
+    loadedAtMs: number | null,
+    incomplete: boolean,
+    connection?: unknown,
+  ): UsageRetryState {
+    const state = this.incompleteUsageRetry.observe(incomplete, connection);
+    this.providerConvergenceOutstanding = incomplete;
+    this.providerConvergenceConnection = incomplete ? connection : undefined;
+    // Incomplete provider usage must not start the TTL or focus/reconnect can skip recovery.
+    this.lastLoadedAtMs = state === "complete" ? loadedAtMs : null;
+    return state;
+  }
+
+  /** Keeps an existing provider convergence cycle alive across aggregate load failures. */
+  markLoadFailed(connection?: unknown): void {
+    if (!this.providerConvergenceOutstanding) {
+      return;
+    }
+    if (connection !== this.providerConvergenceConnection) {
+      this.providerConvergenceOutstanding = false;
+      this.providerConvergenceConnection = undefined;
+      this.incompleteUsageRetry.useConnection(connection);
+      return;
+    }
+    this.incompleteUsageRetry.observe(true, connection);
   }
 
   interrupt(): void {
@@ -68,11 +132,19 @@ export class UsageRefreshPolicy {
   }
 
   reload(): void {
+    void this.reloadAndWait();
+  }
+
+  private async reloadAndWait(): Promise<void> {
     this.pendingAutomaticRefresh = false;
-    this.options.reload();
+    await this.options.reload();
   }
 
   request(reason: UsageRefreshReason): void {
+    void this.requestAndWait(reason);
+  }
+
+  private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
     if (this.options.isLoading() && reason !== "manual") {
       this.pendingAutomaticRefresh = true;
       return;
@@ -86,7 +158,10 @@ export class UsageRefreshPolicy {
       lastLoadedAtMs: this.lastLoadedAtMs,
     });
     if (decision === "fetch") {
-      this.reload();
+      if (reason !== "poll") {
+        this.incompleteUsageRetry.startCycle();
+      }
+      await this.reloadAndWait();
     }
   }
 

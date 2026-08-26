@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -140,6 +141,8 @@ export class SessionEntryLifecycleUpsertConflictError extends Error {
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
   resetBoundaryReason?: SessionResetBoundaryReason;
+  /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
+  routeContext?: ConversationRouteContext | null;
 } & (
   | {
       entry: SessionEntry;

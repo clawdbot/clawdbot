@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { persistHeartbeatOutcome } from "../../../infra/heartbeat-outcome-store.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../../state/openclaw-agent-db.js";
 
 const mocks = vi.hoisted(() => ({
   applyPromptToolsAllow: vi.fn(),
@@ -64,6 +73,7 @@ import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
 type PromptPhaseState = ReturnType<PromptPhaseInput["lifecycle"]["readState"]>;
 type AssemblyCall = {
+  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
   setLeasedSteering: (lease: { leaseId: string; runIds: string[] }) => void;
 };
 type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
@@ -76,6 +86,8 @@ type PromptErrorCall = {
   yieldDetected: boolean;
   yieldMessage: string | null;
 };
+
+const tempStateDirs: string[] = [];
 
 function createFixture() {
   const order: string[] = [];
@@ -107,6 +119,7 @@ function createFixture() {
     prePromptMessageCount = count;
   });
   const setPromptCacheChangesForTurn = vi.fn();
+  const setCodeModeReconciliationReadAuthorized = vi.fn();
   const setFinalPromptText = vi.fn();
   const markBeforeAgentRunBlocked = vi.fn();
   const markYieldAborted = vi.fn(() => {
@@ -119,6 +132,7 @@ function createFixture() {
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
     const lease = { leaseId: "lease-1", runIds: ["run-1"] };
+    input.applyPromptBuildToolsAllow(undefined);
     input.setLeasedSteering(lease);
     return {
       hookCtx: {},
@@ -237,6 +251,14 @@ function createFixture() {
       transport: "sse",
       uncompactedEffectiveTools: [],
     },
+    toolPolicy: {
+      baseline: { activeToolNames: ["read"], catalogEntries: [] },
+      effectiveTools: [{ name: "read" }],
+      uncompactedEffectiveTools: [{ name: "read" }],
+      tools: [{ name: "read" }],
+      codeModeControlsEnabled: false,
+      coreReadAuthorized: true,
+    },
     preflight: {
       contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
@@ -258,6 +280,7 @@ function createFixture() {
       setPrePromptMessageCount,
       setCurrentUserTimestampOverride: vi.fn(),
       setPromptCacheChangesForTurn,
+      setCodeModeReconciliationReadAuthorized,
       setFinalPromptText,
       markBeforeAgentRunBlocked,
       markYieldAborted,
@@ -275,6 +298,7 @@ function createFixture() {
     setFinalPromptText,
     setPrePromptMessageCount,
     setPromptCacheChangesForTurn,
+    setCodeModeReconciliationReadAuthorized,
     state,
     yieldState,
   };
@@ -282,9 +306,59 @@ function createFixture() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.applyPromptToolsAllow.mockReturnValue({
+    activeToolNames: ["read"],
+    coreReadAuthorized: true,
+    effectiveTools: [{ name: "read" }],
+    uncompactedEffectiveTools: [{ name: "read" }],
+    tools: [{ name: "read" }],
+  });
+});
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
+  for (const stateDir of tempStateDirs.splice(0)) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it("does not claim heartbeat outcomes for detached user-triggered runs", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-phase-heartbeat-"));
+    tempStateDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await upsertSessionEntryCore(
+      { agentId: "main", env: process.env, sessionKey: "agent:main:main" },
+      { sessionId: "prompt-phase-heartbeat-test", updatedAt: 1 },
+    );
+    persistHeartbeatOutcome({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      runSessionKey: "agent:main:main:heartbeat",
+      response: { outcome: "progress", notify: false, summary: "Heartbeat context" },
+      occurredAt: 1,
+      env: process.env,
+    });
+    const fixture = createFixture();
+    Object.assign(fixture.input.attempt, {
+      sessionKey: "agent:main:main",
+      sessionPersistence: "detached",
+      trigger: "user",
+    });
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(mocks.preparePromptContext.mock.calls[0]?.[0]).not.toHaveProperty(
+      "heartbeatOutcomeContext",
+    );
+    expect(
+      openOpenClawAgentDatabase({ agentId: "main", env: process.env })
+        .db.prepare("SELECT context_run_id, context_claimed_at FROM heartbeat_outcomes")
+        .get(),
+    ).toEqual({ context_run_id: null, context_claimed_at: null });
+  });
+
   it("runs prompt work in phase order and publishes prompt outputs", async () => {
     const fixture = createFixture();
 
@@ -308,6 +382,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     ]);
     expect(fixture.setPrePromptMessageCount).toHaveBeenCalledWith(2);
     expect(fixture.setPromptCacheChangesForTurn).toHaveBeenCalledWith([]);
+    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(true);
     expect(fixture.setFinalPromptText).toHaveBeenCalledWith("hello");
     expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -333,6 +408,21 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+  });
+
+  it("records a final prompt policy that removes core read", async () => {
+    const fixture = createFixture();
+    mocks.applyPromptToolsAllow.mockReturnValueOnce({
+      activeToolNames: [],
+      coreReadAuthorized: false,
+      effectiveTools: [],
+      uncompactedEffectiveTools: [],
+      tools: [],
+    });
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(false);
   });
 
   it("skips before_agent_run for settled-turn finalization", async () => {

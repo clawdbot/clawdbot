@@ -6,6 +6,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectDefined,
+  expectRequestCountStable,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
@@ -205,13 +206,12 @@ suite.define(() => {
         },
         messageId: "terminal-sidebar-reply",
         messageSeq: 2,
+        session: expectDefined(completed.sessions[0], "completed sidebar session fixture"),
         sessionKey: key,
         status: "done",
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThan(listCount);
       await row.getByText("Repair landed cleanly").waitFor();
+      await expectRequestCountStable(gateway, "sessions.list", listCount);
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -383,6 +383,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      // Rotation expands the spinner element's square DOMRect even though its
+      // circular ink is unchanged; freeze it while asserting endcap geometry.
+      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
@@ -451,7 +454,7 @@ suite.define(() => {
       expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
       expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
       expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms.length).toBeGreaterThanOrEqual(4);
+      expect(layout.atoms.length).toBeGreaterThanOrEqual(3);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -497,7 +500,7 @@ suite.define(() => {
             .locator(".sidebar-recent-session__details-endcap")
             .evaluate((element) => getComputedStyle(element).opacity),
         )
-        .toBe("0");
+        .toBe("1");
       await expect
         .poll(() =>
           busyRow

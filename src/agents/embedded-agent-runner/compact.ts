@@ -144,6 +144,7 @@ export async function compactNativeCliSession(params: {
       ...(params.compactParams.sessionEntry
         ? { sessionEntry: params.compactParams.sessionEntry }
         : {}),
+      contextWindow: params.compactParams.sessionEntry?.contextWindow,
       trigger: "manual",
       controlOperation: "compact",
       disableCliLiveSession: true,

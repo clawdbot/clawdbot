@@ -45,14 +45,14 @@ import {
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
+import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
-import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import {
-  createWorkerConnection,
+  WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
-  type WorkerConnectionState,
-} from "./worker-connection.js";
+} from "./worker-connection-contract.js";
+import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
@@ -122,6 +122,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
+  execApprovals?: ExecApprovalsFile;
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -512,6 +513,9 @@ class FakeWorkerGateway {
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
     this.methods.push(frame.method);
     this.inferenceRequests.push(structuredClone(frame.params));
+    if (this.inferencePlanIndex === 0 && this.options.execApprovals) {
+      saveExecApprovals(this.options.execApprovals);
+    }
     this.inferenceStarted.resolve();
     if (this.options.silenceFirstInference && !this.droppedInference) {
       this.droppedInference = true;
@@ -1467,7 +1471,18 @@ describe("worker runtime", () => {
     },
     { mode: "full" as const, omittedTools: [], denial: null },
   ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: ["tool", "text"],
+      ...(mode === "full"
+        ? {
+            execApprovals: {
+              version: 1,
+              defaults: { security: "full", ask: "always" },
+              agents: {},
+            },
+          }
+        : {}),
+    });
     launch.assignment.permissionMode = mode;
     launch.assignment.workerContainmentRoot = workspaceDir;
 
@@ -1491,6 +1506,8 @@ describe("worker runtime", () => {
       await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
         "worker-local",
       );
+      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
+      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
     }
   });
 

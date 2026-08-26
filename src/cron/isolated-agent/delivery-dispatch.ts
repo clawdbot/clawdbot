@@ -1,6 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -27,6 +28,7 @@ import {
   queueCronMessageToolDeliveryAwareness,
   resolveCronAwarenessMainSessionKey,
   resolveCronAwarenessText,
+  commitDirectCronOutboundRoute,
   resolveDirectCronDeliverySessionKey,
   resolveDirectCronTranscriptMirrorText,
   isSameSessionKey,
@@ -37,7 +39,6 @@ import {
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
   isStaleCronDelivery,
-  loadDeliverySubagentRegistryRuntime,
   logCronDeliveryError,
   logCronDeliveryErrorDeferred,
   logCronDeliveryWarn,
@@ -45,6 +46,7 @@ import {
   normalizeSilentReplyText,
   resolveCronDeliveryBestEffort,
   resolveCronDeliveryScheduledAtMs,
+  resolveDescendantSubagentFollowup,
   resolveCronDeliveryStartDelayMs,
   retryTransientDirectCronDelivery,
   waitForCompletedDirectCronDelivery,
@@ -54,20 +56,20 @@ import type {
   DispatchCronDeliveryState,
   SuccessfulCronDeliveryTarget,
 } from "./delivery-dispatch-types.js";
-import { normalizeDirectCronDeliveryPayloads } from "./delivery-payload-normalization.js";
+import {
+  appendCronRunInspectionLink,
+  normalizeDirectCronDeliveryPayloads,
+} from "./delivery-payload-normalization.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
   cleanupCronRunSessionAfterRun,
   type CronRunSessionCleanupOutcome,
 } from "./session-cleanup.js";
-import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
-);
-const subagentFollowupRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-followup.runtime.js"),
 );
 export { queueCronMessageToolDeliveryAwareness, resolveCronDeliveryBestEffort };
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
@@ -280,14 +282,23 @@ export async function dispatchCronDelivery(
       if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
       }
+      const linkedPayloadsForDelivery = appendCronRunInspectionLink(
+        payloadsForDelivery,
+        resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+          sessionKey: params.runSessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        }),
+      );
       deliveryAttempted = true;
-      const deliverySessionKey = await resolveDirectCronDeliverySessionKey({
-        cfg: params.cfgWithAgentDefaults,
-        job: params.job,
-        agentId: params.agentId,
-        agentSessionKey: params.agentSessionKey,
-        delivery,
-      });
+      const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
+        await resolveDirectCronDeliverySessionKey({
+          cfg: params.cfgWithAgentDefaults,
+          job: params.job,
+          agentId: params.agentId,
+          agentSessionKey: params.agentSessionKey,
+          delivery,
+        });
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -311,6 +322,26 @@ export async function dispatchCronDelivery(
       let hadPartialFailure = false;
       let completedByConcurrentDelivery = false;
       let payloadMayHaveReachedRecipientBeforeFailure = false;
+      // Once-only early commit: the durable sender fires `onDeliveryResult`
+      // after each identified platform result, before later fallible work in
+      // the batch. Committing the route there (not only after the batch
+      // returns) means a first successful sub-send followed by a later failure
+      // still records the route — matching `commitOutboundSessionRoute` in
+      // gateway server-methods/send.ts (passed as `onDeliveryResult` there too).
+      // A fully failed send never reaches this callback, so the route stays
+      // untouched; the post-batch safety nets below remain as a second layer.
+      let directCronRouteCommitted = false;
+      const commitDirectCronRouteEarly = async () => {
+        if (directCronRouteCommitted || !directCronOutboundRoute) {
+          return;
+        }
+        directCronRouteCommitted = true;
+        await commitDirectCronOutboundRoute({
+          cfg: params.cfgWithAgentDefaults,
+          delivery,
+          route: directCronOutboundRoute,
+        });
+      };
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
@@ -331,7 +362,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           accountId: delivery.accountId,
           threadId: delivery.threadId,
-          payloads: payloadsForDelivery,
+          payloads: linkedPayloadsForDelivery,
           session: deliverySession,
           identity,
           bestEffort: params.deliveryBestEffort,
@@ -344,6 +375,15 @@ export async function dispatchCronDelivery(
           onError,
           onPayload: (payload) => {
             attemptedPayloadsForMirror.push(payload);
+          },
+          onDeliveryResult: () => {
+            // Early commit: persist the route as soon as the first platform
+            // result confirms a recipient was reached, before later sub-sends
+            // in the batch can fail. Returning the promise lets the durable
+            // sender await it (as gateway send.ts does with
+            // commitOutboundSessionRoute), so the route row lands before any
+            // later fallible work in the batch. See commitDirectCronRouteEarly.
+            return commitDirectCronRouteEarly();
           },
         });
         payloadMayHaveReachedRecipientBeforeFailure ||=
@@ -400,19 +440,53 @@ export async function dispatchCronDelivery(
           text: failureAwarenessText,
           targetText: failureAwarenessText,
         });
+        // Even when the batch throws (e.g. a partial_failed batch with
+        // best-effort disabled), a payload may already have reached the
+        // recipient. Persist the route so later sends can continue the
+        // conversation — matching the partial-failure safety net in gateway
+        // server-methods/send.ts. A fully failed send (no recipient-reached
+        // evidence) leaves the route untouched. commitDirectCronRouteEarly is
+        // once-only, so this is a no-op if the early onDeliveryResult commit
+        // already ran for a recipient-reached sub-send.
+        if (payloadMayHaveReachedRecipientBeforeFailure) {
+          await commitDirectCronRouteEarly();
+        }
         throw err;
       }
       if (completedByConcurrentDelivery) {
         delivered = true;
+        // Another process completed the same fenced recipient intent. The
+        // local send failed, so its onDeliveryResult never fired and the
+        // resolved route was never committed. Persist it now so later
+        // conversation sends to this target have a route — matching the
+        // post-success invariant (the concurrent completion IS a success).
+        // commitDirectCronRouteEarly is once-only, so this is a no-op if the
+        // early onDeliveryResult commit already ran for a recipient-reached
+        // sub-send before the failure.
+        await commitDirectCronRouteEarly();
         return null;
       }
       // Only mark delivered when ALL payloads succeeded (no partial failure).
+      // A partial batch is not a durable completion, so we never mint a full
+      // receipt for it — but it may still have reached the recipient.
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Persist the outbound route once any payload is confirmed to have
+      // reached the recipient, matching the post-success invariant in
+      // message-action-send.ts and the partial-failure safety net in gateway
+      // server-methods/send.ts (which commits on `sent` OR `partial_failed`).
+      // A fully failed send (no recipient-reached evidence) must not mint a
+      // conversation identity or rebind the session route; a partial batch
+      // that already delivered must not lose the route later sends need.
+      // commitDirectCronRouteEarly is once-only, so this is a no-op if the
+      // early onDeliveryResult commit already ran mid-batch.
+      if (delivered || payloadMayHaveReachedRecipientBeforeFailure) {
+        await commitDirectCronRouteEarly();
+      }
       // Partial platform evidence remains unknown; never mint a full receipt.
       const deliveryAwarenessText = resolveCronAwarenessText({
         outputText,
         synthesizedText,
-        deliveryPayloads: payloadsForDelivery,
+        deliveryPayloads: linkedPayloadsForDelivery,
         outboundPayloads: attemptedPayloadsForMirror,
       });
       const shouldQueueAwarenessForDelivery = shouldQueueCronAwareness({
@@ -444,7 +518,7 @@ export async function dispatchCronDelivery(
             ? projectDeliveredDirectCronPayloadsForMirror(attemptedPayloadsForMirror)
             : projectOutboundPayloadPlanForMirror(
                 createOutboundPayloadPlan(
-                  buildDirectCronTranscriptMirrorPayloads(payloadsForDelivery),
+                  buildDirectCronTranscriptMirrorPayloads(linkedPayloadsForDelivery),
                   {
                     cfg: params.cfgWithAgentDefaults,
                     sessionKey: deliverySessionKey,
@@ -544,64 +618,20 @@ export async function dispatchCronDelivery(
     }
     const initialSynthesizedText = synthesizedText?.trim() ?? "";
     const spawnOnlyHandoff = params.spawnOnlyHandoff;
-    const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
-    const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
-    const subagentFollowupSessionKey = params.runSessionKey;
-    let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-      subagentFollowupSessionKey,
-    );
-    const shouldCheckCompletedDescendants =
-      activeSubagentRuns === 0 &&
-      (spawnOnlyHandoff || isLikelyInterimCronMessage(initialSynthesizedText));
-    const needsSubagentFollowupRuntime =
-      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
-    const subagentFollowupRuntime = needsSubagentFollowupRuntime
-      ? await subagentFollowupRuntimeLoader.load()
-      : undefined;
-    // Also check for already-completed descendants. If the subagent finished
-    // before delivery-dispatch runs, activeSubagentRuns is 0 and
-    // expectedSubagentFollowup may be false (e.g. cron said "on it" which
-    // doesn't match the narrow hint list). We still need to use the
-    // descendant's output instead of the interim cron text.
-    const completedDescendantReply = shouldCheckCompletedDescendants
-      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        })
-      : undefined;
-    const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
-    if (
-      (!params.deliveryBestEffort || spawnOnlyHandoff) &&
-      (activeSubagentRuns > 0 || expectedSubagentFollowup)
-    ) {
-      let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
-        sessionKey: subagentFollowupSessionKey,
-        initialReply: initialSynthesizedText,
+    const { finalReply, activeSubagentRuns, hadDescendants } =
+      await resolveDescendantSubagentFollowup({
+        sessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
         timeoutMs: params.timeoutMs,
-        observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        deliveryBestEffort: params.deliveryBestEffort,
+        spawnOnlyHandoff,
+        initialSynthesizedText,
       });
-      activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        subagentFollowupSessionKey,
-      );
-      if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        });
-      }
-      if (finalReply && activeSubagentRuns === 0) {
-        outputText = finalReply;
-        summary = pickSummaryFromOutput(finalReply) ?? summary;
-        synthesizedText = finalReply;
-        deliveryPayloads = [{ text: finalReply }];
-      }
-    } else if (completedDescendantReply) {
-      // Descendants already finished before we got here. Use their output
-      // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
+    if (finalReply) {
+      outputText = finalReply;
+      summary = pickSummaryFromOutput(finalReply) ?? summary;
+      synthesizedText = finalReply;
+      deliveryPayloads = [{ text: finalReply }];
     }
     if (spawnOnlyHandoff && !synthesizedText?.trim()) {
       // An accepted spawn is the turn's only completion; retiring it without

@@ -78,6 +78,48 @@ describe("loadModelProvidersData", () => {
     expect(sessionUsageCall?.[1]).toHaveProperty("agentScope", "all");
   });
 
+  it.each([
+    { label: "the initial prepared catalog", refresh: false },
+    { label: "the configured catalog after discovery", refresh: true },
+  ])("surfaces a failure loading $label without discarding provider data", async ({ refresh }) => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      switch (method) {
+        case "models.authStatus":
+          return {
+            ts: 1,
+            providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
+          };
+        case "models.list":
+          if ((params as { view?: string } | undefined)?.view === "all") {
+            return { providerOutcomes: [] };
+          }
+          throw new Error("configured catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
+        case "config.get":
+          return {
+            config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+            hash: "hash",
+          };
+        case "usage.status":
+          return { updatedAt: 1, providers: [] };
+        case "sessions.usage":
+          return { aggregates: { byProvider: [] } };
+        default:
+          return {};
+      }
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const result = await loadModelProvidersData(client, { agentId: "main", refresh });
+
+    expect(result.models).toBeNull();
+    expect(result.catalogError).toBe(
+      "configured catalog unavailable: OPENAI_API_KEY=sk-123...cdef",
+    );
+    expect(result.authStatus?.providers).toHaveLength(1);
+    expect(result.config).toEqual({ agents: { defaults: { model: "openai/gpt-5.5" } } });
+    expect(result.error).toBeNull();
+  });
+
   it("degrades an invalid auth-status response without discarding other provider data", async () => {
     const request = vi.fn(async (method: string) => {
       switch (method) {

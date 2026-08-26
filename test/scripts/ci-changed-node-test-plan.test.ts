@@ -102,7 +102,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("routes a focused source change into one targeted job", () => {
-    expect(createChangedNodeTestShards(["src/agents/live-model-filter.ts"])).toEqual([
+    expect(createChangedNodeTestShards(["src/agents/live-provider-owner.ts"])).toEqual([
       {
         checkName: "checks-node-changed",
         configs: [],
@@ -110,8 +110,9 @@ describe("CI changed Node test plan", () => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed",
         targets: [
-          "src/agents/live-model-filter.test.ts",
           "src/agents/live-model-dynamic-candidates.test.ts",
+          "src/agents/live-model-filter.test.ts",
+          "src/agents/live-target-matcher.test.ts",
           "src/agents/model-compat.test.ts",
         ],
       },
@@ -276,7 +277,7 @@ describe("CI changed Node test plan", () => {
     expect(
       createChangedNodeTestShards([
         "src/infra/format-time/deleted-helper.ts",
-        "src/agents/live-model-filter.ts",
+        "src/agents/live-provider-owner.ts",
       ]),
     ).toBeNull();
   });
@@ -284,7 +285,7 @@ describe("CI changed Node test plan", () => {
   it("keeps targeting when a diff only deletes test files alongside live source", () => {
     const shards = createChangedNodeTestShards([
       "src/agents/deleted-obsolete.test.ts",
-      "src/agents/live-model-filter.ts",
+      "src/agents/live-provider-owner.ts",
     ]);
     expect(shards).not.toBeNull();
     const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
@@ -310,7 +311,7 @@ describe("CI changed Node test plan", () => {
 
   it("fails safe when an unresolved path is mixed with a precise source change", () => {
     expect(
-      createChangedNodeTestShards(["src/agents/live-model-filter.ts", "tsconfig.json"]),
+      createChangedNodeTestShards(["src/agents/live-provider-owner.ts", "tsconfig.json"]),
     ).toBeNull();
   });
 
@@ -444,7 +445,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("skips extension fallback when the core-impact predicate does not fire", () => {
-    expect(createChangedExtensionFallbackShards(["src/agents/live-model-filter.ts"])).toEqual([]);
+    expect(createChangedExtensionFallbackShards(["src/agents/live-provider-owner.ts"])).toEqual([]);
   });
 
   it("falls back to bounded Codex config shards for deleted sources", () => {
@@ -478,6 +479,15 @@ describe("CI changed Node test plan", () => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
       },
+    ]);
+  });
+
+  it("prebuilds private QA dist before the QA Lab extension fallback", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
     ]);
   });
 

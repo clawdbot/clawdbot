@@ -16,6 +16,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasSlackAccountCredentials } from "./account-configured.js";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -68,48 +69,18 @@ const {
   nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
-    if (slack?.postAs === "user") {
-      const hasUserToken =
-        hasConfiguredAccountValue(slack.userToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
-      if (!hasUserToken) {
-        return false;
-      }
-      if (slack.mode === "http") {
-        return hasConfiguredAccountValue(slack.signingSecret);
-      }
-      if (slack.mode === "relay") {
-        return (
-          hasConfiguredAccountValue(slack.relay?.url) &&
-          hasConfiguredAccountValue(slack.relay?.authToken) &&
-          hasConfiguredAccountValue(slack.relay?.gatewayId)
-        );
-      }
-      return (
-        hasConfiguredAccountValue(slack.appToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
-      );
-    }
-    const hasBotToken =
-      hasConfiguredAccountValue(slack?.botToken) ||
-      hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
-    if (!hasBotToken) {
-      return false;
-    }
-    if (slack?.mode === "http") {
-      return hasConfiguredAccountValue(slack.signingSecret);
-    }
-    if (slack?.mode === "relay") {
-      return (
-        hasConfiguredAccountValue(slack.relay?.url) &&
-        hasConfiguredAccountValue(slack.relay?.authToken) &&
-        hasConfiguredAccountValue(slack.relay?.gatewayId)
-      );
-    }
-    return (
-      hasConfiguredAccountValue(slack?.appToken) ||
-      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
-    );
+    const userIdentity = slack?.postAs === "user";
+    return hasSlackAccountCredentials({
+      config: slack ?? {},
+      identityTokenConfigured:
+        hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
+        hasConfiguredAccountValue(
+          userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
+        ),
+      appTokenConfigured:
+        hasConfiguredAccountValue(slack?.appToken) ||
+        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
+    });
   },
 });
 export const listSlackAccountIds = listAccountIds;

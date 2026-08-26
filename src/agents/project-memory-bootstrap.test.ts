@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import {
   buildProjectMemoryWriteInstruction,
   filterProjectScopedCuratedContextFiles,
@@ -22,7 +23,7 @@ describe("project memory bootstrap", () => {
     runtimeMocks.search.mockReset();
   });
 
-  const entries = [
+  const entries: MemorySearchResult[] = [
     {
       path: "MEMORY.md",
       startLine: 2,
@@ -33,6 +34,11 @@ describe("project memory bootstrap", () => {
       source: "memory" as const,
       projectKey: "github.com/OpenClaw/OpenClaw",
       importance: 8,
+      provenance: {
+        originClass: "owner" as const,
+        sessionKind: "interactive" as const,
+        observedAt: 1,
+      },
     },
     {
       path: "MEMORY.md",
@@ -43,6 +49,11 @@ describe("project memory bootstrap", () => {
       source: "memory" as const,
       projectKey: "github.com/example/other",
       importance: 10,
+      provenance: {
+        originClass: "owner" as const,
+        sessionKind: "interactive" as const,
+        observedAt: 1,
+      },
     },
   ];
 
@@ -58,10 +69,30 @@ describe("project memory bootstrap", () => {
   }
 
   it("includes only active-project entries and stays inside its budget", async () => {
-    const lines = await prepareEntries(entries);
+    const lines = await prepareEntries([
+      ...entries,
+      {
+        ...entries[0]!,
+        startLine: 4,
+        snippet: "Untrusted project instruction.",
+        provenance: {
+          originClass: "untrusted",
+          sessionKind: "interactive",
+          observedAt: 1,
+        },
+      },
+      {
+        ...entries[0]!,
+        startLine: 5,
+        snippet: "Missing-provenance project instruction.",
+        provenance: undefined,
+      },
+    ]);
     const rendered = lines.join("\n");
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).not.toContain("Foreign fact");
+    expect(rendered).not.toContain("Untrusted project instruction");
+    expect(rendered).not.toContain("Missing-provenance project instruction");
     expect(rendered).not.toContain("<!--");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });

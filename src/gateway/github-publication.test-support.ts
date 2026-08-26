@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabase,
@@ -349,6 +350,9 @@ export function installGitHubPublicationTestHarness(): void {
   });
 
   afterEach(async () => {
+    // Agent close releases leases through shared state; closing shared state first can
+    // reopen it during teardown and leave a Windows handle under the fixture root.
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });

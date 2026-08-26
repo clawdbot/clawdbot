@@ -87,23 +87,15 @@ function hasDeliverableAssistantPayload(result: {
   meta?: { finalAssistantVisibleText?: unknown };
 }): boolean {
   const finalVisibleText = result.meta?.finalAssistantVisibleText;
-  const payloads = Array.isArray(result.payloads)
-    ? result.payloads.filter((payload) => {
-        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-          return true;
-        }
-        const record = payload as { isCommentary?: unknown; visible?: unknown };
-        return record.isCommentary !== true && record.visible !== false;
-      })
-    : [];
   return (
     (typeof finalVisibleText === "string" &&
       finalVisibleText.trim().length > 0 &&
       !isSilentReplyPayloadText(finalVisibleText)) ||
-    hasVisibleAgentPayload(
-      { payloads },
-      { includeErrorPayloads: false, includeReasoningPayloads: false },
-    )
+    hasVisibleAgentPayload(result, {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+      requireTerminalContent: true,
+    })
   );
 }
 

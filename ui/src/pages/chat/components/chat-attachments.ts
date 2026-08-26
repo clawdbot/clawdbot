@@ -1,6 +1,7 @@
 // Shared attachment controls for chat and new-session composers.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import "../../../components/tooltip.ts";
@@ -16,6 +17,8 @@ import {
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { syncChatAttachmentRailScroll } from "./chat-attachment-viewport.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -396,7 +399,10 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
-  const input = e.target as HTMLInputElement;
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
   const files = [...(input.files ?? [])];
   input.value = "";
   void appendAttachmentFiles(files, props);
@@ -500,16 +506,24 @@ export function handleChatAttachmentMenuSelection(
   if (value !== "camera" && value !== "photo" && value !== "file") {
     return false;
   }
-  clickComposerInput(event.currentTarget as HTMLElement, `.agent-chat__${value}-input`);
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    clickComposerInput(target, `.agent-chat__${value}-input`);
+  }
   return true;
 }
 
-export function renderChatAttachmentMenuTrigger(disabled: boolean | undefined) {
+export function renderChatAttachmentMenuTrigger(
+  disabled: boolean | undefined,
+  hasOverrides = false,
+) {
   return html`
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach"
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${hasOverrides
+        ? "agent-chat__input-btn--has-overrides"
+        : ""}"
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${t("chat.composer.addAttachment")}
@@ -533,19 +547,6 @@ export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
       <span slot="icon" aria-hidden="true">${fileIcon}</span>
       <span>${t("chat.composer.attachFileOption")}</span>
     </wa-dropdown-item>
-  `;
-}
-
-export function renderChatAttachmentMenu(props: ChatAttachmentControlsProps) {
-  return html`
-    <wa-dropdown
-      class="agent-chat__attach-menu"
-      placement="top-start"
-      aria-label=${t("chat.composer.addAttachment")}
-      @wa-select=${handleChatAttachmentMenuSelection}
-    >
-      ${renderChatAttachmentMenuTrigger(props.disabled)} ${renderChatAttachmentMenuOptions()}
-    </wa-dropdown>
   `;
 }
 
@@ -622,9 +623,6 @@ function renderBrowserAnnotationAttachment(
         )}
       </div>
       <div class="chat-attachment-file__body chat-browser-annotation-card__body">
-        <span class="chat-browser-annotation-card__label"
-          >${t("chat.composer.browserAnnotation")}</span
-        >
         <span
           class="chat-attachment-file__name chat-browser-annotation-card__identity"
           title=${identity}
@@ -632,9 +630,6 @@ function renderBrowserAnnotationAttachment(
         >
         <span class="chat-attachment-file__meta chat-browser-annotation-card__meta">
           <span>${regionLabel}</span>
-          ${annotation.inspectedElement
-            ? html`<span>${t("chat.composer.browserAnnotationInspectedElement")}</span>`
-            : nothing}
         </span>
       </div>
       <openclaw-tooltip .content=${removeLabel}>
@@ -658,7 +653,15 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
     return nothing;
   }
   return html`
-    <div class="chat-attachments-preview">
+    <div
+      class="chat-attachments-preview"
+      ${ref(syncChatAttachmentRailScroll)}
+      @scroll=${(event: Event) => {
+        if (event.currentTarget instanceof Element) {
+          syncChatAttachmentRailScroll(event.currentTarget);
+        }
+      }}
+    >
       ${attachments.map((att) =>
         att.browserAnnotation
           ? renderBrowserAnnotationAttachment(att, att.browserAnnotation, props)
@@ -675,14 +678,20 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                 ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
                   ? renderAttachmentImage(
                       att,
-                      t("chat.composer.attachmentPreview"),
+                      att.fileName?.trim() || t("chat.composer.attachmentPreview"),
                       att.fileName?.trim() || t("chat.imageLightbox.untitled"),
                       props,
                     )
                   : isLargePastedTextAttachment(att)
                     ? html`
                         <div class="chat-attachment-file chat-attachment-file--pasted-text">
-                          <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                          <span class="chat-attachment-file__icon"
+                            >${renderAttachmentFileIcon({
+                              filename: att.fileName ?? "pasted-text.txt",
+                              mimeType: att.mimeType,
+                              mode: "preview-with-favicon",
+                            })}</span
+                          >
                           <span class="chat-attachment-file__body">
                             <span class="chat-attachment-file__name"
                               >${pastedTextPreview(att)}</span
@@ -705,7 +714,13 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                           .content=${att.fileName ?? t("chat.attachments.attachedFile")}
                         >
                           <div class="chat-attachment-file">
-                            <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                            <span class="chat-attachment-file__icon"
+                              >${renderAttachmentFileIcon({
+                                filename: att.fileName ?? "attachment",
+                                mimeType: att.mimeType,
+                                mode: "large-placeholder",
+                              })}</span
+                            >
                             <span class="chat-attachment-file__name"
                               >${att.fileName ?? t("chat.attachments.attachedFile")}</span
                             >

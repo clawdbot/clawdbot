@@ -305,7 +305,15 @@ actor MacNodeRuntime {
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        guard self.codexThreadCatalogEnabled() else {
+        // Freeze native ownership before awaiting worker support so one invocation cannot switch owners.
+        let nativeCatalogEnabled = self.codexThreadCatalogEnabled()
+        if !nativeCatalogEnabled,
+           let nodeHostWorker,
+           await nodeHostWorker.supports(req.command)
+        {
+            return await nodeHostWorker.invoke(req)
+        }
+        guard nativeCatalogEnabled else {
             return Self.errorResponse(
                 req,
                 code: .unavailable,

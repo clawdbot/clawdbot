@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -246,6 +247,48 @@ describe("skills proposal gateway handlers", () => {
       "PROPOSAL.md",
     );
   });
+
+  it("returns the stored review outcomes from curator status", async () => {
+    openOpenClawStateDatabase({ env: testState.env })
+      .db.prepare(
+        "INSERT INTO skill_curator_state (id, last_attempt_at_ms, last_success_at_ms, last_error, last_result_json) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        1,
+        100,
+        100,
+        null,
+        JSON.stringify({
+          collectionReviews: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
+          experienceReviews: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
+        }),
+      );
+
+    await expect(callHandler("skills.curator.status", {})).resolves.toMatchObject({
+      ok: true,
+      response: {
+        collectionReview: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
+        experienceReview: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
+      },
+    });
+  });
+
+  it.each(["pin", "unpin", "restore"])(
+    "returns an explicit retirement error for the registered curator %s method",
+    async (action) => {
+      await expect(
+        callHandler(`skills.curator.${action}`, { skill: "daily-brief" }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("Skill lifecycle curation is retired"),
+          }),
+        }),
+      );
+    },
+  );
 
   it("marks manually created create targets stale before list and inspect responses", async () => {
     const create = await callHandler("skills.proposals.create", {

@@ -12,6 +12,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -42,14 +43,16 @@ import {
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
-  if (!command?.environment) {
+  if (!command) {
     return status;
   }
   const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
+  const nextCommand: GatewayServiceCommandConfig = {
     ...command,
     environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
   };
+  delete nextCommand.managedDefinition;
+  delete nextCommand.managedOverrides;
   return {
     ...status,
     service: {
@@ -121,6 +124,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(
       `${label("Service file:")} ${infoText(shortenHomePath(service.command.sourcePath))}`,
     );
+  }
+  if (service.command?.reloadPending) {
+    defaultRuntime.log(warnText("Systemd reload: pending (run systemctl --user daemon-reload)"));
   }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(

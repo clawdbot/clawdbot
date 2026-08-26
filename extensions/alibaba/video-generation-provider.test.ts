@@ -22,6 +22,7 @@ import {
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 // Alibaba tests cover video generation provider plugin behavior.
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import {
   DASHSCOPE_WAN_VIDEO_MODELS,
@@ -276,6 +277,10 @@ describe("alibaba video generation provider", () => {
       expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       await fs.rm(agentDir, { force: true, recursive: true });
     }
   });

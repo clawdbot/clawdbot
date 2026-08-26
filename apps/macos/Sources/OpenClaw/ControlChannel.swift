@@ -133,8 +133,7 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
-    // Coalesce rapid connecting/degraded oscillations so SwiftUI does not churn
-    // MenuBarExtra status items while the gateway connection is unstable.
+    // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
     private var pendingStateTask: Task<Void, Never>?
     private var stateDebouncer = ControlChannelStateDebouncer()
 
@@ -217,10 +216,8 @@ final class ControlChannel {
     }
 
     func disconnect() async {
-        await GatewayConnection.shared.shutdown()
         self.setStateThrottled(.disconnected)
-        self.lastPingMs = nil
-        self.authSourceLabel = nil
+        await GatewayConnection.shared.shutdown()
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {

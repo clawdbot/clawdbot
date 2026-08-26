@@ -13,6 +13,7 @@ const suite = createControlUiE2eSuite({
 
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 const providerUsageArtifactDir = path.resolve(".artifacts/control-ui-e2e/provider-usage-outcomes");
+const usageFilterArtifactDir = path.resolve(".artifacts/control-ui-e2e/usage-filter-repair");
 
 const totals = {
   input: 1_200_000,
@@ -263,6 +264,90 @@ suite.define(() => {
 
         await expect.poll(() => cachedRow.count()).toBe(1);
         await expect.poll(() => pendingRow.count()).toBe(1);
+      },
+    );
+  });
+
+  it("keeps selected provider alternatives visible and finds quoted session labels", async () => {
+    const date = dayOffset(0);
+    const updatedAt = Date.now();
+    const sessions = [
+      { provider: "openai", label: "Team Planning" },
+      { provider: "anthropic", label: "Research Review" },
+    ].map(({ provider, label }) => ({
+      key: `agent:main:${provider}`,
+      label,
+      agentId: "main",
+      modelProvider: provider,
+      model: `${provider}-model`,
+      updatedAt,
+      usage: {
+        ...totals,
+        activityDates: [date],
+        dailyBreakdown: [{ date, cost: totals.totalCost, tokens: totals.totalTokens }],
+      },
+    }));
+    const empty = emptyUsageResponses();
+    if (recordVisuals) {
+      await mkdir(usageFilterArtifactDir, { recursive: true });
+    }
+
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1_000, width: 1_440 },
+        ...(recordVisuals
+          ? { recordVideo: { dir: usageFilterArtifactDir, size: { height: 1_000, width: 1_440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.usage": { ...empty["sessions.usage"], sessions, totals },
+            "usage.cost": {
+              ...empty["usage.cost"],
+              daily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+              totals,
+            },
+            "usage.status": { updatedAt, providers: [] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const sessionLabels = page.locator(".session-bar-title");
+        await expect
+          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+          .toEqual(["Research Review", "Team Planning"]);
+
+        const providerFilter = page.locator(".usage-filter-select").filter({
+          has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
+        });
+        await providerFilter.locator(".usage-filter-trigger").click();
+        await providerFilter.locator('wa-dropdown-item[value="command:select-all"]').click();
+        await expect.poll(() => providerFilter.locator(".settings-count").textContent()).toBe("2");
+        await expect
+          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+          .toEqual(["Research Review", "Team Planning"]);
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(usageFilterArtifactDir, "01-provider-alternatives.png"),
+          });
+        }
+
+        const query = page.locator(".usage-query-input");
+        await query.fill('label:"Team Planning"');
+        await query.press("Enter");
+        await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Team Planning"]);
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(usageFilterArtifactDir, "02-quoted-session-label.png"),
+          });
+        }
       },
     );
   });
@@ -546,6 +631,7 @@ suite.define(() => {
         await page.mouse.move(1, 1);
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
 
+        await page.keyboard.press("Tab");
         await messagesHint.focus();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
         await page.getByRole("button", { name: "Cost", exact: true }).focus();
@@ -558,6 +644,7 @@ suite.define(() => {
           .toContain("Total user and assistant messages in range.");
         await page.getByRole("button", { name: "Cost", exact: true }).click();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await page.keyboard.press("Tab");
         await messagesHint.focus();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
         await messagesHint.press("Escape");

@@ -10,6 +10,7 @@ import {
   normalizeAttachments,
   resolveAttachmentKind,
 } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 
 describe("normalizeAttachmentPath", () => {
   it("allows localhost file URLs", () => {
@@ -146,6 +147,66 @@ describe("normalizeAttachments", () => {
       index: 0,
       alreadyTranscribed: false,
     });
+  });
+
+  it.each([
+    { fileName: "photo.png", capability: "image", contentType: "application/octet-stream" },
+    { fileName: "voice.ogg", capability: "audio", contentType: undefined },
+    { fileName: "clip.mp4", capability: "video", contentType: "application/octet-stream" },
+    { fileName: "scan.TIFF", capability: "image", contentType: "binary/octet-stream" },
+  ] as const)(
+    "selects opaque-source $fileName for its $capability provider",
+    ({ fileName, capability, contentType }) => {
+      const attachments = normalizeAttachments({
+        media: [
+          {
+            url: "https://cdn.example.test/download/opaque",
+            fileName,
+            contentType,
+          },
+        ],
+      });
+
+      expect(attachments.map(resolveAttachmentKind)).toEqual([capability]);
+      expect(selectAttachments({ capability, attachments }).selected).toEqual(attachments);
+    },
+  );
+
+  it.each([
+    {
+      name: "filename-only SVG",
+      fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
+    },
+    {
+      name: "authoritative document kind",
+      fact: { fileName: "photo.png", kind: "document" as const },
+    },
+    {
+      name: "authoritative document MIME",
+      fact: { fileName: "photo.png", contentType: "application/pdf" },
+    },
+  ])("does not select $name for image understanding", ({ fact }) => {
+    const attachments = normalizeAttachments({
+      media: [{ url: "https://cdn.example.test/download/opaque", ...fact }],
+    });
+
+    expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
+  });
+
+  it("prefers the source extension over a conflicting display filename", () => {
+    const attachments = normalizeAttachments({
+      media: [
+        {
+          path: "/tmp/opaque",
+          url: "https://cdn.example.test/download/voice.ogg",
+          fileName: "photo.png",
+          contentType: "application/octet-stream",
+        },
+      ],
+    });
+
+    expect(selectAttachments({ capability: "audio", attachments }).selected).toEqual(attachments);
+    expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
   });
 });
 

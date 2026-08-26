@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readBestEffortConfigSnapshot: vi.fn(),
+  readCommandConfigSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
@@ -27,8 +27,11 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
 }));
 
+vi.mock("../cli/command-config-snapshot.js", () => ({
+  readCommandConfigSnapshot: mocks.readCommandConfigSnapshot,
+}));
+
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
@@ -90,9 +93,12 @@ describe("collectStatusScanOverview", () => {
 
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: { session: {} },
-      sourceConfig: { session: { raw: true } },
+    mocks.readCommandConfigSnapshot.mockResolvedValue({
+      snapshot: {
+        valid: true,
+        runtimeConfig: { session: {} },
+        sourceConfig: { session: { raw: true } },
+      },
     });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
@@ -146,10 +152,7 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
-    expect(mocks.readBestEffortConfigSnapshot).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: undefined,
-    });
+    expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     const channelsRequest = gatewayRequest("channels.status");
     expect(channelsRequest?.url).toBe("ws://127.0.0.1:18789");

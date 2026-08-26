@@ -7,14 +7,15 @@ import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
-  compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
   isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
-import { expectedIntegrityForUpdate } from "../infra/package-update-utils.js";
-import { compareValidSemver } from "../infra/semver.js";
+import {
+  comparePackageUpdateVersions,
+  expectedIntegrityForUpdate,
+} from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -225,14 +226,6 @@ export function expectedIntegrityForNpmUpdate(params: {
   );
 }
 
-function compareNpmSemverForUpdate(left: string, right: string): number {
-  const releaseCmp = compareOpenClawReleaseVersions(left, right);
-  if (releaseCmp !== null) {
-    return releaseCmp;
-  }
-  return compareValidSemver(left, right) ?? 0;
-}
-
 export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   currentVersion: string | undefined;
   effectiveSpec: string | undefined;
@@ -267,7 +260,7 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   ) {
     return undefined;
   }
-  return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
+  return comparePackageUpdateVersions(metadataResult.metadata.version, params.currentVersion) > 0
     ? { packageName, registryLine, version: metadataResult.metadata.version }
     : undefined;
 }
@@ -327,7 +320,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   });
   const stableVersion = versions
     ?.filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(compareNpmSemverForUpdate)
+    .toSorted(comparePackageUpdateVersions)
     .at(-1);
   if (stableVersion) {
     const stableMetadata = await resolveNpmSpecMetadata({
@@ -339,7 +332,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
 
   const prereleaseVersion = versions
     ?.filter(isPrereleaseSemverVersion)
-    .toSorted(compareNpmSemverForUpdate)
+    .toSorted(comparePackageUpdateVersions)
     .at(-1);
   if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
     return undefined;
@@ -420,11 +413,7 @@ export function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResoluti
 }
 
 export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  const releaseCmp = compareOpenClawReleaseVersions(bundledVersion, installedVersion);
-  if (releaseCmp !== null) {
-    return releaseCmp > 0;
-  }
-  return (compareValidSemver(bundledVersion, installedVersion) ?? 0) > 0;
+  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
 }
 
 function shouldFallbackClawHubToDefault(result: { ok: false; code?: string }): boolean {

@@ -121,7 +121,13 @@ export type SetupInferenceStatus =
 export type SetupInferenceFailureStatus = Exclude<SetupInferenceStatus, "ok">;
 
 export type ActivateSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      lines: string[];
+      gatewayRestartRequired?: true;
+    }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 /**

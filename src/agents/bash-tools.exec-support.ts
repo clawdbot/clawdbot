@@ -5,9 +5,24 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecToolApprovalReview,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+
+export function attachExecApprovalReview(
+  result: AgentToolResult<ExecToolDetails>,
+  review?: ExecToolApprovalReview,
+): AgentToolResult<ExecToolDetails> {
+  if (review) {
+    result.details.approvalReviews = [review];
+    result.details.approvalReviewOutcome = review.status === "approved" ? "approved" : "denied";
+  }
+  return result;
+}
 
 export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
@@ -81,7 +96,8 @@ export function createExecHostResolver(defaults?: ExecToolDefaults) {
           : elevatedDefaults?.defaultLevel === "on"
             ? "ask"
             : "off";
-    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+    const effectiveDefaultMode =
+      elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
     const elevatedMode =
       typeof params.elevated === "boolean"
         ? params.elevated
@@ -96,6 +112,7 @@ export function createExecHostResolver(defaults?: ExecToolDefaults) {
       requestedTarget,
       elevatedRequested: elevatedMode !== "off",
       sandboxAvailable: Boolean(defaults?.sandbox),
+      sandboxRequired: defaults?.sandboxRequired,
     }).effectiveHost;
   };
 }

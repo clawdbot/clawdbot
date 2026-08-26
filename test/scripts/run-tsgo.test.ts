@@ -1,5 +1,5 @@
 // Run Tsgo tests cover run tsgo script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,8 @@ import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
+import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
+import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -231,4 +233,181 @@ describe("run-tsgo sparse guard", () => {
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
   });
+});
+
+describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
+  it("keeps the watchdog opt-in", () => {
+    expect(resolveTsgoTimeoutMs({})).toBeUndefined();
+    expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "  " })).toBeUndefined();
+    expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "30000" })).toBe(30_000);
+  });
+
+  function writeFakeTsgo(cwd: string, body: string) {
+    const binDir = path.join(cwd, "node_modules", ".bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const fakeTsgo = path.join(binDir, "tsgo");
+    fs.writeFileSync(fakeTsgo, body, "utf8");
+    fs.chmodSync(fakeTsgo, 0o755);
+  }
+
+  // The fake compiler is a grandchild in its own process group, so spawnSync's
+  // killSignal never reaches it. Its recorded pid is the only handle the harness
+  // has to tear the tree down when the outer timeout fires on a pre-fix run.
+  function readFakeTsgoPid(cwd: string) {
+    const pidFile = path.join(cwd, "fake-tsgo.pid");
+    if (!fs.existsSync(pidFile)) {
+      return undefined;
+    }
+    const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+    return Number.isInteger(pid) && pid > 1 ? pid : undefined;
+  }
+
+  function reapFakeTsgo(cwd: string) {
+    const pid = readFakeTsgoPid(cwd);
+    if (pid === undefined) {
+      return;
+    }
+    for (const target of [-pid, pid]) {
+      try {
+        process.kill(target, "SIGKILL");
+      } catch {
+        // Already reaped by the watchdog under test.
+      }
+    }
+  }
+
+  function runFakeTsgo(
+    cwd: string,
+    timeoutMs: string | undefined,
+    onBeforeReap?: (pid: number | undefined) => void,
+  ) {
+    const { OPENCLAW_TSGO_TIMEOUT_MS: _unset, ...baseEnv } = process.env;
+    try {
+      return spawnSync(
+        process.execPath,
+        [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
+        {
+          cwd,
+          encoding: "utf8",
+          env:
+            timeoutMs === undefined ? baseEnv : { ...baseEnv, OPENCLAW_TSGO_TIMEOUT_MS: timeoutMs },
+          // spawnSync blocks this thread, so vitest's own per-test budget can never
+          // fire; a regression here would hang the worker instead of failing.
+          timeout: 25_000,
+          killSignal: "SIGKILL",
+        },
+      );
+    } finally {
+      onBeforeReap?.(readFakeTsgoPid(cwd));
+      reapFakeTsgo(cwd);
+    }
+  }
+
+  it.each([{ bound: "0" }, { bound: "abc" }])(
+    "explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of $bound instead of crashing",
+    ({ bound }) => {
+      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
+      writeFakeTsgo(cwd, "#!/bin/sh\nexit 0\n");
+
+      const result = runFakeTsgo(cwd, bound);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("must be plain decimal digits");
+      expect(result.stderr).toContain("Unset it to disable the watchdog");
+      expect(result.stderr).not.toContain("at readPositiveEnvInt");
+      expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+    },
+    30_000,
+  );
+
+  it("kills a wedged tsgo that ignores SIGTERM instead of blocking its caller forever", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
+    // Mirrors the observed wedge: the checker refuses SIGTERM and never reports,
+    // so only a process-group SIGKILL frees the caller. It records its pid so the
+    // harness can reap the tree, and self-exits as a last-resort backstop.
+    writeFakeTsgo(
+      cwd,
+      '#!/bin/sh\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\ntrap \'\' TERM\ni=0\nwhile [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done\n',
+    );
+
+    const observedBeforeReap = {
+      error: undefined as unknown,
+      pid: undefined as number | undefined,
+    };
+    const result = runFakeTsgo(cwd, "2000", (pid) => {
+      observedBeforeReap.pid = pid;
+      if (pid === undefined) {
+        return;
+      }
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        observedBeforeReap.error = error;
+      }
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("killed the tsgo process tree");
+    // Printing the message is not the contract; the tree actually being gone is.
+    expect(observedBeforeReap.pid).toBeDefined();
+    expect(observedBeforeReap.error).toMatchObject({ code: "ESRCH" });
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+  }, 30_000);
+
+  it("lets the inner supervisor reap a wedged compiler before the wrapper exits on SIGTERM", async () => {
+    const cwd = createTempDir("openclaw-run-tsgo-signal-");
+    const pidFile = path.join(cwd, "fake-tsgo.pid");
+    fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
+    writeFakeTsgo(
+      cwd,
+      '#!/bin/sh\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\ntrap \'\' TERM HUP INT\nwhile true; do sleep 1; done\n',
+    );
+    const wrapper = spawn(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
+      { cwd, stdio: "ignore" },
+    );
+
+    try {
+      const compilerPid = await waitForPidFile(pidFile, 10_000);
+      wrapper.kill("SIGTERM");
+
+      const wrapperResult = await waitForChildClose(wrapper, 15_000);
+      expect([
+        { code: 143, signal: null },
+        { code: null, signal: "SIGTERM" },
+      ]).toContainEqual(wrapperResult);
+      await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
+    } finally {
+      if (wrapper.exitCode === null && wrapper.signalCode === null) {
+        wrapper.kill("SIGKILL");
+      }
+      reapFakeTsgo(cwd);
+    }
+  }, 20_000);
+
+  // Every bound that must leave a completing compiler alone. The ceiling case is the
+  // regression that matters: without saturation Node collapses the delay to 1ms and
+  // would kill this sleeping child immediately.
+  it.each([
+    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
+    { bound: "30000", name: "an explicit bound", body: "#!/bin/sh\nexit 0\n" },
+    {
+      bound: "2147483648",
+      name: "an override past Node's timer ceiling",
+      body: "#!/bin/sh\nsleep 1\nexit 0\n",
+    },
+  ])(
+    "leaves a completing tsgo alone under $name",
+    ({ bound, body }) => {
+      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
+      writeFakeTsgo(cwd, body);
+
+      const result = runFakeTsgo(cwd, bound);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("killed the tsgo process tree");
+    },
+    30_000,
+  );
 });

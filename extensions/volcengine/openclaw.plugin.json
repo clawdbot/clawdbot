@@ -352,7 +352,9 @@
   },
   "contracts": {
     "speechProviders": [
-      "volcengine"
+      "volcengine",
+      "bytedance",
+      "doubao"
     ]
   }
 }

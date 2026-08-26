@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
 import "../../components/web-awesome-popover.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -261,6 +262,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
+  const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
   return html`<div class="activity-feed__session-row">
     <a
       class="activity-feed__session"
@@ -290,7 +292,11 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
                 data-health=${row.observerDigest?.health ?? nothing}
                 >${headline}</span
               >`
-            : html`<span>${ownerName}</span>`}${scope
+            : html`<span>${ownerName}</span>`}${source
+            ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
+                >· ${source}${scope ? " ·" : ""}</span
+              >`
+            : nothing}${scope
             ? html`<span class="activity-feed__session-scope">${scope}</span>`
             : nothing}
         </span>
@@ -378,12 +384,17 @@ function renderIdentityHeader(
       ${devices.length > 0
         ? html`<div class="activity-feed__devices">
             ${devices.map((entry) => {
-              const device = [entry.deviceFamily, entry.platform].filter(Boolean).join(" · ");
+              const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
+                .filter(Boolean)
+                .join(" · ");
               return html`<div class="activity-feed__device">
                 <span class="activity-feed__device-name"
                   >${entry.host ?? t("activityFeed.unknownDevice")}</span
                 >
                 ${device ? html`<span>${device}</span>` : nothing}
+                ${entry.ip
+                  ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
+                  : nothing}
                 ${entry.lastInputSeconds !== undefined
                   ? html`<span
                       >${t("activityFeed.lastInput", {
@@ -447,6 +458,8 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               class="settings-segmented__btn ${props.filters.time === time
                 ? "settings-segmented__btn--active"
                 : ""}"
+              data-compact-label=${time === "all" ? t(TIME_LABELS[time]) : time}
+              aria-label=${t(TIME_LABELS[time])}
               aria-pressed=${String(props.filters.time === time)}
               @click=${() => props.onFiltersChange({ ...props.filters, time })}
             >
@@ -456,7 +469,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         </div>
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
-      <main class="activity-feed__main">
+      <div class="activity-feed__main">
         ${props.filters.personId
           ? identity
             ? renderIdentityHeader(props.context, identity, props.rows)
@@ -488,7 +501,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                   </section>`}
             `
           : nothing}
-      </main>
+      </div>
     </div>
   `;
 }

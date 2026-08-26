@@ -11,6 +11,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -246,7 +247,7 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
-  it("sequences pending owners by their explicit plugin generation", async () => {
+  it("rejects unpublished plugin generations while matching pending callers share their owner", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
@@ -281,24 +282,170 @@ describe("prepared model runtime owner selection", () => {
     });
     const pendingB = acquireAgentRunPreparedModelRuntime(input, {
       pluginGeneration: generationB,
-    });
+    }).catch((error: unknown) => error);
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
     finishGenerationA();
-    const [leaseA, matchingLeaseA, leaseB] = await Promise.all([
+    const [leaseA, matchingLeaseA, rejectedGeneration] = await Promise.all([
       pendingA,
       matchingPendingA,
       pendingB,
     ]);
 
     expect(matchingLeaseA.snapshot).toBe(leaseA.snapshot);
-    expect(leaseB.snapshot).not.toBe(leaseA.snapshot);
+    expect(rejectedGeneration).toEqual(
+      expect.objectContaining({ message: expect.stringContaining("superseded") }),
+    );
     expect(leaseA.snapshot.metadataSnapshot).toBe(generationA!.pluginMetadataSnapshot);
-    expect(leaseB.snapshot.metadataSnapshot).toBe(generationB.pluginMetadataSnapshot);
+    await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(leaseA.snapshot);
     leaseA.release();
     matchingLeaseA.release();
-    await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(leaseB.snapshot);
-    leaseB.release();
+  });
+
+  it("keeps a committed gateway owner current when an admitted turn resumes on its older generation", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const defaults = {
+      model: "openai/gpt-5",
+      models: {
+        "openai/gpt-5": { params: { transport: "sse" as const, openaiWsWarmup: false } },
+      },
+    };
+    const previousConfig = {
+      agents: { defaults },
+      messages: { responsePrefix: "previous" },
+    };
+    const committedConfig = {
+      agents: { defaults },
+      messages: { responsePrefix: "committed" },
+    };
+    const publicationOptions = {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static" as const,
+      gatewayLifecycle: true,
+    };
+    const runInput = (config: typeof previousConfig) => ({
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      allowGatewaySubagentBinding: true,
+      config,
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5", runtime: "openclaw" }],
+      workspaceDir: "/tmp/unused-workspace",
+    });
+
+    await refreshPreparedModelRuntimeSnapshots(previousConfig, publicationOptions);
+    const admitted = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const previousSnapshot = getPreparedModelRuntimeSnapshot(runInput(previousConfig));
+    expect(admitted?.pluginGeneration).toBeDefined();
+    expect(previousSnapshot).toBeDefined();
+
+    const outerLease = await acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+      catalogMode: "static",
+      pluginGeneration: admitted!.pluginGeneration,
+    });
+    expect(outerLease.snapshot).toBe(previousSnapshot);
+    let outerLeaseActive = true;
+
+    await refreshPreparedModelRuntimeSnapshots(committedConfig, publicationOptions);
+    const committedSnapshot = getPreparedModelRuntimeSnapshot(runInput(committedConfig));
+    const registryLoads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+    expect(committedSnapshot).toBeDefined();
+    expect(committedSnapshot).not.toBe(previousSnapshot);
+    let releaseDetachedAdmission!: () => void;
+    const detachedAdmissionGate = new Promise<void>((resolve) => {
+      releaseDetachedAdmission = resolve;
+    });
+    let detachedAdmission!: Promise<unknown>;
+
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(
+        admitted!.pluginGeneration,
+        async () => {
+          const resumed = await withPreparedModelRuntimePluginGenerationScope(
+            admitted!.pluginGeneration,
+            async () =>
+              await acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+                catalogMode: "static",
+                pluginGeneration: admitted!.pluginGeneration,
+              }),
+          );
+
+          expect(resumed.snapshot).toBe(previousSnapshot);
+          expect(getPreparedModelRuntimeSnapshot(runInput(committedConfig))).toBe(
+            committedSnapshot,
+          );
+          expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
+          resumed.release();
+          const clonedConfigLease = await acquireAgentRunPreparedModelRuntime(
+            runInput(structuredClone(previousConfig)),
+            { pluginGeneration: admitted!.pluginGeneration },
+          );
+          expect(clonedConfigLease.snapshot).toBe(previousSnapshot);
+          clonedConfigLease.release();
+          await expect(
+            acquireAgentRunPreparedModelRuntime(
+              { ...runInput(previousConfig), workspaceDir: "/tmp/different-workspace" },
+              { pluginGeneration: admitted!.pluginGeneration },
+            ),
+          ).rejects.toThrow("plugin generation was superseded");
+          await expect(
+            acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+              pluginGeneration: { ...admitted!.pluginGeneration },
+            }),
+          ).rejects.toThrow("plugin generation was superseded");
+          detachedAdmission = detachedAdmissionGate.then(async () =>
+            acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+              pluginGeneration: admitted!.pluginGeneration,
+            }),
+          );
+        },
+        () => (outerLeaseActive ? outerLease.snapshot : undefined),
+      );
+    } finally {
+      outerLeaseActive = false;
+      outerLease.release();
+    }
+    releaseDetachedAdmission();
+    await expect(detachedAdmission).rejects.toThrow("plugin generation was superseded");
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+        pluginGeneration: admitted!.pluginGeneration,
+      }),
+    ).rejects.toThrow("plugin generation was superseded");
+    expect(getPreparedModelRuntimeSnapshot(runInput(committedConfig))).toBe(committedSnapshot);
+
+    const next = await acquireAgentRunPreparedModelRuntime(runInput(committedConfig));
+    expect(next.snapshot).toBe(committedSnapshot);
+    next.release();
+  });
+
+  it("does not let a stale pinned generation replace an owner awaiting auth refresh", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const admitted = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    expect(admitted).toBeDefined();
+
+    mocks.mutationListener?.({ agentDir: "/tmp/unused-agent", affectsInheritedStores: false });
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime(
+        {
+          agentId: "default",
+          agentDir: "/tmp/unused-agent",
+          config,
+          workspaceDir: "/tmp/unused-workspace",
+        },
+        { pluginGeneration: { ...admitted!.pluginGeneration } },
+      ),
+    ).rejects.toThrow("plugin generation was superseded");
+
+    await vi.waitFor(async () => {
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toMatchObject({ config });
+    });
   });
 
   it("bounds retained gateway run owners while reusing recent selections", async () => {

@@ -3,9 +3,11 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 
 type PairingShell = HTMLElement & {
@@ -54,7 +56,6 @@ function createPairingShell(params: {
   const overlaySnapshot = {
     approvalQueue: [],
     approvalErrors: new Map(),
-    approvalNowMs: 0,
     approvalBusy: false,
     devicePairSetupOpen: Boolean(params.setupCode),
     devicePairSetupLifecycle: params.setupCode
@@ -99,7 +100,7 @@ function createPairingShell(params: {
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     sessions: { state: { result: null } },
-    theme: { mode: "system" },
+    theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;
@@ -145,10 +146,9 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
-  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");

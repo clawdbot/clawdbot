@@ -167,7 +167,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "nextcloud-talk",
   "nostr",
   "ollama",
-  "open-prose",
   "copilot-proxy",
   "sglang",
   "zai",

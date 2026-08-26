@@ -15,6 +15,10 @@ function repository(fullName: string, updatedAt: string, description?: string) {
   };
 }
 
+function requestUrl(input: Parameters<typeof fetch>[0] | undefined): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : (input?.url ?? "");
+}
+
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -87,6 +91,90 @@ describe("project GitHub search", () => {
       "Authorization",
       "Bearer test-github-token",
     );
+  });
+
+  it("preserves GitHub best-match order for global results instead of re-sorting by recency", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      json({
+        items: [
+          repository("openclaw/best-match", "2020-01-01T00:00:00Z"),
+          repository("someone/recently-pushed-fork", "2026-08-25T00:00:00Z"),
+        ],
+      }),
+    );
+
+    const result = await searchRemoteProjects("best-match", { env: {}, fetchImpl, now: 300 });
+
+    expect(result.projects.map((project) => project.fullName)).toEqual([
+      "openclaw/best-match",
+      "someone/recently-pushed-fork",
+    ]);
+    const searchUrl = requestUrl(fetchImpl.mock.calls[0]?.[0]);
+    expect(searchUrl).not.toContain("sort=");
+  });
+
+  it("resolves exact owner/name queries directly and ranks the repository first", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).includes("/repos/openclaw/openclaw")) {
+        return json(repository("openclaw/openclaw", "2026-08-20T00:00:00Z"));
+      }
+      return json({
+        items: [
+          repository("someone/openclaw-tutorial", "2026-08-25T00:00:00Z"),
+          repository("openclaw/openclaw", "2026-08-20T00:00:00Z"),
+        ],
+      });
+    });
+
+    const result = await searchRemoteProjects("openclaw/openclaw", {
+      env: {},
+      fetchImpl,
+      now: 400,
+    });
+
+    expect(result.projects.map((project) => project.fullName)).toEqual([
+      "openclaw/openclaw",
+      "someone/openclaw-tutorial",
+    ]);
+    expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      expect.stringContaining("/repos/openclaw/openclaw"),
+      expect.stringContaining("/search/repositories?"),
+    ]);
+  });
+
+  it("degrades to search results when the exact owner/name lookup misses", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).includes("/repos/")) {
+        return json({ message: "Not Found" }, 404);
+      }
+      return json({ items: [repository("acme/missing-exact", "2026-08-10T00:00:00Z")] });
+    });
+
+    const result = await searchRemoteProjects("acme/missing-exact-repo", {
+      env: {},
+      fetchImpl,
+      now: 500,
+    });
+
+    expect(result.projects.map((project) => project.fullName)).toEqual(["acme/missing-exact"]);
+  });
+
+  it("degrades optional lanes to global results when their requests reject in transport", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/repos/") || url.includes("/user/repos")) {
+        throw new TypeError("fetch failed");
+      }
+      return json({ items: [repository("acme/still-works", "2026-08-10T00:00:00Z")] });
+    });
+
+    const result = await searchRemoteProjects("acme/still-works", {
+      env: { GH_TOKEN: "test-github-token" },
+      fetchImpl,
+      now: 600,
+    });
+
+    expect(result.projects.map((project) => project.fullName)).toEqual(["acme/still-works"]);
   });
 
   it("caches normalized queries for 60 seconds and refetches after expiry", async () => {

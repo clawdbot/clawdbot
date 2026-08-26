@@ -160,22 +160,39 @@ export function consumePendingToolMediaIntoReply(
   return mergedPayload;
 }
 
-/** Consumes queued tool media as a standalone reply payload. */
-export function consumePendingToolMediaReply(
+/** Restores reserved tool media after its outbound delivery was rejected. */
+export function restorePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
     | "pendingToolAudioAsVoice"
+    | "pendingToolMediaDeliveryFailed"
   >,
-): BlockReplyPayload | null {
-  const payload = readPendingToolMediaReply(state);
-  if (!payload) {
-    return null;
+  payload: BlockReplyPayload,
+): void {
+  const pendingUrls = state.pendingToolMediaUrls;
+  const pendingAttachments = state.pendingToolMediaAttachments ?? [];
+  const restoredUrls = payload.mediaUrls ?? [];
+  const restoredAttachments = payload.attachments ?? [];
+  const seen = new Set(restoredUrls);
+  state.pendingToolMediaUrls = [...restoredUrls, ...pendingUrls.filter((url) => !seen.has(url))];
+  state.pendingToolMediaAttachments = [
+    ...restoredUrls.map((_, index) => restoredAttachments[index] ?? {}),
+    ...pendingUrls.flatMap((url, index) =>
+      seen.has(url) ? [] : [pendingAttachments[index] ?? {}],
+    ),
+  ];
+  for (const [index, url] of restoredUrls.entries()) {
+    if (payload.trustedLocalMedia || restoredAttachments[index]?.trustedLocalMedia) {
+      state.pendingToolMediaTrustByUrl.set(url, true);
+    } else if (!state.pendingToolMediaTrustByUrl.has(url)) {
+      state.pendingToolMediaTrustByUrl.set(url, false);
+    }
   }
-  clearPendingToolMedia(state);
-  return payload;
+  state.pendingToolAudioAsVoice ||= payload.audioAsVoice === true;
+  state.pendingToolMediaDeliveryFailed = true;
 }
 
 /** Reads queued tool media without clearing it. */

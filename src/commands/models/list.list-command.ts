@@ -4,6 +4,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -63,11 +64,8 @@ export async function modelsListCommand(
       return undefined;
     }
     if (/\s/u.test(rawProviderFilter)) {
-      runtime.error(
-        `Invalid provider filter "${sanitizeTerminalText(rawProviderFilter)}". Use a provider id such as "moonshot", not a display label.`,
-      );
-      process.exitCode = 1;
-      return null;
+      const message = `Invalid provider filter "${sanitizeTerminalText(rawProviderFilter)}". Use a provider id such as "moonshot", not a display label.`;
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
     const parsed = parseModelRef(
       `${rawProviderFilter}/_`,
@@ -76,9 +74,6 @@ export async function modelsListCommand(
     );
     return parsed?.provider ?? normalizeLowercaseStringOrEmpty(rawProviderFilter);
   })();
-  if (parsedProviderFilter === null) {
-    return;
-  }
   const humanReadable = !opts.json && !opts.plain;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
@@ -120,11 +115,8 @@ export async function modelsListCommand(
       ].map((providerId) => providerAliasCanonicalizer.provider(providerId)),
     );
     if (!knownProviderIds.has(providerFilter)) {
-      runtime.error(
-        `Unknown provider filter "${sanitizeTerminalText(rawProviderFilter ?? providerFilter)}" for this installation. Run ${formatCliCommand("openclaw plugins list --json")} to see installed providers, or configure it under models.providers.`,
-      );
-      process.exitCode = 1;
-      return;
+      const message = `Unknown provider filter "${sanitizeTerminalText(rawProviderFilter ?? providerFilter)}" for this installation. Run ${formatCliCommand("openclaw plugins list --json")} to see installed providers, or configure it under models.providers.`;
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
   }
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
@@ -207,9 +199,13 @@ export async function modelsListCommand(
       availableKeys = loaded.availableKeys;
     }
   } catch (err) {
-    runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
-    process.exitCode = 1;
-    return;
+    const detail = err instanceof Error ? err.message : String(err);
+    const message = `Model registry unavailable: ${detail}`;
+    throw new ExpectedCliError({
+      message,
+      humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
+      machineOutput: message,
+    });
   }
   const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
   const promotionsRefreshPromise = promotionsModulePromise

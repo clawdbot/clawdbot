@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCroppedMotionPreview,
   renderStartRemoteRecording,
   type RunCommand,
 } from "../../scripts/e2e/telegram-desktop-crabbox.ts";
@@ -13,6 +14,7 @@ import {
   readRecorderSession,
   recoverRecorderStartup,
   recorderArtifacts,
+  runRecorderActions,
   screenshotRecorder,
   type RecorderOperations,
   type RecorderSession,
@@ -23,6 +25,7 @@ import {
   renderWaitForMainWindow,
   startRecorder,
   stopRecorder,
+  teardownRecorder,
   viewRecorder,
   writeRecorderSession,
 } from "../../scripts/e2e/telegram-desktop-recorder.ts";
@@ -39,13 +42,13 @@ function recorderSessionArg(root: string, sessionPath: string): string {
   return path.relative(root, sessionPath);
 }
 
-function testSession(): RecorderSession {
+function testSession(outputDir = "/tmp/recorder"): RecorderSession {
   return {
     chat: "-1001234567890",
     desktopSessionId: "987654321",
-    keepBox: false,
     leaseId: "cbx_test123",
     leaseOwned: true,
+    outputDir,
     imageSource: "telegram-desktop=7.0.9",
     provider: "aws",
     recordFps: 24,
@@ -56,9 +59,9 @@ function testSession(): RecorderSession {
       finalScreenshot: "/tmp/recorder/final.png",
       video: "/tmp/recorder/session.mp4",
     },
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt: "2026-08-15T12:00:00.000Z",
-    window: { height: 1000, width: 650, x: 635, y: 40 },
+    window: { height: 1000, id: "0x04600007", width: 650, x: 635, y: 40 },
     userDriver: ["python3", "driver.py", "--account", "qa shared"],
   };
 }
@@ -75,6 +78,8 @@ describe("Telegram Desktop recorder CLI", () => {
     expect(
       parseRecorderArgs([
         "start",
+        "--session",
+        "desktop-recorder.json",
         "--output-dir",
         ".artifacts/telegram",
         "--chat",
@@ -93,6 +98,7 @@ describe("Telegram Desktop recorder CLI", () => {
       outputDir: ".artifacts/telegram",
       provider: "docker",
       recordFps: 24,
+      sessionPath: "desktop-recorder.json",
       ttl: "2h",
       userDriver: ["uv", "run", "driver.py", "--json"],
     });
@@ -112,13 +118,14 @@ describe("Telegram Desktop recorder CLI", () => {
         "recorder.json",
         "--crop",
         "telegram-window",
-        "--keep-box",
+        "--since",
+        "2026-08-15T12:00:10.000Z",
       ]),
     ).toEqual({
       command: "stop",
       crop: "telegram-window",
-      keepBox: true,
       sessionPath: "recorder.json",
+      since: "2026-08-15T12:00:10.000Z",
     });
     expect(parseRecorderArgs(["status", "--session", "recorder.json"])).toEqual({
       command: "status",
@@ -128,10 +135,93 @@ describe("Telegram Desktop recorder CLI", () => {
       command: "recover",
       sessionPath: "recorder.json",
     });
+    expect(parseRecorderArgs(["teardown", "--session", "recorder.json"])).toEqual({
+      command: "teardown",
+      sessionPath: "recorder.json",
+    });
     expect(parseRecorderArgs(["artifacts", "--session", "recorder.json"])).toEqual({
       command: "artifacts",
       sessionPath: "recorder.json",
     });
+    expect(
+      parseRecorderArgs([
+        "actions",
+        "--session",
+        "recorder.json",
+        "--actions-file",
+        "click.json",
+        "--timeout-seconds",
+        "90",
+      ]),
+    ).toEqual({
+      actionsFile: "click.json",
+      command: "actions",
+      sessionPath: "recorder.json",
+      timeoutSeconds: 90,
+    });
+  });
+
+  it("targets the recorded Telegram window instead of the first matching window", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    const actionsPath = path.join(root, "click.json");
+    writeRecorderSession(sessionPath, testSession(root));
+    fs.writeFileSync(
+      actionsPath,
+      JSON.stringify([
+        { command: "click", x: 120, y: 240 },
+        { command: "sleep", milliseconds: 5 },
+      ]),
+    );
+    const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({
+      stderr: "",
+      stdout: "clicked\n",
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun,
+    } satisfies RecorderOperations;
+
+    await expect(
+      runRecorderActions(
+        root,
+        {
+          actionsFile: "click.json",
+          command: "actions",
+          sessionPath: "recorder.json",
+          timeoutSeconds: 90,
+        },
+        operations,
+      ),
+    ).resolves.toEqual({
+      results: [
+        { command: "click", stderr: "", stdout: "clicked\n" },
+        { command: "sleep", stderr: "", stdout: "" },
+      ],
+    });
+    expect(sshRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringContaining(
+          'xdotool windowactivate --sync "$win" mousemove --window "$win" 120 240 click 1',
+        ),
+        stdio: "pipe",
+        timeoutMs: 90_000,
+      }),
+    );
+    const actionCommand = sshRun.mock.calls[0]?.[0].command;
+    expect(actionCommand).toContain("win='0x04600007'");
+    expect(actionCommand).toContain("tolower($1) == tolower(win)");
+    expect(actionCommand).toContain('[ "$WIDTH" -ne 650 ]');
+    expect(actionCommand).not.toContain("{print $1; exit}");
   });
 
   it("requires start inputs and a -100 private-group chat id", () => {
@@ -171,6 +261,20 @@ describe("Telegram Desktop recorder CLI", () => {
         "   ",
       ]),
     ).toThrow("--user-driver is required");
+  });
+
+  it("requires a run-scoped session handle", () => {
+    expect(() =>
+      parseRecorderArgs([
+        "start",
+        "--output-dir",
+        ".artifacts/telegram",
+        "--chat",
+        "-1001234",
+        "--user-driver",
+        "driver",
+      ]),
+    ).toThrow("--session is required");
   });
 });
 
@@ -252,6 +356,7 @@ describe("Telegram Desktop recorder remote contract", () => {
             outputDir: "out",
             provider: testCase.provider,
             recordFps: 24,
+            sessionPath: "desktop-recorder.json",
             ttl: "2h",
             userDriver: ["python3", "driver.py"],
           },
@@ -301,6 +406,7 @@ describe("Telegram Desktop recorder remote contract", () => {
           outputDir: "out",
           provider: "docker",
           recordFps: 24,
+          sessionPath: "desktop-recorder.json",
           ttl: "2h",
           userDriver: ["python3", "driver.py"],
         },
@@ -347,6 +453,7 @@ describe("Telegram Desktop recorder remote contract", () => {
           outputDir: "out",
           provider: "docker",
           recordFps: 24,
+          sessionPath: "desktop-recorder.json",
           ttl: "2h",
           userDriver: ["python3", "driver.py"],
         },
@@ -398,50 +505,44 @@ describe("Telegram Desktop recorder remote contract", () => {
           outputDir: "out",
           provider: "docker",
           recordFps: 24,
+          sessionPath: "desktop-recorder.json",
           ttl: "2h",
           userDriver: ["python3", "driver.py"],
         },
         operations,
       ),
     ).rejects.toThrow(
-      "Telegram server accepted 2 login tokens, but Telegram Desktop stayed on the QR screen: permission denied reading the remote Docker socket",
+      "token-accepted-no-transition: Telegram server accepted 2 login tokens, but Telegram Desktop stayed on the QR screen: permission denied reading the remote Docker socket",
     );
     expect(
       runCommand.mock.calls.filter(([call]) => call.args.includes("terminate-session")),
     ).toHaveLength(2);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(root, "out", "telegram-desktop-authorization-failure.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ failures: [{ classification: "token-accepted-no-transition" }] });
   });
 
-  it("reprovisions one fresh local desktop after an accepted-token wedge", async () => {
+  it("reuses one authorized desktop across sequential captures", async () => {
     const root = makeTempDir();
-    let container = 0;
-    let qrAttempt = 0;
     const runCommand = vi.fn<RunCommand>(async (call) => {
       if (call.command === "docker") {
         return { stderr: "", stdout: "[]" };
       }
       if (call.args[0] === "warmup") {
-        container += 1;
-        return {
-          stderr: "",
-          stdout: `leased ${container === 1 ? "cbx_0a1b2c" : "cbx_0a1b2d"} slug=quiet-crab`,
-        };
+        return { stderr: "", stdout: "leased cbx_0a1b2c slug=quiet-crab" };
       }
       if (call.args.includes("confirm-qr")) {
         return {
           stderr: "",
-          stdout: JSON.stringify({
-            ok: true,
-            session: { id: `${container}${qrAttempt}`, isPasswordPending: false },
-          }),
+          stdout: JSON.stringify({ ok: true, session: { id: "91234", isPasswordPending: false } }),
         };
       }
-      if (
-        call.args.includes("terminate-session") ||
-        call.args.includes("terminate-desktop-sessions")
-      ) {
-        return { stderr: "", stdout: JSON.stringify({ ok: true }) };
-      }
-      return { stderr: "", stdout: "" };
+      return { stderr: "", stdout: JSON.stringify({ ok: true }) };
     });
     const inspectCrabbox = vi.fn(async () => ({
       sshHost: "host",
@@ -457,43 +558,44 @@ describe("Telegram Desktop recorder remote contract", () => {
       scpFromRemote: vi.fn(async () => undefined),
       sshRun: vi.fn(async ({ command }: { command: string }) => {
         if (command.includes("telegram-login-qr.png")) {
-          qrAttempt += 1;
-          return { stderr: "", stdout: `tg://login?token=attempt-${qrAttempt}` };
-        }
-        if (command.includes("Telegram Desktop did not reach the main window") && container === 1) {
-          throw new Error("first desktop stayed on QR");
+          return { stderr: "", stdout: "tg://login?token=first-capture" };
         }
         if (command.includes("getwindowgeometry")) {
-          return { stderr: "", stdout: "635 40 650 1000" };
+          return { stderr: "", stdout: "0x04600007 635 40 650 1000" };
         }
         return { stderr: "", stdout: "" };
       }),
     } satisfies RecorderOperations;
 
-    const result = await startRecorder(
-      root,
-      {
-        command: "start",
-        chat: "-1001234567890",
-        crabboxClass: "standard",
-        idleTimeout: "1h",
-        json: false,
-        outputDir: "out",
-        provider: "docker",
-        recordFps: 24,
-        ttl: "2h",
-        userDriver: ["python3", "driver.py"],
-      },
-      operations,
-    );
+    const options = {
+      command: "start" as const,
+      chat: "-1001234567890",
+      crabboxClass: "standard",
+      idleTimeout: "1h",
+      json: false,
+      outputDir: "attempt-1",
+      provider: "docker" as const,
+      recordFps: 24,
+      sessionPath: "desktop-recorder.json",
+      ttl: "2h",
+      userDriver: ["python3", "driver.py"],
+    };
+    const first = await startRecorder(root, options, operations);
+    await stopRecorder(root, { command: "stop", sessionPath: "desktop-recorder.json" }, operations);
+    const second = await startRecorder(root, { ...options, outputDir: "attempt-2" }, operations);
 
-    expect(inspectCrabbox).toHaveBeenCalledTimes(2);
-    expect(runCommand.mock.calls.filter(([call]) => call.args[0] === "warmup")).toHaveLength(2);
-    expect(runCommand.mock.calls).toContainEqual([
-      expect.objectContaining({ args: ["stop", "--provider", "docker", "cbx_0a1b2c"] }),
-    ]);
-    expect(result.session).toMatchObject({ leaseId: "cbx_0a1b2d", leaseOwned: true });
-    expect(readRecorderSession(result.sessionPath)).toMatchObject({ leaseId: "cbx_0a1b2d" });
+    expect(runCommand.mock.calls.filter(([call]) => call.args[0] === "warmup")).toHaveLength(1);
+    expect(runCommand.mock.calls.filter(([call]) => call.args.includes("confirm-qr"))).toHaveLength(
+      1,
+    );
+    expect(
+      operations.sshRun.mock.calls.filter(([call]) => call.command.includes("x11grab")),
+    ).toHaveLength(2);
+    expect(first.sessionPath).toBe(second.sessionPath);
+    expect(readRecorderSession(second.sessionPath)).toMatchObject({
+      leaseId: "cbx_0a1b2c",
+      outputDir: path.join(root, "attempt-2"),
+    });
   });
 
   it("hides the prepared chat before recording starts", async () => {
@@ -503,7 +605,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         return { stderr: "", stdout: "tg://login?token=open-target-chat" };
       }
       if (command.includes("getwindowgeometry")) {
-        return { stderr: "", stdout: "635 40 650 1000" };
+        return { stderr: "", stdout: "0x04600007 635 40 650 1000" };
       }
       return { stderr: "", stdout: "" };
     });
@@ -536,6 +638,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         outputDir: "out",
         provider: "docker",
         recordFps: 24,
+        sessionPath: "desktop-recorder.json",
         ttl: "2h",
         userDriver: ["python3", "driver.py"],
       },
@@ -593,6 +696,7 @@ describe("Telegram Desktop recorder remote contract", () => {
       outputDir: "out",
       provider: "docker" as const,
       recordFps: 24,
+      sessionPath: "desktop-recorder.json",
       ttl: "2h",
       userDriver: ["python3", "driver.py"],
     };
@@ -602,10 +706,24 @@ describe("Telegram Desktop recorder remote contract", () => {
     vi.useFakeTimers();
     try {
       const exhausted = expect(startRecorder(root, options, operations)).rejects.toThrow(
-        "telegram-login-screen.png",
+        "qr-unreadable: Telegram Desktop did not leave the login screen after 6 attempts",
       );
       await vi.runAllTimersAsync();
       await exhausted;
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(root, "out", "telegram-desktop-authorization-failure.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ failures: [{ classification: "qr-unreadable" }] });
+      // The lane reads this fact as a different OS user than the recorder; 0600
+      // would break the retry budget with EACCES.
+      expect(
+        fs.statSync(path.join(root, "out", "telegram-desktop-authorization-failure.json")).mode &
+          0o777,
+      ).toBe(0o644);
       expect(scpFromRemote).toHaveBeenCalledWith(
         expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
       );
@@ -616,6 +734,77 @@ describe("Telegram Desktop recorder remote contract", () => {
       );
       await vi.runAllTimersAsync();
       await unfetchable;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies one accepted token without a main-window transition", async () => {
+    const root = makeTempDir();
+    let qrAttempt = 0;
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn<RunCommand>(async (call) => ({
+        stderr: "",
+        stdout: call.args.includes("confirm-qr")
+          ? JSON.stringify({ ok: true, session: { id: 91234, isPasswordPending: false } })
+          : JSON.stringify({ ok: true }),
+      })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun: vi.fn(async ({ command }: { command: string }) => {
+        if (command.includes("telegram-login-qr.png")) {
+          qrAttempt += 1;
+          if (qrAttempt === 1) {
+            return { stderr: "", stdout: "tg://login?token=accepted-once" };
+          }
+          throw new Error("zbarimg: no barcode detected");
+        }
+        if (command.includes("Telegram Desktop did not reach the main window")) {
+          throw new Error("Telegram Desktop did not reach the main window");
+        }
+        return { stderr: "", stdout: "" };
+      }),
+    } satisfies RecorderOperations;
+
+    vi.useFakeTimers();
+    try {
+      const failed = expect(
+        startRecorder(
+          root,
+          {
+            command: "start",
+            chat: "-1001234567890",
+            crabboxClass: "standard",
+            idleTimeout: "1h",
+            json: false,
+            leaseId: "cbx_borrowed",
+            outputDir: "out",
+            provider: "docker",
+            recordFps: 24,
+            sessionPath: "desktop-recorder.json",
+            ttl: "2h",
+            userDriver: ["python3", "driver.py"],
+          },
+          operations,
+        ),
+      ).rejects.toThrow("main-window-timeout: Telegram Desktop did not reach the main window");
+      await vi.runAllTimersAsync();
+      await failed;
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(root, "out", "telegram-desktop-authorization-failure.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ failures: [{ classification: "main-window-timeout" }] });
     } finally {
       vi.useRealTimers();
     }
@@ -657,6 +846,7 @@ describe("Telegram Desktop recorder remote contract", () => {
             outputDir: "out",
             provider: "docker",
             recordFps: 24,
+            sessionPath: "desktop-recorder.json",
             ttl: "2h",
             userDriver: ["python3", "driver.py"],
           },
@@ -750,23 +940,59 @@ describe("Telegram Desktop recorder remote contract", () => {
 });
 
 describe("Telegram Desktop recorder window geometry", () => {
+  it("motion-trims the cropped video without a duration-sized GIF filter", async () => {
+    const root = makeTempDir();
+    const calls: Array<{ args: string[]; command: string }> = [];
+    await createCroppedMotionPreview({
+      crabboxBin: "crabbox",
+      crop: { cropWidth: 650, height: 600, width: 650, x: 635, y: 440 },
+      croppedGifPath: path.join(root, "cropped.gif"),
+      croppedVideoPath: path.join(root, "cropped.mp4"),
+      cwd: root,
+      fps: 4,
+      startSeconds: 9,
+      run: async ({ args, command }) => {
+        calls.push({ args, command });
+        return { stderr: "", stdout: command === "crabbox" ? "{}" : "" };
+      },
+      videoPath: path.join(root, "recording.mp4"),
+    });
+
+    expect(calls.map(({ command }) => command)).toEqual(["ffmpeg", "crabbox"]);
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(["-ss", "9.000"]));
+    expect(calls[1]?.args).toEqual(
+      expect.arrayContaining([
+        "media",
+        "preview",
+        "--fps",
+        "4",
+        "--width",
+        "650",
+        "--trimmed-video-output",
+        path.join(root, "cropped.mp4"),
+      ]),
+    );
+    expect(calls.some(({ args }) => args.includes("-filter_complex"))).toBe(false);
+  });
+
   it("parses the measured window and rejects unusable geometry", () => {
-    expect(parseWindowGeometry(" 636 45 648 995 \n")).toEqual({
+    expect(parseWindowGeometry(" 0x04600007 636 45 648 995 \n")).toEqual({
       height: 995,
+      id: "0x04600007",
       width: 648,
       x: 636,
       y: 45,
     });
-    expect(() => parseWindowGeometry("636 45 648")).toThrow("was not readable");
-    expect(() => parseWindowGeometry("636 45 10 10")).toThrow("too small to crop");
+    expect(() => parseWindowGeometry("0x04600007 636 45 648")).toThrow("was not readable");
+    expect(() => parseWindowGeometry("0x04600007 636 45 10 10")).toThrow("too small to crop");
   });
 
   it("crops the recorded window instead of a fixed rectangle", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
     writeRecorderSession(sessionPath, {
-      ...testSession(),
-      window: { height: 995, width: 648, x: 636, y: 45 },
+      ...testSession(root),
+      window: { height: 995, id: "0x04600007", width: 648, x: 636, y: 45 },
     });
     const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 648 }));
     const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({ stderr: "", stdout: "" }));
@@ -792,16 +1018,20 @@ describe("Telegram Desktop recorder window geometry", () => {
       {
         command: "stop",
         crop: "telegram-window",
-        keepBox: false,
         sessionPath: recorderSessionArg(root, sessionPath),
+        since: "2026-08-15T12:00:10.000Z",
       },
       operations,
     );
     expect(cropped).toHaveBeenCalledWith(
       expect.objectContaining({
         crop: { cropWidth: 648, height: 600, width: 648, x: 636, y: 440 },
+        fps: 4,
+        startSeconds: 9,
+        videoPath: path.join(root, "telegram-desktop-recorder-session.mp4"),
       }),
     );
+    expect(operations.createMotionPreview).not.toHaveBeenCalled();
     expect(
       sshRun.mock.calls.some(([params]) => params.command.includes("scrot -o -a 636,440,648,600")),
     ).toBe(true);
@@ -809,9 +1039,10 @@ describe("Telegram Desktop recorder window geometry", () => {
 });
 
 describe("Telegram Desktop recorder session lifecycle", () => {
-  it("round-trips recorder.json schema version 1", () => {
-    const sessionPath = path.join(makeTempDir(), "recorder.json");
-    const session = testSession();
+  it("round-trips recorder.json schema version 2", () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    const session = testSession(root);
 
     writeRecorderSession(sessionPath, session);
 
@@ -825,7 +1056,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     const screenshot = path.join(root, "screenshot.png");
     fs.writeFileSync(screenshot, "proof", { mode: 0o600 });
     writeRecorderSession(sessionPath, {
-      ...testSession(),
+      ...testSession(root),
       artifacts: { screenshot },
     });
 
@@ -843,7 +1074,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
   it("keeps every recorder path inside its fixed working directory", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
-    writeRecorderSession(sessionPath, testSession());
+    writeRecorderSession(sessionPath, testSession(root));
     expect(() =>
       recorderArtifacts(root, { command: "artifacts", sessionPath: "../recorder.json" }),
     ).toThrow("--session must stay inside the recorder root");
@@ -873,11 +1104,13 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     ).rejects.toThrow("--output must be relative");
   });
 
-  it("writes the default screenshot beside a relative session path", async () => {
+  it("writes the default screenshot in the current capture directory", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "attempt", "recorder.json");
     fs.mkdirSync(path.dirname(sessionPath));
-    writeRecorderSession(sessionPath, testSession());
+    const captureDir = path.join(root, "capture");
+    fs.mkdirSync(captureDir);
+    writeRecorderSession(sessionPath, testSession(captureDir));
     const scpFromRemote = vi.fn(async () => undefined);
 
     const output = await screenshotRecorder(
@@ -898,7 +1131,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       },
     );
 
-    expect(path.dirname(output)).toBe(path.dirname(sessionPath));
+    expect(path.dirname(output)).toBe(captureDir);
     expect(scpFromRemote).toHaveBeenCalledWith(expect.objectContaining({ local: output }));
   });
 
@@ -939,7 +1172,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     expect(fs.existsSync(`${sessionPath}.starting`)).toBe(false);
   });
 
-  it("never stops a borrowed --lease-id box, on failure or on stop", async () => {
+  it("never stops a borrowed --lease-id box, on failure or teardown", async () => {
     const root = makeTempDir();
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
@@ -970,6 +1203,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
           outputDir: "out",
           provider: "aws",
           recordFps: 24,
+          sessionPath: "desktop-recorder.json",
           ttl: "2h",
           userDriver: ["python3", "driver.py"],
         },
@@ -981,7 +1215,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const sessionPath = path.join(root, "recorder.json");
     writeRecorderSession(sessionPath, {
-      ...testSession(),
+      ...testSession(root),
       leaseId: "cbx_borrowed",
       leaseOwned: false,
     });
@@ -994,19 +1228,19 @@ describe("Telegram Desktop recorder session lifecycle", () => {
         sshUser: "user",
       })),
     } satisfies RecorderOperations;
-    await stopRecorder(
+    await teardownRecorder(
       root,
-      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
-      operations,
+      { command: "teardown", sessionPath: recorderSessionArg(root, sessionPath) },
+      { runCommand: operations.runCommand },
     );
     expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(true);
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
 
-  it("keeps the Desktop authorization and the box alive with --keep-box", async () => {
+  it("keeps the Desktop authorization and box alive when a capture stops", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
-    writeRecorderSession(sessionPath, testSession());
+    writeRecorderSession(sessionPath, testSession(root));
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
       calls.push({ args: params.args, command: params.command });
@@ -1026,25 +1260,20 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
     } satisfies RecorderOperations;
 
-    const stopped = await stopRecorder(
+    await stopRecorder(
       root,
-      {
-        command: "stop",
-        keepBox: true,
-        sessionPath: recorderSessionArg(root, sessionPath),
-      },
+      { command: "stop", sessionPath: recorderSessionArg(root, sessionPath) },
       operations,
     );
-    expect(stopped.keepBox).toBe(true);
     expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(false);
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
 
-  it("uses the recorded provider for view, inspect, and owned-lease stop", async () => {
+  it("uses the recorded provider for view, capture stop, and teardown", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
     writeRecorderSession(sessionPath, {
-      ...testSession(),
+      ...testSession(root),
       imageSource: "openclaw-telegram-desktop:7.0.9",
       provider: "docker",
     });
@@ -1080,8 +1309,13 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     );
     await stopRecorder(
       root,
-      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+      { command: "stop", sessionPath: recorderSessionArg(root, sessionPath) },
       operations,
+    );
+    await teardownRecorder(
+      root,
+      { command: "teardown", sessionPath: recorderSessionArg(root, sessionPath) },
+      { runCommand: operations.runCommand },
     );
 
     expect(inspectCrabbox).toHaveBeenCalledTimes(2);
@@ -1104,7 +1338,7 @@ describe("Telegram Desktop recorder session lifecycle", () => {
   it("finishes cleanly without previews when the lease is already gone", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
-    writeRecorderSession(sessionPath, testSession());
+    writeRecorderSession(sessionPath, testSession(root));
     const preview = vi.fn(async () => ({}));
     const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 }));
     const operations = {
@@ -1126,7 +1360,6 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       {
         command: "stop",
         crop: "telegram-window",
-        keepBox: false,
         sessionPath: recorderSessionArg(root, sessionPath),
       },
       operations,
@@ -1136,13 +1369,12 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     expect(cropped).not.toHaveBeenCalled();
   });
 
-  it("keeps artifacts recorded by an earlier keep-box stop", async () => {
+  it("keeps artifacts recorded by an earlier capture stop", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
     writeRecorderSession(sessionPath, {
-      ...testSession(),
+      ...testSession(root),
       artifacts: { previewGif: "/kept/motion.gif", video: "/kept/session.mp4" },
-      keepBox: true,
     });
     const operations = {
       createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
@@ -1162,7 +1394,6 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       root,
       {
         command: "stop",
-        keepBox: false,
         sessionPath: recorderSessionArg(root, sessionPath),
       },
       operations,
@@ -1173,10 +1404,10 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     });
   });
 
-  it("still stops Crabbox and reports failure when local session termination fails", async () => {
+  it("still stops Crabbox and reports teardown failure when session termination fails", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
-    writeRecorderSession(sessionPath, testSession());
+    writeRecorderSession(sessionPath, testSession(root));
     const calls: Array<{ args: string[]; command: string }> = [];
     const mockedRun: RunCommand = async (params) => {
       calls.push({ args: params.args, command: params.command });
@@ -1200,10 +1431,10 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     } satisfies RecorderOperations;
 
     await expect(
-      stopRecorder(
+      teardownRecorder(
         root,
-        { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
-        operations,
+        { command: "teardown", sessionPath: recorderSessionArg(root, sessionPath) },
+        { runCommand: operations.runCommand },
       ),
     ).rejects.toThrow("terminate Telegram Desktop session: terminate failed");
 
@@ -1224,7 +1455,6 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       command: "crabbox",
     });
     const stopped = readRecorderSession(sessionPath);
-    expect(stopped.stoppedAt).toBeDefined();
     expect(stopped.cleanupErrors).toContain("terminate Telegram Desktop session: terminate failed");
   });
 });

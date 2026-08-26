@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => hoisted.activeRegistry,
+  getActivePluginSessionExtensionRegistry: () => hoisted.activeRegistry,
   requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
@@ -25,6 +26,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
+const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");
 
 function provider(
   id: string,
@@ -119,6 +121,52 @@ describe("session catalog Gateway HOME isolation", () => {
       "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable",
       { reason: "isolated_state" },
     );
+  });
+
+  it("binds HOME isolation into the internal read-only catalog facade", async () => {
+    const localHost = {
+      hostId: "gateway:local",
+      label: "Local",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [],
+    };
+    const list = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) =>
+      request.allowProcessHomeFallback === false ? [] : [localHost],
+    );
+    const read = vi.fn(async (request: Parameters<SessionCatalogProvider["read"]>[0]) => {
+      if (request.allowProcessHomeFallback === false) {
+        throw new Error("local Test sessions are unavailable in isolated state");
+      }
+      return { hostId: request.hostId, threadId: request.threadId, items: [] };
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("test", { list, read }) }];
+
+    await withProfile(undefined, async () => {
+      const [catalog] = listActiveSessionCatalogs();
+      expect(catalog?.processHomeFallbackAllowed).toBe(true);
+      await expect(catalog?.list({})).resolves.toEqual([localHost]);
+      await expect(
+        catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
+      ).resolves.toMatchObject({ threadId: "known-thread" });
+    });
+    await withProfile("dev", async () => {
+      const [catalog] = listActiveSessionCatalogs();
+      expect(catalog?.processHomeFallbackAllowed).toBe(false);
+      await expect(catalog?.list({})).resolves.toEqual([]);
+      await expect(
+        catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
+      ).rejects.toThrow("local Test sessions are unavailable in isolated state");
+    });
+
+    expect(list.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
+      true,
+      false,
+    ]);
+    expect(read.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it.each([

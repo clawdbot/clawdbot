@@ -8,6 +8,19 @@ import {
   registerSandboxBackend,
 } from "./backend.js";
 
+function createGenerationRegistration(label: string) {
+  return {
+    factory: async () => {
+      throw new Error(`unused sandbox backend ${label}`);
+    },
+    manager: {
+      describeRuntime: async () => ({ running: true, configLabelMatch: true }),
+      removeRuntime: async () => {},
+    },
+    resolveWorkdir: () => `/runtime/${label}`,
+  };
+}
+
 describe("sandbox backend registry", () => {
   it("registers Podman as a built-in backend", () => {
     expect(getSandboxBackendFactory("podman")).not.toBeNull();
@@ -61,4 +74,84 @@ describe("sandbox backend registry", () => {
     restore();
     expect(getSandboxBackendWorkdirResolver("test-workdir")).toBeNull();
   });
+
+  it.each([
+    {
+      scenario: "older registration retires first",
+      generations: ["A", "B"],
+      disposalOrder: [
+        ["A", "B"],
+        ["B", null],
+      ],
+    },
+    {
+      scenario: "active registration restores its live predecessor",
+      generations: ["A", "B"],
+      disposalOrder: [
+        ["B", "A"],
+        ["A", null],
+      ],
+    },
+    {
+      scenario: "active registration skips every retired predecessor",
+      generations: ["A", "B", "C"],
+      disposalOrder: [
+        ["B", "C"],
+        ["A", "C"],
+        ["C", null],
+      ],
+    },
+    {
+      scenario: "active registration restores the newest unretired predecessor",
+      generations: ["A", "B", "C"],
+      disposalOrder: [
+        ["B", "C"],
+        ["C", "A"],
+        ["A", null],
+      ],
+    },
+    {
+      scenario: "repeated stale disposal never restores retired authority",
+      generations: ["A", "B"],
+      disposalOrder: [
+        ["B", "A"],
+        ["A", null],
+        ["B", null],
+      ],
+    },
+  ] as const)(
+    "preserves all backend authority when $scenario",
+    ({ generations, disposalOrder }) => {
+      const backendId = "test-generation-ownership";
+      const registrations = new Map<string, ReturnType<typeof createGenerationRegistration>>();
+      const disposers = new Map<string, () => void>();
+
+      try {
+        for (const label of generations) {
+          const registration = createGenerationRegistration(label);
+          registrations.set(label, registration);
+          disposers.set(label, registerSandboxBackend(backendId, registration));
+        }
+
+        for (const [disposedLabel, expectedLabel] of disposalOrder) {
+          const dispose = disposers.get(disposedLabel);
+          if (!dispose) {
+            throw new Error(`missing sandbox registration disposer ${disposedLabel}`);
+          }
+          dispose();
+
+          const expected = expectedLabel ? registrations.get(expectedLabel) : undefined;
+          expect(getSandboxBackendFactory(backendId)).toBe(expected?.factory ?? null);
+          expect(getSandboxBackendManager(backendId)).toBe(expected?.manager ?? null);
+          expect(getSandboxBackendWorkdirResolver(backendId)).toBe(
+            expected?.resolveWorkdir ?? null,
+          );
+        }
+      } finally {
+        for (const dispose of Array.from(disposers.values()).toReversed()) {
+          dispose();
+        }
+      }
+    },
+  );
 });

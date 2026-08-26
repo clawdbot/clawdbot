@@ -19,7 +19,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
+import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -165,8 +165,15 @@ export function resolveFailureAlert(
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
+  // A configured failure destination has no thread and stays distinct from a
+  // threaded primary peer unless a job alert names its own recipient.
   const primaryRouteMatches =
-    primaryRecipientMatches && accountId === primaryAnnounceRoute?.accountId;
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    (alternateRoute === null ||
+      !job.delivery?.failureDestination ||
+      primaryAnnounceRoute?.threadId == null ||
+      jobConfig?.to !== undefined);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -184,21 +191,6 @@ export function resolveFailureAlert(
   };
 }
 
-function enqueueFailureAlertFallback(state: CronServiceState, job: CronJob, text: string): void {
-  enqueueCronSystemEvent(state, text, {
-    agentId: job.agentId,
-    sessionKey: job.sessionKey,
-  });
-  if (job.wakeMode === "now") {
-    requestCronHeartbeat(state, {
-      intent: "immediate",
-      reason: `cron:${job.id}:failure-alert`,
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-    });
-  }
-}
-
 function markFailureNotificationRequested(job: CronJob): void {
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "unknown";
@@ -214,7 +206,13 @@ function transportFailureAlert(
     route: ResolvedFailureAlert;
   },
 ): void {
-  const fallback = () => enqueueFailureAlertFallback(state, params.job, params.payload.text ?? "");
+  let pendingFallback = true;
+  const fallback = (reachedRecipient = false) => {
+    if (pendingFallback && !reachedRecipient) {
+      enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
+    }
+    pendingFallback = false;
+  };
   if (!state.deps.sendCronFailureAlert) {
     fallback();
     return;
@@ -230,6 +228,7 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
+      onDeliveryAttempt: fallback,
     })
     .catch((err: unknown) => {
       state.deps.log.warn(
@@ -366,12 +365,15 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  const now = params.occurredAtMs ?? state.deps.nowMs();
+  const wallClockNow = state.deps.nowMs();
+  const now = params.occurredAtMs ?? wallClockNow;
   const lastAlert = params.job.state.lastFailureAlertAtMs;
   // Cooldown is stored on job state so process restarts and service reloads do
-  // not spam operators with repeated alerts for the same failing job.
+  // not spam operators. Future timestamps cannot prove a recent prior alert.
   const inCooldown =
-    typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+    typeof lastAlert === "number" &&
+    lastAlert <= wallClockNow &&
+    now - lastAlert < Math.max(0, alertConfig.cooldownMs);
   if (inCooldown) {
     return;
   }

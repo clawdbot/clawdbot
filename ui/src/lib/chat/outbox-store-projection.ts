@@ -9,7 +9,7 @@ import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import {
   applyStoredChatOutboxScope,
   hasKnownSessionDefaults,
-  readStoredOutboxStore,
+  readProjectedOutboxStore,
   resolveComposerStorageScope,
   resolveStoredComposerSession,
   resolveStoredChatOutboxScope,
@@ -36,7 +36,7 @@ function listStoredComposerRows(
   }
   try {
     const target = storageTargetForGateway(state.settings?.gatewayUrl);
-    const store = readStoredOutboxStore(storage, target);
+    const store = readProjectedOutboxStore(storage, target);
     let migrated = false;
     const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(state);
     const defaultAgentId = hasKnownSessionDefaults(state)
@@ -93,21 +93,6 @@ function listStoredComposerRows(
   }
 }
 
-export function listStoredDraftScopes(state: ChatComposerScope): ReadonlySet<string> {
-  return new Set(
-    listStoredComposerRows(state).flatMap(({ scope, session }) =>
-      session.draft
-        ? [
-            storedChatOutboxScopeKey({
-              sessionKey: scope.conversationKey,
-              ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
-            }),
-          ]
-        : [],
-    ),
-  );
-}
-
 export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutbox[] {
   return listStoredComposerRows(state)
     .flatMap(({ scope, session }) =>
@@ -133,12 +118,20 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
 
 export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
-  for (const outbox of listStoredChatOutboxes(state)) {
-    const ids = idsByScope.get(storedChatOutboxScopeKey(outbox)) ?? {
+  const draftScopes = new Set<string>();
+  for (const { scope, session } of listStoredComposerRows(state)) {
+    const scopeKey = storedChatOutboxScopeKey({
+      sessionKey: scope.conversationKey,
+      ...(scope.routingAgentId ? { agentId: scope.routingAgentId } : {}),
+    });
+    if (session.draft) {
+      draftScopes.add(scopeKey);
+    }
+    const ids = idsByScope.get(scopeKey) ?? {
       all: new Set<string>(),
       attention: new Set<string>(),
     };
-    for (const item of outbox.queue) {
+    for (const item of session.queue ?? []) {
       if (!item.pendingRunId) {
         ids.all.add(item.id);
         if (item.sendState === "failed" || item.sendState === "unconfirmed") {
@@ -147,7 +140,7 @@ export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
       }
     }
     if (ids.all.size) {
-      idsByScope.set(storedChatOutboxScopeKey(outbox), ids);
+      idsByScope.set(scopeKey, ids);
     }
   }
   const countsByScope = new Map<string, number>();
@@ -160,5 +153,5 @@ export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
       attentionCountsByScope.set(scopeKey, ids.attention.size);
     }
   }
-  return { countsByScope, attentionCountsByScope, total };
+  return { countsByScope, attentionCountsByScope, draftScopes, total };
 }

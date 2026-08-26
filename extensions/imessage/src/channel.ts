@@ -318,6 +318,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       doctor: imessageDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        bindingStore: "adapter",
         createManager: ({ cfg, accountId }) =>
           createIMessageConversationBindingManager({
             cfg,

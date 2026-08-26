@@ -11,6 +11,7 @@ import {
   resolvePolicyPluginActivationState,
 } from "../../plugins/config-policy.js";
 import { resolveMemorySlotDecision } from "../../plugins/config-state.js";
+import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -22,27 +23,32 @@ const log = createSubsystemLogger("skills");
 
 type PluginSkillLinkType = "dir" | "junction";
 
+export type PluginSkillRoot = {
+  dir: string;
+  rejectHardlinks: boolean;
+};
+
 // Plugin metadata is process-stable while the gateway runs, but this resolver sits on the
 // per-turn skills-refresh path. ACP availability changes outside that metadata lifecycle, so it
 // stays in the memo identity to prevent stale ACPX skill exposure without repeating directory IO.
-let pluginSkillDirsMemo: {
+let pluginSkillRootsMemo: {
   workspaceDir: string;
   config: OpenClawConfig | undefined;
   snapshot: unknown;
   acpRuntimeAvailable: boolean;
-  dirs: string[];
+  roots: PluginSkillRoot[];
 } | null = null;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
-  pluginSkillDirsMemo = null;
+  pluginSkillRootsMemo = null;
 });
 
-export function resolvePluginSkillDirs(params: {
+export function resolvePluginSkillRoots(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
   /** Override the plugin skills directory for testing. */
   pluginSkillsDir?: string;
-}): string[] {
+}): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     publishPluginSkills([], {
@@ -50,21 +56,20 @@ export function resolvePluginSkillDirs(params: {
     });
     return [];
   }
-  const config = params.config ?? {};
   const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config,
+    config: params.config,
     env: process.env,
   });
-  return resolvePluginSkillDirsFromMetadata({ ...params, metadataSnapshot });
+  return resolvePluginSkillRootsFromMetadata({ ...params, metadataSnapshot });
 }
 
-export function resolvePluginSkillDirsFromMetadata(params: {
+export function resolvePluginSkillRootsFromMetadata(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
   pluginSkillsDir?: string;
   metadataSnapshot: PluginMetadataSnapshot;
-}): string[] {
+}): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
@@ -83,13 +88,13 @@ export function resolvePluginSkillDirsFromMetadata(params: {
   const canMemoize = params.pluginSkillsDir === undefined;
   if (
     canMemoize &&
-    pluginSkillDirsMemo &&
-    pluginSkillDirsMemo.workspaceDir === workspaceDir &&
-    pluginSkillDirsMemo.config === params.config &&
-    pluginSkillDirsMemo.snapshot === metadataSnapshot &&
-    pluginSkillDirsMemo.acpRuntimeAvailable === acpRuntimeAvailable
+    pluginSkillRootsMemo &&
+    pluginSkillRootsMemo.workspaceDir === workspaceDir &&
+    pluginSkillRootsMemo.config === params.config &&
+    pluginSkillRootsMemo.snapshot === metadataSnapshot &&
+    pluginSkillRootsMemo.acpRuntimeAvailable === acpRuntimeAvailable
   ) {
-    return pluginSkillDirsMemo.dirs;
+    return pluginSkillRootsMemo.roots;
   }
   const normalizedPlugins = normalizePluginsConfigWithResolver(
     config.plugins,
@@ -98,7 +103,7 @@ export function resolvePluginSkillDirsFromMetadata(params: {
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
-  const resolved: string[] = [];
+  const resolved: PluginSkillRoot[] = [];
 
   for (const record of registry.plugins) {
     if (!record.skills || record.skills.length === 0) {
@@ -130,6 +135,10 @@ export function resolvePluginSkillDirsFromMetadata(params: {
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+    });
     for (const raw of record.skills) {
       const trimmed = raw.trim();
       if (!trimmed) {
@@ -151,22 +160,25 @@ export function resolvePluginSkillDirsFromMetadata(params: {
           continue;
         }
         seen.add(resolvedCandidate);
-        resolved.push(resolvedCandidate);
+        resolved.push({ dir: resolvedCandidate, rejectHardlinks });
       }
     }
   }
 
-  publishPluginSkills(resolved, {
-    pluginSkillsDir: params.pluginSkillsDir,
-  });
+  publishPluginSkills(
+    resolved.map((root) => root.dir),
+    {
+      pluginSkillsDir: params.pluginSkillsDir,
+    },
+  );
 
   if (canMemoize) {
-    pluginSkillDirsMemo = {
+    pluginSkillRootsMemo = {
       workspaceDir,
       config: params.config,
       snapshot: metadataSnapshot,
       acpRuntimeAvailable,
-      dirs: resolved,
+      roots: resolved,
     };
   }
   return resolved;

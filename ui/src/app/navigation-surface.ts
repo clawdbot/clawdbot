@@ -14,9 +14,27 @@ export function navigationSurfaceIsHidden(params: {
   );
 }
 
+export function floatingSidebarAttentionVisible(params: {
+  navigationSurfaceHidden: boolean;
+  mobileNavLayout: boolean;
+  onboarding: boolean;
+  settingsTakeover?: boolean;
+  compact?: boolean;
+}): boolean {
+  // Mobile keeps attention in its drawer except during onboarding. Settings
+  // replaces that drawer/sidebar entirely, so both need the floating copy.
+  const attentionNeedsFloating =
+    params.settingsTakeover ||
+    (params.navigationSurfaceHidden && (!params.mobileNavLayout || params.onboarding));
+  return attentionNeedsFloating && !params.compact;
+}
+
 export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
+  mobileNavLayout: boolean;
   onboarding: boolean;
+  settingsTakeover?: boolean;
+  compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   heldUpdateCampaignId?: string | null;
@@ -33,12 +51,8 @@ export function renderFloatingUpdateCard(params: {
   onNavigate?: (routeId: NavigationRouteId) => void;
   onOpenApprovals?: () => void;
 }) {
-  // A stale client must always have a visible refresh action, including during
-  // onboarding, even though update-available actions stay hidden there.
-  const showAttention = params.navigationSurfaceHidden && !params.onboarding;
-  const showUpdateCard = params.onboarding
-    ? params.refreshRequired
-    : params.navigationSurfaceHidden;
+  const showAttention = floatingSidebarAttentionVisible(params);
+  const showUpdateCard = !params.compact && params.refreshRequired;
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }

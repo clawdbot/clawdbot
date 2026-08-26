@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { recordSkillCollectionReviewSuccess } from "../../skills/workshop/collection-review-state.js";
+import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
@@ -28,7 +28,7 @@ describe("skill_workshop collection history", () => {
     });
 
     const createTime = Date.UTC(2026, 7, 18, 12, 34, 56);
-    recordSkillCollectionReviewSuccess(
+    recordSkillCollectionReviewHistory(
       workspaceDir,
       createTime,
       {
@@ -71,7 +71,7 @@ describe("skill_workshop collection history", () => {
         (_, index) => `${kind}-${review}-${index}-long-enough-to-fill-the-history-budget`,
       );
     for (let review = 0; review < 20; review += 1) {
-      recordSkillCollectionReviewSuccess(
+      recordSkillCollectionReviewHistory(
         workspaceDir,
         review,
         {

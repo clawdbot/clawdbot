@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -20,6 +22,7 @@ import {
   toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
+  WorkerFencedError,
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
@@ -152,9 +155,12 @@ describe("worker connection endpoint failures", () => {
       admissionDeadlineMs: 60_000,
       reconnectBackoff: { initialMs: 30_000, maxMs: 30_000, factor: 1, jitter: 0 },
     });
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
 
     await expect(connection.start()).rejects.toBeInstanceOf(WorkerConnectionEndpointError);
-    expect(connection.state).toMatchObject({ kind: "failed" });
+    expect(terminalErrors).toHaveLength(1);
+    expect(connection.state).toEqual({ kind: "failed", error: terminalErrors[0] });
     expect(createSocket).not.toHaveBeenCalled();
   });
 
@@ -255,6 +261,137 @@ describe("worker connection endpoint failures", () => {
   });
 });
 
+describe("worker connection reconnect backoff", () => {
+  it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test gateway did not allocate a TCP port");
+    }
+
+    let available = true;
+    let transportInterrupted = false;
+    const unavailableWorkers = new Set<string>();
+    const recoveredWorkers = new Set<string>();
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as {
+          id: string;
+          params: { admission: WorkerConnectParams["admission"] };
+        };
+        const admission = frame.params.admission;
+        if (!available) {
+          unavailableWorkers.add(admission.environmentId);
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "gateway temporarily unavailable",
+                details: { reason: "gateway-unavailable" },
+                retryable: true,
+              },
+            }),
+          );
+          return;
+        }
+        if (transportInterrupted) {
+          recoveredWorkers.add(admission.environmentId);
+        }
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "worker-hello-ok",
+              environmentId: admission.environmentId,
+              sessionId: admission.sessionId,
+              ownerEpoch: admission.ownerEpoch,
+              rpcSetVersion: admission.rpcSetVersion,
+              protocolFeatures: [...admission.handshake.protocolFeatures],
+              credentialExpiresAtMs: Date.now() + 60_000,
+              policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+            },
+          }),
+        );
+      });
+    });
+
+    const workers = Array.from({ length: 20 }, (_, index) =>
+      createWorkerConnection({
+        endpoint: {
+          kind: "websocket",
+          url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+        },
+        connectParams: {
+          ...FRAME_CONNECT_PARAMS,
+          admission: {
+            ...FRAME_CONNECT_PARAMS.admission,
+            environmentId: `reconnect-worker-${index}`,
+          },
+        },
+        admissionDeadlineMs: 10_000,
+      }),
+    );
+
+    let randomDraw = 0;
+    const random = vi
+      .spyOn(Math, "random")
+      .mockImplementation(() => ((randomDraw++ % 20) + 1) / 21);
+    const retryDelays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const timeout = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (typeof delay === "number" && delay >= 250 && delay <= 275) {
+          retryDelays.push(delay);
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      });
+
+    try {
+      await Promise.all(workers.map((worker) => worker.start()));
+      const readyAgain = workers.map(
+        (worker) =>
+          new Promise<void>((resolve) => {
+            const unsubscribe = worker.onReady(() => {
+              unsubscribe();
+              resolve();
+            });
+          }),
+      );
+
+      available = false;
+      transportInterrupted = true;
+      for (const socket of server.clients) {
+        socket.close(1012, "gateway-unavailable");
+      }
+      await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
+        timeout: 3_000,
+        interval: 5,
+      });
+      available = true;
+      await Promise.all(readyAgain);
+
+      expect(recoveredWorkers.size).toBe(20);
+      expect(retryDelays).toHaveLength(20);
+      expect(new Set(retryDelays).size).toBeGreaterThanOrEqual(10);
+      expect(Math.max(...retryDelays)).toBeLessThanOrEqual(30_000);
+    } finally {
+      random.mockRestore();
+      timeout.mockRestore();
+      await Promise.all(workers.map((worker) => worker.stop()));
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
 describe("worker connection error coercion", () => {
   it("preserves structured non-Error causes", () => {
     const cause = { code: "ECONNRESET", status: 503 };
@@ -271,6 +408,8 @@ describe("WorkerConnection state listener isolation", () => {
   it("settles stop and reaches later listeners when an earlier listener throws", async () => {
     const connection = createIdleConnection();
     const listeners = installThrowingThenHealthyListeners(connection);
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
     const exit = connection.waitForExit();
 
     await expect(connection.stop()).resolves.toBeUndefined();
@@ -280,11 +419,14 @@ describe("WorkerConnection state listener isolation", () => {
     expect(connection.state).toEqual({ kind: "stopped" });
     expect(listeners.throwingCalls()).toBe(1);
     expect(listeners.observed).toEqual(["stopped"]);
+    expect(terminalErrors).toEqual([new WorkerConnectionStoppedError()]);
   });
 
   it("settles fencing and reaches later listeners when an earlier listener throws", async () => {
     const connection = createIdleConnection();
     const listeners = installThrowingThenHealthyListeners(connection);
+    const terminalErrors: Error[] = [];
+    connection.onTerminalError((error) => terminalErrors.push(error));
 
     expect(() => connection.fence("owner-epoch-mismatch")).not.toThrow();
     await expect(connection.waitForExit()).resolves.toEqual({
@@ -295,6 +437,25 @@ describe("WorkerConnection state listener isolation", () => {
     expect(connection.state).toEqual({ kind: "fenced", reason: "owner-epoch-mismatch" });
     expect(listeners.throwingCalls()).toBe(1);
     expect(listeners.observed).toEqual(["fenced"]);
+    expect(terminalErrors).toEqual([new WorkerFencedError("owner-epoch-mismatch")]);
+  });
+
+  it("keeps terminal errors bound to their emitted state during nested transitions", () => {
+    const connection = createIdleConnection();
+    const terminalErrors: Error[] = [];
+    connection.onStateChange((state) => {
+      if (state.kind === "fenced") {
+        void connection.stop();
+      }
+    });
+    connection.onTerminalError((error) => terminalErrors.push(error));
+
+    connection.fence("owner-epoch-mismatch");
+
+    expect(terminalErrors).toEqual([
+      new WorkerConnectionStoppedError(),
+      new WorkerFencedError("owner-epoch-mismatch"),
+    ]);
   });
 });
 

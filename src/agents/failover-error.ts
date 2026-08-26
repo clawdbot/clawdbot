@@ -493,9 +493,11 @@ function hasGatewayDrainingFailure(err: unknown): boolean {
 }
 
 function hasWorkerRunnerCoordinationFailure(err: unknown): boolean {
-  return ["WorkerRunnerUnavailableError", "WorkerRunnerCapacityError"].some((name) =>
-    errorGraphHasName(err, name),
-  );
+  return [
+    "WorkerRunnerUnavailableError",
+    "WorkerRunnerCapacityError",
+    "WorkerWorkspaceReconciliationError",
+  ].some((name) => errorGraphHasName(err, name));
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {

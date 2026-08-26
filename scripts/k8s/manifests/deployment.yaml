@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: init-config
-          image: busybox:1.37
+          image: busybox:1.38
           imagePullPolicy: IfNotPresent
           command:
             - sh

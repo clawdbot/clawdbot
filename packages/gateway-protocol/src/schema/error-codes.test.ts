@@ -8,6 +8,7 @@ import {
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
@@ -52,6 +53,15 @@ describe("gateway error details", () => {
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(isMcpAppViewExpiredError({ details })).toBe(true);
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
+  });
+
+  it("validates queued outbound delivery details", () => {
+    const details = { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED };
+    expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, { ...details, retry: true })).toBe(
+      false,
+    );
   });
 
   it("validates unknown-agent details", () => {

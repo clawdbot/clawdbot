@@ -234,6 +234,7 @@ export async function buildStatusAllReportData(params: {
   });
 
   return {
+    configDiagnostics: params.overview.configDiagnostics,
     overviewRows,
     channels: params.overview.channels,
     channelIssues: params.overview.channelIssues.map((issue) => ({

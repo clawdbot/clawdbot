@@ -508,13 +508,14 @@ describe("msteams messenger", () => {
       expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
     });
 
-    it("retries full activity preparation when media upload fails transiently", async () => {
+    it("retries media preparation but reuses it after provider dispatch starts", async () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
       const localFile = path.join(tmpDir, "retry.txt");
       await writeFile(localFile, "hello");
 
       try {
         const attempts: string[] = [];
+        const providerPayloads: string[] = [];
         const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
         let uploadAttempts = 0;
         graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
@@ -535,8 +536,12 @@ describe("msteams messenger", () => {
           name: "retry.txt",
         });
 
+        const sendActivity = createRecordedSendActivity(attempts, 429);
         const ctx = {
-          sendActivity: createRecordedSendActivity(attempts),
+          sendActivity: async (activity: unknown) => {
+            providerPayloads.push(JSON.stringify(activity));
+            return await sendActivity(activity);
+          },
         };
         const ids = await sendMSTeamsMessages({
           replyStyle: "thread",
@@ -555,14 +560,18 @@ describe("msteams messenger", () => {
             getAccessToken: async () => "token",
           },
           sharePointSiteId: "site-123",
-          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
           onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
         });
 
         expect(uploadAttempts).toBe(2);
-        expect(attempts).toEqual(["one"]);
+        expect(attempts).toEqual(["one", "one"]);
+        expect(providerPayloads[1]).toBe(providerPayloads[0]);
         expect(ids).toEqual(["id:one"]);
-        expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
+        expect(retryEvents).toEqual([
+          { nextAttempt: 2, delayMs: 0 },
+          { nextAttempt: 3, delayMs: 0 },
+        ]);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }

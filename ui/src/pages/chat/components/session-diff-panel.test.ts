@@ -2,10 +2,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../../../test-helpers/native-gateways.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 import "./session-diff-panel.ts";
 
 type SessionDiffElement = HTMLElement & {
+  execNode: string | null;
   loadFileText: SessionDiffFileTextLoader | null;
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
@@ -69,9 +74,56 @@ function fileResult(patch: string): SessionsDiffResult {
 
 afterEach(() => {
   document.body.replaceChildren();
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
 });
 
 describe("SessionDiffPanel", () => {
+  it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
+    { name: "native local gateway", nativeGateway: "local", offered: true },
+    { name: "native remote gateway", nativeGateway: "remote", offered: false },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      offered: false,
+    },
+  ] as const)("offers file editors only for native-local checkouts: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.execNode = "execNode" in testCase ? (testCase.execNode ?? null) : null;
+    panel.loader = vi.fn(async () => ({ ...fileResult(SNAPSHOT_PATCH), root: "/workspace" }));
+    document.body.append(panel);
+
+    await vi.waitFor(() => expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull());
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
+    await panel.updateComplete;
+
+    const menu = panel.querySelector("openclaw-session-diff-menu");
+    expect(menu?.textContent?.includes("Open in Editor")).toBe(testCase.offered);
+    expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+  });
+
+  it("closes an open editor menu when the native gateway switches to remote", async () => {
+    setNativeGatewayTestState("local");
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.loader = vi.fn(async () => ({ ...fileResult(SNAPSHOT_PATCH), root: "/workspace" }));
+    document.body.append(panel);
+
+    await vi.waitFor(() => expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull());
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-session-diff-menu")?.textContent).toContain(
+      "Open in Editor",
+    );
+
+    setNativeGatewayTestState("remote");
+    await panel.updateComplete;
+
+    expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
+  });
+
   it("commits only the latest loader result after a rapid loader change", async () => {
     const first = deferred<SessionsDiffResult>();
     const second = deferred<SessionsDiffResult>();

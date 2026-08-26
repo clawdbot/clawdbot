@@ -187,7 +187,7 @@ vi.mock("../routing/session-key.js", async () => {
     LEGACY_IMPLICIT_AGENT_ID: "main",
     normalizeAgentId: vi.fn((value: string) => value),
     normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
-    parseAgentSessionKey: vi.fn(() => null),
+    parseAgentSessionKey: vi.fn(actual.parseAgentSessionKey),
   };
 });
 
@@ -1071,5 +1071,24 @@ describe("getStatusSummary", () => {
         model: "claude-opus-4-8",
       }),
     );
+  });
+
+  it("resolves aggregate selected models from each row's agent", async () => {
+    const models: Record<string, string> = { ops: "ops", research: "research" };
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation(
+      (_cfg, _entry, id) => ({ provider: "openai", model: models[id ?? ""] ?? "global" }),
+    );
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },
+        "agent:research:main": { sessionId: "research-session", updatedAt: 2 },
+        main: { sessionId: "global-session", updatedAt: 1 },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+    const selected = summary.sessions.recent.map(({ selectedModel }) => selectedModel);
+
+    expect(selected).toEqual(["openai/ops", "openai/research", "openai/global"]);
   });
 });

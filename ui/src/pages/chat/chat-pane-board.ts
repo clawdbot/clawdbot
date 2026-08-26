@@ -228,7 +228,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.presented) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();
@@ -237,6 +237,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (
           !this.state ||
+          !this.presented ||
           this.state.connectionEpoch !== sourceEpoch ||
           parentKey !== this.resolveBoardSessionKey()
         ) {
