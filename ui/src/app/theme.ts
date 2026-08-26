@@ -1,4 +1,5 @@
 // Control UI module implements theme behavior.
+import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 export type ThemeName = "claw" | "knot" | "dash" | "absolutely" | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
@@ -20,10 +21,13 @@ const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
    theme is active, so every other theme pays nothing for fonts it never paints.
    Loading with the app bundle (not the first-paint boot script) costs one
    font-display: swap on a cold load and keeps the theme->asset mapping in one
-   place. */
-const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, string>> = {
-  absolutely: "/fonts/absolutely.css",
+   place. Values are bundle-relative asset names: the href is resolved against
+   the configured Control UI mount, and the stylesheet's own url() references
+   are relative to it, so both levels follow a non-root base path. */
+const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>> = {
+  absolutely: "fonts/absolutely.css",
 };
+type ControlUiFontStylesheet = `fonts/${string}.css`;
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 function prefersLightScheme(): boolean {
@@ -75,14 +79,15 @@ export function syncThemeFontStylesheet(theme: ThemeName): void {
   if (typeof document === "undefined") {
     return;
   }
-  const href = THEME_FONT_STYLESHEETS[theme];
+  const asset = THEME_FONT_STYLESHEETS[theme];
   const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
-  if (!href) {
+  if (!asset) {
     existing?.remove();
     return;
   }
+  const href = inferControlUiPublicAssetPath(asset);
   if (existing instanceof HTMLLinkElement) {
-    if (!existing.href.endsWith(href)) {
+    if (existing.getAttribute("href") !== href) {
       existing.href = href;
     }
     return;

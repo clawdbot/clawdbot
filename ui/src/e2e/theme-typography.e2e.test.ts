@@ -37,7 +37,7 @@ function themeConfigResponse(theme: string, mode: "dark" | "light") {
   };
 }
 
-async function openThemedChat(theme: string, mode: "dark" | "light") {
+async function openThemedChat(theme: string, mode: "dark" | "light", basePath = "") {
   const context = await suite.newBrowserContext({
     colorScheme: mode,
     locale: "en-US",
@@ -66,6 +66,7 @@ async function openThemedChat(theme: string, mode: "dark" | "light") {
     }
   });
   const gateway = await installMockGateway(page, {
+    ...(basePath ? { basePath } : {}),
     methodResponses: { "config.get": themeConfigResponse(theme, mode) },
   });
   return { fontRequests, gateway, page };
@@ -129,6 +130,33 @@ suite.define(() => {
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDirectory, "absolutely-chat-dark.png") });
     }
+  });
+
+  it("resolves the font stylesheet against a configured mount path", async () => {
+    // A gateway mounted at a base path serves the bundle below that prefix, so
+    // root-absolute font URLs 404 there and the theme silently falls back to
+    // system faces while its palette still applies.
+    const basePath = "/openclaw";
+    const { page } = await openThemedChat("absolutely", "dark", basePath);
+    const requested: string[] = [];
+    await page.route(`**${basePath}/fonts/**`, async (route) => {
+      const { pathname } = new URL(route.request().url());
+      requested.push(pathname);
+      await route.fulfill({ status: 404, body: "", contentType: "text/css" });
+    });
+
+    await page.goto(`${suite.server.baseUrl}${basePath.slice(1)}/chat`);
+    await page
+      .locator(".agent-chat__composer-combobox textarea")
+      .waitFor({ state: "visible", timeout: 30_000 });
+
+    const linkHref = await page.evaluate(
+      () => document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
+    );
+
+    expect(linkHref).toBe(`${basePath}/fonts/absolutely.css`);
+    // The browser must actually fetch below the mount, not at the root.
+    await expect.poll(() => requested).toContain(`${basePath}/fonts/absolutely.css`);
   });
 
   it("leaves themes without declared faces on the system stack", async () => {
