@@ -186,7 +186,7 @@ export async function dashboardCommand(
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
     return;
   }
-  const { port, basePath, links, includeTokenInUrl } = target;
+  const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
   runtime.log("One-time browser pairing included in browser/clipboard URL.");
@@ -204,6 +204,7 @@ export async function dashboardCommand(
         hint = formatControlUiSshHint({
           port,
           basePath,
+          tlsEnabled: tlsConfig?.enabled === true,
         });
       } else {
         hint = opened
@@ -216,6 +217,7 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
+        tlsEnabled: tlsConfig?.enabled === true,
       });
     }
   } else {
