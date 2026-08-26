@@ -252,10 +252,9 @@ export class DraftSubmissionFlow {
     const gateway = this.read().context?.gateway.snapshot;
     const pendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     const target = this.placement().target;
+    const hasInitialTurn = this.messageValue.trim() || this.attachmentDraft.attachments.length;
     const remoteProject =
-      target || (!this.messageValue.trim() && !this.attachmentDraft.attachments.length)
-        ? this.place.browser.remoteProject
-        : null;
+      target || this.place.worktree || !hasInitialTurn ? this.place.browser.remoteProject : null;
     if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
       const projectAccess = readSessionMethodAccess(gateway, {
         method: "projects.add",
@@ -464,8 +463,9 @@ export class DraftSubmissionFlow {
       }
       this.startedSession.current = null;
       const placementTarget = startup ? null : this.placement().target;
+      const hasInitialTurn = message || apiAttachments?.length;
       const remoteProject =
-        !startup && !pendingPlacement && (placementTarget || (!message && !apiAttachments?.length))
+        !startup && !pendingPlacement && (placementTarget || this.place.worktree || !hasInitialTurn)
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {

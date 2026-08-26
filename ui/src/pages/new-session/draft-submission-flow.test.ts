@@ -676,23 +676,36 @@ describe("DraftSubmissionFlow", () => {
   });
 
   it.each([
-    { methods: ["sessions.create"], allowed: false },
-    { methods: ["projects.add"], allowed: false },
-    { methods: ["projects.add", "sessions.create"], allowed: true },
-  ])("checks every required method for an empty remote-project session", ({ methods, allowed }) => {
+    { methods: ["sessions.create"], allowed: false, worktree: false },
+    { methods: ["projects.add"], allowed: false, worktree: false },
+    { methods: ["projects.add", "sessions.create"], allowed: true, worktree: false },
+    { methods: ["sessions.create"], allowed: false, worktree: true },
+  ])("checks remote-project access with worktree=$worktree", ({ methods, allowed, worktree }) => {
     const { flow, place } = createDraftFixture({ methods });
     place.selectRemoteProject({
       identity: "openclaw/openclaw",
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
+    if (worktree) {
+      place.toggleWorktree();
+      flow.setMessage("start in a worktree");
+    }
 
     expect(flow.submissionAccess().allowed).toBe(allowed);
   });
 
-  it("materializes a remote project before creating a session without an initial turn", async () => {
+  it.each([
+    { scenario: "an empty session", message: "", worktree: false },
+    { scenario: "a prompted worktree", message: "inspect the project", worktree: true },
+    { scenario: "an attachment-only worktree", message: "", worktree: true },
+  ])("materializes a remote project before $scenario", async ({ message, worktree }) => {
+    let materializeProject!: (project: { id: string }) => void;
+    const materializedProject = new Promise<{ id: string }>((resolve) => {
+      materializeProject = resolve;
+    });
     const { context, flow, place, request } = createDraftFixture({
       methods: ["projects.add", "sessions.create"],
-      request: async (method) => (method === "projects.add" ? { id: "openclaw" } : {}),
+      request: async (method) => (method === "projects.add" ? materializedProject : {}),
     });
     vi.mocked(context.sessions.createResult).mockResolvedValue({
       key: "agent:main:empty-remote-project",
@@ -705,23 +718,42 @@ describe("DraftSubmissionFlow", () => {
       identity: "openclaw/openclaw",
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
-    // Empty-draft button gating is independent from the remote-project submission contract.
-    vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+    if (worktree) {
+      place.toggleWorktree();
+      vi.spyOn(place, "worktreeAvailable").mockReturnValue(true);
+    }
+    flow.setMessage(message);
+    if (worktree && !message) {
+      flow.attachmentDraft.replace([
+        {
+          id: "attachment-1",
+          dataUrl: "data:text/plain;base64,SGk=",
+          mimeType: "text/plain",
+          fileName: "note.txt",
+        },
+      ]);
+    } else if (!message) {
+      // Empty-draft button gating is independent from the remote-project submission contract.
+      vi.spyOn(flow, "canSubmit").mockReturnValue(true);
+    }
 
-    await flow.submit();
+    const submitted = flow.submit();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "projects.add",
+        { gitUrl: "https://github.com/openclaw/openclaw.git" },
+        { timeoutMs: null },
+      ),
+    );
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    materializeProject({ id: "openclaw" });
+    await submitted;
 
-    expect(request).toHaveBeenCalledWith(
-      "projects.add",
-      { gitUrl: "https://github.com/openclaw/openclaw.git" },
-      { timeoutMs: null },
-    );
-    expect(context.sessions.createResult).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", message: "", projectId: "openclaw" }),
-      { reconciliation: "background" },
-    );
-    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
-      "projectGitUrl",
-    );
+    const createParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(createParams).toMatchObject({ agentId: "main", message, projectId: "openclaw" });
+    expect(createParams?.worktree).toBe(worktree || undefined);
+    expect(createParams).not.toHaveProperty("projectGitUrl");
+    expect(createParams).not.toHaveProperty("cwd");
     expect(request.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(context.sessions.createResult).mock.invocationCallOrder[0] ??
         Number.POSITIVE_INFINITY,
