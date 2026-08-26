@@ -1714,7 +1714,7 @@ describe("config plugin validation", () => {
         pluginMetadataSnapshot: {
           manifestRegistry: {
             plugins: [],
-            diagnostics: parsed!.diagnostics,
+            diagnostics: [...parsed!.diagnostics],
           },
         },
       },
@@ -1841,7 +1841,7 @@ describe("config plugin validation", () => {
         pluginMetadataSnapshot: {
           manifestRegistry: {
             plugins: [bundledGoogleRecord],
-            diagnostics: parsed!.diagnostics,
+            diagnostics: [...parsed!.diagnostics],
           },
         },
       },
