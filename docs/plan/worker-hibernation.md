@@ -13,6 +13,12 @@ is implemented in `extensions/crabbox/` and live-proven; phases 2 and 3 remain
 gated as designed. Written from direct source inspection of this repo and the
 sibling `openclaw/crabbox` checkout (`../crabbox` @ 19bd2f51).
 
+Product update (2026-08-26): profile-level `suspendAfter` is the accepted knob
+for automatically suspending idle workers; the next message provisions a
+replacement. Crabbox warm images now default on, with
+`settings.warmImage: false` as the opt-out. This supersedes the phase-1
+opt-in/default-off assumptions below; phases 2 and 3 remain gated.
+
 Live proof (2026-08-26, isolated dev gateway, Crabbox dev build with the
 fixed-ID fork contract):
 
