@@ -2511,8 +2511,8 @@ docker_e2e_docker_run_cmd run demo
     expectTextToIncludeAll(registryHelper, [
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
       '[[ "$candidate_version" =~ -(alpha|beta)\\.[1-9][0-9]*$ ]]',
-      'latest_version="0.0.0"',
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=$latest_version,beta=$candidate_version"',
+      'dist_tags="latest=0.0.0,$dist_tags"',
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
       'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"',
       'export npm_config_registry="$NPM_CONFIG_REGISTRY"',
     ]);
@@ -3888,7 +3888,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=$latest_version,beta=$candidate_version"',
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(

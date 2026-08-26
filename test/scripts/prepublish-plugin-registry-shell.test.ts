@@ -129,12 +129,20 @@ NODE
     (version) => {
       const root = tempDirs.make("openclaw-stable-prepublish-registry-shell-");
       const registryRoot = join(root, "registry");
-      const tarball = createTarball(
+      const discordTarball = createTarball(
         root,
         root,
         "@openclaw/discord",
         `openclaw-discord-${version}.tgz`,
         version,
+      );
+      const fixtureVersion = "2026.5.2";
+      const braveTarball = createTarball(
+        root,
+        root,
+        "@openclaw/brave-plugin",
+        `openclaw-brave-${fixtureVersion}.tgz`,
+        fixtureVersion,
       );
       const result = spawnSync(
         "bash",
@@ -153,17 +161,21 @@ cleanup() {
 trap cleanup EXIT
 openclaw_prepublish_plugin_registry_start \
   "" "" "$VERSION" "" "$REGISTRY_ROOT" registry_pid \
-  "@openclaw/discord" "$VERSION" "$TARBALL"
+  "@openclaw/discord" "$VERSION" "$DISCORD_TARBALL" \
+  "@openclaw/brave-plugin" "$FIXTURE_VERSION" "$BRAVE_TARBALL"
 test "$(npm view @openclaw/discord version)" = "$VERSION"
+test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
 `,
         ],
         {
           encoding: "utf8",
           env: {
             ...process.env,
+            BRAVE_TARBALL: braveTarball,
+            DISCORD_TARBALL: discordTarball,
+            FIXTURE_VERSION: fixtureVersion,
             HELPER: SCRIPT,
             REGISTRY_ROOT: registryRoot,
-            TARBALL: tarball,
             VERSION: version,
           },
         },
