@@ -101,7 +101,6 @@ final class DisabledUpdaterController: UpdaterProviding {
 @MainActor
 @Observable
 final class UpdateStatus {
-    static let disabled = UpdateStatus()
     var isUpdateReady: Bool
 
     init(isUpdateReady: Bool = false) {

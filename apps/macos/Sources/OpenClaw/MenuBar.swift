@@ -418,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        self.statusMenuController?.stop()
         QuickChatController.shared.stop()
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
