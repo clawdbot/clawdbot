@@ -7,6 +7,7 @@ import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js"
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 import { runExec } from "../process/exec.js";
+import { isNodeRuntime } from "./runtime-binary.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -24,12 +25,6 @@ const VERSION_MANAGER_MARKERS = [
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
-}
-
-function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
-  const pathModule = getPathModule(platform);
-  const base = normalizeLowercaseStringOrEmpty(pathModule.basename(execPath));
-  return base === "node" || base === "node.exe";
 }
 
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
@@ -272,7 +267,7 @@ export async function resolvePreferredNodePath(params: {
   const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
   const execFileImpl = params.execFile ?? execFileAsync;
-  if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
+  if (currentExecPath && isNodeRuntime(currentExecPath)) {
     const runtime = await resolveNodeRuntimeInfo(currentExecPath, execFileImpl);
     if (runtime.supported) {
       const stableCurrentPath = await resolveStableNodePath(currentExecPath);

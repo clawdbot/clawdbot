@@ -62,6 +62,35 @@ describe("resolvePreferredNodePath", () => {
   const linuxSystemNode = "/usr/bin/node";
   const nvmNode = "/home/test/.nvm/versions/node/v24.15.0/bin/node";
 
+  it.each([
+    { platform: "linux", execPath: "/custom/bin/node", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/nodejs", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node-24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/bun", isNode: false },
+    { platform: "win32", execPath: "D:\\Tools\\node.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\nodejs.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\node24.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\bun.exe", isNode: false },
+  ] as const)(
+    "uses canonical Node runtime classification for $execPath on $platform",
+    async ({ platform, execPath, isNode }) => {
+      mockNodePathPresent();
+      const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.15.0"));
+
+      const result = await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform,
+        execFile,
+        execPath,
+      });
+
+      expect(result).toBe(isNode ? execPath : undefined);
+      expect(execFile).toHaveBeenCalledTimes(isNode ? 1 : 0);
+    },
+  );
+
   it("prefers supported system node over version-manager execPath", async () => {
     mockNodePathPresent(darwinNode);
 
