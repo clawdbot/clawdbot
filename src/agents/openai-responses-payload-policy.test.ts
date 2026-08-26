@@ -447,4 +447,25 @@ describe("openai responses payload policy", () => {
     );
     expect(policy.explicitContinuationOptIn).toBe(false);
   });
+
+  it("never lets the continuation opt-in flip ChatGPT/Codex store:false to true", () => {
+    // isResponsesApi (the broad Responses-API predicate) also matches
+    // openai-chatgpt-responses. The opt-in must stay scoped to the custom
+    // openai-responses route only, or an operator setting the compat flag
+    // on a ChatGPT/Codex-routed model would silently flip its deliberate
+    // no-store contract -- reproduces the real request shape from the
+    // "emits store false for native OpenAI Codex responses disable mode"
+    // case above, plus the compat opt-in.
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "disable" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBe(false);
+  });
 });

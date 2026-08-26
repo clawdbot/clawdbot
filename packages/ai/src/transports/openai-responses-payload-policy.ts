@@ -287,10 +287,15 @@ function resolveOpenAIResponsesPayloadCapabilities(
   // carries no trust signal, so eligibility here comes entirely from an
   // operator explicitly confirming, per model, that the backend correctly
   // resolves `previous_response_id` and persists `store: true` turns.
+  // Scoped to the custom `openai-responses` route only -- not the broader
+  // isResponsesApi predicate, which also matches `openai-chatgpt-responses`.
+  // ChatGPT/Codex deliberately stays `store: false` (see allowsResponsesStore
+  // below); this opt-in must never be able to flip that contract for an
+  // operator who sets the compat flag on a ChatGPT/Codex-routed model.
   // Azure is excluded: azure-openai-responses.ts hardcodes `store: false`
   // downstream regardless, so opting in there would be a no-op.
   const explicitContinuationOptIn =
-    isResponsesApi &&
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
     supportsResponsesStoreField &&
     provider !== "azure-openai" &&
     provider !== "azure-openai-responses" &&
