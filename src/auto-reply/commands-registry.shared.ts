@@ -46,14 +46,14 @@ type DefineChatCommandInput = {
 };
 
 /**
- * Keep simple model selections on fast client-side patch paths. Multi-token
- * forms can carry runtime selectors or a prompt, so the server directive parser
- * must own the full atomic transaction.
+ * Keep simple model selections on fast client-side patch paths. Semantic reset
+ * and multi-token forms require the server directive parser to own the full
+ * atomic transaction.
  */
 export function shouldForwardModelCommandToServer(rawArgs: string): boolean {
   const args = rawArgs.trim();
   const normalized = args.toLowerCase();
-  return normalized === "list" || normalized === "status" || /\s/u.test(args);
+  return ["default", "list", "status"].includes(normalized) || /\s/u.test(args);
 }
 
 /** Defines one command with normalized aliases, scope, and argument parsing defaults. */

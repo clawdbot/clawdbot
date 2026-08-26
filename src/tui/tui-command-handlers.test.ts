@@ -2381,13 +2381,10 @@ describe("tui command handlers", () => {
   it.each([
     { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
     { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model default", field: "model" },
     { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
-    { mode: "embedded", local: true, command: "/model default", field: "model" },
     { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
     { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
-    { mode: "gateway", local: false, command: "/model DEFAULT", field: "model" },
   ])(
     "clears the $field session override for $command in $mode mode",
     async ({ local, command, field }) => {
@@ -2994,13 +2991,24 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["codex", "openclaw"])(
-    "forwards model/runtime transactions through the server directive path for %s",
-    async (runtime) => {
+  it.each([
+    { local: false, command: "/model default" },
+    { local: true, command: "/model default" },
+    { local: false, command: "/model DEFAULT" },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime codex continue with this model",
+    },
+    {
+      local: false,
+      command: "/model openai/gpt-5.6-luna --runtime openclaw continue with this model",
+    },
+  ])(
+    "forwards $command through the server directive path (local: $local)",
+    async ({ command, local }) => {
       const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
       const patchSession = vi.fn();
-      const command = `/model openai/gpt-5.6-luna --runtime ${runtime} continue with this model`;
-      const { handleCommand } = createHarness({ sendChat, patchSession });
+      const { handleCommand } = createHarness({ sendChat, patchSession, opts: { local } });
 
       await handleCommand(command);
 

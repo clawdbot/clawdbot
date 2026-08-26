@@ -3428,6 +3428,28 @@ describe("handleSendChat", () => {
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["/model default", "/model DEFAULT"])(
+    "forwards semantic model reset commands through chat.send: %s",
+    async (command) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.send": { status: "started" },
+          "sessions.patch": createResolvedModelPatch("default", "openai"),
+        },
+        sessionKey: "main",
+        chatMessage: command,
+      });
+
+      await handleSendChat(host);
+
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: command, sessionKey: "main" }),
+      );
+      expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    },
+  );
+
   it("queues local slash commands while the gateway client is unavailable", async () => {
     const host = makeChatHost({
       client: null,
