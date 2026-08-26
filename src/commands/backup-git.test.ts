@@ -113,6 +113,22 @@ describe("Git backup command agent selection", () => {
     expect(mocks.createGitBackup).toHaveBeenCalledOnce();
   });
 
+  it("preserves the Git-specific warning when outcome recording fails", async () => {
+    mocks.recordBackupRunOutcome.mockImplementation(() => {
+      throw new Error("record failed");
+    });
+    const runtime = createTestRuntime();
+
+    await backupGitCreateCommand(runtime, {
+      repository: "/tmp/repository",
+      global: true,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Warning: the Git backup outcome could not be recorded: record failed",
+    );
+  });
+
   it("resolves every current agent and its configured root for an all-scope backup", async () => {
     const mainAgentDir = path.resolve("/tmp/external-main");
     const opsAgentDir = path.resolve("/tmp/external-ops");

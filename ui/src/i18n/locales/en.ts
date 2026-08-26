@@ -5715,7 +5715,7 @@ export const en: TranslationMap = {
     imageLightbox: {
       label: "Image preview: {title}",
       open: "Open image {title}",
-      openOriginal: "Open original",
+      openOriginal: "Open in new tab",
       copy: "Copy image",
       download: "Download image",
       copyFailed: "Could not copy this image. Check clipboard access and try again.",

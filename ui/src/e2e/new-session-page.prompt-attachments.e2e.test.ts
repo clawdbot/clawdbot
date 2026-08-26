@@ -279,7 +279,8 @@ suite.define(() => {
       const lightbox = page.locator("openclaw-image-lightbox");
       const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
       await dialog.waitFor({ state: "visible" });
-      await expect(lightbox.getAttribute("title")).resolves.toBe("favicon-32.png");
+      await expect(lightbox.getAttribute("title")).resolves.toBeNull();
+      await page.getByAltText("favicon-32.png").last().waitFor({ state: "visible" });
       await captureUiProof(page, "new-session-picked-image-lightbox.png");
       await page.keyboard.press("Escape");
       await lightbox.waitFor({ state: "detached" });
@@ -309,7 +310,7 @@ suite.define(() => {
       await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
       await previewButton.click();
       await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
-      await expect(page.getByRole("link", { name: "Open original" }).count()).resolves.toBe(0);
+      await expect(page.getByRole("link", { name: "Open in new tab" }).count()).resolves.toBe(0);
       await captureUiProof(page, "new-session-svg-lightbox.png");
     });
   });
