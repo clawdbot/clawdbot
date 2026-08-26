@@ -124,6 +124,20 @@ export function bindReplyDispatcherConversationContext(
   conversationContextsByDispatcher.set(dispatcher, conversationContext);
 }
 
+export function normalizeReplyPayloadForDispatcher(
+  dispatcher: ReplyDispatcher,
+  payload: ReplyPayload,
+  options: Omit<
+    NonNullable<Parameters<typeof normalizeReplyPayloadOutcome>[1]>,
+    "conversationContext"
+  >,
+): NormalizeReplyOutcome {
+  return normalizeReplyPayloadOutcome(payload, {
+    ...options,
+    conversationContext: conversationContextsByDispatcher.get(dispatcher),
+  });
+}
+
 /** Capture one core-dispatcher delivery outcome without changing send* return types. */
 export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -211,35 +225,6 @@ type ReplyDispatcherWithTypingResult = {
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
 };
-
-type NormalizeReplyPayloadInternalOptions = Pick<
-  ReplyDispatcherOptions,
-  | "responsePrefix"
-  | "responsePrefixContext"
-  | "responsePrefixContextProvider"
-  | "onHeartbeatStrip"
-  | "transformReplyPayload"
-> & {
-  conversationContext?: string;
-  onSkip?: (reason: NormalizeReplySkipReason) => void;
-};
-
-function normalizeReplyPayloadInternal(
-  payload: ReplyPayload,
-  opts: NormalizeReplyPayloadInternalOptions,
-): NormalizeReplyOutcome {
-  // Prefer dynamic context provider over static context
-  const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
-
-  return normalizeReplyPayloadOutcome(payload, {
-    responsePrefix: opts.responsePrefix,
-    responsePrefixContext: prefixContext,
-    onHeartbeatStrip: opts.onHeartbeatStrip,
-    transformReplyPayload: opts.transformReplyPayload,
-    conversationContext: opts.conversationContext,
-    onSkip: opts.onSkip,
-  });
-}
 
 /** Normalize through a dispatcher's exact owner before TTS or other visible side effects. */
 export function prepareReplyPayloadForDispatcher(
@@ -346,12 +331,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     payload: ReplyPayload,
     notifySkip: boolean,
   ) =>
-    normalizeReplyPayloadInternal(payload, {
+    normalizeReplyPayloadForDispatcher(dispatcher, payload, {
       responsePrefix: options.responsePrefix,
-      responsePrefixContext: options.responsePrefixContext,
-      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      responsePrefixContext:
+        options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
       transformReplyPayload: options.transformReplyPayload,
-      conversationContext: conversationContextsByDispatcher.get(dispatcher),
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: notifySkip
         ? (reason) =>
