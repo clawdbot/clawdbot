@@ -160,8 +160,9 @@ export function resolveRunWorkspaceDir(params: {
 
 /**
  * Choose which directory supplies AGENTS.md / SOUL.md / BOOTSTRAP.md for a run.
- * Managed worktree sessions must use their checkout so shared agent-home
- * rewrites cannot poison later worktree prompts.
+ * Managed worktree sessions must use their remounted checkout so shared
+ * agent-home rewrites cannot poison later worktree prompts. A cwd-only
+ * worktree binding must not steal bootstrap away from a canonical session.
  */
 export function resolveRunBootstrapWorkspaceDir(params: {
   canonicalWorkspaceDir: string;
@@ -177,5 +178,5 @@ export function resolveRunBootstrapWorkspaceDir(params: {
   if (session === root || session.startsWith(`${root}${path.sep}`)) {
     return params.sessionWorkspaceDir;
   }
-  return managed;
+  return params.canonicalWorkspaceDir;
 }

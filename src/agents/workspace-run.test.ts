@@ -27,14 +27,16 @@ describe("resolveRunBootstrapWorkspaceDir", () => {
     ).toBe("/home/user/.openclaw/worktrees/abc/wt-1/nested");
   });
 
-  it("falls back to the managed worktree root when only cwd is bound", () => {
+  it("keeps canonical bootstrap when only cwd would bind a worktree", () => {
+    // Isolation: a canonical session must not inherit worktree AGENTS.md just
+    // because exec/cwd happens to sit inside a managed checkout.
     expect(
       resolveRunBootstrapWorkspaceDir({
         canonicalWorkspaceDir: "/home/user/.openclaw/workspace",
         sessionWorkspaceDir: "/home/user/.openclaw/workspace",
         managedWorktreeDir: "/home/user/.openclaw/worktrees/abc/wt-1",
       }),
-    ).toBe("/home/user/.openclaw/worktrees/abc/wt-1");
+    ).toBe("/home/user/.openclaw/workspace");
   });
 });
 

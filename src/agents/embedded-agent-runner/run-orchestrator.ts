@@ -373,12 +373,12 @@ async function runEmbeddedAgentInternal(
             resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
           );
           const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
-          // Managed worktree checkouts own their bootstrap files. Keeping the
-          // shared agent home here leaves absolute .openclaw/workspace paths in
-          // the system prompt and lets one exec escape rewrite AGENTS.md for
-          // every later worktree session.
+          // Managed worktree checkouts own their bootstrap files only when the
+          // session workspace itself was remounted into that checkout. A
+          // cwd-only worktree binding must not inject unrelated worktree
+          // AGENTS.md into a still-canonical session.
           const managedWorktreeId = await resolveWorktreeIdForPath({
-            candidatePaths: [resolvedWorkspace, params.cwd],
+            candidatePaths: [resolvedWorkspace],
           }).catch(() => undefined);
           const managedWorktreeDir = managedWorktreeId
             ? getRegistryWorktree(process.env, managedWorktreeId)?.path
