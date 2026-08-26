@@ -116,6 +116,8 @@ Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-s
 
 Channel plugins may preserve ordering, debounce input, and apply transport backpressure before a message enters the session queue. They should not impose a separate timeout around the agent turn itself. Once a message is routed to a session, the session, tool, and runtime lifecycle govern long-running work so all channels report and recover from slow turns consistently.
 
+Channel plugins that serialize inbound messages per session should release their queue lane when a turn is adopted (run start) rather than when the run completes, so messages that arrive while a run is active reach the queue policy (steer, collect, or followup) instead of waiting for the full run. Telegram and Feishu release their lanes at adoption.
+
 ## Streaming, chunking, and batching
 
 Block streaming sends partial replies as the model produces text blocks; chunking respects channel text limits and avoids splitting fenced code.

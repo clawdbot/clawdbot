@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
 
 describe("channel ingress drain lifecycle", () => {
-  it("binds only the reply-lane ownership surface", async () => {
+  it("binds the reply-lane ownership and pre-adoption abort surfaces", async () => {
     const abort = new AbortController();
     const calls: string[] = [];
     const bound = bindIngressLifecycleToReplyOptions({

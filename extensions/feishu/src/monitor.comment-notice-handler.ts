@@ -9,6 +9,7 @@ import {
 import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
 import { botOpenIds } from "./monitor.state.js";
 import { createSequentialQueue } from "./sequential-queue.js";
+import { enqueueAdoptionGatedTurn } from "./turn-adoption-gate.js";
 
 function buildCommentNoticeQueueKey(event: {
   notice_meta?: {
@@ -70,21 +71,42 @@ export function createFeishuDriveCommentNoticeHandler(params: {
         `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
         `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
     );
-    await enqueue(buildCommentNoticeQueueKey(event), async () => {
-      if (turnAdoptionLifecycle?.abortSignal.aborted) {
-        await turnAdoptionLifecycle.onAbandoned();
-        return;
-      }
-      await handleFeishuCommentEvent({
-        cfg,
-        accountId,
-        event,
-        botOpenId: getBotOpenId(accountId),
-        runtime,
-        abortSignal,
-        turnAdoptionLifecycle,
-      });
+    const sequentialKey = buildCommentNoticeQueueKey(event);
+    if (!turnAdoptionLifecycle) {
+      await enqueue(sequentialKey, () =>
+        handleFeishuCommentEvent({
+          cfg,
+          accountId,
+          event,
+          botOpenId: getBotOpenId(accountId),
+          runtime,
+          abortSignal,
+        }),
+      );
+      return;
+    }
+    // The document lane frees at turn adoption (run start), matching the
+    // message lane: a rapid same-document notice reaches the shared queue
+    // policy while the first run is still active (#54409). Pre-adoption
+    // failure or a failed durable adoption rejects the race so the caller's
+    // settle() cannot tombstone the row; the gate's pre-start abort still
+    // abandons without running the handler.
+    const { lane, turn } = enqueueAdoptionGatedTurn({
+      enqueue,
+      sequentialKey,
+      lifecycle: turnAdoptionLifecycle,
+      runTurn: (gatedLifecycle) =>
+        handleFeishuCommentEvent({
+          cfg,
+          accountId,
+          event,
+          botOpenId: getBotOpenId(accountId),
+          runtime,
+          abortSignal,
+          turnAdoptionLifecycle: gatedLifecycle,
+        }),
     });
+    await Promise.race([turn, lane]);
   };
 
   return async (data: unknown) => {

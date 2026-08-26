@@ -11,6 +11,7 @@ import {
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { createSequentialQueue } from "./sequential-queue.js";
+import { enqueueAdoptionGatedTurn } from "./turn-adoption-gate.js";
 import type { FeishuChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
@@ -200,38 +201,41 @@ export function createFeishuMessageReceiveHandler({
     },
   });
 
-  const dispatchFeishuMessage = async (
+  // Queue tasks release their lane at turn adoption (run start) instead of
+  // full turn completion, so a second same-chat message reaches core's queue
+  // policy while the first turn is still running (#54409). The lane promise is
+  // bounded by the sequential queue's eviction; `turn` carries the full turn.
+  const dispatchFeishuMessage = (
     event: FeishuMessageEvent,
     messageDedupeKey?: string,
     processingClaim?: FeishuMessageProcessingClaim,
     turnAdoptionLifecycle?: FeishuIngressLifecycle,
-  ) => {
+  ): { lane: Promise<void>; turn: Promise<void> } => {
     const sequentialKey = resolveSequentialKey({
       accountId,
       event,
       botOpenId: getBotOpenId(accountId),
       botName: getBotName(accountId),
     });
-    const task = async () => {
-      if (turnAdoptionLifecycle?.abortSignal.aborted) {
-        await turnAdoptionLifecycle.onAbandoned();
-        return;
-      }
-      await handleMessage({
-        cfg,
-        event,
-        botOpenId: getBotOpenId(accountId),
-        botName: getBotName(accountId),
-        runtime,
-        channelRuntime,
-        chatHistories,
-        accountId,
-        processingClaim,
-        messageDedupeKey,
-        turnAdoptionLifecycle,
-      });
-    };
-    await enqueue(sequentialKey, task);
+    return enqueueAdoptionGatedTurn({
+      enqueue,
+      sequentialKey,
+      lifecycle: turnAdoptionLifecycle,
+      runTurn: (gatedLifecycle) =>
+        handleMessage({
+          cfg,
+          event,
+          botOpenId: getBotOpenId(accountId),
+          botName: getBotName(accountId),
+          runtime,
+          channelRuntime,
+          chatHistories,
+          accountId,
+          processingClaim,
+          messageDedupeKey,
+          turnAdoptionLifecycle: gatedLifecycle,
+        }),
+    });
   };
 
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
@@ -317,12 +321,17 @@ export function createFeishuMessageReceiveHandler({
             }
             try {
               if (activeEntries.length === 1) {
-                await dispatchFeishuMessage(
+                const { lane, turn } = dispatchFeishuMessage(
                   last.event,
                   resolveFeishuMessageDedupeKey(last.event),
                   last.processingClaim,
                   admissionLifecycle,
                 );
+                // Observe the turn outcome before settle: a pre-adoption
+                // failure must reach the catch (onAbandoned → rethrow) so
+                // abandon retry accounting survives; the lane bounds a
+                // never-adopting turn at the queue's eviction.
+                await Promise.race([turn, lane]);
                 await settle();
                 return;
               }
@@ -356,7 +365,7 @@ export function createFeishuMessageReceiveHandler({
                 entries: freshEntries.map((entry) => entry.event),
                 botOpenId: getBotOpenId(accountId),
               });
-              await dispatchFeishuMessage(
+              const { lane, turn } = dispatchFeishuMessage(
                 {
                   ...dispatchEntry.event,
                   message: {
@@ -374,6 +383,8 @@ export function createFeishuMessageReceiveHandler({
                 dispatchEntry.processingClaim,
                 admissionLifecycle,
               );
+              // Observe the turn outcome before settle (see single-entry path).
+              await Promise.race([turn, lane]);
               await settle();
             } catch (err) {
               await admissionLifecycle.onAbandoned();
