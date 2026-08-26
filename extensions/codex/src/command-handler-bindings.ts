@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { consumeCodexAppServerLiveThread } from "./app-server/client-runtime.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier } from "./app-server/config.js";
@@ -345,13 +344,11 @@ export async function resumeThread(
         }
         const currentBinding = await deps.bindingStore.read(identity);
         assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
-        const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-          authProfileId: currentBinding?.authProfileId,
-          agentDir: scope.agentDir,
-          config: ctx.config,
-        });
-        let committedResponse = false;
-        const commitResumedThread = async (value: unknown, client?: CodexAppServerClient) => {
+        const commitResumedThread = async (
+          value: unknown,
+          client: CodexAppServerClient,
+          { authProfileId }: { authProfileId?: string },
+        ) => {
           const response = assertCodexThreadResumeResponse(value);
           const effectiveThreadId = response.thread.id;
           if (effectiveThreadId !== normalizedThreadId) {
@@ -374,27 +371,23 @@ export async function resumeThread(
             bindingBeforeCommit,
             "committing a different resumed thread",
           );
-          const clientId = client?.getInstanceId();
-          const sameOwner = client
-            ? isSameCodexAppServerThreadOwner(bindingBeforeCommit, {
-                threadId: effectiveThreadId,
-                clientId,
-              })
-            : bindingBeforeCommit?.threadId === effectiveThreadId;
+          const clientId = client.getInstanceId();
+          const sameOwner = isSameCodexAppServerThreadOwner(bindingBeforeCommit, {
+            threadId: effectiveThreadId,
+            clientId,
+          });
           let retained = false;
           try {
-            if (client) {
-              const knownOwnership = sameOwner
-                ? await consumeCodexAppServerLiveThread(client, effectiveThreadId)
-                : undefined;
-              retained = await retainCodexAppServerBindingSubscription(
-                client,
-                effectiveThreadId,
-                knownOwnership,
-              );
-              if (!retained) {
-                throw new Error("Codex resumed thread lost its native subscription owner.");
-              }
+            const knownOwnership = sameOwner
+              ? await consumeCodexAppServerLiveThread(client, effectiveThreadId)
+              : undefined;
+            retained = await retainCodexAppServerBindingSubscription(
+              client,
+              effectiveThreadId,
+              knownOwnership,
+            );
+            if (!retained) {
+              throw new Error("Codex resumed thread lost its native subscription owner.");
             }
             if (bindingBeforeCommit && !sameOwner) {
               // The old row must remain authoritative until its subscription
@@ -406,7 +399,7 @@ export async function resumeThread(
               binding: {
                 ...(bindingBeforeCommit?.threadId === effectiveThreadId ? bindingBeforeCommit : {}),
                 threadId: effectiveThreadId,
-                ...(clientId ? { clientId } : {}),
+                clientId,
                 cwd: resumedCwd,
                 authProfileId,
                 model: response.model,
@@ -418,14 +411,13 @@ export async function resumeThread(
               throw new Error("Codex thread binding changed while attaching the resumed thread.");
             }
           } catch (error) {
-            if (client && !sameOwner) {
+            if (!sameOwner) {
               await rollbackCodexAppServerBindingSubscription(client, effectiveThreadId, retained);
             }
             throw error;
           }
-          committedResponse = true;
         };
-        const response = await deps.codexControlRequest(
+        await deps.codexControlRequest(
           pluginConfig,
           CODEX_CONTROL_METHODS.resumeThread,
           {
@@ -434,16 +426,14 @@ export async function resumeThread(
           },
           {
             config: ctx.config,
+            agentId: scope.agentId,
             agentDir: scope.agentDir,
-            authProfileId,
+            authProfileId: currentBinding?.authProfileId,
             sessionKey: ctx.sessionKey,
             sessionId: ctx.sessionId,
             onResponse: commitResumedThread,
           },
         );
-        if (!committedResponse) {
-          await commitResumedThread(response);
-        }
         return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
           normalizedThreadId,
         )}.`;

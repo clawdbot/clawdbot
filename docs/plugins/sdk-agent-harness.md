@@ -118,6 +118,14 @@ Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
 
+For auxiliary session control calls, `resolveSessionModelRef` from
+`openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
+`prepareAgentRuntimeAuth` from `openclaw/plugin-sdk/agent-harness-runtime` selects
+its auth route and ordered credential attempts from the caller's loaded auth
+snapshot. Preserve the selected attempt's profile, API, and fallback restrictions
+when materializing credentials; this keeps control calls on the same billing
+route as agent turns.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.

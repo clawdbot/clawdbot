@@ -5,10 +5,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
+import type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { withCodexAppServerJsonClient } from "./request.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -1422,6 +1424,62 @@ describe("shared Codex app-server client", () => {
     });
     expect(mocks.resolveCodexAppServerPreparedApiKeyCacheKey).toHaveBeenCalledWith("platform-key");
   });
+
+  it.each(["api-key", "subscription"] as const)(
+    "reuses a turn's %s physical client for a control resume",
+    async (authRequirement) => {
+      const harness = createClientHarness();
+      const start = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockReturnValueOnce(harness.client)
+        .mockImplementation(() => {
+          throw new Error("control resume opened a second physical client");
+        });
+      const preparedAuth: CodexAppServerPreparedAuth =
+        authRequirement === "api-key"
+          ? { kind: "api-key", apiKey: "platform-key" }
+          : {
+              kind: "profile",
+              profileId: "openai:scoped",
+              store: {
+                version: 1,
+                profiles: {
+                  "openai:scoped": { type: "token", provider: "openai", token: "prepared-token" },
+                },
+              },
+            };
+      const options = {
+        timeoutMs: 1000,
+        agentDir: "/tmp/openclaw-agent",
+        preparedAuth,
+        authRequirement,
+        authBindingFingerprint:
+          authRequirement === "subscription" ? "profile-credential-fingerprint" : undefined,
+      };
+      const producer = getSharedCodexAppServerClient(options);
+      await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+      await expect(producer).resolves.toBe(harness.client);
+      const response = { thread: { id: "thread-resume" } };
+      const request = vi.spyOn(harness.client, "request").mockResolvedValue(response as never);
+
+      await expect(
+        withCodexAppServerJsonClient(options, async (send, client) => {
+          expect(client).toBe(harness.client);
+          return await send({
+            method: "thread/resume",
+            requestParams: { threadId: "thread-resume" },
+          });
+        }),
+      ).resolves.toEqual(response);
+
+      expect(start).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "thread/resume",
+        { threadId: "thread-resume" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    },
+  );
 
   it("rejects ambiguous prepared and legacy auth before starting a client", async () => {
     const startSpy = vi.spyOn(CodexAppServerClient, "start");

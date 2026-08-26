@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import {
   claimCodexAppServerLiveThread,
@@ -18,6 +18,7 @@ import {
   withCodexAppServerThreadMutation,
   withExclusiveCodexAppServerThread,
 } from "./thread-ownership.js";
+import { withTimeout } from "./timeout.js";
 
 const session = {
   kind: "session" as const,
@@ -124,29 +125,25 @@ describe("Codex session deletion subscriptions", () => {
     await fixture.seed();
     await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
     const successor = { ...session, sessionId: "session-after-deletion" };
-    const resumeEntered = createDeferred();
-    const allowResume = createDeferred();
-    const committed = createDeferred();
+    const resumeEntered = createDeferred<void>();
+    const allowResume = createDeferred<void>();
+    const committed = createDeferred<void>();
     const resuming = withCodexAppServerThreadMutation(fixture.binding.threadId, async () => {
       resumeEntered.resolve();
       await allowResume.promise;
       await fixture.resume(successor);
     });
-    await withTestTimeout(resumeEntered.promise, 5_000, "resume did not enter the native queue");
+    await withTimeout(resumeEntered.promise, 5_000, "resume did not enter the native queue");
     const deletion = fixture.remove(session, async (mutation) => {
       mutation.commit();
       committed.resolve();
     });
     const completion = Promise.allSettled([resuming, deletion]);
     try {
-      await withTestTimeout(
-        committed.promise,
-        5_000,
-        "native resume queue blocked session deletion",
-      );
+      await withTimeout(committed.promise, 5_000, "native resume queue blocked session deletion");
       allowResume.resolve();
       expect(
-        await withTestTimeout(completion, 5_000, "native deletion cleanup did not settle"),
+        await withTimeout(completion, 5_000, "native deletion cleanup did not settle"),
       ).toEqual([
         { status: "fulfilled", value: undefined },
         { status: "fulfilled", value: undefined },
@@ -158,7 +155,7 @@ describe("Codex session deletion subscriptions", () => {
       expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
     } finally {
       allowResume.resolve();
-      await withTestTimeout(completion, 5_000, "resume and deletion cleanup did not settle");
+      await withTimeout(completion, 5_000, "resume and deletion cleanup did not settle");
     }
   });
 
@@ -166,8 +163,8 @@ describe("Codex session deletion subscriptions", () => {
     const fixture = createFixture();
     await fixture.seed();
     await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-    const unsubscribeStarted = createDeferred();
-    const unsubscribeAcknowledged = createDeferred();
+    const unsubscribeStarted = createDeferred<void>();
+    const unsubscribeAcknowledged = createDeferred<void>();
     fixture.request.mockImplementation(async (method) => {
       if (method === "thread/unsubscribe") {
         unsubscribeStarted.resolve();
@@ -179,7 +176,7 @@ describe("Codex session deletion subscriptions", () => {
     const deletionCompletion = Promise.allSettled([deletion]);
     let resuming: Promise<void> | undefined;
     try {
-      await withTestTimeout(unsubscribeStarted.promise, 5_000, "deletion did not unsubscribe");
+      await withTimeout(unsubscribeStarted.promise, 5_000, "deletion did not unsubscribe");
       const successor = { ...session, sessionId: "session-after-deletion" };
       let resumeEntered = false;
       resuming = withExclusiveCodexAppServerThread({
@@ -197,7 +194,7 @@ describe("Codex session deletion subscriptions", () => {
       expect(await fixture.bindingStore.read(session)).toBeUndefined();
       unsubscribeAcknowledged.resolve();
       expect(
-        await withTestTimeout(completion, 5_000, "resume did not follow deletion cleanup"),
+        await withTimeout(completion, 5_000, "resume did not follow deletion cleanup"),
       ).toEqual([
         { status: "fulfilled", value: undefined },
         { status: "fulfilled", value: undefined },
@@ -210,7 +207,7 @@ describe("Codex session deletion subscriptions", () => {
       expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
     } finally {
       unsubscribeAcknowledged.resolve();
-      await withTestTimeout(
+      await withTimeout(
         Promise.allSettled([deletionCompletion, resuming]),
         5_000,
         "unsubscribe and resume cleanup did not settle",
@@ -225,7 +222,7 @@ describe("Codex session deletion subscriptions", () => {
     await fixture.seed(sibling);
     await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
 
-    await withTestTimeout(
+    await withTimeout(
       fixture.remove(session, async (first) => {
         await fixture.remove(sibling, async (second) => {
           first.commit();

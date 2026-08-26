@@ -318,7 +318,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
       // +2: exact-session deletion parameters and synchronous companion mutation contract.
-      4343,
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      4345,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
