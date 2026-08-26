@@ -1,7 +1,12 @@
 // Control UI tests cover models behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadModels } from "./models.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  peekChatMetadata,
+  rememberChatMetadata,
+  subscribeChatMetadata,
+} from "./chat/chat-metadata-store.ts";
+import { invalidateModelCatalogCache, loadModels } from "./model-catalog-store.ts";
 
 describe("loadModels", () => {
   it("requests the configured model list view", async () => {
@@ -37,6 +42,41 @@ describe("loadModels", () => {
       agentId: "main",
       preparedOnly: true,
     });
+  });
+
+  it("revalidates existing metadata after explicit account-model discovery", async () => {
+    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const discovered = [
+      ...prepared,
+      { id: "discovered", name: "Discovered", provider: "openai", contextWindow: 262_144 },
+    ];
+    const request = vi.fn(async (method: string) => ({
+      models: discovered,
+      ...(method === "chat.metadata" ? { commands: [] } : {}),
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    rememberChatMetadata(client, "main", { commands: [], models: prepared });
+    const listener = vi.fn();
+    const unsubscribe = subscribeChatMetadata(client, "main", listener);
+
+    await loadModels(client, { agentId: "main" });
+
+    await vi.waitFor(() => expect(peekChatMetadata(client, "main")?.models).toEqual(discovered));
+    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it("does not revalidate metadata for automatic prepared-only catalog reads", async () => {
+    const models = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const request = vi.fn(async () => ({ models }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    rememberChatMetadata(client, "main", { commands: [], models });
+
+    await loadModels(client, { agentId: "main", preparedOnly: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
   });
 
   it("reuses the configured model list while the cache is fresh", async () => {
@@ -198,6 +238,27 @@ describe("loadModels", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("retires a picker catalog when its logical Gateway connection changes", async () => {
+    const beforeReconnect = [{ id: "before", name: "Before", provider: "openai" }];
+    const afterReconnect = [{ id: "after", name: "After", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: beforeReconnect })
+      .mockResolvedValueOnce({ models: afterReconnect });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      beforeReconnect,
+    );
+
+    invalidateModelCatalogCache(client);
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      afterReconnect,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a failed account catalog refresh retryable", async () => {

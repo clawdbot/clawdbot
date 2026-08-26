@@ -3621,6 +3621,17 @@
       ]
     },
     {
+      "id": "native.android.72bc0a1f6e54a2b1",
+      "source": "Collapse child sessions",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.21dc666555b12fc1",
       "source": "Collapse progress card",
       "surface": "android",
@@ -6310,6 +6321,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.ee12abec104cc9b2",
+      "source": "Expand child sessions",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
     },
@@ -9200,6 +9222,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ProvidersModelsScreen.kt"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         },
         {
           "kind": "ui-call",
@@ -13997,6 +14023,10 @@
         },
         {
           "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        },
+        {
+          "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt"
         },
         {
@@ -17149,6 +17179,17 @@
       ]
     },
     {
+      "id": "native.android.9b0665c5dd020488",
+      "source": "Thread failed",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.0622b4b9cd3412dc",
       "source": "Threads",
       "surface": "android",
@@ -17689,6 +17730,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.a2146d0be93439c8",
+      "source": "Unread",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt"
         }
       ]
     },
@@ -19490,7 +19542,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -19505,7 +19557,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         },
         {
           "kind": "ui-localized-call",
@@ -19520,11 +19572,7 @@
       "sites": [
         {
           "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/TalkModeManager+Permissions.swift"
-        },
-        {
-          "kind": "ui-localized-call",
-          "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift"
+          "path": "apps/ios/Sources/Voice/VoicePermissionSupport.swift"
         }
       ]
     },

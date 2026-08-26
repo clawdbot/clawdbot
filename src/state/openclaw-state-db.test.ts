@@ -51,6 +51,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-retirement.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -218,6 +219,15 @@ const RETIRED_COMMITMENT_SCHEMA_OBJECTS = [
   "idx_commitments_scope_dedupe",
   "idx_commitments_agent_due",
   "idx_commitments_agent_sent",
+] as const;
+
+const RETIRED_STATE_TABLES_V10 = [
+  "agent_model_catalogs",
+  "android_notification_recent_packages",
+  "command_log_entries",
+  "diagnostic_stability_bundles",
+  "media_blobs",
+  "model_capability_cache",
 ] as const;
 
 function seedV6CommitmentSchema(database: DatabaseSync): void {
@@ -1692,7 +1702,7 @@ describe("openclaw state database", () => {
       warnings: [],
     });
     const migrated = openOpenClawStateDatabase({ env });
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(9);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all(),
     ).toEqual([
@@ -1719,6 +1729,53 @@ describe("openclaw state database", () => {
       expect.objectContaining({ agentId: "preserved", path: preservedDefaultPath }),
     ]);
   });
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "retires six dead v9 shared-state tables through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+      legacy.exec(`
+        INSERT INTO agent_model_catalogs (catalog_key, agent_dir, raw_json, updated_at)
+        VALUES ('main', '/agents/main', '{"models":[]}', 1);
+      `);
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "state-table-retirement-v10",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired six dead shared-state tables (v10)"],
+          warnings: [],
+        });
+      }
+
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(10);
+      expect(
+        migrated.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 10 });
+      for (const tableName of RETIRED_STATE_TABLES_V10) {
+        expect(
+          migrated.db
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(tableName),
+        ).toBeUndefined();
+      }
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+        kind: "state-table-retirement-v10",
+        path: databasePath,
+      });
+    },
+  );
 
   it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",

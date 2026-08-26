@@ -61,6 +61,8 @@ type ModelProvidersViewProps = {
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  /** Usage never converged before the retry budget ran out; cards lack usage. */
+  providerUsageStalled: boolean;
   probeAvailable: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, ModelProviderRowMessage>;
@@ -650,6 +652,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       providerRows,
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
+    ${props.providerUsageStalled
+      ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
+      : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

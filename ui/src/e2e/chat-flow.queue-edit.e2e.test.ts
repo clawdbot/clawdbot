@@ -202,7 +202,11 @@ suite.define(() => {
       }
       await gateway.setOnline(false);
       await gateway.closeLatest();
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
       const editButton = editRow.locator(".chat-queue__edit");
@@ -341,7 +345,9 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
       await gateway.emitGatewayEvent("sessions.changed", {

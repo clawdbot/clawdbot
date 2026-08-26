@@ -330,7 +330,7 @@ suite.define(() => {
           }
           proof.finish();
         });
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await expect.poll(() => send.isEnabled()).toBe(true);
         await send.click();
 
@@ -419,9 +419,8 @@ suite.define(() => {
           proof.finish();
         });
         await page
-          .locator(
-            'openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb img[alt="Attachment preview"]',
-          )
+          .locator('openclaw-chat-pane[aria-hidden="false"]')
+          .getByRole("img", { name: "pixel.png" })
           .waitFor();
       },
     );

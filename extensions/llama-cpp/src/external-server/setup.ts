@@ -40,12 +40,10 @@ import { buildLlamaServerProviderConfig } from "./models.js";
 function selectSetupModelId(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
   const healthy = discovery.models.filter((model) => !model.failed);
   const candidates = healthy.length > 0 ? healthy : discovery.models;
-  const ordered = candidates.toSorted((left, right) => {
-    const leftLoaded = left.status === "loaded" || left.status === "sleeping";
-    const rightLoaded = right.status === "loaded" || right.status === "sleeping";
-    return Number(rightLoaded) - Number(leftLoaded);
-  });
-  const ids = ordered.map((model) => model.config.id);
+  const ready = candidates.filter(
+    (model) => model.status === "loaded" || model.status === "sleeping",
+  );
+  const ids = (ready.length > 0 ? ready : candidates).map((model) => model.config.id);
   return selectPreferredLocalModelId(ids) ?? ids[0];
 }
 

@@ -88,13 +88,12 @@ describe("Buzz live directory", () => {
     gatewayMocks.activeBus = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
     relayMocks.subscribe.mockImplementation(
       (

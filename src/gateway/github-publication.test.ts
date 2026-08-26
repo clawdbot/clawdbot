@@ -74,7 +74,8 @@ describe("Gateway GitHub publication", () => {
         candidate.includes("update-ref") ||
         candidate.includes("read-tree") ||
         candidate.includes("add") ||
-        candidate.includes("reset"),
+        candidate.includes("reset") ||
+        candidate.includes("push"),
     )) {
       expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
     }

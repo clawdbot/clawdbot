@@ -155,6 +155,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onTypingChange?: (typing: boolean, preview?: string) => void;
     canSend: boolean;
     disabledReason: string | null;
+    disabledReasonTone?: "info" | "danger";
     disabledBanner?: ChatComposerDisabledBanner;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
@@ -330,6 +331,7 @@ export function renderChat(props: ChatProps) {
       streamStartedAt: props.streamStartedAt,
       runId: props.runId,
       runOutputTokens: props.runOutputTokens,
+      runStatus: props.runStatus,
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
@@ -404,6 +406,7 @@ export function renderChat(props: ChatProps) {
     queuedOutboxCount: props.queuedOutboxCount,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
+    disabledReasonTone: props.disabledReasonTone,
     disabledBanner: props.disabledBanner,
     runError: props.runError,
     sending: props.sending,
@@ -449,6 +452,7 @@ export function renderChat(props: ChatProps) {
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
     suggestionComposer: props.suggestionComposer,
+    typingActors: props.typingActors,
     onTypingChange: props.onTypingChange,
     composerControls: props.composerControls,
     permissionPicker: props.permissionPicker,
@@ -479,6 +483,18 @@ export function renderChat(props: ChatProps) {
     onRemoveAttachment: props.onRemoveAttachment,
     onOpenImage: openImmediateImage,
   });
+  const taskSuggestionTray = renderChatTaskSuggestionTray(props);
+  const dockedProgressCard =
+    props.progressCard?.placement === "dock"
+      ? renderSessionProgressCard(props.progressCard.card, "dock", props.onDismissProgressCard)
+      : nothing;
+  // One column owns the conversation's top-right gutter. Both members float over
+  // the transcript, so sharing a stack is what stops the wider suggestion tray
+  // from silently covering the progress card when they appear together.
+  const gutterStack =
+    taskSuggestionTray === nothing && dockedProgressCard === nothing
+      ? nothing
+      : html`<div class="chat-gutter-stack">${taskSuggestionTray}${dockedProgressCard}</div>`;
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
       ? html`
@@ -561,7 +577,12 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${props.header ?? nothing} ${renderChatViewNotices(props)}
+                ${props.header ?? nothing}
+                ${renderChatViewNotices({
+                  ...props,
+                  error: props.error ?? props.runError?.summary ?? null,
+                  onDismissError: props.error != null ? props.onDismissError : undefined,
+                })}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
                   ${thread} ${earlierHistoryButton} ${scrollToBottomButton}
@@ -577,7 +598,7 @@ export function renderChat(props: ChatProps) {
                         })}
                       </div>`
                     : nothing}
-                  ${renderChatTaskSuggestionTray(props)}
+                  ${gutterStack}
                   ${renderChatPullRequests({
                     pullRequests: props.pullRequests ?? [],
                     branch: props.pullRequestsBranch,
@@ -605,13 +626,6 @@ export function renderChat(props: ChatProps) {
                     sessions: props.swarmSessions ?? [],
                     sessionKey: props.sessionKey,
                   })}
-                  ${props.progressCard?.placement === "dock"
-                    ? renderSessionProgressCard(
-                        props.progressCard.card,
-                        "dock",
-                        props.onDismissProgressCard,
-                      )
-                    : nothing}
                   ${showModelSetupSplash ? nothing : chatColumnFooter}
                 </div>
               </div>

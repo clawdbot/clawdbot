@@ -3,13 +3,13 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../pages/chat/run-lifecycle.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
@@ -404,7 +404,7 @@ suite.define(() => {
     await gateway.resolveDeferred("sessions.list");
   });
 
-  it("renders a safe self-abort diagnostic while preserving interrupted status", async () => {
+  it("renders a safe self-abort diagnostic without leaving stale composer status", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-abort-diagnostic");
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     if (captureProof) {
@@ -434,7 +434,7 @@ suite.define(() => {
     const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
     await alert.waitFor();
     expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
-    await currentPage.getByLabel("Run status: Interrupted").waitFor();
+    expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     if (captureProof) {
       await currentPage.screenshot({

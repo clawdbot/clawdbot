@@ -1,12 +1,17 @@
 // Mistral plugin module implements memory embedding adapter behavior.
 import {
+  embeddingProviderOwnsDestination,
   isMissingEmbeddingApiKeyError,
+  sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createMistralEmbeddingProvider,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
+import { MISTRAL_BASE_URL } from "./model-definitions.js";
+
+const EXCLUDED_EMBEDDING_HEADERS = ["authorization", "content-type", "x-api-key", "api-key"];
 
 export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "mistral",
@@ -22,6 +27,13 @@ export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
       provider: "mistral",
       fallback: "none",
     });
+    const headers = sanitizeEmbeddingCacheHeaders(client.headers, EXCLUDED_EMBEDDING_HEADERS);
+    const usesDefaultIdentity =
+      headers.length === 0 &&
+      embeddingProviderOwnsDestination({
+        baseUrl: client.baseUrl,
+        providerBaseUrl: MISTRAL_BASE_URL,
+      });
     return {
       provider,
       runtime: {
@@ -29,6 +41,7 @@ export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
         cacheKeyData: {
           provider: "mistral",
           model: client.model,
+          ...(usesDefaultIdentity ? {} : { baseUrl: client.baseUrl, headers }),
         },
       },
     };

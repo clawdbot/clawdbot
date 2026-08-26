@@ -270,14 +270,15 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 
 /** Extracts likely exact identifiers that summaries should preserve literally. */
 export function extractOpaqueIdentifiers(text: string): string[] {
-  // Path and host/port candidates start at token boundaries so prose such as
-  // "typecheck/lint/format" is not mistaken for an absolute path.
-  const matches =
-    text.match(
-      /([A-Fa-f0-9]{8,}|https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}|\b\d{6,}\b)/g,
-    ) ?? [];
+  // Decimal/scientific syntax is unambiguous numeric data, including unit suffixes. Integer tokens
+  // with letters remain opaque because the suffix may be part of an exact identifier.
   return uniqueStrings(
-    matches
+    Array.from(
+      text.matchAll(
+        /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
+      ),
+      (match) => match[1] ?? match[2] ?? "",
+    )
       .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
       .filter((value) => value.length >= 4),
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);

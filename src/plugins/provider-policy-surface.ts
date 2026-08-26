@@ -51,6 +51,7 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -103,6 +104,12 @@ const PROVIDER_POLICY_HOOK_KEYS = [
 
 function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
+  if (
+    Array.isArray(mod.deprecatedProfileIds) &&
+    mod.deprecatedProfileIds.every((value) => typeof value === "string")
+  ) {
+    surface.deprecatedProfileIds = mod.deprecatedProfileIds;
+  }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
     const hook = mod[key];
     if (typeof hook === "function") {

@@ -352,14 +352,19 @@ suite.define(() => {
           .evaluateAll((buttons) =>
             buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
           );
-        const [timeFilterBox, peopleControlBox] = await Promise.all([
-          timeFilter.boundingBox(),
-          peopleControl.boundingBox(),
-        ]);
         expect(new Set(timeButtonTops)).toHaveLength(1);
-        expect(timeFilterBox).not.toBeNull();
-        expect(peopleControlBox).not.toBeNull();
-        expect(Math.abs(timeFilterBox!.y - peopleControlBox!.y)).toBeLessThan(2);
+        await expect
+          .poll(async () => {
+            const [timeFilterBox, peopleControlBox] = await Promise.all([
+              timeFilter.boundingBox(),
+              peopleControl.boundingBox(),
+            ]);
+            if (!timeFilterBox || !peopleControlBox) {
+              return Number.POSITIVE_INFINITY;
+            }
+            return Math.abs(timeFilterBox.y - peopleControlBox.y);
+          })
+          .toBeLessThan(2);
         const automationGroupChildTops = await automationGroup
           .locator(":scope > *")
           .evaluateAll((children) =>

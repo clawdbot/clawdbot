@@ -453,11 +453,6 @@ async function handleChatHistoryRequest({
     agentId: activeRunAgentId,
     defaultAgentId: compatibilityOwnerAgentId,
   });
-  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
-    snapshot: inFlightRun,
-    messages: capped,
-    maxBytes: maxHistoryBytes,
-  });
   if (cursor !== undefined) {
     if (!sessionId || !storePath || resolveClaudeCliBindingSessionId(entry)) {
       respond(true, { kind: "reset" });
@@ -501,15 +496,26 @@ async function handleChatHistoryRequest({
       return;
     }
     sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
+    const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+      snapshot: inFlightRun,
+      messages: delta.messages,
+      maxBytes: maxHistoryBytes,
+    });
     respond(true, {
       kind: "delta",
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       sessionInfo,
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
     });
     return;
   }
+  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+    snapshot: inFlightRun,
+    messages: capped,
+    maxBytes: maxHistoryBytes,
+  });
   const payload = {
     sessionKey,
     sessionId,

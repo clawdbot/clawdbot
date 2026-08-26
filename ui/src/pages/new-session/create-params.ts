@@ -33,6 +33,7 @@ export function buildDraftSessionCreateParams(draft: {
   contextWindow?: string;
   thinkingLevel?: string;
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+  permissionMode?: SessionCreateParams["permissionMode"];
   visibility?: NewSessionVisibility;
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
@@ -66,6 +67,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
+    ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree

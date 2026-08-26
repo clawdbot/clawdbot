@@ -554,6 +554,11 @@ suite.define(() => {
         const second = page.locator(`[data-session-key="${secondSessionKey}"]`);
         const card = page.locator(".session-progress-hovercard");
         await first.waitFor({ state: "visible" });
+        expect(
+          await page.evaluate(
+            () => customElements.get("openclaw-session-progress-hovercard-provider") === undefined,
+          ),
+        ).toBe(true);
 
         const pointer = async (
           locator: typeof first,

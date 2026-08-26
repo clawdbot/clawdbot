@@ -198,6 +198,10 @@ export class NodeInvokeStreamController {
     ) {
       return false;
     }
+    if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+      this.settleTimeout(params.invokeId, pending);
+      return false;
+    }
     if (params.seq > pending.nextProgressSeq) {
       // Duplicate buffered frames are not progress: resetting idle for them
       // would let a stalled sender extend the deadline forever without ever
@@ -210,10 +214,17 @@ export class NodeInvokeStreamController {
       }
     }
     pending.progressChunks.set(params.seq, params.chunk);
-    this.resetIdleTimer(params.invokeId, pending);
+    // The first authenticated frame proves execution, even when it is out of order.
+    if (!pending.idleTimer) {
+      this.resetIdleTimer(params.invokeId, pending);
+    }
     while (true) {
       const chunk = pending.progressChunks.get(pending.nextProgressSeq);
       if (chunk === undefined) {
+        break;
+      }
+      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+        this.settleTimeout(params.invokeId, pending);
         break;
       }
       pending.progressChunks.delete(pending.nextProgressSeq);
@@ -233,6 +244,11 @@ export class NodeInvokeStreamController {
         pending.progressChunks.clear();
         break;
       }
+      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+        this.settleTimeout(params.invokeId, pending);
+        break;
+      }
+      this.resetIdleTimer(params.invokeId, pending);
     }
     return true;
   }

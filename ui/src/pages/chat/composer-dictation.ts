@@ -449,6 +449,16 @@ export class ComposerDictationController {
     return `${minutes}:${seconds}`;
   }
 
+  // Returns the stop promise so callers can sequence work (e.g. send) after
+  // the transcript lands in the draft.
+  finishActive(): Promise<boolean> {
+    return this.stop({ commit: true });
+  }
+
+  cancelActive(): void {
+    void this.stop({ commit: false });
+  }
+
   update(options: ComposerDictationControllerOptions): void {
     this.options = options;
     if (this.phase === "stopping") {
@@ -635,9 +645,9 @@ export class ComposerDictationController {
     }
   }
 
-  private async stop(options: { commit: boolean }): Promise<void> {
+  private async stop(options: { commit: boolean }): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopping") {
-      return;
+      return false;
     }
     const wasActive = this.active;
     this.clearGesture();
@@ -645,17 +655,22 @@ export class ComposerDictationController {
     const session = this.session;
     if (!session) {
       this.reset();
-      return;
+      return false;
     }
     this.setPhase("stopping");
     const transcript = options.commit ? await session.finish() : (await session.cancel(), "");
-    if (this.session === session) {
+    const ownsSession = this.session === session;
+    if (ownsSession) {
       this.session = null;
     }
-    if (options.commit && transcript && wasActive && !this.disposed) {
+    const committed = Boolean(
+      options.commit && transcript && wasActive && ownsSession && !this.disposed,
+    );
+    if (committed) {
       this.options.onCommit(transcript);
     }
     this.reset();
+    return committed;
   }
 
   private reset(): void {
