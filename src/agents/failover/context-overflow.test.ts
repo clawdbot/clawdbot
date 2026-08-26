@@ -3,6 +3,7 @@ import {
   classifyFailoverReason,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isProviderRequestSizeCeilingError,
 } from "./classify.js";
 
 describe("isLikelyContextOverflowError", () => {
@@ -32,6 +33,32 @@ const GROQ_THROTTLED_REQUEST_429 =
   "429 Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` " +
   "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 7500, " +
   "Requested 1000, please try again in 3.5s.";
+
+describe("isProviderRequestSizeCeilingError", () => {
+  it("separates a request above the whole limit from one within it", () => {
+    expect(isProviderRequestSizeCeilingError(GROQ_OVERSIZED_REQUEST_413)).toBe(true);
+    expect(isProviderRequestSizeCeilingError(GROQ_THROTTLED_REQUEST_429)).toBe(false);
+  });
+
+  it("does not pair a limit and a requested size stated in different units", () => {
+    // Read separately these numbers describe requests per minute and tokens per minute; pairing
+    // them would route a throttle that waiting resolves into a terminal, unrecoverable outcome.
+    expect(
+      isProviderRequestSizeCeilingError(
+        "429 Rate limit reached on requests per minute (RPM): Limit 30, Used 30. " +
+          "Also tokens per minute (TPM) Requested 5000",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["no message", undefined],
+    ["a message without a TPM hint", "413 Request too large: Limit 8000, Requested 8098"],
+    ["a limit with no requested size", "tokens per minute (TPM): Limit 8000, please reduce"],
+  ])("returns false for %s", (_name, message) => {
+    expect(isProviderRequestSizeCeilingError(message)).toBe(false);
+  });
+});
 
 describe("provider request-size ceilings worded as TPM limits", () => {
   it("treats a request larger than the whole token limit as overflow", () => {

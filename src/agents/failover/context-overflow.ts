@@ -23,15 +23,12 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return matchesContextOverflowMessage(raw, "tpm-rate-limit-hint");
 }
 
-const STATED_TOKEN_LIMIT_RE = /\blimit\s+([\d,]+)/i;
-const STATED_TOKENS_REQUESTED_RE = /\brequested\s+([\d,]+)/i;
+// Both figures must come from one clause. Read separately, a message stating an RPM limit and a
+// TPM request size would pair numbers that describe different units.
+const STATED_TOKEN_SIZES_RE = /\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
 
-function readStatedTokenCount(raw: string, pattern: RegExp): number | undefined {
-  const digits = pattern.exec(raw)?.[1]?.replaceAll(",", "");
-  if (!digits) {
-    return undefined;
-  }
-  const parsed = Number(digits);
+function readStatedTokenCount(digits: string | undefined): number | undefined {
+  const parsed = Number(digits?.replaceAll(",", ""));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
@@ -50,8 +47,9 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
   if (!errorMessage || !hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
-  const limit = readStatedTokenCount(errorMessage, STATED_TOKEN_LIMIT_RE);
-  const requested = readStatedTokenCount(errorMessage, STATED_TOKENS_REQUESTED_RE);
+  const stated = STATED_TOKEN_SIZES_RE.exec(errorMessage);
+  const limit = readStatedTokenCount(stated?.[1]);
+  const requested = readStatedTokenCount(stated?.[2]);
   return limit !== undefined && requested !== undefined && requested > limit;
 }
 

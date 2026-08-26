@@ -461,8 +461,9 @@ describe("recoverEmbeddedRunOverflow", () => {
     // Oversized tool results are present, so a bypass that only skipped compaction would still
     // fall into fallback truncation and return { action: "retry" }. This pins real terminality.
     mocks.sessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    const input = makeInput({ promptError });
 
-    const result = await recoverEmbeddedRunOverflow(makeInput({ promptError }));
+    const result = await recoverEmbeddedRunOverflow(input);
 
     expect(result).toMatchObject({ action: "surface", kind: "context_overflow" });
     expect(mocks.compact).not.toHaveBeenCalled();
@@ -470,6 +471,10 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(
       expect.stringContaining("provider request-size ceiling"),
     );
+    // The run's recovery budget is untouched, so a genuine overflow later in the same run still
+    // gets its full compaction attempts and its one tool-result truncation.
+    expect(input.state.overflowCompactionAttempts).toBe(0);
+    expect(input.state.toolResultTruncationAttempted).toBe(false);
   });
 
   it("keeps ordinary TPM throttling out of overflow recovery", async () => {
