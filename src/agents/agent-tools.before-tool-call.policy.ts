@@ -57,9 +57,12 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 
-/** Keep receipt ownership private without widening observable hook outcomes. */
-function markOwnerDecision(outcome: HookOutcome): void {
-  Object.defineProperty(outcome, "ownerDecision", { value: true });
+/** Keep receipt routing private without widening observable hook outcomes. */
+function markPrivateDecision(
+  outcome: HookOutcome,
+  marker: "genericDecision" | "ownerDecision",
+): void {
+  Object.defineProperty(outcome, marker, { value: true });
 }
 
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
@@ -139,14 +142,15 @@ export async function runBeforeToolCallHook(args: {
           args.ctx,
         );
         if (intervention) {
-          return {
+          const outcome: HookOutcome = {
             blocked: true,
             kind: "veto",
             deniedReason: "tool-loop",
             reason: intervention.reason,
             params,
-            genericDecision: true,
           };
+          markPrivateDecision(outcome, "genericDecision");
+          return outcome;
         }
       }
     }
@@ -259,14 +263,15 @@ export async function runBeforeToolCallHook(args: {
         )
       : undefined;
     if (trustedPolicyResult?.block) {
-      return {
+      const outcome: HookOutcome = {
         blocked: true,
         kind: "veto",
         deniedReason: "plugin-before-tool-call",
         reason: trustedPolicyResult.blockReason || "Tool call blocked by trusted plugin policy",
         params,
-        genericDecision: true,
       };
+      markPrivateDecision(outcome, "genericDecision");
+      return outcome;
     }
     let trustedApprovalParams: unknown;
     let trustedApprovalResolution: PluginApprovalResolution | undefined;
@@ -319,7 +324,7 @@ export async function runBeforeToolCallHook(args: {
         params: policyAdjustedParams,
       };
       if (trustedApprovalResolution) {
-        markOwnerDecision(allowed);
+        markPrivateDecision(allowed, "ownerDecision");
         allowed.approvalResolution = trustedApprovalResolution;
       }
       return allowed;
@@ -406,7 +411,7 @@ export async function runBeforeToolCallHook(args: {
       params: finalParams,
     };
     if (hookResult || finalApprovalResolution) {
-      markOwnerDecision(allowed);
+      markPrivateDecision(allowed, "ownerDecision");
     }
     if (finalApprovalResolution) {
       allowed.approvalResolution = finalApprovalResolution;
