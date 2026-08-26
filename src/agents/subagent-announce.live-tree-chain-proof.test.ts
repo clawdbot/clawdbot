@@ -105,7 +105,10 @@ import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/syste
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listTaskFlowsForOwnerKey } from "../tasks/task-flow-runtime-internal.js";
+import {
+  listTaskFlowsForOwnerKey,
+  reloadTaskFlowRegistryFromStore,
+} from "../tasks/task-flow-runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { loadSessionEntryByKey } from "./subagents/announce/subagent-announce-delivery.js";
 import {
@@ -546,6 +549,17 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect.soft(delegateRun.requesterSessionKey).toBe(originChildSessionKey);
     expect.soft(delegateRun.controllerSessionKey).toBe(originChildSessionKey);
     expect.soft(listTaskFlowsForOwnerKey(rootSessionKey)).toHaveLength(0);
+    reloadTaskFlowRegistryFromStore();
+    expect(listTaskFlowsForOwnerKey(originChildSessionKey)).toEqual([
+      expect.objectContaining({
+        flowId: flow.flowId,
+        ownerKey: originChildSessionKey,
+        stateJson: expect.objectContaining({
+          childSessionKey: delegateRun.childSessionKey,
+          originRunId: originChildRunId,
+        }),
+      }),
+    ]);
 
     const dispatchSpan = spans.find((span) => span.name === "continuation.delegate.dispatch");
     const fireSpan = spans.find((span) => span.name === "continuation.delegate.fire");
