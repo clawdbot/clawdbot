@@ -22,6 +22,7 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
+import { buildCliHarnessContextInputProvenance } from "../sessions/input-provenance.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -396,10 +397,16 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    // Claude marks harness-written user turns (skill instruction bodies,
+    // continuation summaries) with isMeta/isCompactSummary. Record that
+    // provenance here, where the native flag is known, so downstream display
+    // never has to infer operator authorship from message text.
+    const harnessInjected = entry.isMeta === true || entry.isCompactSummary === true;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
+        ...(harnessInjected ? { provenance: buildCliHarnessContextInputProvenance() } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       baseMeta,

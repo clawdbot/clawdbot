@@ -545,6 +545,43 @@
   margin: 0 auto;
 }
 
+.chat-notice__collapse {
+  width: min(560px, 100%);
+  margin: 0 auto;
+}
+
+.chat-notice__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+}
+
+.chat-notice__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.chat-notice__toggle::before {
+  content: "▸";
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.chat-notice__collapse[open] > .chat-notice__toggle::before {
+  transform: rotate(90deg);
+}
+
+.chat-notice__toggle:hover {
+  color: var(--text);
+}
+
+.chat-notice__collapse .chat-notice__body {
+  margin-top: 7px;
+  text-align: start;
+}
+
 .chat-notice--danger {
   width: min(560px, calc(100% - 32px));
   margin: 14px auto;
