@@ -125,13 +125,11 @@ export function createDiscordDraftStream(params: {
       discardActiveCreate = false;
       if (generation !== streamGeneration) {
         if (shouldDiscardStaleCreate && typeof sentMessageId === "string" && sentMessageId) {
-          try {
-            await deleteChannelMessage(rest, channelId, sentMessageId);
-          } catch (err) {
-            params.warn?.(
-              `discord stale stream preview cleanup failed: ${formatErrorMessage(err)}`,
-            );
-          }
+          await deleteCleanupMessage({
+            channelId,
+            messageId: sentMessageId,
+            warnPrefix: "discord stale stream preview cleanup failed",
+          });
         }
         return true;
       }
