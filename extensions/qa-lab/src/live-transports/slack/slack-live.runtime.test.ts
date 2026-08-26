@@ -29,7 +29,6 @@ import {
   buildSlackApprovalCheckpointMessage,
   collectSlackActionValues,
   extractSlackNativeApprovalId,
-  listSlackMessages,
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
 import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
@@ -127,32 +126,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();
     expect(testing.resolveSlackRateLimitDelayMs(new Error("network failed"))).toBeUndefined();
-  });
-
-  it("bounds paginated history work and surfaces Slack rate limits for poller backoff", async () => {
-    const history = vi
-      .fn()
-      .mockResolvedValueOnce({ messages: [], response_metadata: { next_cursor: "page-2" } })
-      .mockResolvedValueOnce({ messages: [], response_metadata: { next_cursor: "page-3" } })
-      .mockRejectedValueOnce({ retryAfter: 10 });
-
-    await expect(
-      listSlackMessages({
-        channelId: "C123456789",
-        client: { conversations: { history } } as never,
-        oldestTs: "1.000000",
-      }),
-    ).rejects.toEqual({ retryAfter: 10 });
-    expect(history).toHaveBeenCalledTimes(3);
-
-    history.mockReset();
-    history.mockResolvedValue({ messages: [], response_metadata: { next_cursor: "more" } });
-    await listSlackMessages({
-      channelId: "C123456789",
-      client: { conversations: { history } } as never,
-      oldestTs: "1.000000",
-    });
-    expect(history).toHaveBeenCalledTimes(5);
   });
 
   beforeEach(() => {
@@ -1349,46 +1322,43 @@ describe("Slack live QA runtime helpers", () => {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
-    const history = vi.fn(async (request: { cursor?: string }) =>
-      request.cursor === "page-2"
-        ? {
-            messages: [
-              {
-                blocks: [
+    const history = vi.fn(async () => ({
+      messages: [
+        {
+          blocks: [
+            {
+              type: "data_visualization",
+              title: "QA latency trend",
+              chart: {
+                type: "line",
+                series: [
                   {
-                    type: "data_visualization",
-                    title: "QA latency trend",
-                    chart: {
-                      type: "line",
-                      series: [
-                        {
-                          name: "Latency",
-                          data: [
-                            { label: "P50", value: 120 },
-                            { label: "P95", value: 240 },
-                          ],
-                        },
-                      ],
-                      axis_config: {
-                        categories: ["P50", "P95"],
-                        x_label: "Percentile",
-                        y_label: "Milliseconds",
-                      },
-                    },
+                    name: "Latency",
+                    data: [
+                      { label: "P50", value: 120 },
+                      { label: "P95", value: 240 },
+                    ],
                   },
                 ],
-                // Slack history flattens the top-level accessibility newlines on readback.
-                text: accessibleText.replace(/\s+/gu, " "),
-                ts: "2.000000",
-                user: "U999999999",
+                axis_config: {
+                  categories: ["P50", "P95"],
+                  x_label: "Percentile",
+                  y_label: "Milliseconds",
+                },
               },
-            ],
-          }
-        : {
-            messages: [],
-            response_metadata: { next_cursor: "page-2" },
-          },
-    );
+            },
+          ],
+          // Slack history flattens the top-level accessibility newlines on readback.
+          text: accessibleText.replace(/\s+/gu, " "),
+          ts: "2.000000",
+          user: "U999999999",
+        },
+      ],
+    }));
+    run.verifyObserved?.({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
 
     await expect(
       afterReply(
@@ -1401,18 +1371,12 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
-    expect(history).toHaveBeenNthCalledWith(1, {
+    expect(history).toHaveBeenCalledOnce();
+    expect(history).toHaveBeenCalledWith({
       channel: "C123456789",
       inclusive: true,
-      limit: 200,
-      oldest: "1.000000",
-    });
-    expect(history).toHaveBeenNthCalledWith(2, {
-      channel: "C123456789",
-      cursor: "page-2",
-      inclusive: true,
-      limit: 200,
-      oldest: "1.000000",
+      latest: "2.000000",
+      limit: 1,
     });
   });
 
@@ -1436,6 +1400,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    run.verifyObserved?.({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
     const result = expect(
       afterReply(
         {} as never,
@@ -1529,6 +1497,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    run.verifyObserved?.({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
 
     await expect(
       afterReply(
@@ -1541,6 +1513,13 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_table block and deterministic accessible text");
+    expect(history).toHaveBeenCalledOnce();
+    expect(history).toHaveBeenCalledWith({
+      channel: "C123456789",
+      inclusive: true,
+      latest: "2.000000",
+      limit: 1,
+    });
   });
 
   it("rejects fallback-only Slack table delivery", async () => {
@@ -1562,6 +1541,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    run.verifyObserved?.({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
     const result = expect(
       afterReply(
         {} as never,
