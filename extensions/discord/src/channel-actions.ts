@@ -180,7 +180,7 @@ function describeDiscordMessageTool({
     );
     schemaActions.push("react", "reactions");
   }
-  if (discovery.isEnabled("messages")) {
+  if (actions.has("send")) {
     schemaProperties.components = Type.Optional(
       Type.Object(
         {

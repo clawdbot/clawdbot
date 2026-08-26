@@ -360,7 +360,12 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("upload-file");
     expect(discovery?.actions).not.toContain("read");
     expect(discovery?.actions).not.toContain("edit");
-    expect(discovery?.actions).not.toContain("delete");
+    expect(discovery?.schema).toMatchObject({
+      actions: expect.arrayContaining(["send"]),
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
   });
 
   it("describes usable custom emoji formats and available server emoji discovery", () => {
