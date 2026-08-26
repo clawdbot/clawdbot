@@ -3,6 +3,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -87,6 +88,19 @@ export function resolveOperatorRolePolicyForProfile(
     }
   }
   return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
+}
+
+/** Derives immutable session isolation only from its authenticated human creator. */
+export function resolveCreatorSandbox(
+  cfg: OpenClawConfig,
+  creation: { actor?: SessionCreatedActor } | undefined,
+): "required" | undefined {
+  const actor = creation?.actor;
+  return actor?.type === "human" &&
+    actor.id &&
+    resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
+    ? "required"
+    : undefined;
 }
 
 /** Resolves the current named policy from the connection's verified profile identity. */

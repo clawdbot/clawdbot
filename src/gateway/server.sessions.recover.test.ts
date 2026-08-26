@@ -407,6 +407,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
         modelOverride: "gpt-5.6-sol",
         modelSelectionLocked: true,
         pinnedAt: 1,
+        sandbox: "required",
         spawnedCwd: "/tmp/recovered-worktree",
         mainRestartRecovery: {
           cycleId: "cycle-tombstoned",
@@ -467,6 +468,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     modelOverride: "gpt-5.6-sol",
     previousSessionId: sourceSessionId,
     providerOverride: "openai",
+    sandbox: "required",
     spawnedCwd: "/tmp/recovered-worktree",
   });
   const archivedSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });

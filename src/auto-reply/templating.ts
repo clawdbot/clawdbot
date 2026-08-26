@@ -312,6 +312,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SessionCreation?: {
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;

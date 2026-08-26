@@ -541,12 +541,14 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
-/** Closed session, agent, and operator-scope policy for one named team role. */
+/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = {
   sessions: {
     /** Maximum access to another person's sessions without explicit membership. */
     others: "none" | "view" | "suggest" | "write";
   };
+  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
+  sandbox?: "inherit" | "required";
   /** Agent IDs available for session creation and runs, or all agents when set to "*". */
   agents: "*" | string[];
   /** Ceiling applied to the authenticated profile's granted operator scopes. */

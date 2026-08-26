@@ -197,6 +197,7 @@ describe("handleBashChatCommand stop", () => {
         classificationSessionKey: "agent:target:telegram:direct:target-session",
         mainSessionKey: "agent:target:main",
         mode: "non-main",
+        sandboxRequired: false,
         sandboxed: true,
         toolPolicy: {
           allow: [],

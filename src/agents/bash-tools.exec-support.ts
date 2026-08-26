@@ -96,7 +96,8 @@ export function createExecHostResolver(defaults?: ExecToolDefaults) {
           : elevatedDefaults?.defaultLevel === "on"
             ? "ask"
             : "off";
-    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+    const effectiveDefaultMode =
+      elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
     const elevatedMode =
       typeof params.elevated === "boolean"
         ? params.elevated
@@ -111,6 +112,7 @@ export function createExecHostResolver(defaults?: ExecToolDefaults) {
       requestedTarget,
       elevatedRequested: elevatedMode !== "off",
       sandboxAvailable: Boolean(defaults?.sandbox),
+      sandboxRequired: defaults?.sandboxRequired,
     }).effectiveHost;
   };
 }

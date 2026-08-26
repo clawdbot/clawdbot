@@ -325,6 +325,50 @@ describe("session message-cut methods", () => {
     expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
   });
 
+  it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
+    const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+
+    expect(fork).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+      undefined,
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" })).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("sandbox");
+  });
+
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(

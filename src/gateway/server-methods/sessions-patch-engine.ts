@@ -18,7 +18,7 @@ import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
@@ -133,7 +133,9 @@ async function executeSessionPatchMutations(params: {
 }): Promise<MutationCoreResult> {
   const { client } = params;
   const cfg = params.context.getRuntimeConfig();
-  const creation = resolveOperatorSessionCreation(client);
+  const operatorCreation = resolveOperatorSessionCreation(client);
+  const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
+  const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);

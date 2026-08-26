@@ -14,6 +14,7 @@ import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import {
   authenticatedProfileUnavailableError,
@@ -300,7 +301,7 @@ export function authorizeResolvedSessionMutation(params: {
     const agentError = authorizeSessionAgentRun({
       cfg: params.cfg,
       client: params.client,
-      agentId: target.agentId,
+      target,
     });
     if (agentError) {
       return agentError;
@@ -326,9 +327,27 @@ export function authorizeResolvedSessionMutation(params: {
 function authorizeSessionAgentRun(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
-  agentId: string;
+  target: SessionSharingTarget;
 }): ErrorShape | null {
-  return authorizeGatewaySessionCreation(params) ?? null;
+  const agentError = authorizeGatewaySessionCreation({
+    cfg: params.cfg,
+    client: params.client,
+    agentId: params.target.agentId,
+  });
+  if (agentError) {
+    return agentError;
+  }
+  if (
+    params.cfg.gateway?.roles &&
+    params.target.entry.sandbox !== "required" &&
+    resolveOperatorRolePolicy(params.client, params.cfg)?.sandbox === "required"
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
+    );
+  }
+  return null;
 }
 
 export function authorizeSessionSharingTarget(params: {
@@ -477,7 +496,7 @@ export function resolveSessionMutationAuthorization(params: {
         ? authorizeSessionAgentRun({
             cfg: getCfg(),
             client: params.client,
-            agentId: target.agentId,
+            target,
           })
         : null) ??
       authorizeIncognitoSessionTarget({
@@ -556,7 +575,7 @@ export function resolveSessionMutationAuthorization(params: {
             ? authorizeSessionAgentRun({
                 cfg: currentCfg,
                 client: params.client,
-                agentId: current.agentId,
+                target: current,
               })
             : null) ??
           authorizeIncognitoSessionTarget({

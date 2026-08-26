@@ -28,6 +28,24 @@ describe("session snapshot merge", () => {
     });
   });
 
+  it.each([undefined, "inherit"] as const)(
+    "preserves a required creation sandbox against a %s patch",
+    (sandbox) => {
+      const existing: SessionEntry = {
+        ...initial,
+        sandbox: "required",
+      };
+      const patch: Partial<SessionEntry> = {};
+      Object.assign(patch, { sandbox });
+
+      expect(mergeSessionEntry(existing, patch)).toMatchObject({ sandbox: "required" });
+    },
+  );
+
+  it("does not add a creation sandbox to an existing unstamped session", () => {
+    expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
+  });
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {

@@ -710,6 +710,7 @@ export type SessionMessageCutMutationParams = {
   creation?: {
     via: import("./session-entry-provenance.js").SessionCreatedVia;
     actor?: import("./session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   entryId: string;
   env?: NodeJS.ProcessEnv;

@@ -67,11 +67,18 @@ export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   now?: number;
-}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
+  sandbox?: "required";
+}): {
+  createdVia: SessionCreatedVia;
+  createdActor?: SessionCreatedActor;
+  createdAt: number;
+  sandbox?: "required";
+} {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
+    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
   };
 }
 

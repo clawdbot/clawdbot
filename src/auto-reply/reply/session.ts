@@ -413,6 +413,7 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<Internal
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
     spawnDepth: entry.spawnDepth,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,

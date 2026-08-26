@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global) or `agents.entries.*.sandbox` (per-agent). The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -20,7 +20,7 @@ This is not a perfect security boundary, but it materially limits filesystem and
 Not sandboxed:
 
 - The Gateway process itself.
-- Any tool explicitly allowed to run outside the sandbox via `tools.elevated`. Elevated exec bypasses sandboxing and runs on the configured escape path (`gateway` by default, or `node` when the exec target is `node`). If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
+- Any tool explicitly allowed to run outside an ordinary sandbox via `tools.elevated`. Elevated exec uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`), but cannot escape a session whose creator role requires sandboxing. If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
 
 ## Modes, scope, and backend
 
@@ -34,9 +34,16 @@ Three independent settings control sandbox behavior:
 
 **Mode** controls when sandboxing applies:
 
-- `off`: no sandboxing.
+- `off`: no agent-wide sandboxing; sessions whose creator role requires a sandbox still run sandboxed.
 - `non-main`: sandbox every session except the agent's main session. The main session key is always `agent:<agentId>:main` (or `global` when `session.scope` is `"global"`); it is not configurable. Group/channel sessions use their own keys, so they always count as non-main and get sandboxed.
 - `all`: every session runs in a sandbox.
+
+Set a named operator role's `sandbox` policy to `"required"` to sandbox that
+role's newly created sessions regardless of agent mode. The creator requirement
+is immutable for the session; unavailable backends fail closed, and elevated
+execution or Gateway/node host overrides cannot bypass it. The default
+`"inherit"` preserves existing agent-mode behavior. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 **Scope** controls how many containers/environments are created:
 

@@ -255,9 +255,23 @@ export function resolveExecTarget(params: {
   requestedTarget?: ExecTarget | null;
   elevatedRequested: boolean;
   sandboxAvailable: boolean;
+  sandboxRequired?: boolean;
 }) {
-  const configuredTarget = params.configuredTarget ?? "auto";
+  const sandboxRequired = params.sandboxRequired === true;
+  if (sandboxRequired && !params.sandboxAvailable) {
+    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+  }
+  if (sandboxRequired && params.elevatedRequested) {
+    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+  }
+  // Session isolation outranks every agent, session, and request-scoped host preference.
+  const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
   const requestedTarget = params.requestedTarget ?? null;
+  if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
+    throw new Error(
+      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    );
+  }
   if (
     requestedTarget &&
     !isRequestedExecTargetAllowed({

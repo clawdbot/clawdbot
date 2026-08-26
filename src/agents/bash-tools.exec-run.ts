@@ -237,7 +237,8 @@ export function createExecTool(
             : elevatedDefaults?.defaultLevel === "on"
               ? "ask"
               : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+      const effectiveDefaultMode =
+        elevatedAllowed && !defaults?.sandboxRequired ? elevatedDefaultMode : "off";
       const elevatedMode =
         typeof params.elevated === "boolean"
           ? params.elevated
@@ -291,6 +292,7 @@ export function createExecTool(
         requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxRequired: defaults?.sandboxRequired,
       });
       const host: ExecHost = target.effectiveHost;
 
