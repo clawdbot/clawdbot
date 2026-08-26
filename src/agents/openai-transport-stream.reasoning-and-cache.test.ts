@@ -229,6 +229,29 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
+  it("strips Azure Responses prompt-cache keys when compat disables them", () => {
+    const options = {
+      sessionId: "session-123",
+    } as const;
+    const azureModel = makeResponsesModel<"azure-openai-responses">({
+      api: "azure-openai-responses",
+      provider: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+    const supported = buildOpenAIResponsesParams(azureModel, emptyContext(), options);
+    const disabled = buildOpenAIResponsesParams(
+      // SAFETY: Configured Azure models carry generic compat fields beyond the API-specific type.
+      { ...azureModel, compat: { supportsPromptCacheKey: false } } as never,
+      emptyContext(),
+      options,
+    );
+
+    expect(supported).toMatchObject({
+      prompt_cache_key: "session-123",
+    });
+    expect(disabled).not.toHaveProperty("prompt_cache_key");
+  });
+
   it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

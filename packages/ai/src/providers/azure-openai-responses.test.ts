@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
@@ -162,6 +163,44 @@ describe("azure-openai-responses", () => {
     } finally {
       configureAiTransportHost({});
     }
+  });
+
+  it("honors the prompt-cache compatibility opt-out at the request boundary", async () => {
+    const sentParams: Array<Record<string, unknown>> = [];
+    const hostFetch: typeof fetch = async (input, init) => {
+      const body: unknown = await new Request(input, init).json();
+      if (!isRecord(body)) {
+        throw new Error("expected an object request payload");
+      }
+      sentParams.push(body);
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      for (const supportsPromptCacheKey of [undefined, false, true]) {
+        await streamAzureOpenAIResponses(
+          // SAFETY: Configured Azure models carry generic compat fields beyond the API-specific type.
+          {
+            ...azureResponsesModel,
+            compat: supportsPromptCacheKey === undefined ? undefined : { supportsPromptCacheKey },
+          } as never,
+          context,
+          {
+            apiKey: "test-api-key",
+            sessionId: "session-123",
+          },
+        ).result();
+      }
+    } finally {
+      configureAiTransportHost({});
+    }
+
+    expect(sentParams.map((params) => params.prompt_cache_key)).toEqual([
+      "session-123",
+      undefined,
+      "session-123",
+    ]);
   });
 
   it("fences compaction replay by the resolved Azure endpoint", async () => {

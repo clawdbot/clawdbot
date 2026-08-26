@@ -6,6 +6,10 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "../transports/openai-responses-payload-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
@@ -239,6 +243,14 @@ function buildParams(
   };
 
   applyCommonResponsesParams(params, model, context, options);
+  applyOpenAIResponsesPayloadPolicy(
+    // SAFETY: OpenAI SDK request params are mutable string-keyed payload objects at egress.
+    params as unknown as Record<string, unknown>,
+    resolveOpenAIResponsesPayloadPolicy(model, {
+      storeMode: "preserve",
+      enablePromptCacheStripping: true,
+    }),
+  );
 
   return params;
 }
