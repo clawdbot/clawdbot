@@ -664,7 +664,7 @@ describe("feishuPlugin actions", () => {
       await expect(search(params)).rejects.toThrow("query");
     });
 
-    it.each([null, "", "5", "2junk", 0, -1, 1.5, 11, NaN, Infinity, true])(
+    it.each([null, "", "5", "2junk", 0, -1, 1.5, 11, Number.NaN, Infinity, true])(
       "rejects invalid limit %j",
       async (limit) => {
         await expect(search({ query: "赞", limit })).rejects.toThrow("limit");
@@ -710,7 +710,8 @@ describe("feishuPlugin actions", () => {
         { length: 8 },
         (_, index) =>
           [
-            [...unit.repeat(512)].slice(0, 511).join("") + String.fromCodePoint(0x1f600 + index),
+            Array.from(unit.repeat(512)).slice(0, 511).join("") +
+              String.fromCodePoint(0x1f600 + index),
             [keyword],
           ] as const,
       );

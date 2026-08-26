@@ -553,7 +553,7 @@ describe("FeishuConfigSchema stickerSets", () => {
   it.each(["👍", "e\u0301", "👋🏽", "👩‍💻"])(
     "uses Unicode scalar bounds consistently for %s",
     (unit) => {
-      const bounded = (limit: number) => [...unit.repeat(limit)].slice(0, limit).join("");
+      const bounded = (limit: number) => Array.from(unit.repeat(limit)).slice(0, limit).join("");
       const appId = bounded(128);
       const fileKey = bounded(512);
       const keyword = bounded(64);

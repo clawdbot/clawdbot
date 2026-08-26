@@ -22,7 +22,7 @@ describe("normalizeFeishuExternalKey", () => {
   it.each(["x", "界", "👍", "e\u0301", "👩‍💻"])(
     "bounds received keys by Unicode scalars for %s",
     (unit) => {
-      const key = [...unit.repeat(512)].slice(0, 512).join("");
+      const key = Array.from(unit.repeat(512)).slice(0, 512).join("");
       expect(normalizeFeishuExternalKey(` \t${key}\n`)).toBe(key);
       expect(normalizeFeishuExternalKey(key + "x")).toBeUndefined();
     },

@@ -9,8 +9,8 @@ import {
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
+import { FEISHU_EXTERNAL_KEY_PATTERN } from "./external-keys.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
-import { FeishuStickerSetsSchema } from "./sticker-catalog.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 export { z };
 
@@ -21,6 +21,35 @@ const ChannelActionsSchema = z
   })
   .strict()
   .optional();
+
+const MAX_STICKER_SETS = 32;
+const MAX_STICKERS_PER_SET = 256;
+
+function canonicalTextPattern(maxLength: number): RegExp {
+  // Quantifiers enforce the same scalar bound in Zod and exported JSON Schema;
+  // maxLength alone differs between their UTF-16 and grapheme counting rules.
+  return new RegExp(`^(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cs}]{1,${maxLength}}$`, "u");
+}
+
+const FeishuStickerSetSchema = z
+  .record(
+    z.string().regex(FEISHU_EXTERNAL_KEY_PATTERN),
+    z
+      .array(z.string().regex(canonicalTextPattern(64)))
+      .min(1)
+      .max(8),
+  )
+  .refine((set) => Object.keys(set).length <= MAX_STICKERS_PER_SET, {
+    message: `At most ${MAX_STICKERS_PER_SET} stickers per bot set are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKERS_PER_SET });
+
+const FeishuStickerSetsSchema = z
+  .record(z.string().regex(canonicalTextPattern(128)), FeishuStickerSetSchema)
+  .refine((sets) => Object.keys(sets).length <= MAX_STICKER_SETS, {
+    message: `At most ${MAX_STICKER_SETS} bot sticker sets are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKER_SETS });
 
 const FeishuGroupPolicySchema = z.union([
   GroupPolicySchema,
