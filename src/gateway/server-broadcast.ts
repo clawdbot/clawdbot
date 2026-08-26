@@ -387,9 +387,9 @@ export function createGatewayBroadcaster(params: {
       clientSeq.set(c, nextSeq);
       try {
         c.socket.send(frame);
-      } catch {
-        // The consumed seq makes this send failure visible to the client's
-        // gap detector on its next received frame.
+      } catch (err) {
+        log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, { event });
+        c.socket.terminate();
       }
     }
   };

@@ -180,8 +180,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTerminalError: this.params.onTerminalError,
       providerId: () => this.realtimeProviderId,
       realtimeConfig: () => this.realtimeConfig,
-      stopTerminally: () => {
-        this.stopLifecycle("exact-speech overflow");
+      stopTerminally: (reason) => {
+        this.stopLifecycle(reason);
         this.consults.close();
       },
       stopped: () => this.isStopped(),
@@ -491,7 +491,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (shouldLogRealtimeVerboseEvent(event)) {
       logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
     }
-    this.playback.handleProviderEvent(event);
     const interruptionLog = formatRealtimeInterruptionLog(event);
     if (interruptionLog) {
       logger.info(interruptionLog);

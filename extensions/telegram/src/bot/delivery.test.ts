@@ -1964,6 +1964,34 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it("maps a supergroup migration rejection without rewriting the streaming target", async () => {
+    const chatId = "-123456789";
+    const migratedChatId = -1_001_234_567_890;
+    const terminal = Object.assign(
+      new Error("400: Bad Request: group chat was upgraded to a supergroup chat"),
+      {
+        name: "GrammyError",
+        error_code: 400,
+        description: "Bad Request: group chat was upgraded to a supergroup chat",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      },
+    );
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+
+    const observed = await sendTelegramText(
+      createBot({ sendMessage }),
+      chatId,
+      "hello",
+      createRuntime(),
+    ).catch((error: unknown) => error);
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toMatchObject({ cause: terminal, retryable: false });
+    expect(observed).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(firstMockCallArg(sendMessage, 0)).toBe(chatId);
+  });
+
   it("keeps broad 421-shaped streaming send errors ambiguous", async () => {
     const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
     const sendMessage = vi.fn().mockRejectedValue(edgeError);
