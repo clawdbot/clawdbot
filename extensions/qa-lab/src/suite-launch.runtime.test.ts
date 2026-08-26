@@ -1986,7 +1986,6 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        onCommandOutput: expect.any(Function),
         progress: expect.any(Function),
         scenarios: [
           expect.objectContaining({ execution: expect.objectContaining({ kind: "script" }) }),
@@ -1995,149 +1994,51 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
-  it("redacts split native output and neutralizes CI commands before streaming", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-safe-native-output-");
+  it("streams native owner progress without exposing child output to CI", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-safe-native-progress-");
     vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
     runQaTestFileScenarios.mockImplementationOnce(async (params) => {
-      params.onCommandOutput?.("stdout", Buffer.from("OPENAI_API_"));
-      params.onCommandOutput?.("stdout", Buffer.from("KEY=synthetic-split-secret-123456789\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("::stop-"));
-      params.onCommandOutput?.("stdout", Buffer.from("commands::attacker\n"));
-      params.onCommandOutput?.("stderr", Buffer.from("Authorization: Bea"));
-      params.onCommandOutput?.("stderr", Buffer.from("rer synthetic-bearer-secret-987654321\n"));
-      params.onCommandOutput?.("stderr", Buffer.from("#"));
-      params.onCommandOutput?.("stderr", Buffer.from("#[error]attacker\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("prefix -----BEGIN RSA PRIVATE KEY-----\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("synthetic-pem-secret-body-22334455\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("-----END RSA PRIVATE KEY-----\n"));
-      params.onCommandOutput?.(
-        "stdout",
-        Buffer.from(`${"x".repeat(16_384)}-----BEGIN EC PRIVATE KEY-----\n`),
+      params.progress?.("native docker-batch start scenarios=1 timeoutMs=60000");
+      expect(stderrWrite).toHaveBeenCalledWith(
+        expect.stringContaining("[qa-suite] native docker-batch start"),
       );
-      params.onCommandOutput?.("stdout", Buffer.from("synthetic-oversized-pem-secret-body\n"));
-      params.onCommandOutput?.(
-        "stdout",
-        Buffer.from("-----END EC PRIVATE KEY-----\nsafe PEM recovery\n"),
+      const childOutput = Buffer.from(
+        [
+          "OPENAI_API_KEY=synthetic-provider-secret",
+          'warning: invalid value " channels.buzz.authTag:',
+          "[",
+          '  "synthetic-auth-secret"',
+          "]",
+          "::stop-commands::synthetic-runner-attack",
+          "##[error]synthetic-runner-attack",
+        ].join("\n"),
       );
-      params.onCommandOutput?.("stdout", Buffer.from(`${"x".repeat(16_380)}-----BE`));
-      params.onCommandOutput?.("stdout", Buffer.from("GIN OPENSSH PRIVATE KEY-----\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("synthetic-split-oversized-pem-secret\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("-----END OPENSSH PRI"));
-      params.onCommandOutput?.("stdout", Buffer.from("VATE KEY-----\nsafe split PEM recovery\n"));
-      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.authTag: [\r\n"));
-      params.onCommandOutput?.("stderr", Buffer.from('  "synthetic-auth-tag-secret",\r\n'));
-      params.onCommandOutput?.("stderr", Buffer.from('  "synthetic-auth-signature"\r\n]\r\n'));
-      params.onCommandOutput?.("stderr", Buffer.from('  "authTag": [\n'));
-      params.onCommandOutput?.("stderr", Buffer.from('    "synthetic-json-auth-tag-secret"\n]\n'));
-      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.authTag:\n"));
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from('[\n"synthetic-line-separated-auth-secret"\n]\n'),
-      );
-      params.onCommandOutput?.("stderr", Buffer.from('  "authTag":\r\n'));
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from('[\r\n"synthetic-quoted-line-separated-auth-secret"\r\n]\r\n'),
-      );
-      params.onCommandOutput?.("stderr", Buffer.from('  "authTag"\r\n'));
-      params.onCommandOutput?.("stderr", Buffer.from(":\r\n"));
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from('[\r\n"synthetic-key-colon-separated-auth-secret"\r\n]\r\n'),
-      );
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from("authTag validation: channels.buzz.authTag:\n"),
-      );
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from('[\n"synthetic-repeated-mention-auth-secret"\n]\n'),
-      );
-      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.AUTHTAG:\n"));
-      params.onCommandOutput?.("stderr", Buffer.from('[\n"synthetic-mixed-case-auth-secret"\n]\n'));
-      params.onCommandOutput?.("stderr", Buffer.from("ordinary mention of authTag\n"));
-      params.onCommandOutput?.("stderr", Buffer.from("ordinary progress resumed\n"));
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from(`${"x".repeat(16_384)} channels.buzz.authTag: [\n`),
-      );
-      params.onCommandOutput?.("stderr", Buffer.from('"synthetic-oversized-auth-tag-secret"\n]\n'));
-      params.onCommandOutput?.("stderr", Buffer.from(`${"x".repeat(16_375)} channels.buzz.auth`));
-      params.onCommandOutput?.("stderr", Buffer.from("Tag: [\n"));
-      params.onCommandOutput?.(
-        "stderr",
-        Buffer.from('"synthetic-split-oversized-auth-secret"\n]\n'),
-      );
-      params.onCommandOutput?.("stderr", Buffer.from(`OPENAI_API_KEY=${"x".repeat(20_000)}`));
-      params.onCommandOutput?.("stderr", Buffer.from("discarded-secret\nsafe output resumed\n"));
-      params.onCommandOutput?.("stdout", Buffer.from("OPENAI_API_KEY="));
-      params.onCommandOutput?.("stdout", Buffer.from("synthetic-trailing-secret-1122334455"));
-      expect(stdoutWrite).toHaveBeenCalled();
+      params.onCommandOutput?.("stdout", childOutput);
+      params.onCommandOutput?.("stderr", childOutput);
       return await defaultTestFileImplementation(params);
     });
 
     try {
       await runQaSuite({
         repoRoot,
-        outputDir: ".artifacts/qa-e2e/safe-native-output",
+        outputDir: ".artifacts/qa-e2e/safe-native-progress",
         scenarioIds: ["docker-npm-onboard-channel-agent"],
       });
-      const unsafeTailFragments = [
-        "OPENAI_API_K",
-        "EY=synthetic-cross-forwarder-secret-55667788",
-        ":",
-        ":stop-commands::cross-forwarder-attacker",
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic-incomplete-private-key",
-      ];
-      for (const [index, fragment] of unsafeTailFragments.entries()) {
-        runQaTestFileScenarios.mockImplementationOnce(async (params) => {
-          params.onCommandOutput?.("stdout", Buffer.from(fragment));
-          return await defaultTestFileImplementation(params);
-        });
-        await runQaSuite({
-          repoRoot,
-          outputDir: `.artifacts/qa-e2e/safe-native-output-${index}`,
-          scenarioIds: ["docker-npm-onboard-channel-agent"],
-        });
-      }
 
-      const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
-      const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
-      expect(stdout).toContain("OPENAI_API_KEY=<redacted>");
-      expect(stdout).toContain(": :stop-commands::attacker");
-      expect(stdout).not.toContain("synthetic-split-secret-123456789");
-      expect(stdout).not.toContain("synthetic-trailing-secret-1122334455");
-      expect(stdout).not.toContain("synthetic-pem-secret-body-22334455");
-      expect(stdout).not.toContain("synthetic-oversized-pem-secret-body");
-      expect(stdout).toContain("safe PEM recovery");
-      expect(stdout).not.toContain("synthetic-split-oversized-pem-secret");
-      expect(stdout).toContain("safe split PEM recovery");
-      expect(stdout).not.toContain("synthetic-cross-forwarder-secret-55667788");
-      expect(stdout).not.toContain("synthetic-incomplete-private-key");
-      expect(stdout).not.toContain("cross-forwarder-attacker");
-      expect(stdout).not.toContain("::stop-commands::");
-      expect(stderr).toContain("Bearer <redacted>");
-      expect(stderr).toContain("# #[error]attacker");
-      expect(stderr).toContain("channels.buzz.authTag: <redacted>");
-      expect(stderr).toContain("native output line omitted: exceeded safe limit");
-      expect(stderr).toContain("safe output resumed");
-      expect(stderr).not.toContain("synthetic-bearer-secret-987654321");
-      expect(stderr).not.toContain("synthetic-auth-tag-secret");
-      expect(stderr).not.toContain("synthetic-auth-signature");
-      expect(stderr).not.toContain("synthetic-json-auth-tag-secret");
-      expect(stderr).not.toContain("synthetic-line-separated-auth-secret");
-      expect(stderr).not.toContain("synthetic-quoted-line-separated-auth-secret");
-      expect(stderr).not.toContain("synthetic-key-colon-separated-auth-secret");
-      expect(stderr).not.toContain("synthetic-repeated-mention-auth-secret");
-      expect(stderr).not.toContain("synthetic-mixed-case-auth-secret");
-      expect(stderr).toContain("ordinary progress resumed");
-      expect(stderr).not.toContain("synthetic-oversized-auth-tag-secret");
-      expect(stderr).not.toContain("synthetic-split-oversized-auth-secret");
-      expect(stderr).not.toContain("discarded-secret");
-      expect(stderr).not.toContain("##[error]");
+      const runnerParams = runQaTestFileScenarios.mock.calls[0]?.[0];
+      expect(runnerParams?.progress).toEqual(expect.any(Function));
+      expect(runnerParams).not.toHaveProperty("onCommandOutput");
+      const output = [...stdoutWrite.mock.calls, ...stderrWrite.mock.calls]
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(output).toContain("[qa-suite] native docker-batch start");
+      expect(output).not.toContain("synthetic-provider-secret");
+      expect(output).not.toContain("synthetic-auth-secret");
+      expect(output).not.toContain("::stop-commands::");
+      expect(output).not.toContain("##[error]");
     } finally {
       stdoutWrite.mockRestore();
       stderrWrite.mockRestore();

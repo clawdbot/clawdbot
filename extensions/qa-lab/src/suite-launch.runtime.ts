@@ -1,7 +1,6 @@
 // QA Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
@@ -12,7 +11,6 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
@@ -103,8 +101,6 @@ const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 // Three is the audited ceiling for concurrent Gateway and process-group lifecycles.
 // Raising it risks cleanup overlap and shared port/listener contention.
 const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
-const MAX_NATIVE_OUTPUT_LINE_LENGTH = 16_384;
-const MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH = 256;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -419,122 +415,6 @@ async function resolveSuiteExecutionPlan(
   };
 }
 
-function createQaNativeOutputForwarder() {
-  type MultilineSecret = "pem" | "authTag";
-  type OutputState = {
-    decoder: StringDecoder;
-    dropping?: MultilineSecret | "line";
-    droppedSuffix?: string;
-    multiline?: MultilineSecret;
-    pending: string;
-  };
-  const outputs: Record<"stderr" | "stdout", OutputState> = {
-    stdout: { decoder: new StringDecoder("utf8"), pending: "" },
-    stderr: { decoder: new StringDecoder("utf8"), pending: "" },
-  };
-  const authTagAssignmentState = (text: string): "prefix" | "array" | undefined => {
-    for (const match of text.matchAll(/(?:^|[^\w])"?authTag"?/giu)) {
-      const suffix = text.slice(match.index + match[0].length);
-      if (/^\s*[:=]\s*\[/u.test(suffix)) {
-        return "array";
-      }
-      if (/^\s*(?:[:=]\s*)?$/u.test(suffix)) {
-        return "prefix";
-      }
-    }
-    return undefined;
-  };
-  const endsMultilineSecret = (kind: MultilineSecret, text: string) =>
-    kind === "pem" ? /-----END [A-Z ]*PRIVATE KEY-----/u.test(text) : /\]\s*[,}\r\n]*$/u.test(text);
-  const detectMultilineSecret = (text: string): MultilineSecret | undefined => {
-    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(text)) {
-      return "pem";
-    }
-    if (authTagAssignmentState(text)) {
-      return "authTag";
-    }
-    return undefined;
-  };
-
-  return {
-    write: (stream: "stderr" | "stdout", chunk: Buffer) => {
-      const output = outputs[stream];
-      let text = output.decoder.write(chunk);
-      while (text.length > 0) {
-        const newline = text.search(/[\r\n]/u);
-        const complete = newline !== -1;
-        const segment = complete ? text.slice(0, newline + 1) : text;
-        text = complete ? text.slice(newline + 1) : "";
-        if (output.dropping) {
-          const discarded = (output.droppedSuffix ?? "") + segment;
-          if (output.dropping === "line") {
-            const multiline = detectMultilineSecret(discarded);
-            if (multiline) {
-              output.dropping = multiline;
-            }
-          }
-          if (
-            complete &&
-            (output.dropping === "line" || endsMultilineSecret(output.dropping, discarded))
-          ) {
-            output.dropping = undefined;
-            output.droppedSuffix = undefined;
-          } else {
-            output.droppedSuffix = complete
-              ? undefined
-              : discarded.slice(-MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH);
-          }
-          continue;
-        }
-        // Redaction needs complete lines and whole multiline secrets, never partial chunks.
-        if (output.pending.length + segment.length > MAX_NATIVE_OUTPUT_LINE_LENGTH) {
-          const discarded = output.pending + segment;
-          const multiline = output.multiline ?? detectMultilineSecret(discarded);
-          process[stream].write("[qa-suite] native output line omitted: exceeded safe limit\n");
-          output.pending = "";
-          output.dropping =
-            multiline && (!complete || !endsMultilineSecret(multiline, segment))
-              ? multiline
-              : undefined;
-          if (!complete) {
-            output.dropping ??= "line";
-          }
-          output.droppedSuffix =
-            output.dropping === "line"
-              ? discarded.slice(-MAX_NATIVE_OUTPUT_MARKER_SUFFIX_LENGTH)
-              : undefined;
-          output.multiline = undefined;
-          continue;
-        }
-        output.pending += segment;
-        if (complete) {
-          output.multiline ??= detectMultilineSecret(output.pending);
-          if (output.multiline === "authTag" && !authTagAssignmentState(output.pending)) {
-            output.multiline = detectMultilineSecret(output.pending);
-          }
-          if (output.multiline && !endsMultilineSecret(output.multiline, output.pending)) {
-            continue;
-          }
-          process[stream].write(redactQaGatewayDebugText(output.pending));
-          output.pending = "";
-          output.multiline = undefined;
-        }
-      }
-    },
-    flush() {
-      for (const stream of ["stdout", "stderr"] as const) {
-        const output = outputs[stream];
-        output.pending += output.decoder.end();
-        if (output.pending && !output.dropping) {
-          // Independent partitions must never concatenate unredactable partial secrets.
-          process[stream].write("[qa-suite] unterminated native output omitted\n");
-        }
-        output.pending = "";
-      }
-    },
-  };
-}
-
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
   runParams: QaSuiteRunParams | undefined;
@@ -546,28 +426,20 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const output = shouldLogQaSuiteProgress() ? createQaNativeOutputForwarder() : undefined;
-  try {
-    return await runQaTestFileScenarios({
-      evidenceMode: runParams?.evidenceMode,
-      ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
-      ...(runParams?.failFast ? { failFast: true } : {}),
-      ...(output
-        ? {
-            onCommandOutput: output.write,
-            progress: (message: string) => writeQaSuiteProgress(true, message),
-          }
-        : {}),
-      repoRoot,
-      outputDir,
-      providerMode,
-      primaryModel,
-      scenarios: params.scenarios,
-      writeEvidenceFile: runParams?.writeEvidenceFile,
-    });
-  } finally {
-    output?.flush();
-  }
+  return await runQaTestFileScenarios({
+    evidenceMode: runParams?.evidenceMode,
+    ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
+    ...(runParams?.failFast ? { failFast: true } : {}),
+    ...(shouldLogQaSuiteProgress()
+      ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
+      : {}),
+    repoRoot,
+    outputDir,
+    providerMode,
+    primaryModel,
+    scenarios: params.scenarios,
+    writeEvidenceFile: runParams?.writeEvidenceFile,
+  });
 }
 
 function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | undefined) {
