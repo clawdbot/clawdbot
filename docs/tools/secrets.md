@@ -16,6 +16,12 @@ agent only learns that the entry now exists.
 The tool is available only in the main session. Subagents and other
 non-primary runs do not receive it.
 
+It is enabled by default and governed by the normal tool policy — there is no
+dedicated config key. To remove it, deny it like any other tool (for example
+`tools.deny: ["secrets"]` in `openclaw.json`); allowlists and tool profiles
+apply to it the same way. Creating a credential request also requires an
+`operator.admin` Gateway client, which the agent's own client satisfies.
+
 ## Actions
 
 - `request` — ask the human for a value and store it under a name such as
