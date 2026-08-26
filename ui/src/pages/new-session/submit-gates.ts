@@ -98,7 +98,7 @@ export function resolveNewSessionSubmitBlock(
   if (
     gateway.preferenceLoading ||
     place.modelControl.isRestoringPreference() ||
-    !place.worktreePreferenceReady
+    !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
