@@ -8,6 +8,7 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
@@ -75,8 +76,8 @@ export class WorkerAdmissionError extends Error {
 }
 
 export class WorkerAdmissionDeadlineExceededError extends Error {
-  constructor() {
-    super("worker admission deadline exceeded");
+  constructor(diagnosis: string) {
+    super(diagnosis);
     this.name = "WorkerAdmissionDeadlineExceededError";
   }
 }
@@ -103,16 +104,48 @@ export function toWorkerConnectionError(error: unknown): Error {
 }
 
 export function formatWorkerConnectionFailure(
-  endpoint: WorkerConnectionEndpoint,
+  options: WorkerConnectionOptions,
   error: unknown,
+  attempts?: number,
 ): string {
-  const target =
-    endpoint.kind === "websocket"
-      ? truncateUtf16Safe(new URL(endpoint.url).host, 128)
-      : truncateUtf16Safe(endpoint.socketPath, 128);
+  const endpoint = options.endpoint;
+  let address: string;
+  if (endpoint.kind === "websocket") {
+    const url = new URL(endpoint.url);
+    address = `${url.hostname}:${url.port || (url.protocol === "wss:" ? "443" : "80")}`;
+  } else {
+    address = endpoint.socketPath;
+  }
+  const target = truncateUtf16Safe(address, 128);
+  let detail = toWorkerConnectionError(error).message;
+  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+  const credentials = [
+    options.connectParams.admission.credential,
+    ...(access ? [access.clientId, access.clientSecret] : []),
+  ];
+  // Scrub before truncating so a cut credential cannot escape into stderr or IPC.
+  for (const credential of credentials) {
+    for (const value of [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]) {
+      if (value) {
+        detail = detail.replaceAll(value, "[REDACTED]");
+      }
+    }
+  }
+  if (endpoint.kind === "websocket") {
+    detail = detail.replaceAll(endpoint.url, target);
+  }
   const cause =
-    truncateUtf16Safe(toWorkerConnectionError(error).message.replace(/\s+/gu, " ").trim(), 160) ||
-    "connection failed";
+    truncateUtf16Safe(
+      redactSensitiveText(detail, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      160,
+    ) || "connection failed";
+  if (attempts !== undefined) {
+    return `worker admission deadline exceeded after ${attempts} attempts to ${target}: ${cause}`;
+  }
   const hint =
     endpoint.kind === "websocket"
       ? "check TLS pin/publicUrl configuration"
