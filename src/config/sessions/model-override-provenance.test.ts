@@ -4,13 +4,13 @@ import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.j
 describe("hasSessionActiveAutoModelFallback", () => {
   it.each([
     {
-      name: "legacy source auto without provenance",
+      name: "configured automatic selection without fallback provenance",
       entry: {
         providerOverride: "fallback",
         modelOverride: "secondary",
         modelOverrideSource: "auto" as const,
       },
-      expected: true,
+      expected: false,
     },
     {
       name: "different automatic selection",

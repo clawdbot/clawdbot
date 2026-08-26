@@ -60,20 +60,14 @@ export function hasSessionActiveAutoModelFallback(
   if (!entry) {
     return false;
   }
-  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
-  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
-  if (entry.modelOverrideSource === "auto" && (!originProvider || !originModel)) {
-    return Boolean(
-      normalizeOptionalString(entry.providerOverride) ||
-      normalizeOptionalString(entry.modelOverride),
-    );
-  }
   if (
     !hasSessionAutoModelFallbackProvenance(entry) ||
     (entry.modelOverrideSource !== undefined && entry.modelOverrideSource !== "auto")
   ) {
     return false;
   }
+  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
   const overrideProvider = normalizeOptionalString(entry.providerOverride) ?? originProvider;
   const overrideModel = normalizeOptionalString(entry.modelOverride) ?? originModel;
   // Configured subagent selections deliberately carry self-origin metadata so cleanup preserves

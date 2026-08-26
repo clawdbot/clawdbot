@@ -66,7 +66,7 @@ describe("resolveStoredModelOverride", () => {
     ).toBeNull();
   });
 
-  it("does not inherit legacy source:auto overrides without provenance", () => {
+  it("inherits configured automatic selections without fallback provenance", () => {
     expect(
       resolveStoredModelOverride({
         defaultProvider: "openai",
@@ -81,7 +81,12 @@ describe("resolveStoredModelOverride", () => {
           },
         },
       }),
-    ).toBeNull();
+    ).toEqual({
+      provider: "google-vertex",
+      model: "gemini-fallback",
+      source: "parent",
+      routeResolution: "raw",
+    });
   });
 
   it("continues to inherit deliberate parent model pins", () => {

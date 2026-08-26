@@ -29,21 +29,40 @@ describe("inheritSessionSelection", () => {
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
   });
-  it("does not persist legacy source:auto model overrides into child entries", () => {
-    expect(
-      inheritSessionSelection({
+  it.each([
+    { source: "auto" as const, profile: "google-vertex:fallback", inheritedProfile: undefined },
+    { source: "user" as const, profile: "openai:work", inheritedProfile: "openai:work" },
+  ])(
+    "drops fallback model state while preserving only $source auth intent",
+    ({ source, profile, inheritedProfile }) => {
+      const inherited = inheritSessionSelection({
         sessionId: "legacy-auto-model",
         updatedAt: 1,
         providerOverride: "google-vertex",
         modelOverride: "gemini-fallback",
         modelOverrideSource: "auto",
-      }),
-    ).not.toMatchObject({
-      providerOverride: expect.any(String),
-      modelOverride: expect.any(String),
-    });
-  });
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: profile,
+        authProfileOverrideSource: source,
+        thinkingLevel: "high",
+      });
 
+      expect(inherited.providerOverride).toBeUndefined();
+      expect(inherited.modelOverride).toBeUndefined();
+      expect(inherited.modelOverrideSource).toBeUndefined();
+      expect(inherited.agentRuntimeOverride).toBeUndefined();
+      expect(inherited.contextWindow).toBe("1m");
+      expect(inherited.authProfileOverride).toBe(inheritedProfile);
+      expect(inherited.authProfileOverrideSource).toBe(inheritedProfile ? "user" : undefined);
+      expect(inherited.thinkingLevel).toBe("high");
+    },
+  );
+});
+
+describe("SessionLabelOwnerIndex", () => {
   it("indexes the store once and answers repeated conflicts without rescanning entries", () => {
     const labelReads = vi.fn();
     const entry = (sessionId: string, label: string): SessionEntry => {

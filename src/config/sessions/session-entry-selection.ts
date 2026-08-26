@@ -64,6 +64,7 @@ export function inheritSessionSelection(
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
   const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
+  const inheritAuthProfile = inheritModelSelection || authProfileOverrideSource === "user";
   return {
     ...(inheritModelSelection && parentEntry.providerOverride
       ? { providerOverride: parentEntry.providerOverride }
@@ -88,10 +89,10 @@ export function inheritSessionSelection(
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
     ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(authProfileOverrideSource && parentEntry.authProfileOverride
+    ...(inheritAuthProfile && authProfileOverrideSource && parentEntry.authProfileOverride
       ? { authProfileOverride: parentEntry.authProfileOverride }
       : {}),
-    ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+    ...(inheritAuthProfile && authProfileOverrideSource ? { authProfileOverrideSource } : {}),
   };
 }
 

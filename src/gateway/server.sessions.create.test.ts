@@ -3827,6 +3827,11 @@ test("sessions.create skips inherited active auto fallback model overrides", asy
         modelOverrideSource: "auto",
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: "google-vertex:fallback",
+        authProfileOverrideSource: "auto",
+        thinkingLevel: "high",
       }),
     },
   });
@@ -3839,6 +3844,11 @@ test("sessions.create skips inherited active auto fallback model overrides", asy
       providerOverride?: string;
       modelOverride?: string;
       modelOverrideSource?: string;
+      agentRuntimeOverride?: string;
+      contextWindow?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      thinkingLevel?: string;
     };
   }>("sessions.create", {
     agentId: "main",
@@ -3850,6 +3860,11 @@ test("sessions.create skips inherited active auto fallback model overrides", asy
   expect(created.payload?.entry?.providerOverride).toBeUndefined();
   expect(created.payload?.entry?.modelOverride).toBeUndefined();
   expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.agentRuntimeOverride).toBeUndefined();
+  expect(created.payload?.entry?.contextWindow).toBe("1m");
+  expect(created.payload?.entry?.authProfileOverride).toBeUndefined();
+  expect(created.payload?.entry?.authProfileOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.resolved).toEqual({ modelProvider: "openai", model: "gpt-primary" });
 
   const key = created.payload?.key as string;
@@ -3857,6 +3872,11 @@ test("sessions.create skips inherited active auto fallback model overrides", asy
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(storedEntry?.providerOverride).toBeUndefined();
   expect(storedEntry?.modelOverride).toBeUndefined();
+  expect(storedEntry?.agentRuntimeOverride).toBeUndefined();
+  expect(storedEntry?.contextWindow).toBe("1m");
+  expect(storedEntry?.authProfileOverride).toBeUndefined();
+  expect(storedEntry?.authProfileOverrideSource).toBeUndefined();
+  expect(storedEntry?.thinkingLevel).toBe("high");
 });
 
 test("sessions.create resolves the current default instead of inherited runtime identity", async () => {
