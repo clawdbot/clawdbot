@@ -90,14 +90,15 @@ function stripVerifiedConversationContext(
   }
 
   const normalizedSource = source.replace(/\r\n?/gu, "\n");
+  const markdownLinePrefix =
+    "[ \\t]*(?:(?:>|[-+*](?=[ \\t])|#{1,6}(?=[ \\t])|\\d{1,9}[.)](?=[ \\t]))[ \\t]*)*";
   let result = text;
   if (containsConversationMarker) {
-    const quotedLinePrefix = "(?:[ \\t]{0,3}>[ \\t]?)*";
     const promptPattern = normalizedSource
       .split("\n")
       .map(escapeRegExp)
-      .join(`\\r?\\n${quotedLinePrefix}`);
-    const copiedPrompt = new RegExp(`(?:^[ \\t]{0,3}(?:>[ \\t]?)+)?${promptPattern}`, "gmu");
+      .join(`\\r?\\n${markdownLinePrefix}`);
+    const copiedPrompt = new RegExp(`(?:^${markdownLinePrefix})?${promptPattern}`, "gmu");
     // Markdown formatting does not make an exact owner-bound private prompt safe to disclose.
     result = text.replace(copiedPrompt, "");
   }
@@ -109,18 +110,45 @@ function stripVerifiedConversationContext(
   if (!sourceStart) {
     return result;
   }
-  // CRLF can double the raw length of a normalized prompt; earlier bytes cannot form its suffix.
-  const searchStart = Math.max(0, result.length - normalizedSource.length * 2);
+  const firstSourceLine = normalizedSource.split("\n", 1)[0] ?? normalizedSource;
+  const completedSourceStart = result.indexOf(firstSourceLine);
+  // Anchor every completed prompt start; wrappers can be arbitrarily wide and markers can repeat.
+  const searchStart =
+    completedSourceStart === -1
+      ? Math.max(0, result.length - normalizedSource.length * 2)
+      : completedSourceStart;
+  const markdownWrapper = new RegExp(`^${markdownLinePrefix}$`, "u");
+  const incompleteMarkdownWrapper = new RegExp(
+    `^${markdownLinePrefix}(?:[-+*]|#{1,6}|\\d{1,9}[.)]?)?$`,
+    "u",
+  );
   let candidateStart = result.indexOf(sourceStart, searchStart);
   while (candidateStart !== -1) {
     const suffix = result.slice(candidateStart).replace(/\r\n?/gu, "\n");
-    const unquotedSuffix = suffix
-      .replace(/\n(?:[ \t]{0,3}>[ \t]?)+/gu, "\n")
-      .replace(/\n[ \t]{1,3}$/u, "\n");
+    const sourceLines = normalizedSource.split("\n");
+    let lineIndex = 0;
+    const unwrappedSuffix = suffix.replace(/\n([^\n]*)/gu, (_match, line: string) => {
+      const sourceLine = sourceLines[++lineIndex];
+      if (sourceLine === undefined) {
+        return `\n${line}`;
+      }
+      if (!sourceLine) {
+        return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
+      }
+      let contentStart = line.indexOf(sourceLine[0]);
+      while (contentStart !== -1) {
+        const content = line.slice(contentStart);
+        if (sourceLine.startsWith(content) && markdownWrapper.test(line.slice(0, contentStart))) {
+          return `\n${content}`;
+        }
+        contentStart = line.indexOf(sourceLine[0], contentStart + 1);
+      }
+      return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
+    });
     if (
       (suffix.length < normalizedSource.length && normalizedSource.startsWith(suffix)) ||
-      (unquotedSuffix.length < normalizedSource.length &&
-        normalizedSource.startsWith(unquotedSuffix))
+      (unwrappedSuffix.length < normalizedSource.length &&
+        normalizedSource.startsWith(unwrappedSuffix))
     ) {
       // A later stream update can complete private prompt bytes that cannot be retracted once sent.
       return result.slice(0, candidateStart);

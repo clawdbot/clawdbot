@@ -128,9 +128,24 @@ describe("agent runner streaming presentation", () => {
     { name: "indented", prefix: "  > " },
     { name: "nested", prefix: ">> " },
     { name: "spaced nested", prefix: "> > " },
+    { name: "four-space code", prefix: "    " },
+    { name: "tab-indented code", prefix: "\t" },
+    { name: "bulleted list", prefix: "- " },
+    { name: "numbered list", prefix: "1. " },
+    { name: "heading", prefix: "# " },
+    { name: "deep heading", prefix: "###### " },
+    { name: "quoted heading", prefix: "> ## " },
+    { name: "multiline list item", prefix: "- ", continuation: "  " },
+    { name: "widely indented list item", prefix: "- ", continuation: "    " },
+    { name: "varying quote depth", prefix: "> ", continuation: ">> " },
+    { name: "quoted list continuation", prefix: "> - ", continuation: ">   " },
+    { name: "mixed code indentation", prefix: "    ", continuation: "\t" },
+    { name: "quoted continuation after an unwrapped marker", prefix: "", continuation: "> " },
+    { name: "very wide list continuation", prefix: "- ", continuation: " ".repeat(320) },
+    { name: "deeply nested quote", prefix: "> ", continuation: `${">".repeat(320)} ` },
   ])(
-    "withholds $name blockquoted prompt bytes before private stream text is visible",
-    ({ prefix }) => {
+    "withholds $name Markdown prompt bytes before private stream text is visible",
+    ({ prefix, continuation }) => {
       const conversationContext = [
         "[Chat messages since your last reply - for context]",
         "Alice: private history",
@@ -140,7 +155,7 @@ describe("agent runner streaming presentation", () => {
       ].join("\n");
       const quotedContext = conversationContext
         .split("\n")
-        .map((line) => `${prefix}${line}`)
+        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
         .join("\n");
       const presentation = createPresentation({ conversationContext });
 
@@ -157,6 +172,91 @@ describe("agent runner streaming presentation", () => {
           text: `${quotedContext}\n\nVisible streamed answer.`,
         }),
       ).toEqual({ text: "Visible streamed answer.", skip: false });
+    },
+  );
+
+  it("withholds decorated prompt continuations after safe same-line reply text", () => {
+    const conversationContext = [
+      "[Current message - respond to this]",
+      "private inbound paragraph",
+    ].join("\n");
+    const wrappedContext = conversationContext
+      .split("\n")
+      .map((line, index) => `${index === 0 ? "Visible answer: " : "> "}${line}`)
+      .join("\n");
+    const presentation = createPresentation({ conversationContext });
+
+    for (let length = 1; length <= wrappedContext.length; length += 1) {
+      const visibleText =
+        presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
+
+      expect(visibleText).not.toContain("private");
+    }
+  });
+
+  it("keeps the original prompt anchor when private context repeats its first marker", () => {
+    const marker = "[Current message - respond to this]";
+    const conversationContext = [
+      marker,
+      "private first paragraph",
+      marker,
+      "private final paragraph",
+    ].join("\n");
+    const wrappedContext = conversationContext
+      .split("\n")
+      .map((line, index) => `${index === 0 ? "- " : " ".repeat(320)}${line}`)
+      .join("\n");
+    const presentation = createPresentation({ conversationContext });
+
+    for (let length = 1; length <= wrappedContext.length; length += 1) {
+      const visibleText =
+        presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
+
+      expect(visibleText).not.toContain("private");
+    }
+  });
+
+  it.each([
+    { name: "bulleted", prefix: "- ", sourcePrefix: "- " },
+    { name: "quoted", prefix: "> ", sourcePrefix: "> " },
+    { name: "indented", prefix: "    ", sourcePrefix: "    " },
+    {
+      name: "list continuation with prompt indentation",
+      prefix: "- ",
+      continuation: "    ",
+      sourcePrefix: "    ",
+    },
+    {
+      name: "list continuation with a prompt-owned bullet",
+      prefix: "- ",
+      continuation: "    ",
+      sourcePrefix: "- ",
+    },
+    {
+      name: "varying quote depth with a prompt-owned quote",
+      prefix: "> ",
+      continuation: ">> ",
+      sourcePrefix: "> ",
+    },
+  ])(
+    "withholds $name wrappers without consuming prompt-owned Markdown",
+    ({ prefix, continuation, sourcePrefix }) => {
+      const conversationContext = [
+        "[Current message - respond to this]",
+        `${sourcePrefix}private inbound paragraph`,
+      ].join("\n");
+      const wrappedContext = conversationContext
+        .split("\n")
+        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
+        .join("\n");
+      const presentation = createPresentation({ conversationContext });
+
+      for (let length = 1; length <= wrappedContext.length; length += 1) {
+        const visibleText =
+          presentation.normalizeStreamingText({ text: wrappedContext.slice(0, length) }).text ?? "";
+
+        expect(visibleText).not.toContain("private");
+      }
     },
   );
 

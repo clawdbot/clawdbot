@@ -215,18 +215,32 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered[0]).not.toContain("private inbound paragraph");
   });
 
-  it("never delivers an exact private prompt quoted on every Markdown line", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private inbound paragraph",
-    });
-    const quotedContext = conversationContext
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
+  it.each([
+    { name: "blockquoted", prefix: "> " },
+    { name: "indented", prefix: "    " },
+    { name: "bulleted", prefix: "- " },
+    { name: "headed", prefix: "# " },
+    { name: "list-continuation", prefix: "- ", continuation: "  " },
+    { name: "wide-list-continuation", prefix: "- ", continuation: "    " },
+    { name: "varying-quote-depth", prefix: "> ", continuation: ">> " },
+  ])(
+    "never delivers an exact private prompt $name on every Markdown line",
+    async ({ prefix, continuation }) => {
+      const conversationContext = buildHistoryContext({
+        historyText: "[Telegram] Alice: private history",
+        currentMessage: "private inbound paragraph",
+      });
+      const quotedContext = conversationContext
+        .split("\n")
+        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
+        .join("\n");
 
-    await prepareAndDispatch({ text: `${quotedContext}\n\nVisible answer.` }, conversationContext);
+      await prepareAndDispatch(
+        { text: `${quotedContext}\n\nVisible answer.` },
+        conversationContext,
+      );
 
-    expect(delivered).toEqual(["Visible answer."]);
-  });
+      expect(delivered).toEqual(["Visible answer."]);
+    },
+  );
 });

@@ -39,6 +39,34 @@ describe("user-facing internal scaffolding", () => {
         .map((line) => `> ${line}`)
         .join("\n")}`,
     },
+    {
+      name: "indented Markdown block",
+      input: `Visible answer.\n\n${conversationContext
+        .split("\n")
+        .map((line) => `    ${line}`)
+        .join("\n")}`,
+    },
+    {
+      name: "Markdown list",
+      input: `Visible answer.\n\n${conversationContext
+        .split("\n")
+        .map((line) => `- ${line}`)
+        .join("\n")}`,
+    },
+    {
+      name: "Markdown headings",
+      input: `Visible answer.\n\n${conversationContext
+        .split("\n")
+        .map((line) => `# ${line}`)
+        .join("\n")}`,
+    },
+    {
+      name: "multiline Markdown list item",
+      input: `Visible answer.\n\n${conversationContext
+        .split("\n")
+        .map((line, index) => `${index === 0 ? "- " : "  "}${line}`)
+        .join("\n")}`,
+    },
   ])("never preserves an exact private prompt inside a $name", ({ input }) => {
     const result = sanitizeUserFacingText(input, { conversationContext });
 
