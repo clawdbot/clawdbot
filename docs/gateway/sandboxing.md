@@ -531,7 +531,7 @@ Paths:
       preserves workspace ownership. Rootless Podman rejects zero-valued users;
       bake packages into the image or use rootful Podman.
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
-    - Values in `agents.defaults.sandbox.docker.env` remain visible through container metadata commands such as `docker inspect` or `podman inspect`. Docker and Podman values must be single-line because engine environment files are line-delimited. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
+    - Values in `agents.defaults.sandbox.docker.env` remain visible through container metadata commands such as `docker inspect` or `podman inspect`. Docker and Podman require portable environment names and single-line, non-NUL values because secure engine environment files are line-delimited; config validation and `openclaw doctor` reject invalid entries before sandbox use. Rename invalid keys, use single-line values, or deliver multiline material through a mounted file or custom image; this requires manual remediation because `doctor --fix` cannot safely preserve the original value. SSH and OpenShell backends still support multiline values. Use a custom image, mounted secret file, or another secret delivery path if metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>

@@ -8,21 +8,35 @@ type ContainerEnvFile = {
   cleanup: () => Promise<void>;
 };
 
+export function getContainerEnvFileEntryIssue(
+  key: string,
+  value: string,
+): "invalid-name" | "line-break" | "nul" | undefined {
+  if (normalizeEnvVarKey(key, { portable: true }) !== key) {
+    return "invalid-name";
+  }
+  if (/[\r\n]/u.test(value)) {
+    return "line-break";
+  }
+  return value.includes("\0") ? "nul" : undefined;
+}
+
 function serializeContainerEnv(env: Readonly<Record<string, string>>): string {
   let content = "";
   const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
   for (const [key, value] of entries) {
-    if (normalizeEnvVarKey(key, { portable: true }) !== key) {
+    const issue = getContainerEnvFileEntryIssue(key, value);
+    if (issue === "invalid-name") {
       throw new Error(
         `Invalid container environment variable name ${JSON.stringify(key)}; use letters, digits, and underscores without a leading digit.`,
       );
     }
-    if (/[\r\n]/u.test(value)) {
+    if (issue === "line-break") {
       throw new Error(
         `Container environment variable ${key} must have a single-line value because Docker and Podman --env-file entries are line-delimited.`,
       );
     }
-    if (value.includes("\0")) {
+    if (issue === "nul") {
       throw new Error(`Container environment variable ${key} must not contain NUL bytes.`);
     }
     content += `${key}=${value}\n`;
