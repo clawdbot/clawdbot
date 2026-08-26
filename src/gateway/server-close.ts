@@ -978,7 +978,7 @@ export function createGatewayCloseHandler(
         clearInterval(params.maintenance.healthInterval);
         clearInterval(params.maintenance.dedupeCleanup);
         clearInterval(params.maintenance.worktreeCleanup);
-        params.maintenance.skillCuratorCleanup();
+        params.maintenance.skillUsageCleanup();
       }
       if (params.agentUnsub) {
         await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);

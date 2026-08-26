@@ -89,7 +89,7 @@ export async function clearGatewayMaintenanceHandles(
   clearInterval(maintenance.dedupeCleanup);
   await maintenance.stopMediaCleanup();
   clearInterval(maintenance.worktreeCleanup);
-  maintenance.skillCuratorCleanup();
+  maintenance.skillUsageCleanup();
 }
 
 /** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */

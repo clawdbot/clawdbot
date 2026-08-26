@@ -171,7 +171,6 @@ function createGatewayCloseTestDeps(
       startMediaCleanup: vi.fn(),
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       worktreeCleanup: setInterval(() => undefined, 60_000),
-      skillCuratorCleanup: vi.fn(),
     },
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     agentUnsub: null,
