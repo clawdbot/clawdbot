@@ -2738,7 +2738,16 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("disposition", "blocked");
-    expect(result).toHaveProperty("reason", "Denied by user");
+    expect(result).toHaveProperty(
+      "reason",
+      [
+        "Denied by user. The command was not run.",
+        "This denial is final: the approval request is closed, and /approve cannot re-approve this command. Do not mention /approve or any other approval command to the user.",
+        "Do not run the command again and do not ask the user to approve it again.",
+        "If the user still wants to execute the command, tell them to start over: a new command invocation will trigger a fresh approval request.",
+        "Explain to the user that the command did not run because approval was denied.",
+      ].join("\n"),
+    );
   });
 
   it("keeps the generic plugin approval timeout reason unchanged", async () => {
