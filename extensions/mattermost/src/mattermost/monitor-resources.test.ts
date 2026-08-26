@@ -51,11 +51,42 @@ describe("mattermost monitor resources", () => {
         body: "quarterly files",
         nativeMedia: [{}, {}],
         materializedMedia: [
-          { path: "/tmp/q1.pdf", contentType: "application/pdf" },
-          { kind: "audio" },
+          { path: "/tmp/q1.pdf", contentType: "application/pdf", fileName: "available.pdf" },
+          { kind: "audio", fileName: "quarterly recording.mp3" },
         ],
       }),
-    ).toBe("quarterly files\n\n[mattermost attachment unavailable]");
+    ).toBe('quarterly files\n\n[mattermost attachment unavailable] "quarterly recording.mp3"');
+  });
+
+  it.each([
+    {
+      fileName: '../../private/report]\u0000\n".pdf',
+      expected: '[mattermost attachment unavailable] "report].pdf"',
+    },
+    { fileName: "   ", expected: "[mattermost attachment unavailable]" },
+  ])("safely formats unavailable attachment names: $fileName", ({ fileName, expected }) => {
+    expect(
+      formatMattermostInboundMediaText({
+        body: "",
+        nativeMedia: [{}],
+        materializedMedia: [{ kind: "document", fileName }],
+      }),
+    ).toBe(expected);
+  });
+
+  it("bounds multiple unavailable attachment names without losing their count", () => {
+    const materializedMedia = Array.from({ length: 4 }, (_, index) => ({
+      kind: "document" as const,
+      fileName: `${index}-${"a".repeat(250)}.pdf`,
+    }));
+    const result = formatMattermostInboundMediaText({
+      body: "",
+      nativeMedia: materializedMedia.map(() => ({})),
+      materializedMedia,
+    });
+
+    expect(result).toContain("[mattermost 4 attachments unavailable]");
+    expect(result.length).toBeLessThanOrEqual(560);
   });
 
   it("keeps successfully materialized media-only text empty", () => {
