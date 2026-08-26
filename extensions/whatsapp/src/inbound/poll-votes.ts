@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   rememberWhatsAppBaileysCacheEntry,
   readWhatsAppBaileysCacheEntry,
