@@ -1,4 +1,4 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -39,6 +39,12 @@ import {
 } from "./dispatch-from-config.test-harness.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const FAST_ABORT_SESSION_MODEL = Object.freeze({
+  providerOverride: "anthropic",
+  modelOverride: "claude-opus-4-6-20260205",
+  thinkingLevel: "high" as const,
+});
 
 function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId?: string }) {
   const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -512,11 +518,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("seeds direct fast-abort prefixes from the session-selected model", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
     const onModelSelected = vi.fn();
 
     await dispatchReplyFromConfig({
@@ -542,11 +544,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("carries session prefix context through the actual routed fast-abort delivery", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
