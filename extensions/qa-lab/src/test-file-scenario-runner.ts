@@ -556,24 +556,27 @@ function buildTestFileEvidence(params: {
       generatedAt: params.generatedAt,
       evidenceMode,
       profile: resolveQaEvidenceProfile({ env: params.env }),
-      entries: [
-        ...producerEntries.map((entry) => {
+      entries: params.results.flatMap((result) => [
+        ...(result.producerEvidence?.entries ?? []).map((entry) => {
+          const coveredEntry = withScenarioCoverage(entry, result.scenario);
           const fallbackFailure = fallbackEvidence?.entries.find(
-            (fallback) => fallback.test.id === entry.test.id && fallback.result.status === "fail",
+            (fallback) =>
+              fallback.test.id === coveredEntry.test.id && fallback.result.status === "fail",
           );
           const resolvedEntry =
-            entry.result.status !== "fail" && fallbackFailure
-              ? Object.assign({}, entry, { result: fallbackFailure.result })
-              : entry;
+            coveredEntry.result.status !== "fail" && fallbackFailure
+              ? Object.assign({}, coveredEntry, { result: fallbackFailure.result })
+              : coveredEntry;
           if (evidenceMode !== "slim") {
             return resolvedEntry;
           }
           const { execution: _execution, ...withoutExecution } = resolvedEntry;
           return withoutExecution;
         }),
-        ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
-          []),
-      ],
+        ...(fallbackEvidence?.entries.filter(
+          (entry) => entry.test.id === result.scenario.id && !producerEntryIds.has(entry.test.id),
+        ) ?? []),
+      ]),
     });
   }
   const definition = testFileRunnerDefinitions[params.kind];
