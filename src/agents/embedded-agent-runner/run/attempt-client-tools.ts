@@ -85,11 +85,10 @@ export function prepareEmbeddedAttemptClientTools(params: {
     params.replaySafetyOptions,
   );
   // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
-  // the same name must never be mistaken for one at tool completion.
+  // the same name must never be mistaken for one at tool completion. The marked
+  // controls exist only on the post-catalog `effectiveTools` surface.
   const codeModeExecToolNames = new Set(
-    params.uncompactedEffectiveTools
-      .filter((tool) => isCodeModeExecTool(tool))
-      .map((tool) => tool.name),
+    params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
   );
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
