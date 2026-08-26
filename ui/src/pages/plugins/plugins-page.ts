@@ -4,7 +4,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { pathForPluginsHubTab, pathForRoute } from "../../app-route-paths.ts";
+import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -12,21 +12,8 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import {
-  buildAddMcpServerPatch,
-  buildRemoveMcpServerPatch,
-  buildToggleMcpServerPatch,
-  MCP_SERVER_NAME_PATTERN,
-  parseMcpTarget,
-  patchMcpServers,
-  summarizeMcpServers,
-  type McpServerSummary,
-  type McpServersPatchBuildResult,
-} from "../../lib/config/mcp-servers.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
@@ -42,16 +29,14 @@ import {
   type GatewayPageChange,
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
-import type { ConnectorSuggestion } from "./presentation.ts";
+import { PluginsMcpController } from "./plugins-mcp-controller.ts";
 import { pluginArtPath } from "./presentation.ts";
 import { canonicalPluginsRouteLocation, pluginsHubTabForRoute } from "./route-data.ts";
 import {
-  connectorRowKey,
   renderPlugins,
   type InstalledFilter,
   type PluginRowMessage,
@@ -103,11 +88,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private detailInspectionError: string | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
-  @state() private mcpServers: McpServerSummary[] | null = null;
-  @state() private mcpMessage: PluginRowMessage | null = null;
-  @state() private mcpBusy = false;
-  @state() private mcpFormOpen = false;
-
   private routeDataConsumed = false;
   private normalizedLocation = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -129,7 +109,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.detailInspectionError = null;
       this.consentController.reset();
       this.pageNotice = null;
-      this.mcpMessage = null;
+      this.mcpController.resetMessage();
     },
     invalidateRequests: (change) =>
       this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
@@ -169,26 +149,13 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly configTask = new Task(this, {
-    autoRun: false,
-    args: () =>
-      [
-        this.gateway.connected ? this.gateway.client : null,
-        this.context?.runtimeConfig ?? null,
-      ] as const,
-    task: async ([client, runtimeConfig]) => {
-      if (!client || !runtimeConfig) {
-        return initialState;
-      }
-      await runtimeConfig.refresh();
-      return runtimeConfig.state.lastError;
-    },
-    onComplete: () => {
-      this.syncMcpServers();
-    },
-    onError: () => {
-      this.syncMcpServers();
-    },
+  private readonly mcpController = new PluginsMcpController({
+    element: this,
+    gateway: this.gateway,
+    getContext: () => this.context,
+    canMutate: () => this.canMutate(),
+    setRowBusy: (rowKey, busy) => this.setBusy(rowKey, busy),
+    setRowMessage: (rowKey, message) => this.setMessage(rowKey, message),
   });
 
   private readonly searchTask = new Task(this, {
@@ -210,14 +177,6 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      this.syncMcpServers();
-      return runtimeConfig.subscribe(() => this.syncMcpServers());
-    },
-  );
-
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
@@ -233,7 +192,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    this.subscriptions.clear();
+    this.mcpController.disconnect();
     this.clearSearchTimer();
     this.resetPluginIcons();
     super.disconnectedCallback();
@@ -287,17 +246,15 @@ class PluginsPage extends OpenClawLightDomElement {
     ) {
       this.resetPluginIcons();
       this.busy = {};
-      this.mcpBusy = false;
+      this.mcpController.resetBusy();
       this.debouncedSearchQuery = "";
     }
     if (shouldRefreshAfterChange) {
-      void this.refreshPage();
+      void this.mcpController.refreshPage(() => this.refreshCatalog());
     } else {
       this.ensureInitialData();
     }
-    if (snapshot.phase === "connected") {
-      void this.context?.runtimeConfig.ensureLoaded().then(() => this.syncMcpServers());
-    }
+    this.mcpController.ensureLoaded(snapshot.phase === "connected");
     if (
       !change.initial &&
       (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
@@ -355,7 +312,7 @@ class PluginsPage extends OpenClawLightDomElement {
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
     }
-    void this.configTask.run([null, this.context.runtimeConfig]);
+    this.mcpController.invalidate();
     void this.searchTask.run([null, ""]);
     this.consentController.invalidateMutations();
   }
@@ -530,16 +487,6 @@ class PluginsPage extends OpenClawLightDomElement {
       : null;
   }
 
-  private get configRefreshError(): string | null {
-    const failure =
-      this.configTask.status === TaskStatus.ERROR
-        ? formatUiError(this.configTask.error)
-        : this.configTask.status === TaskStatus.COMPLETE
-          ? this.configTask.value
-          : null;
-    return failure ? t("pluginsPage.configRefreshFailed", { error: failure }) : null;
-  }
-
   private ensureInitialData() {
     if (
       !this.gateway.connected ||
@@ -563,24 +510,6 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     this.error = null;
     await this.catalogTask.run([client]);
-  }
-
-  private async refreshRuntimeConfig(): Promise<void> {
-    const client = this.gateway.client;
-    if (!client || !this.gateway.connected) {
-      return;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    await this.configTask.run([client, runtimeConfig]);
-  }
-
-  private async refreshPage(): Promise<void> {
-    await Promise.all([this.refreshCatalog(), this.refreshRuntimeConfig()]);
-  }
-
-  private syncMcpServers() {
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    this.mcpServers = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -698,13 +627,6 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.catalogTask.run([client]);
   }
 
-  private pageError(): string | null {
-    const errors = [this.error, this.configRefreshError].filter((message): message is string =>
-      Boolean(message),
-    );
-    return errors.length > 0 ? errors.join(" ") : null;
-  }
-
   private showDetails(pluginId: string | null) {
     this.detailPluginId = pluginId;
     this.detailInspection = null;
@@ -725,7 +647,7 @@ class PluginsPage extends OpenClawLightDomElement {
           this.detailInspection = inspection;
         }
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (this.gateway.isCurrent(scope) && this.detailPluginId === plugin.id) {
           this.detailInspectionError = formatUiError(error);
         }
@@ -760,120 +682,6 @@ class PluginsPage extends OpenClawLightDomElement {
     );
   }
 
-  private async mutateMcpServers(params: {
-    buildPatch: (servers: Readonly<Record<string, unknown>>) => McpServersPatchBuildResult;
-    note: string;
-    successText: string;
-    busyKey?: string;
-  }): Promise<boolean> {
-    if (!this.canMutate() || this.mcpBusy) {
-      return false;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    this.mcpBusy = true;
-    if (params.busyKey) {
-      this.setBusy(params.busyKey, true);
-      this.setMessage(params.busyKey, null);
-    }
-    this.mcpMessage = null;
-    // Failures surface where the action started: on the triggering card when
-    // one exists (Discover connectors), otherwise in the MCP section.
-    const fail = (text: string) => {
-      if (params.busyKey) {
-        this.setMessage(params.busyKey, { kind: "error", text });
-      } else {
-        this.mcpMessage = { kind: "error", text };
-      }
-      return false;
-    };
-    try {
-      const result = await patchMcpServers(runtimeConfig, {
-        buildPatch: params.buildPatch,
-        note: params.note,
-      });
-      if (!result.ok) {
-        return fail(result.error);
-      }
-      this.syncMcpServers();
-      this.mcpMessage = { kind: "success", text: params.successText };
-      return true;
-    } catch (error) {
-      return fail(formatUiError(error));
-    } finally {
-      this.mcpBusy = false;
-      if (params.busyKey) {
-        this.setBusy(params.busyKey, false);
-      }
-    }
-  }
-
-  private async addMcpServer(form: McpServerForm) {
-    const name = form.name.trim();
-    if (!MCP_SERVER_NAME_PATTERN.test(name)) {
-      this.mcpMessage = { kind: "error", text: t("mcpServers.nameInvalid") };
-      return;
-    }
-    const config = parseMcpTarget(form.target, form.transport);
-    if (!config) {
-      this.mcpMessage = { kind: "error", text: t("mcpServers.targetInvalid") };
-      return;
-    }
-    const added = await this.mutateMcpServers({
-      buildPatch: (servers) => buildAddMcpServerPatch(servers, name, config),
-      note: `plugins: add MCP server ${name}`,
-      successText: t("mcpServers.addedSuccess", { name }),
-    });
-    if (added) {
-      this.mcpFormOpen = false;
-    }
-  }
-
-  private async toggleMcpServer(name: string, enabled: boolean) {
-    await this.mutateMcpServers({
-      buildPatch: (servers) => buildToggleMcpServerPatch(servers, name, enabled),
-      note: `plugins: ${enabled ? "enable" : "disable"} MCP server ${name}`,
-      successText: t(enabled ? "mcpServers.enabledSuccess" : "mcpServers.disabledSuccess", {
-        name,
-      }),
-    });
-  }
-
-  private async removeMcpServer(name: string) {
-    await this.mutateMcpServers({
-      buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
-      note: `plugins: remove MCP server ${name}`,
-      successText: t("mcpServers.removedSuccess", { name }),
-    });
-  }
-
-  private async addConnector(connector: ConnectorSuggestion) {
-    if (connector.action.kind !== "mcp") {
-      return;
-    }
-    const mcp = connector.action.mcp;
-    const rowKey = connectorRowKey(connector.id);
-    const successText =
-      mcp.followUp === "oauth"
-        ? t("pluginsPage.connectorAddedOauth", {
-            name: connector.name,
-            command: `openclaw mcp login ${mcp.serverName}`,
-          })
-        : mcp.followUp === "endpoint"
-          ? t("pluginsPage.connectorAddedEndpoint", { name: connector.name })
-          : t("pluginsPage.connectorAddedReady", { name: connector.name });
-    const added = await this.mutateMcpServers({
-      buildPatch: (servers) =>
-        buildAddMcpServerPatch(servers, mcp.serverName, structuredClone(mcp.config)),
-      note: `plugins: add MCP connector ${mcp.serverName}`,
-      successText,
-      busyKey: rowKey,
-    });
-    if (added) {
-      this.setMessage(rowKey, { kind: "success", text: successText });
-      this.mcpMessage = null;
-    }
-  }
-
   override render() {
     const blockedReason = this.mutationBlockedReason();
     return html`
@@ -886,7 +694,7 @@ class PluginsPage extends OpenClawLightDomElement {
           connected: this.gateway.connected,
           loading: this.loading,
           result: this.result,
-          error: this.pageError(),
+          error: this.mcpController.pageError(this.error),
           activeTab: this.activeTab,
           query: this.query,
           installedFilter: this.installedFilter,
@@ -907,16 +715,12 @@ class PluginsPage extends OpenClawLightDomElement {
           canMutate: this.canMutate(),
           mutationBlockedReason: blockedReason,
           pageNotice: this.pageNotice,
-          mcpSettingsHref: pathForRoute("mcp", this.context?.basePath ?? ""),
-          mcpServers: this.mcpServers,
-          mcpMessage: this.mcpMessage,
-          mcpBusy: this.mcpBusy,
-          mcpFormOpen: this.mcpFormOpen,
+          ...this.mcpController.viewState,
           onQueryChange: (query) => this.changeQuery(query),
           onFilterChange: (filter) => {
             this.installedFilter = filter;
           },
-          onRefresh: () => void this.refreshPage(),
+          onRefresh: () => void this.mcpController.refreshPage(() => this.refreshCatalog()),
           onIconError: (pluginId) => this.handlePluginIconError(pluginId),
           onShowDetails: (pluginId) => this.showDetails(pluginId),
           onSetEnabled: (pluginId, enabled, rowKey) =>
@@ -930,17 +734,7 @@ class PluginsPage extends OpenClawLightDomElement {
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
           onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
-          onAddConnector: (connector) => void this.addConnector(connector),
           onSearchClawHub: (query) => this.openClawHubSearch(query),
-          onMcpToggle: (name, enabled) => void this.toggleMcpServer(name, enabled),
-          onMcpRemove: (name) => void this.removeMcpServer(name),
-          onMcpFormToggle: (open) => {
-            this.mcpFormOpen = open;
-            if (open) {
-              this.mcpMessage = null;
-            }
-          },
-          onMcpAdd: (form) => void this.addMcpServer(form),
         })}
       `)}
     `;

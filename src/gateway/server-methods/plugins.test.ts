@@ -369,7 +369,13 @@ describe("plugin management Gateway handlers", () => {
           label: "extra acknowledgement properties",
           acknowledgement: { reviewToken, unexpected: true },
         },
-      ].map((invalid) => ({ ...testCase, ...invalid })),
+      ].map((invalid) => ({
+        method: testCase.method,
+        params: testCase.params,
+        mock: testCase.mock,
+        label: invalid.label,
+        acknowledgement: invalid.acknowledgement,
+      })),
     ),
   )("rejects $label before dispatching $method", async (testCase) => {
     const result = await callHandler(testCase.method, {

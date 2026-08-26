@@ -66,9 +66,9 @@ function formatPluginCapabilityConsentLines(details: PluginCapabilityConsentRevi
     if (!values) {
       continue;
     }
-    for (const [name, value] of Object.entries(values)) {
+    for (const [grantName, value] of Object.entries(values)) {
       const rendered = Array.isArray(value) ? sanitizeCapabilityValues(value) : String(value);
-      lines.push(`${grantGroup} ${name}: ${rendered}`);
+      lines.push(`${grantGroup} ${grantName}: ${rendered}`);
     }
   }
   if (details.trust) {

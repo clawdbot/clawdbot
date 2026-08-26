@@ -33,7 +33,6 @@ import {
   formatClawHubInstallFailure,
   formatGitInstallFailure,
   formatMarketplaceInstallFailure,
-  formatNewerExactPinnedNpmDefaultLineMessage,
   formatNpmInstallFailure,
   readClawHubTrustErrorCode,
   runPluginUpdateAttempt,
@@ -68,7 +67,6 @@ import {
   resolveClawHubUpdateSpecs,
   resolveNpmSpecPackageName,
   resolveNpmUpdateSpecs,
-  resolveNewerExactPinnedNpmDefaultLine,
   resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
   resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
@@ -85,6 +83,7 @@ import {
   recordPluginUpdateFailure,
   recordPluginUpdateTransaction,
 } from "./update-summary.js";
+import { reconcileUnchangedUpdate } from "./update-unchanged.js";
 
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
@@ -427,61 +426,26 @@ export async function updateNpmInstalledPlugins(params: {
             metadata: metadataResult.metadata,
           })
         ) {
-          const newerExactPinnedDefaultLine =
-            !npmSpecOverride && !officialNpmSpec
-              ? await resolveNewerExactPinnedNpmDefaultLine({
-                  currentVersion,
-                  effectiveSpec,
-                  probeNpmVersion: metadataResult.metadata.version,
-                  updateChannel,
-                  timeoutMs: params.timeoutMs,
-                })
-              : undefined;
-          if (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) {
-            const nextRecordSpec = resolveNpmInstallRecordSpec({
-              requestedSpec: recordSpec,
-              resolution: metadataResult.metadata,
-              pinResolvedRegistrySpec: !preserveNpmRecordIntent,
-            });
-            if (nextRecordSpec !== record.spec) {
-              const resolutionFields = buildNpmResolutionInstallFields(metadataResult.metadata);
-              next = {
-                ...next,
-                plugins: {
-                  ...next.plugins,
-                  installs: {
-                    ...next.plugins?.installs,
-                    [pluginId]: {
-                      ...record,
-                      spec: nextRecordSpec,
-                      resolvedName: resolutionFields.resolvedName ?? record.resolvedName,
-                      resolvedVersion: resolutionFields.resolvedVersion ?? record.resolvedVersion,
-                      resolvedSpec: resolutionFields.resolvedSpec ?? record.resolvedSpec,
-                      integrity: resolutionFields.integrity ?? record.integrity,
-                      shasum: resolutionFields.shasum ?? record.shasum,
-                      resolvedAt: resolutionFields.resolvedAt ?? record.resolvedAt,
-                    },
-                  },
-                },
-              };
-              changed = true;
-            }
-          }
-          outcomes.push({
+          const unchanged = await reconcileUnchangedUpdate({
+            config: next,
             pluginId,
-            status: "unchanged",
+            record,
             currentVersion,
-            nextVersion: newerExactPinnedDefaultLine?.version ?? metadataResult.metadata.version,
-            message:
-              newerExactPinnedDefaultLine && effectiveSpec
-                ? formatNewerExactPinnedNpmDefaultLineMessage({
-                    pluginId,
-                    effectiveSpec,
-                    currentVersion,
-                    newer: newerExactPinnedDefaultLine,
-                  })
-                : `${pluginId} is up to date (${currentVersion}).`,
+            effectiveSpec,
+            recordSpec,
+            resolution: metadataResult.metadata,
+            updateChannel,
+            timeoutMs: params.timeoutMs,
+            hasSpecOverride: Boolean(npmSpecOverride),
+            hasOfficialNpmSpec: Boolean(officialNpmSpec),
+            syncOfficialInstall: Boolean(
+              params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall,
+            ),
+            preserveRecordIntent: preserveNpmRecordIntent,
           });
+          next = unchanged.config;
+          changed ||= unchanged.changed;
+          outcomes.push(unchanged.outcome);
           continue;
         }
       } else {
