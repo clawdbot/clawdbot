@@ -19,15 +19,6 @@ export type InputProvenance = {
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
-/**
- * Provenance for user-role turns a CLI harness wrote into its own native
- * transcript (skill instruction bodies, continuation summaries). The operator
- * never typed them.
- */
-export function buildCliHarnessContextInputProvenance(): InputProvenance {
-  return { kind: "internal_system", sourceTool: "cli_harness_context" };
-}
-
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",

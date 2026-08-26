@@ -452,6 +452,16 @@ describe("cli session history", () => {
               content: "This session is being continued from a previous conversation.",
             },
           },
+          {
+            type: "user",
+            uuid: "transcript-only-1",
+            isVisibleInTranscriptOnly: true,
+            timestamp: "2026-03-26T16:29:57.000Z",
+            message: {
+              role: "user",
+              content: "Transcript-only synthetic context row.",
+            },
+          },
         ]
           .map((line) => JSON.stringify(line))
           .join("\n"),
@@ -460,7 +470,7 @@ describe("cli session history", () => {
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
-      expect(messages).toHaveLength(3);
+      expect(messages).toHaveLength(4);
       // The operator-authored turn stays free of injected provenance.
       expectFields(messages[0], { role: "user" });
       expect(readRecord(messages[0]).provenance).toBeUndefined();
@@ -470,6 +480,10 @@ describe("cli session history", () => {
         sourceTool: "cli_harness_context",
       });
       expectFields(readRecord(messages[2]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
+      expectFields(readRecord(messages[3]).provenance, {
         kind: "internal_system",
         sourceTool: "cli_harness_context",
       });

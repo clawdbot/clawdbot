@@ -22,7 +22,6 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
-import { buildCliHarnessContextInputProvenance } from "../sessions/input-provenance.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -35,6 +34,7 @@ export type ClaudeCliProjectEntry = {
   isSidechain?: unknown;
   isMeta?: unknown;
   isCompactSummary?: unknown;
+  isVisibleInTranscriptOnly?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -275,11 +275,24 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
+// Claude marks harness-written user turns with isMeta (skill instruction
+// bodies, injected notices), isCompactSummary (compaction summaries), and
+// isVisibleInTranscriptOnly (transcript-only synthetic rows); its own UI
+// groups these flags as "not a real operator turn" (verified against the
+// v2.1.246 bundle). The operator never typed these rows.
+function isClaudeCliHarnessInjectedEntry(entry: ClaudeCliProjectEntry): boolean {
+  return (
+    entry.isMeta === true ||
+    entry.isCompactSummary === true ||
+    entry.isVisibleInTranscriptOnly === true
+  );
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
-  if (entry.isMeta === true || entry.isCompactSummary === true) {
+  if (isClaudeCliHarnessInjectedEntry(entry)) {
     return [];
   }
   if (typeof content === "string") {
@@ -397,16 +410,16 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
-    // Claude marks harness-written user turns (skill instruction bodies,
-    // continuation summaries) with isMeta/isCompactSummary. Record that
-    // provenance here, where the native flag is known, so downstream display
-    // never has to infer operator authorship from message text.
-    const harnessInjected = entry.isMeta === true || entry.isCompactSummary === true;
+    // Record provenance here, where the native flags are known, so downstream
+    // display never has to infer operator authorship from message text.
+    const harnessInjected = isClaudeCliHarnessInjectedEntry(entry);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(harnessInjected ? { provenance: buildCliHarnessContextInputProvenance() } : {}),
+        ...(harnessInjected
+          ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
+          : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       baseMeta,
