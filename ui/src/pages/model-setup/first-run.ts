@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasPendingFirstRunActivation } from "./first-run-activation-pending.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
@@ -97,14 +98,38 @@ function startModelSetupFirstRunRedirect(params: {
     const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
     const defaultAgentId = defaults?.defaultAgentId?.trim() || null;
     const usesDefaultAgent = selectedAgentId === null || selectedAgentId === defaultAgentId;
-    if (
+    const canRedirect =
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
-      defaults?.modelConfigured === false &&
       usesDefaultAgent &&
-      params.isStillDefaultLanding()
-    ) {
+      params.isStillDefaultLanding();
+    if (canRedirect && defaults?.modelConfigured === false) {
       params.redirect();
+    } else if (
+      canRedirect &&
+      defaults?.modelConfigured === true &&
+      hasPendingFirstRunActivation()
+    ) {
+      const owner = {
+        client: snapshot.client,
+        hello: snapshot.hello,
+        revision: params.context.gateway.connectionRevision,
+        agentId: selectedAgentId,
+      };
+      // HMAC/SHA-256 stays out of every ordinary startup bundle; only a real
+      // pending receipt suspends routing until its authenticated owner loads.
+      void import("./first-run-activation-receipt.ts")
+        .then(({ resumeFirstRunActivation }) =>
+          resumeFirstRunActivation(
+            params.context,
+            owner,
+            params,
+            () => initialDecisionSettled,
+            settleInitialDecision,
+          ),
+        )
+        .catch(settleInitialDecision);
+      return;
     }
     settleInitialDecision();
   };

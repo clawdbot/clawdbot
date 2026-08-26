@@ -136,7 +136,8 @@ describe("OpenAI plugin manifest", () => {
     expect(openAiDeviceCode?.choiceHint).toBe(
       "Pair your ChatGPT account in browser with a device code",
     );
-    expect(openAiDeviceCode?.assistantVisibility).toBe("manual-only");
+    expect(openAiDeviceCode?.assistantVisibility).toBeUndefined();
+    expect(openAiDeviceCode?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
     expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");

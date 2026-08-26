@@ -19,6 +19,17 @@ pub struct GatewaySnapshot {
 }
 
 impl GatewaySnapshot {
+    pub fn unconfigured() -> Self {
+        Self {
+            phase: "unconfigured",
+            installed: false,
+            running: false,
+            reachable: false,
+            status: "Setup required".to_string(),
+            detail: Some("Choose where your OpenClaw Gateway should run.".to_string()),
+        }
+    }
+
     pub fn missing_cli() -> Self {
         Self {
             phase: "missingCli",
