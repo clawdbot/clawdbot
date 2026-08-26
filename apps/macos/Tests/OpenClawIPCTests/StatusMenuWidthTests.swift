@@ -127,34 +127,18 @@ struct StatusMenuWidthTests {
         let longTitle =
             "A gateway with a very long operator-assigned display name that must preserve both " +
             "its beginning and its useful identifying suffix"
-        let variants: [(hasImage: Bool, hasSubmenu: Bool, keyEquivalent: String)] = [
-            (false, false, ""),
-            (true, false, ""),
-            (true, true, ""),
-            (true, false, "g"),
-        ]
+        let fitted = StatusMenuMetrics.fittedTitle(longTitle)
+        let measuredWidth = (fitted as NSString).size(withAttributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+        ]).width
 
-        for variant in variants {
-            let fitted = StatusMenuMetrics.fittedTitle(
-                longTitle,
-                hasImage: variant.hasImage,
-                hasSubmenu: variant.hasSubmenu,
-                keyEquivalent: variant.keyEquivalent)
-            let measuredWidth = (fitted as NSString).size(withAttributes: [
-                .font: NSFont.menuFont(ofSize: 0),
-            ]).width
-            let budget = StatusMenuMetrics.titleWidthBudget(
-                hasImage: variant.hasImage,
-                hasSubmenu: variant.hasSubmenu,
-                keyEquivalent: variant.keyEquivalent)
+        #expect(fitted.contains("…"))
+        #expect(fitted.first == longTitle.first)
+        #expect(fitted.last == longTitle.last)
+        #expect(measuredWidth <= StatusMenuMetrics.titleWidthBudget)
+        #expect(StatusMenuMetrics.titleWidthBudget < StatusMenuMetrics.width)
 
-            #expect(fitted.contains("…"))
-            #expect(fitted.first == longTitle.first)
-            #expect(fitted.last == longTitle.last)
-            #expect(measuredWidth <= budget)
-        }
-
-        #expect(StatusMenuMetrics.fittedTitle("Settings…", hasImage: true) == "Settings…")
+        #expect(StatusMenuMetrics.fittedTitle("Settings…") == "Settings…")
     }
 
     private static func session(_ displayName: String) -> SessionRow {

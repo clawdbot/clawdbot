@@ -79,14 +79,12 @@ final class StatusMenuSummaries: NSObject {
             String(localized: "\(count) jobs")
         }
         item.image = NSImage(systemSymbolName: "clock.badge.checkmark", accessibilityDescription: nil)
-        item.title = StatusMenuMetrics.fittedTitle(
-            String(localized: "Automations · \(detail)"), hasImage: item.image != nil, hasSubmenu: true)
+        item.title = StatusMenuMetrics.fittedTitle(String(localized: "Automations · \(detail)"))
 
         var entries = jobs.prefix(8).map { job in
             MenuEntry(id: "cron.job.\(job.id)") { item in
                 let next = job.nextRunDate.map(Self.relativeRun)
-                item.title = StatusMenuMetrics.fittedTitle(
-                    next.map { "\(job.displayName) · \($0)" } ?? job.displayName)
+                item.title = StatusMenuMetrics.fittedTitle(next.map { "\(job.displayName) · \($0)" } ?? job.displayName)
                 item.isEnabled = false
             }
         }
@@ -109,7 +107,7 @@ final class StatusMenuSummaries: NSObject {
             String(localized: "Usage")
         }
         item.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
-        item.title = StatusMenuMetrics.fittedTitle(title, hasImage: item.image != nil, hasSubmenu: true)
+        item.title = StatusMenuMetrics.fittedTitle(title)
 
         var entries = self.orderedUsageRows.map { row in
             MenuEntry(id: "usage.provider.\(row.id)") { item in
@@ -149,7 +147,7 @@ final class StatusMenuSummaries: NSObject {
         let count = self.connectedDeviceCount
         item.image = NSImage(systemSymbolName: "laptopcomputer.and.iphone", accessibilityDescription: nil)
         item.title = StatusMenuMetrics.fittedTitle(
-            String(localized: "Devices · \(count) connected"), hasImage: item.image != nil, hasSubmenu: true)
+            String(localized: "Devices · \(count) connected"))
 
         var entries: [MenuEntry] = []
         if let gateway = self.gatewayEntry() {
@@ -207,7 +205,7 @@ final class StatusMenuSummaries: NSObject {
             item.image = Self.gatewayImage(health: gateway.health, name: gateway.name)
             item.state = gateway.isPrimary ? .on : .off
         }
-        item.title = StatusMenuMetrics.fittedTitle(item.title, hasImage: item.image != nil)
+        item.title = StatusMenuMetrics.fittedTitle(item.title)
     }
 
     private var enabledJobs: [CronJob] {
@@ -428,7 +426,7 @@ extension StatusMenuSummaries {
 
     private func nodeEntry(_ node: NodeInfo) -> MenuEntry {
         MenuEntry(id: "devices.node.\(node.nodeId)") { [weak self] item in
-            item.title = StatusMenuMetrics.fittedTitle(NodeMenuEntryFormatter.primaryName(node), hasSubmenu: true)
+            item.title = StatusMenuMetrics.fittedTitle(NodeMenuEntryFormatter.primaryName(node))
             item.target = self
             item.action = #selector(Self.copyNodeValue(_:))
             if let id = item.representedObject as? String {

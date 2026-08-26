@@ -48,7 +48,7 @@ final class StatusMenuSessions: NSObject {
     }
 
     func configureSessionItem(_ item: NSMenuItem, row: SessionRow) {
-        item.title = StatusMenuMetrics.fittedTitle(row.label, hasSubmenu: true)
+        item.title = StatusMenuMetrics.fittedTitle(row.label)
         item.isEnabled = true
         StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row))
 

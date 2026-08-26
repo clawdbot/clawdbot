@@ -1,17 +1,15 @@
 import AppKit
 
+/// Single owner of the status menu's width. Every row - hosted card or native
+/// item - is built to this width, so the menu never sizes itself from content.
 @MainActor
 enum StatusMenuMetrics {
     static let width: CGFloat = 330
-    private static var chromeWidths: [String: CGFloat] = [:]
 
-    static func fittedTitle(
-        _ title: String,
-        hasImage: Bool = false,
-        hasSubmenu: Bool = false,
-        keyEquivalent: String = "") -> String
-    {
-        let budget = self.titleWidthBudget(hasImage: hasImage, hasSubmenu: hasSubmenu, keyEquivalent: keyEquivalent)
+    /// Truncates a native row title to the width budget with a middle ellipsis.
+    /// Hosted cards do not need this: the renderer frames them at `width`.
+    static func fittedTitle(_ title: String) -> String {
+        let budget = self.titleWidthBudget
         guard self.measuredWidth(title) > budget else { return title }
         let characters = Array(title)
         var bounds = (lower: 0, upper: characters.count)
@@ -30,27 +28,22 @@ enum StatusMenuMetrics {
         return fitted
     }
 
-    static func titleWidthBudget(
-        hasImage: Bool = false,
-        hasSubmenu: Bool = false,
-        keyEquivalent: String = "") -> CGFloat
-    {
-        let cacheKey = "\(hasImage):\(hasSubmenu):\(keyEquivalent)"
-        if let cachedWidth = self.chromeWidths[cacheKey] { return self.width - cachedWidth }
-        let shortcut = keyEquivalent.isEmpty ? "q" : keyEquivalent
-        let item = NSMenuItem(title: "M", action: nil, keyEquivalent: shortcut)
-        item.image = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
-        let cell = NSMenuItemCell(textCell: item.title)
-        cell.menuItem = item
+    /// AppKit aligns the image, submenu, and shortcut columns across every item
+    /// in a menu, so the budget is menu-wide rather than per item: this menu
+    /// always carries all three (icons on actions, submenus on sessions and
+    /// summaries, shortcuts on Settings and Quit).
+    static let titleWidthBudget: CGFloat = {
+        let probe = NSMenuItem(title: "M", action: nil, keyEquivalent: "q")
+        probe.image = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
+        let cell = NSMenuItemCell(textCell: probe.title)
+        cell.menuItem = probe
         cell.font = NSFont.menuFont(ofSize: 0)
         cell.calcSize()
-        var chrome = cell.cellSize.width - self.measuredWidth(item.title)
-        // AppKit aligns image, submenu, and shortcut columns across every item in the root menu.
-        chrome += cell.stateImageWidth + self.measuredWidth("▶")
-        chrome += cell.stateImageWidth + self.measuredWidth("⌘" + shortcut)
-        self.chromeWidths[cacheKey] = chrome
-        return self.width - chrome
-    }
+        var chrome = cell.cellSize.width - StatusMenuMetrics.measuredWidth(probe.title)
+        chrome += cell.stateImageWidth + StatusMenuMetrics.measuredWidth("▶")
+        chrome += cell.stateImageWidth + StatusMenuMetrics.measuredWidth("⌘q")
+        return StatusMenuMetrics.width - chrome
+    }()
 
     private static func measuredWidth(_ value: String) -> CGFloat {
         (value as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width

@@ -232,7 +232,7 @@ final class StatusMenuRenderer: NSObject {
 
     private func configureNative(_ item: NSMenuItem, title: String, symbol: String, action: Selector) {
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        item.title = StatusMenuMetrics.fittedTitle(title, hasImage: item.image != nil)
+        item.title = StatusMenuMetrics.fittedTitle(title)
         item.target = self
         item.action = action
         item.isEnabled = true
