@@ -154,7 +154,6 @@ export function buildCodexAttemptResult(
     turnId: input.turnId,
     upstreamUserText: input.upstreamUserText,
     reasoningText,
-    planText,
     asyncMessages,
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,

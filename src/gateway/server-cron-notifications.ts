@@ -5,15 +5,14 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
-import type { CronEvent } from "../cron/service.js";
+import type { CronEvent, CronService } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronJob, CronMessageChannel } from "../cron/types.js";
+import type { CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
@@ -34,21 +33,14 @@ type CronAgentResolver = (requested?: string | null) => {
   cfg: OpenClawConfig;
 };
 
-type CronFailureAlertParams = {
+type CronFailureAlertParams = Parameters<
+  NonNullable<ConstructorParameters<typeof CronService>[0]["sendCronFailureAlert"]>
+>[0] & {
   deps: CliDeps;
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
-  job: CronJob;
-  payload: ReplyPayload;
-  runAtMs?: number;
-  channel: CronMessageChannel;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-  threadId?: string | number;
-  inheritSessionThread?: false;
 };
 
 function redactWebhookUrl(url: string): string {
@@ -340,21 +332,20 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
 ): Promise<void> {
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
-  const webhookToken = normalizeOptionalString(params.webhookToken);
 
-  if (params.mode === "webhook" && !params.to) {
-    throw new Error("cron failure alert webhook requires a URL");
-  }
-
-  if (params.mode === "webhook" && params.to) {
+  if (params.mode === "webhook") {
+    if (!params.to) {
+      throw new Error("cron failure alert webhook requires a URL");
+    }
     const webhookUrl = normalizeHttpWebhookUrl(params.to);
     if (!webhookUrl) {
       throw new Error("cron failure alert webhook requires a valid http(s) URL");
     }
     await postCronWebhookStrict({
       webhookUrl,
-      webhookToken,
+      webhookToken: normalizeOptionalString(params.webhookToken),
       ssrfPolicy: params.ssrfPolicy,
+      onDeliveryAccepted: () => params.onDeliveryAttempt?.(true),
       payload: {
         jobId: params.job.id,
         jobName: params.job.name,
@@ -387,6 +378,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         text: appendCronRunStarted(params.payload.text ?? "", params.runAtMs, runtimeConfig),
       },
       abortSignal: abortController.signal,
+      onDeliveryAttempt: params.onDeliveryAttempt,
     }),
     CRON_WEBHOOK_TIMEOUT_MS,
     {

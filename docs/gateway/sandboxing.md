@@ -6,7 +6,7 @@ read_when: "You want a dedicated explanation of sandboxing or need to tune agent
 status: active
 ---
 
-OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global) or `agents.entries.*.sandbox` (per-agent). The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
+OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
 <Note>
 This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
@@ -20,7 +20,7 @@ This is not a perfect security boundary, but it materially limits filesystem and
 Not sandboxed:
 
 - The Gateway process itself.
-- Any tool explicitly allowed to run outside the sandbox via `tools.elevated`. Elevated exec bypasses sandboxing and runs on the configured escape path (`gateway` by default, or `node` when the exec target is `node`). If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
+- Any tool explicitly allowed to run outside an ordinary sandbox via `tools.elevated`. Elevated exec uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`), but cannot escape a session whose creator role requires sandboxing. If sandboxing is off, `tools.elevated` changes nothing since exec already runs on the host. See [Elevated Mode](/tools/elevated).
 
 ## Modes, scope, and backend
 
@@ -34,9 +34,16 @@ Three independent settings control sandbox behavior:
 
 **Mode** controls when sandboxing applies:
 
-- `off`: no sandboxing.
+- `off`: no agent-wide sandboxing; sessions whose creator role requires a sandbox still run sandboxed.
 - `non-main`: sandbox every session except the agent's main session. The main session key is always `agent:<agentId>:main` (or `global` when `session.scope` is `"global"`); it is not configurable. Group/channel sessions use their own keys, so they always count as non-main and get sandboxed.
 - `all`: every session runs in a sandbox.
+
+Set a named operator role's `sandbox` policy to `"required"` to sandbox that
+role's newly created sessions regardless of agent mode. The creator requirement
+is immutable for the session; unavailable backends fail closed, and elevated
+execution or Gateway/node host overrides cannot bypass it. The default
+`"inherit"` preserves existing agent-mode behavior. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 **Scope** controls how many containers/environments are created:
 
@@ -127,7 +134,7 @@ To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent
 If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a path mapping constraint:
 
 - **Config requires host paths**: `openclaw.json` `workspace` must contain the **host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. The Docker daemon evaluates paths relative to the host OS namespace, not the Gateway's own namespace.
-- **Matching volume map required**: The Gateway process also writes heartbeat and bridge files to that `workspace` path. Give the Gateway container an identical volume map (`-v /home/user/.openclaw:/home/user/.openclaw`) so the same host path resolves correctly from inside the Gateway container too. Mismatched mappings surface as `EACCES` when the Gateway tries to write its heartbeat.
+- **Matching volume map required**: The Gateway process also writes bridge files to that `workspace` path. Give the Gateway container an identical volume map (`-v /home/user/.openclaw:/home/user/.openclaw`) so the same host path resolves correctly from inside the Gateway container too. Mismatched mappings surface as `EACCES` when the Gateway writes workspace files.
 - **Codex code mode**: when an OpenClaw sandbox is active, OpenClaw disables Codex app-server native Code Mode, user MCP servers, and app-backed plugin execution for that turn (those run from the Gateway-host app-server process, not the OpenClaw sandbox backend), unless the sandbox tool policy exposes the required tools and you opt into the experimental sandbox exec-server path. Shell access then routes through OpenClaw sandbox-backed tools such as `sandbox_exec` and `sandbox_process`. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes. See [Codex Harness](/plugins/codex-harness) for the full behavior.
 
 On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `workspace-write` shell execution needs unprivileged user namespaces inside the sandbox container, and this can fail before shell startup when the service user cannot create them. This needs an unprivileged network namespace too when Docker sandbox egress is disabled (`network: "none"`, the default). Common symptoms: `bwrap: setting up uid map: Permission denied` and `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run `openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable.
@@ -189,7 +196,7 @@ Podman notes:
 
 A containerized Gateway creates sibling sandboxes through the host's local Podman engine or Podman Machine.
 
-- **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write heartbeat or skill-workspace files.
+- **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write skill-workspace files.
 - **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the canonical mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
@@ -531,7 +538,7 @@ Paths:
       preserves workspace ownership. Rootless Podman rejects zero-valued users;
       bake packages into the image or use rootful Podman.
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
-    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit container environment variables. Anyone with access to the selected container engine can inspect them with metadata commands such as `docker inspect` or `podman inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
+    - Values in `agents.defaults.sandbox.docker.env` remain visible through container metadata commands such as `docker inspect` or `podman inspect`. Docker and Podman require portable environment names and single-line, non-NUL values because secure engine environment files are line-delimited; config validation and `openclaw doctor` reject invalid entries before sandbox use. Rename invalid keys, use single-line values, or deliver multiline material through a mounted file or custom image; this requires manual remediation because `doctor --fix` cannot safely preserve the original value. SSH and OpenShell backends still support multiline values. Use a custom image, mounted secret file, or another secret delivery path if metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>

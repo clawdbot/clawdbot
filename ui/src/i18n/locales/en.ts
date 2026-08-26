@@ -497,11 +497,9 @@ export const en: TranslationMap = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {
-      action: "Update",
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
-      dismissUntilRestartOrVersion: "Hide until next restart or update",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -1820,6 +1818,10 @@ export const en: TranslationMap = {
       dash: {
         label: "Dash",
         description: "Chocolate blueprint",
+      },
+      absolutely: {
+        label: "Absolutely",
+        description: "Clay on graphite",
       },
     },
     textSizes: {
@@ -5790,7 +5792,6 @@ export const en: TranslationMap = {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
-      refreshingModels: "Refreshing models…",
       modelsUnavailable: "Models unavailable",
       noModelsAvailable: "No models available",
       emptyModelsAction: "Manage models",
@@ -5803,8 +5804,6 @@ export const en: TranslationMap = {
       nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
-      rootLabel: "Root",
-      sessionRoot: "Session root: {root}",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {

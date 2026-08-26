@@ -16,7 +16,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_MEMORY_DREAMING_ENABLED = true;

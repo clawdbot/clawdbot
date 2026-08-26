@@ -15,6 +15,10 @@ import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
+  buildFeishuCommentPresentationFallback,
+  resolveFeishuRichReply,
+} from "./presentation-card.js";
+import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
   noVisibleFeishuReplyDelivery,
@@ -82,7 +86,8 @@ export function createFeishuCommentReplyDispatcher(
         return noVisibleFeishuReplyDelivery;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      let text = reply.text;
+      const { presentation } = resolveFeishuRichReply(payload);
+      let { text } = buildFeishuCommentPresentationFallback({ text: reply.text, presentation });
       for (const mediaUrl of reply.mediaUrls) {
         text = await buildFeishuMediaFallbackText({ text, mediaUrl, mediaLinkStyle: "plain" });
       }

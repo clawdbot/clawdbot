@@ -14,7 +14,7 @@ import {
   type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import type { ClawdbotConfig, ReplyPayload } from "../runtime-api.js";
 import {
   FEISHU_SELECTED_SECRET_ENV,
   FEISHU_SIBLING_SECRET_ENV,
@@ -2011,6 +2011,59 @@ describe("feishuOutbound.sendPayload native cards", () => {
     );
     expectFeishuResult(result, "reply_msg");
   });
+
+  it.each(["direct", "core-rendered"] as const)(
+    "preserves select command guidance for %s document-comment delivery",
+    async (deliveryPath) => {
+      const presentation: MessagePresentation = {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Choose deployment",
+            options: [
+              {
+                label: "Deploy",
+                action: { type: "command", command: "/deploy staging" },
+              },
+            ],
+          },
+        ],
+      };
+      const originalPayload = { presentation };
+      let payload: ReplyPayload = originalPayload;
+      if (deliveryPath === "core-rendered") {
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload: originalPayload,
+          presentation,
+          ctx: {
+            cfg: emptyConfig,
+            to: "comment:docx:doxcn123:7623358762119646411",
+            text: "",
+            accountId: "main",
+            payload: originalPayload,
+          },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered select presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        payload = coreRenderedPayload;
+      }
+
+      const result = await feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "comment:docx:doxcn123:7623358762119646411",
+        text: "",
+        accountId: "main",
+        payload,
+      });
+
+      expect(commentThreadParams()?.content).toBe(
+        "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+      );
+      expectFeishuResult(result, "reply_msg");
+    },
+  );
 
   it("keeps TTS supplements on the document-comment delivery path", async () => {
     await feishuOutbound.sendPayload?.({

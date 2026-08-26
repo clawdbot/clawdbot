@@ -621,6 +621,75 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
+  it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
+    const bunCommand = {
+      programArguments: [bunPath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    };
+    mocks.readCommand.mockResolvedValue(bunCommand);
+    mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-path-nonminimal",
+          message: "Gateway PATH should be regenerated",
+          level: "recommended",
+        },
+      ],
+    });
+
+    await runRepair({ gateway: {} });
+
+    for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
+      expect(options).toEqual(expect.objectContaining({ runtime: "bun", runtimePath: bunPath }));
+    }
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({ programArguments: bunCommand.programArguments }),
+    );
+  });
+
+  it("migrates an unsupported Bun Gateway service to supported system Node", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
+    const systemNodePath = "/usr/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [bunPath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ runtimePath }) => ({
+      programArguments: [runtimePath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    }));
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-runtime-bun",
+          message: "Bun runtime is unsupported",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.needsNodeRuntimeMigration.mockReturnValue(true);
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: systemNodePath,
+      version: "24.15.0",
+      supported: true,
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "node", runtimePath: systemNodePath }),
+    );
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        programArguments: [systemNodePath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      }),
+    );
+  });
+
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
     mockProcessPlatform("linux");
     const managedDefinition = {

@@ -10,6 +10,8 @@ import {
   resolveAmbientOwnerAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
+import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   hasAvatarUriScheme,
@@ -310,6 +312,79 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
   return issues;
 }
 
+function collectSandboxContainerEnvIssues(
+  config: OpenClawConfig,
+  sourceRaw?: unknown,
+): ConfigValidationIssue[] {
+  const agents = listAgentEntriesWithSource(config);
+  if (
+    !config.agents?.defaults?.sandbox?.docker?.env &&
+    !agents.some(({ entry }) => entry.sandbox?.docker?.env)
+  ) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  const seen = new Set<string>();
+  const authoredAgents = isRecord(sourceRaw) ? listAgentEntriesWithSource(sourceRaw) : agents;
+  const authoredById = new Map(authoredAgents.map((agent) => [agent.entry.id, agent]));
+
+  const defaultSandbox = config.agents?.defaults?.sandbox;
+  const effectiveAgents = agents.length > 0 ? agents : [undefined];
+  for (const agent of effectiveAgents) {
+    const agentSandbox = agent?.entry.sandbox;
+    const scope = resolveSandboxScope({ scope: agentSandbox?.scope ?? defaultSandbox?.scope });
+    const backend = agentSandbox?.backend?.trim() || defaultSandbox?.backend?.trim() || "docker";
+    if (backend !== "docker" && backend !== "podman") {
+      continue;
+    }
+    const env = resolveSandboxDockerEnv({
+      scope,
+      globalEnv: defaultSandbox?.docker?.env,
+      agentEnv: agentSandbox?.docker?.env,
+    });
+    const authoredAgent = agent ? (authoredById.get(agent.entry.id) ?? agent) : undefined;
+    for (const [key, value] of Object.entries(env)) {
+      const reason = getContainerEnvFileEntryIssue(key, value);
+      if (!reason) {
+        continue;
+      }
+      const agentOwnsValue =
+        scope !== "shared" &&
+        authoredAgent !== undefined &&
+        Object.hasOwn(authoredAgent.entry.sandbox?.docker?.env ?? {}, key);
+      const pathSegments =
+        agentOwnsValue && authoredAgent
+          ? authoredAgent.source.kind === "entries"
+            ? ["agents", "entries", authoredAgent.source.key, "sandbox", "docker", "env", key]
+            : ["agents", "list", authoredAgent.source.index, "sandbox", "docker", "env", key]
+          : ["agents", "defaults", "sandbox", "docker", "env", key];
+      const issuePath = pathSegments.join(".");
+      const issueIdentity = JSON.stringify([issuePath, reason]);
+      if (seen.has(issueIdentity)) {
+        continue;
+      }
+      seen.add(issueIdentity);
+      const backendName = backend === "podman" ? "Podman" : "Docker";
+      const remediation =
+        reason === "invalid-name"
+          ? `Rename key ${JSON.stringify(key)} to use letters, digits, and underscores without a leading digit.`
+          : `Use a single-line, non-NUL value for key ${JSON.stringify(key)}, or deliver multiline material through a mounted file or custom image.`;
+      issues.push(
+        withConfigIssuePath(
+          {
+            path: issuePath,
+            message:
+              `${backendName} sandbox backend requires portable environment names and single-line, non-NUL values because the secure env-file transport is line-delimited. ` +
+              `${remediation} SSH/OpenShell backends may keep multiline values. Run openclaw doctor to report the invalid path; manual remediation is required.`,
+          },
+          pathSegments,
+        ),
+      );
+    }
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -386,6 +461,13 @@ export function validateConfigObjectRaw(
   }
   if (policyIssues.length > 0) {
     return { ok: false, issues: policyIssues };
+  }
+  const sandboxContainerEnvIssues = collectSandboxContainerEnvIssues(
+    validatedConfig,
+    opts?.sourceRaw,
+  );
+  if (sandboxContainerEnvIssues.length > 0) {
+    return { ok: false, issues: sandboxContainerEnvIssues };
   }
   const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {

@@ -101,6 +101,96 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    {
+      name: "offline paired device",
+      preference: { kind: "device", id: "paired-runner" },
+      status: "unavailable",
+      availableSlots: 1,
+      attribute: "data-device-id",
+      value: "paired-runner",
+      reason: "Device unavailable",
+    },
+    {
+      name: "automatic device without worker capacity",
+      preference: { kind: "auto-device" },
+      status: "available",
+      availableSlots: 0,
+      attribute: "data-auto-device",
+      value: "true",
+      reason: "No worker slots are available",
+    },
+  ])(
+    "keeps a remembered $name blocked until Local is explicitly selected",
+    async ({ preference, status, availableSlots, attribute, value, reason }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const appUrl = new URL(suite.server.baseUrl);
+      const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+      const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+      const sessionKey = "agent:main:explicit-local-choice";
+      await page.addInitScript(
+        ({ key, workspace, where }) => {
+          localStorage.setItem(
+            key,
+            JSON.stringify({
+              agents: { main: { workspace, folder: workspace, where, worktree: true } },
+            }),
+          );
+        },
+        { key: storageKey, workspace: WORKSPACE, where: preference },
+      );
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": {
+            environments: [
+              {
+                id: "node:paired-runner",
+                type: "node",
+                label: "Paired runner",
+                status,
+                sessionHost: true,
+                workerSlots: { total: 2, available: availableSlots },
+              },
+            ],
+            profiles: [],
+          },
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+        },
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        const where = page.locator("#new-session-where-trigger");
+        await expect.poll(() => where.getAttribute(attribute)).toBe(value);
+
+        await page.locator(".new-session-page__message").fill("run only where I choose");
+        const start = page.getByRole("button", { name: "Start session" });
+        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expect
+          .poll(() => start.locator("xpath=..").getAttribute("content"))
+          .toContain(reason);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await where.click();
+        await page.locator('[data-value="gateway"]').click();
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        await start.click();
+        await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+          params: { agentId: "main", message: "run only where I choose" },
+        });
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("restores the selected agent's own destination instead of inheriting another agent's device", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

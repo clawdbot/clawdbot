@@ -20,7 +20,7 @@ import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import "../styles/sidebar-footer-update.css";
+import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
@@ -46,10 +46,7 @@ import {
   compareSidebarAttentionEntries,
 } from "./sidebar-attention-items.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
-import {
-  resolveSidebarUpdateAttention,
-  startSidebarUpdateAttention,
-} from "./sidebar-attention-update.ts";
+import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import "./tooltip.ts";
 
@@ -454,16 +451,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     );
   }
 
-  private readonly startUpdate = () => {
-    if (this.context) {
-      startSidebarUpdateAttention({
-        context: this.context,
-        nativeUpdateDeclined: this.nativeUpdateDeclined,
-        watchUpdateProgress: this.watchUpdateProgress,
-      });
-    }
-  };
-
   private readonly closeOnOutsidePointer = (event: PointerEvent) => {
     if (!this.panelOpen || event.composedPath().includes(this)) {
       return;
@@ -620,9 +607,6 @@ class SidebarAttention extends OpenClawLightDomElement {
       return nothing;
     }
     const entries = this.currentInboxEntries();
-    const updateEntry = entries.find((entry) => entry.type === "update");
-    const updateDismissal = updateEntry?.dismissal ?? null;
-    const updateState = resolveSidebarUpdateAttention(this.context);
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
@@ -655,38 +639,6 @@ class SidebarAttention extends OpenClawLightDomElement {
             >`
           : nothing}
       </button>
-      ${updateEntry
-        ? html`<span class="sidebar-footer-update-slot">
-            <button
-              type="button"
-              class="sidebar-footer-update"
-              aria-label=${t("updates.sidebar.availableTitle")}
-              ?disabled=${updateState.busy || !updateState.actionable || !updateState.canUpdate}
-              @click=${this.startUpdate}
-            >
-              <span class="sidebar-footer-update__icon" aria-hidden="true"
-                >${updateState.busy ? icons.refresh : icons.download}</span
-              >
-            </button>
-            ${updateDismissal
-              ? html`<openclaw-tooltip
-                  class="sidebar-hover-tooltip"
-                  .content=${t("updates.sidebar.dismissUntilRestartOrVersion")}
-                  .delay=${600}
-                  .closeDelay=${300}
-                >
-                  <button
-                    type="button"
-                    class="sidebar-footer-update__dismiss"
-                    aria-label=${t("updates.sidebar.dismissUntilRestartOrVersion")}
-                    @click=${() => this.dismiss(updateDismissal)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing}
-          </span>`
-        : nothing}
       ${this.panelOpen && this.panelRenderer
         ? this.panelRenderer({
             context: this.context,

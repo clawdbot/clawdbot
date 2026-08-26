@@ -3,6 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
+import {
+  runSkillExperienceReview,
+  type ExperienceReviewCandidate,
+} from "../../../skills/workshop/experience-review.js";
+import {
+  bindActiveOperatorTurnAuthority,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../cron-creator-authority-context.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -21,6 +30,11 @@ import {
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt-spawn-workspace.test-support.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+
+const reviewRunEmbeddedAgent = vi.hoisted(() => vi.fn());
+
+vi.mock("../../embedded-agent.js", () => ({ runEmbeddedAgent: reviewRunEmbeddedAgent }));
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
@@ -40,6 +54,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetEmbeddedAttemptHarness();
+  reviewRunEmbeddedAgent.mockReset();
 });
 
 afterEach(async () => {
@@ -48,6 +63,121 @@ afterEach(async () => {
 });
 
 describe("runEmbeddedAttempt skill policy projections", () => {
+  it.each([
+    {
+      label: "local operator CLI",
+      context: {
+        trigger: "manual" as const,
+        cronCreatorCallerOrigin: { kind: "local" as const },
+      },
+    },
+    {
+      label: "Telegram group",
+      context: {
+        trigger: "user" as const,
+        messageChannel: "telegram",
+        senderId: "sender-1",
+      },
+    },
+  ])("keeps cache state identical for $label", async ({ context }) => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
+    tempPaths.push(workspaceDir);
+    const foregroundPromptContext = {
+      agentId: "main",
+      agentDir: workspaceDir,
+      workspaceDir,
+      cwd: workspaceDir,
+      sandboxSessionKey: "agent:main:main",
+      promptCacheKey: "foreground-cache-prefix",
+      reasoningLevel: "on" as const,
+      ...context,
+    };
+    const tool = (name: string): AnyAgentTool =>
+      ({
+        name,
+        label: name,
+        description: `${name} tool`,
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({
+          content: [{ type: "text" as const, text: "ok" }],
+          details: undefined,
+        }),
+      }) as AnyAgentTool;
+    const snapshots: Array<{
+      toolNames: string[];
+      toolDigest: string;
+      systemPromptDigest: string;
+    }> = [];
+    hoisted.createOpenClawCodingToolsMock.mockImplementation((...args: unknown[]) => {
+      const options = args[0] as {
+        messageChannel?: string;
+        runId?: string;
+        senderId?: string | null;
+      };
+      const operatorAuthority = bindActiveOperatorTurnAuthority(options.runId);
+      const hasCaller =
+        operatorAuthority?.source === "local" ||
+        (options.messageChannel === "telegram" && Boolean(options.senderId?.trim()));
+      return [tool("skill_workshop"), ...(hasCaller ? [tool("transcripts")] : [])];
+    });
+    const captureToolSurface = (options: {
+      messageChannel?: string;
+      runId?: string;
+      senderId?: string | null;
+    }) => {
+      const tools = hoisted.createOpenClawCodingToolsMock(options) as AnyAgentTool[];
+      const toolNames = tools.map((entry) => entry.name);
+      const snapshot = beginPromptCacheObservation({
+        sessionId: "embedded-session",
+        sessionKey: "agent:main:main",
+        provider: "openai",
+        modelId: "gpt-test",
+        streamStrategy: "test",
+        systemPrompt: `system:${toolNames.join(",")}`,
+        tools: collectPromptCacheTools(tools),
+      }).snapshot;
+      return {
+        toolNames,
+        toolDigest: snapshot.toolDigest,
+        systemPromptDigest: snapshot.systemPromptDigest,
+      };
+    };
+
+    const runId = "foreground-parity-run";
+    const foregroundCapability = foregroundPromptContext.cronCreatorCallerOrigin
+      ? createCronCreatorAuthorityCapability(runId, { kind: "local" })
+      : undefined;
+    const foregroundRun = () => captureToolSurface({ ...foregroundPromptContext, runId });
+    snapshots.push(
+      foregroundCapability
+        ? runWithCronCreatorAuthorityCapability(foregroundCapability, foregroundRun)
+        : foregroundRun(),
+    );
+
+    reviewRunEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+      snapshots.push(captureToolSurface(params));
+      return {};
+    });
+    const reviewCandidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId,
+        sessionId: "review-session",
+        sessionKey: "agent:main:review",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+        skillWorkshopAvailable: true,
+        foregroundPromptContext,
+      },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+    };
+    await runSkillExperienceReview(reviewCandidate, {
+      getCurrentConfig: () => reviewCandidate.config ?? {},
+    });
+    expect(snapshots[1]).toEqual(snapshots[0]);
+  });
+
   it("keeps review prompt digests equal while transcript and store stay unchanged", async () => {
     const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(sessionRoot);
@@ -116,7 +246,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
                 suppressToolErrorWarnings: true,
-                trigger: "manual" as const,
+                trigger: "user" as const,
               }
             : {}),
         },

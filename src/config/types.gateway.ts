@@ -273,9 +273,9 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** macOS app-only transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
+  /** Desktop companion transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
   transport?: "ssh" | "direct";
-  /** macOS app-only remote SSH port (default 18789); core validates/preserves but does not read it. */
+  /** Desktop companion remote SSH port (default 18789); core validates/preserves but does not read it. */
   remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
@@ -541,12 +541,14 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
-/** Closed session, agent, and operator-scope policy for one named team role. */
+/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = {
   sessions: {
     /** Maximum access to another person's sessions without explicit membership. */
     others: "none" | "view" | "suggest" | "write";
   };
+  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
+  sandbox?: "inherit" | "required";
   /** Agent IDs available for session creation and runs, or all agents when set to "*". */
   agents: "*" | string[];
   /** Ceiling applied to the authenticated profile's granted operator scopes. */

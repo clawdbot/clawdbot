@@ -500,7 +500,7 @@ describe("refreshChat", () => {
     await waitForFast(() => expect(host.chatModelCatalog).toEqual([model]));
   });
 
-  it("renders cached models while startup metadata refreshes", async () => {
+  it("keeps cached models interactive while startup metadata revalidates silently", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       chatModelSwitchPromises: {},
@@ -527,7 +527,7 @@ describe("refreshChat", () => {
     });
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
-    expect(asChatPageHost(host).chatModelsLoading).toBe(true);
+    expect(asChatPageHost(host).chatModelsLoading).toBe(false);
     const container = document.createElement("div");
     const controls = renderChatPaneComposerControls({
       state: asChatPageHost(host),
@@ -541,8 +541,8 @@ describe("refreshChat", () => {
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
-    expect(container.textContent).toContain("Refreshing models…");
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+    expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");
 
     startup.resolve({
@@ -3427,6 +3427,28 @@ describe("handleSendChat", () => {
     expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5-mini");
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["/model default", "/model DEFAULT"])(
+    "forwards semantic model reset commands through chat.send: %s",
+    async (command) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.send": { status: "started" },
+          "sessions.patch": createResolvedModelPatch("default", "openai"),
+        },
+        sessionKey: "main",
+        chatMessage: command,
+      });
+
+      await handleSendChat(host);
+
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({ message: command, sessionKey: "main" }),
+      );
+      expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    },
+  );
 
   it("queues local slash commands while the gateway client is unavailable", async () => {
     const host = makeChatHost({

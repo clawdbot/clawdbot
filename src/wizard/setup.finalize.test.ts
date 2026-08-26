@@ -175,7 +175,10 @@ vi.mock("../commands/gateway-install-token.js", () => ({
 
 vi.mock("../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
+  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
+    { value: "node", label: "Node" },
+    { value: "bun", label: "Bun 1.4+" },
+  ],
 }));
 
 vi.mock("../commands/health-format.js", () => ({

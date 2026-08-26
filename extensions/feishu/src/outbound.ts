@@ -9,11 +9,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  legacyInteractiveReplyToPresentation,
-  normalizeLegacyInteractiveReply,
-  normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -57,8 +53,10 @@ import {
 import type { ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import {
   assertFeishuCardWithinEnvelope,
+  buildFeishuCommentPresentationFallback,
   buildFeishuPresentationCardElements,
   isFeishuCardWithinEnvelope,
+  resolveFeishuRichReply,
 } from "./presentation-card.js";
 import {
   sendCardFeishu,
@@ -259,10 +257,7 @@ function buildFeishuPayloadCard(params: {
 
   const rawText = params.text ?? params.payload.text;
   const textCard = readNativeFeishuCardJson(rawText);
-  const interactive = normalizeLegacyInteractiveReply(params.payload.interactive);
-  const presentation =
-    normalizeMessagePresentation(params.payload.presentation) ??
-    (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+  const { interactive, presentation } = resolveFeishuRichReply(params.payload);
   if (!presentation && !interactive) {
     if (!textCard) {
       return undefined;
@@ -314,34 +309,13 @@ function buildFeishuPayloadCard(params: {
   return isFeishuCardWithinEnvelope(card) ? card : undefined;
 }
 
-// Keep this aligned with the shared fallback renderer: guidance is valid only
-// when the fallback text exposes a command the user can copy.
-function hasVisibleFallbackCommand(
-  blocks: readonly MessagePresentationBlock[] | undefined,
-): boolean {
-  return (
-    blocks?.some(
-      (block) =>
-        block.type === "buttons" &&
-        block.buttons.some(
-          (button) =>
-            !button.disabled &&
-            button.action?.type === "command" &&
-            !button.url &&
-            !button.webApp?.url &&
-            !button.web_app?.url,
-        ),
-    ) ?? false
-  );
-}
-
 function renderFeishuPresentationPayload({
   payload,
   presentation,
   ctx,
 }: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
   const textCard = readNativeFeishuCardJson(payload.text);
-  const fallbackText = renderMessagePresentationFallbackText({
+  const { fallbackText, fallbackHasCommand } = buildFeishuCommentPresentationFallback({
     text: textCard ? undefined : payload.text,
     presentation,
   });
@@ -353,7 +327,6 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
-  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   if (!card) {
     // The marker keeps core on sendPayload after it strips presentation; that path
     // consumes it and fans out text instead of using the whole fallback as a caption.
@@ -697,21 +670,21 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     if (parseFeishuCommentTarget(ctx.to)) {
-      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
-      const normalizedPresentation =
-        normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+      const { presentation } = resolveFeishuRichReply(payload);
       // Document comments cannot render cards. Resolve the text path before
       // validating card limits so unused native card data cannot block delivery.
       const textCard = readNativeFeishuCardJson(payload.text);
       const fallbackSourceText = textCard ? undefined : payload.text;
-      const presentationFallbackText = renderMessagePresentationFallbackText({
+      const { text, fallbackText } = buildFeishuCommentPresentationFallback({
         text: fallbackSourceText,
-        presentation: normalizedPresentation,
+        presentation,
+        fallbackHasCommand:
+          isRecord(payload.channelData?.feishu) &&
+          payload.channelData.feishu.fallbackHasCommand === true,
       });
       const hasFallbackMedia = normalizeStringEntries(resolvePayloadMediaUrls(payload)).length > 0;
       if (
-        !presentationFallbackText.trim() &&
+        !fallbackText.trim() &&
         !hasFallbackMedia &&
         (textCard || readNativeFeishuCard(payload))
       ) {
@@ -719,14 +692,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           "Feishu native cards cannot be sent to document comments without a text or media fallback.",
         );
       }
-      // Direct delivery retains blocks; core-rendered delivery carries the fact.
-      const fallbackHasCommand =
-        hasVisibleFallbackCommand(normalizedPresentation?.blocks) ||
-        (isRecord(payload.channelData?.feishu) &&
-          payload.channelData.feishu.fallbackHasCommand === true);
-      const text = fallbackHasCommand
-        ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
-        : presentationFallbackText;
       const fallbackPayload = {
         ...payload,
         text,
@@ -754,10 +719,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (ttsSupplement) {
         return await sendFeishuTtsSupplementPayload({ ctx, payload, supplement: ttsSupplement });
       }
-      const interactive = normalizeLegacyInteractiveReply(payload.interactive);
-      const presentation =
-        normalizeMessagePresentation(payload.presentation) ??
-        (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+      const { presentation } = resolveFeishuRichReply(payload);
       const fallbackPayload = presentation
         ? {
             ...payload,

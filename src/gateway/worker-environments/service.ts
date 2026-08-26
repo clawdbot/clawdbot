@@ -455,17 +455,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     credentialBroker.clear();
     options.liveEvents?.clear();
     options.stopNodeWorkerBundleTransfers?.();
-    await environmentAccess.stopAllTunnels();
-    const reconciliation = reconcileInFlight;
-    if (reconciliation) {
-      await Promise.allSettled([reconciliation]);
+    try {
+      await environmentAccess.stopAllTunnels();
+    } finally {
+      // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
+      const reconciliation = reconcileInFlight;
+      if (reconciliation) {
+        await Promise.allSettled([reconciliation]);
+      }
+      while (activeOperations.size > 0) {
+        await Promise.allSettled(activeOperations);
+      }
+      credentialBroker.clear();
+      turnRpc.clear();
+      options.liveEvents?.clear();
     }
-    while (activeOperations.size > 0) {
-      await Promise.allSettled(activeOperations);
-    }
-    credentialBroker.clear();
-    turnRpc.clear();
-    options.liveEvents?.clear();
   };
 
   const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
