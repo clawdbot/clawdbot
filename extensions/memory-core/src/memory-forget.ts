@@ -84,6 +84,11 @@ export type MemoryForgetReport = {
   agentId: string;
   dryRun: boolean;
   sessionIds: string[];
+  sessionResolutions: Array<{
+    sessionId: string;
+    sessionKey?: string;
+    source: "live" | "archived" | "unresolved";
+  }>;
   entryKeys: string[];
   mixedLineageEntryKeys: string[];
   untargetableEntryKeys: string[];
@@ -549,6 +554,13 @@ export async function forgetMemoryEntries(params: {
     agentId: params.agentId,
     dryRun: params.dryRun === true,
     sessionIds: [...sessionIds].toSorted(),
+    sessionResolutions: targets
+      .map(({ sessionId, sessionKey, resolution }) =>
+        sessionKey
+          ? { sessionId, sessionKey, source: resolution }
+          : { sessionId, source: resolution },
+      )
+      .toSorted((left, right) => left.sessionId.localeCompare(right.sessionId)),
     entryKeys: [...entryKeys].toSorted(),
     mixedLineageEntryKeys: [...mixedLineageEntryKeys].toSorted(),
     untargetableEntryKeys: [...untargetableEntryKeys].toSorted(),

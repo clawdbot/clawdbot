@@ -311,6 +311,9 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
     if (report.sessionIds.length > 0) {
       lines.push(`${muted("Session IDs:")} ${report.sessionIds.join(", ")}`);
     }
+    for (const session of report.sessionResolutions) {
+      lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+    }
     if (report.mixedLineageEntryKeys.length > 0) {
       lines.push(
         `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,

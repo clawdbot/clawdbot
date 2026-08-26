@@ -158,7 +158,15 @@ openclaw memory forget --participant <actor-id>
   [--dry-run] [--json]
 ```
 
-Session-set resolution queries `session_windows` / `session_participants`.
+Explicit session IDs and keys resolve against live `session_windows` and
+retained `session_transcript_archives`; an unmatched explicit value remains an
+exact-ID purge target rather than silently disappearing. The report identifies
+each target as `live`, `archived`, or `unresolved`. Hook-source and participant
+selectors only match facts recorded in `session_windows` /
+`session_participants`; archived sessions no longer retain that metadata and
+must be selected explicitly. `--since` compares live-session creation times or
+archive creation times; unresolved explicit IDs remain eligible.
+
 Purge steps, in order, reported per step:
 
 1. Session-corpus files: identify lines whose rendered prefix matches the

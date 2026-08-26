@@ -331,6 +331,10 @@ describe("memory cli", () => {
       agentId: "ops",
       dryRun: true,
       sessionIds: ["session-one", "session-two"],
+      sessionResolutions: [
+        { sessionId: "session-one", sessionKey: "agent:ops:one", source: "live" },
+        { sessionId: "session-two", source: "unresolved" },
+      ],
       entryKeys: ["mixed-entry"],
       mixedLineageEntryKeys: ["mixed-entry"],
       untargetableEntryKeys: ["curated-entry"],
@@ -396,6 +400,8 @@ describe("memory cli", () => {
     await runMemoryCli(["forget", "--session", "session-one", "--agent", "ops", "--dry-run"]);
     const output = firstMockCallArg(logs, "memory forget output");
     expect(output).toContain("Source transcripts retained: 2");
+    expect(output).toContain("Session resolution: session-one (live)");
+    expect(output).toContain("Session resolution: session-two (unresolved)");
     expect(output).toContain("Memory artifacts: 1 files, 1 entries, 2 quoted lines");
     expect(output).toContain("Curated write retained: MEMORY.md (2026-08-25T12:00:00.000Z)");
     expect(getMemorySearchManager).not.toHaveBeenCalled();

@@ -97,8 +97,16 @@ openclaw memory forget --participant <actor-id> [--agent <id>] [--dry-run] [--js
 
 `--session`, `--hook-source`, and `--participant` are repeatable. At least one
 selector is required. `--agent` selects one agent and otherwise defaults to the
-default agent. `--since <date>` limits matching sessions to the selected time
-window.
+default agent. Explicit session IDs and keys match both live sessions and
+retained archived sessions. An unknown explicit value is still treated as an
+exact session ID, purged where matching artifacts exist, and durably excluded
+from future memory ingestion. The report identifies each selected session as
+`live`, `archived`, or `unresolved`. Hook-source and participant selectors only
+match sessions whose corresponding metadata still exists; archived sessions do
+not retain those facts, so select them by ID or key instead. `--since <date>`
+filters live sessions by their creation time and archived sessions by their
+archive creation time; unresolved explicit IDs have no timestamp and remain
+selected.
 
 Run with `--dry-run` before deleting. It computes the same complete report as
 the real purge without changing memory files, SQLite indexes, plugin state, or

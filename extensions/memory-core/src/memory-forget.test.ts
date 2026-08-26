@@ -10,7 +10,7 @@ import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -85,6 +85,157 @@ describe("memory forget", () => {
         .run(hookSource, sessionId);
     }
   }
+
+  it.each([
+    { label: "session ID", selector: "archived" },
+    { label: "session key", selector: "agent:main:archived" },
+  ])("purges an archived-only session selected by its $label", async ({ selector }) => {
+    await seedSession("archived");
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          entryKey: "archived-entry",
+          agentId: "main",
+          sessionId: "archived",
+          sessionKey: "agent:main:archived",
+          originClass: "owner",
+          observedAt: 1_000,
+        },
+      ],
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "# Long-Term Memory\n<!-- openclaw-memory-promotion:archived-entry -->\n- Archived secret.\n",
+    );
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\nKeep curated profile.\n");
+    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(corpusDir, { recursive: true });
+    await fs.writeFile(
+      path.join(corpusDir, "archived.txt"),
+      "[main/sessions/main/archived#L1] User: An archived private fact.\n",
+    );
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId: "archived",
+      sessionKey: "agent:main:archived",
+      message: {
+        role: "assistant",
+        timestamp: 2_000,
+        content: [
+          { type: "toolCall", id: "curated", name: "write", arguments: { path: "USER.md" } },
+        ],
+      },
+    });
+    await expect(
+      deleteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:archived",
+        expectedSessionId: "archived",
+        archiveTranscript: true,
+      }),
+    ).resolves.toBe(true);
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    expect(
+      db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get("archived"),
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare(
+          "SELECT session_id, session_key FROM session_transcript_archives WHERE session_id = ?",
+        )
+        .get("archived"),
+    ).toEqual({ session_id: "archived", session_key: "agent:main:archived" });
+
+    const preview = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: [selector],
+      dryRun: true,
+    });
+    expect(preview).toMatchObject({
+      sessionIds: ["archived"],
+      sessionResolutions: [
+        { sessionId: "archived", sessionKey: "agent:main:archived", source: "archived" },
+      ],
+      entryKeys: ["archived-entry"],
+      curatedWrites: [{ relativePath: "USER.md", observedAt: expect.any(Number) }],
+      artifacts: { memoryEntries: 1, sessionCorpusLines: 1, originRows: 1 },
+    });
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+
+    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [selector] });
+    expect(report).toEqual({ ...preview, dryRun: false });
+    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).not.toContain(
+      "Archived secret",
+    );
+    expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain(
+      "Keep curated profile",
+    );
+    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+    expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+      { sessionId: "archived", reason: "forgotten" },
+    ]);
+  });
+
+  it("durably tombstones an unresolved explicit session without inventing artifacts", async () => {
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Long-Term Memory\nKeep this.\n");
+
+    const preview = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["unknown-session"],
+      dryRun: true,
+    });
+    expect(preview).toMatchObject({
+      sessionIds: ["unknown-session"],
+      sessionResolutions: [{ sessionId: "unknown-session", source: "unresolved" }],
+    });
+    expect(Object.values(preview.artifacts).every((count) => count === 0)).toBe(true);
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["unknown-session"],
+    });
+    expect(report).toEqual({ ...preview, dryRun: false });
+    const tombstones = listMemorySessionTombstones({ agentId: "main" });
+    expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
+    expect(
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
+    ).toEqual(report);
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+  });
+
+  it("does not infer hook or participant facts for an archived-only session", async () => {
+    await seedSession("archived", "gmail");
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    db.prepare(
+      `INSERT INTO session_participants
+         (session_key, actor_type, actor_id, first_prompted_at, last_prompted_at)
+       VALUES (?, 'user', 'participant', 1, 1)`,
+    ).run("agent:main:archived");
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId: "archived",
+      sessionKey: "agent:main:archived",
+      message: { role: "user", content: "Archive this session." },
+    });
+    await deleteSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:archived",
+      expectedSessionId: "archived",
+      archiveTranscript: true,
+    });
+
+    for (const selectors of [{ hookSources: ["gmail"] }, { participants: ["participant"] }]) {
+      const report = await forgetMemoryEntries({ cfg, agentId: "main", ...selectors });
+      expect(report.sessionIds).toEqual([]);
+      expect(report.sessionResolutions).toEqual([]);
+    }
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+  });
 
   it("removes a marker-addressable plain-append promotion after budget compaction", async () => {
     await seedSession("target");

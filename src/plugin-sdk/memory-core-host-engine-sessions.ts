@@ -1,4 +1,5 @@
 /** Private-local SDK subpath for memory session transcript helpers. */
+import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -40,12 +41,13 @@ export type {
 export type MemorySessionTarget = {
   agentId: string;
   sessionId: string;
-  sessionKey: string;
+  sessionKey?: string;
+  resolution: "live" | "archived" | "unresolved";
   hookExternalContentSource: string | null;
   channel: string | null;
   accountId: string | null;
   chatType: string | null;
-  createdAt: number;
+  createdAt?: number;
   participantIds: string[];
 };
 
@@ -89,6 +91,7 @@ function projectSessionMetadata(
     agentId,
     sessionId: row.session_id,
     sessionKey: row.session_key,
+    resolution: "live",
     hookExternalContentSource: row.hook_external_content_source,
     channel: row.channel,
     accountId: row.account_id,
@@ -118,31 +121,44 @@ export function loadMemorySessionMetadata(params: {
   return result.found ? result.value : undefined;
 }
 
+function readSessionArchives(db: DatabaseSync, selectors: readonly string[]) {
+  if (selectors.length === 0 || !tableExists(db, "session_transcript_archives")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<SessionMetadataDatabase>(db)
+      .selectFrom("session_transcript_archives")
+      .select(["archive_name", "session_id", "session_key", "created_at"])
+      .where((expression) =>
+        expression.or([
+          expression("session_id", "in", selectors),
+          expression("session_key", "in", selectors),
+        ]),
+      )
+      .orderBy("created_at")
+      .orderBy("session_id"),
+  ).rows.map((archive) => ({
+    archiveName: archive.archive_name,
+    sessionId: archive.session_id,
+    sessionKey: archive.session_key,
+    createdAt: archive.created_at,
+  }));
+}
+
 /** Resolve retained archive identities after their live session rows disappear. */
 export function loadArchivedSessions(params: {
   agentId: string;
   sessionIds: readonly string[];
-}): Array<{ archiveName: string; sessionId: string; sessionKey: string }> {
+}): Array<{ archiveName: string; sessionId: string; sessionKey: string; createdAt: number }> {
   const sessionIds = [...new Set(params.sessionIds)];
   if (sessionIds.length === 0) {
     return [];
   }
-  const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "session_transcript_archives")) {
-      return [];
-    }
-    return executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<SessionMetadataDatabase>(db)
-        .selectFrom("session_transcript_archives")
-        .select(["archive_name", "session_id", "session_key"])
-        .where("session_id", "in", sessionIds),
-    ).rows.map((archive) => ({
-      archiveName: archive.archive_name,
-      sessionId: archive.session_id,
-      sessionKey: archive.session_key,
-    }));
-  }, params);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => readSessionArchives(db, sessionIds),
+    params,
+  );
   return result.found ? result.value : [];
 }
 
@@ -158,6 +174,7 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
   if (since !== undefined && !Number.isFinite(since)) {
     throw new Error(`Invalid memory session date: ${params.since}`);
   }
+  const resolvedSelectors = new Set<string>();
   const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
     const sessionDb = getNodeSqliteKysely<SessionMetadataDatabase>(db);
     const hasParticipants = tableExists(db, "session_participants");
@@ -202,6 +219,25 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
       db,
       query.orderBy("session_windows.created_at").orderBy("session_windows.session_id"),
     ).rows;
+    const knownRows =
+      since === undefined || sessionIds.length === 0
+        ? rows
+        : executeSqliteQuerySync(
+            db,
+            sessionDb
+              .selectFrom("session_windows")
+              .select(["session_id", "session_key"])
+              .where((expression) =>
+                expression.or([
+                  expression("session_id", "in", sessionIds),
+                  expression("session_key", "in", sessionIds),
+                ]),
+              ),
+          ).rows;
+    for (const row of knownRows) {
+      resolvedSelectors.add(row.session_id);
+      resolvedSelectors.add(row.session_key);
+    }
     const participantIds = new Map<string, string[]>();
     if (rows.length > 0 && hasParticipants) {
       const keys = [...new Set(rows.map((row) => row.session_key))];
@@ -222,9 +258,47 @@ export function resolveMemorySessionTargets(params: MemorySessionSelectors): Mem
         participantIds.set(participant.session_key, ids);
       }
     }
-    return rows.map((row) =>
-      projectSessionMetadata(params.agentId, row, participantIds.get(row.session_key)),
+    const targets = new Map(
+      rows.map((row) => [
+        row.session_id,
+        projectSessionMetadata(params.agentId, row, participantIds.get(row.session_key)),
+      ]),
     );
+    for (const archive of readSessionArchives(db, sessionIds)) {
+      resolvedSelectors.add(archive.sessionId);
+      resolvedSelectors.add(archive.sessionKey);
+      if (targets.has(archive.sessionId) || (since !== undefined && archive.createdAt < since)) {
+        continue;
+      }
+      targets.set(archive.sessionId, {
+        agentId: params.agentId,
+        sessionId: archive.sessionId,
+        sessionKey: archive.sessionKey,
+        resolution: "archived",
+        hookExternalContentSource: null,
+        channel: null,
+        accountId: null,
+        chatType: null,
+        createdAt: archive.createdAt,
+        participantIds: [],
+      });
+    }
+    return [...targets.values()];
   }, params);
-  return result.found ? result.value : [];
+  const targets = result.found ? result.value : [];
+  for (const sessionId of sessionIds) {
+    if (!resolvedSelectors.has(sessionId)) {
+      targets.push({
+        agentId: params.agentId,
+        sessionId,
+        resolution: "unresolved",
+        hookExternalContentSource: null,
+        channel: null,
+        accountId: null,
+        chatType: null,
+        participantIds: [],
+      });
+    }
+  }
+  return targets;
 }
