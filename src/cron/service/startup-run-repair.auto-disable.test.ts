@@ -134,7 +134,6 @@ describe("startup run repair auto-disable", () => {
       cfg,
       readCurrentConfig: () => cfg,
       runOnce,
-      stableSchedulerSeed: "auto-disable-notification-proof",
     });
     try {
       const state = createCronServiceState({
