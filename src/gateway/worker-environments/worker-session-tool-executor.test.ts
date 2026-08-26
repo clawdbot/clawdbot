@@ -68,12 +68,13 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
       agentSessionKey: string;
       callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
     }) => ({
-      execute: async (_toolCallId: string, args: { task: string }) => {
+      execute: async (_toolCallId: string, args: { task: string; worktree?: boolean }) => {
         spawnCallerIdentity(getGatewayToolCallerIdentity());
         spawnArgs(args);
         const details = await options.callGateway("sessions.create", {
           parentSessionKey: options.agentSessionKey,
           task: args.task,
+          ...(args.worktree ? { worktree: true } : {}),
         });
         return {
           content: [{ type: "text", text: "spawned" }],
@@ -479,6 +480,33 @@ describe("worker session tool topology", () => {
       parentSessionId: SOURCE.sessionId,
     });
     expect(replay.resultJson).toBe(first.resultJson);
+  });
+
+  it.each([
+    { label: "default", mode: undefined },
+    { label: "read-only", mode: "read-only" },
+    { label: "guarded", mode: "guarded" },
+    { label: "workspace", mode: "workspace" },
+    { label: "full", mode: "full" },
+  ] as const)("inherits the parent's $label permission mode in a cloud child", async ({ mode }) => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    if (mode) {
+      sessionEntries.get(SOURCE.sessionKey)!.permissionMode = mode;
+    }
+
+    await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: { toolCallId: "spawn-cloud-child-with-permissions", task: "start the child" },
+    });
+
+    const createParams = gatewayCreate.mock.calls[0]?.[0]?.params;
+    expect(createParams).toMatchObject({ worktree: true });
+    if (mode) {
+      expect(createParams).toMatchObject({ permissionMode: mode });
+    } else {
+      expect(createParams).not.toHaveProperty("permissionMode");
+    }
   });
 
   it("carries the exact admitted parent identity into a worker-hosted child spawn", async () => {

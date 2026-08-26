@@ -713,8 +713,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
     },
     async stopAll(): Promise<void> {
-      await Promise.all([...entries.values()].map(stopEntry));
-      await options.workspaceTransfer.closeAll();
+      const stopped = await Promise.allSettled([...entries.values()].map(stopEntry));
+      // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
+      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
+      const failure = stopped.find((result) => result.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

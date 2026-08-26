@@ -428,6 +428,60 @@ describe("node worker tunnel manager", () => {
     },
   );
 
+  it("drains sibling node tunnels before reporting a workspace cleanup failure", async () => {
+    const cleanupError = new Error("first workspace cleanup failed");
+    const siblingCleanup = createDeferred<void>();
+    const close = vi.fn(async (environmentId: string) => {
+      if (environmentId === "environment-1") {
+        throw cleanupError;
+      }
+      await siblingCleanup.promise;
+    });
+    const closeAll = vi.fn(async () => {});
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: (environmentId) => ({
+        ...environment(),
+        environmentId,
+        attachedSessionIds: [environmentId === "environment-1" ? "session-1" : "session-2"],
+      }),
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close,
+        closeAll,
+      } as unknown as NodeWorkspaceTransferService,
+    });
+    await manager.start(startRequest());
+    await manager.start({
+      ...startRequest(),
+      environmentId: "environment-2",
+      sessionId: "session-2",
+    });
+
+    const stopping = manager.stopAll();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(closeAll).not.toHaveBeenCalled();
+
+      siblingCleanup.resolve();
+      await expect(stopping).rejects.toBe(cleanupError);
+      expect(closeAll).toHaveBeenCalledOnce();
+    } finally {
+      siblingCleanup.resolve();
+      await stopping.catch(() => undefined);
+    }
+  });
+
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();
     const record = environment();

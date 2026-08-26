@@ -170,6 +170,9 @@ export function createWorkerSessionToolExecutor(params: {
       } else {
         const createParams: Record<string, unknown> = {
           ...requestParams,
+          ...(operation.source.entry.permissionMode
+            ? { permissionMode: operation.source.entry.permissionMode }
+            : {}),
           key: operation.childSessionKey,
         };
         delete createParams.task;

@@ -2112,6 +2112,44 @@ describe("gateway/node-registry", () => {
     });
   });
 
+  it("rejects streamed input at the hard deadline before its timer callback runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    try {
+      const { frames, invoke, invokeId } = startStreamingNodeInvoke(registry, {
+        timeoutMs: 100,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+      });
+
+      vi.setSystemTime(1_099);
+      registry.sendInvokeInput(invokeId, { kind: "data", data: "before" });
+
+      vi.setSystemTime(1_100);
+      expect(() => registry.sendInvokeInput(invokeId, { kind: "data", data: "expired" })).toThrow(
+        "node invoke is not pending",
+      );
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+      const inputFrames = frames
+        .map((frame) => JSON.parse(frame) as { event?: string; payload?: { payloadJSON?: string } })
+        .filter((frame) => frame.event === "node.invoke.input");
+      expect(inputFrames).toHaveLength(1);
+      expect(inputFrames[0]?.payload?.payloadJSON).toBe(
+        JSON.stringify({ kind: "data", data: "before" }),
+      );
+      expectSingleNodeInvokeCancellation(frames, invokeId);
+      await vi.runOnlyPendingTimersAsync();
+      expectSingleNodeInvokeCancellation(frames, invokeId);
+    } finally {
+      registry.unregister("conn-1");
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects streamed progress after the hard deadline before its timer callback runs", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
