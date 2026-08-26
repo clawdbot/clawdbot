@@ -9,6 +9,7 @@ import {
   parseBrowserPositiveIntegerOption,
   printBrowserJsonResult,
   runBrowserCliCommand as runBrowserObserve,
+  withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { defaultRuntime, shortenHomePath } from "./core-api.js";
@@ -112,7 +113,7 @@ export function registerBrowserActionObserveCommands(
               maxChars,
             },
           },
-          { timeoutMs: timeoutMs ?? 20000 },
+          { timeoutMs: withBrowserActionTimeoutSlack(timeoutMs) },
         );
         if (printBrowserJsonResult(parent, result)) {
           return;
