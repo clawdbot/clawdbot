@@ -33,9 +33,14 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { bumpSessionAutomationVersion } from "../session-automation-index.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+  sessionReadHandlers,
+} from "./sessions-read-cache.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const loader = vi.hoisted(() => ({
   calls: vi.fn(),
@@ -68,59 +73,8 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-const { sessionReadHandlers } = await import("./sessions-read.js");
 const { emitSessionsChanged } = await import("./session-change-event.js");
 const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
-
-function identifiedClient(profileId: string): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
-}
-
-function requestContext(config: OpenClawConfig): GatewayRequestContext {
-  return {
-    chatAbortControllers: new Map(),
-    getRuntimeConfig: () => config,
-    getSessionEventSubscriberConnIds: () => new Set(),
-    loadGatewayModelCatalog: async () => [],
-    logGateway: { debug: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
-
-async function listSessions(params: {
-  client: GatewayClient;
-  context: GatewayRequestContext;
-  request: SessionsListParams;
-}) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReadHandlers["sessions.list"]?.({
-    params: params.request,
-    client: params.client,
-    context: params.context,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-  } as never);
-  expect(responses).toHaveLength(1);
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as {
-    count: number;
-    nextOffset: number | null;
-    sessions: GatewaySessionRow[];
-    totalCount: number;
-  };
-}
 
 async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
