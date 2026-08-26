@@ -122,6 +122,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     tools: Array<{ name: string }>;
     toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
     codeModeControlsEnabled: boolean;
+    coreReadAuthorized: boolean;
     forceToolNames?: readonly string[];
   };
   preflight: PromptPreflightPhaseInput;
@@ -137,6 +138,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setPromptCacheChangesForTurn: (
       changes: PromptAssemblyResult["promptCacheChangesForTurn"],
     ) => void;
+    setCodeModeReconciliationReadAuthorized: (value: boolean) => void;
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
     markYieldAborted: () => void;
@@ -217,8 +219,10 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         tools: input.toolPolicy.tools,
         catalogRef: input.toolPolicy.toolSearchCatalogRef,
         codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
+        coreReadAuthorized: input.toolPolicy.coreReadAuthorized,
         forceToolNames: input.toolPolicy.forceToolNames,
       });
+      input.lifecycle.setCodeModeReconciliationReadAuthorized(promptToolSurface.coreReadAuthorized);
       return promptToolSurface.activeToolNames;
     },
     setLeasedSteering: (lease) => {
@@ -231,8 +235,10 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const canClaimHeartbeatOutcome =
+      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
     const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
+      canClaimHeartbeatOutcome && attempt.sessionKey
         ? buildHeartbeatOutcomeContext(
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,

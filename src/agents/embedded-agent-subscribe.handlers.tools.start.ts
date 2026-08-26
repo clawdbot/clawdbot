@@ -4,7 +4,6 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -320,6 +319,7 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
@@ -560,9 +560,7 @@ export function handleToolExecutionStart(
           config: ctx.params.config,
           currentChannelId: ctx.params.currentChannelId,
           currentMessagingTarget: ctx.params.currentMessagingTarget,
-          currentThreadId:
-            ctx.params.currentThreadId ??
-            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentThreadId: ctx.params.currentThreadId,
           currentMessageId: ctx.params.currentMessageId,
           replyToMode: ctx.params.replyToMode,
           hasRepliedRef: ctx.params.hasRepliedRef,
@@ -616,7 +614,10 @@ export function handleToolExecutionStart(
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();

@@ -10,6 +10,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDeliveredCurrentSourceReply } from "../infra/outbound/source-reply-mirror.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import {
   normalizeLegacyInteractiveReply,
@@ -73,6 +74,9 @@ export function extractMessagingToolSourceReplyPayload(
     readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
   if (idempotencyKey) {
     payload.idempotencyKey = idempotencyKey;
+  }
+  if (details.sourceReplyTranscriptOwner === true) {
+    payload.transcriptOwner = true;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
@@ -346,4 +350,44 @@ export function extractMessagingToolSendResult(
     threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
+}
+
+export function isDeliveredMessagingToolSendToCurrentSource(params: {
+  send: MessagingToolSend | undefined;
+  config?: OpenClawConfig;
+  currentProvider?: string;
+  currentAccountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  currentThreadId?: string;
+  sessionKey?: string;
+  deliveredPayload?: unknown;
+}): boolean {
+  const send = params.send;
+  if (!send?.to) {
+    return false;
+  }
+  return isDeliveredCurrentSourceReply({
+    action: "send",
+    channel: send.provider,
+    accountId: send.accountId,
+    currentAccountId: params.currentAccountId,
+    actionParams: {
+      target: send.to,
+      ...(send.threadSuppressed
+        ? { topLevel: true }
+        : send.threadId
+          ? { threadId: send.threadId }
+          : {}),
+    },
+    cfg: params.config ?? {},
+    sessionKey: params.sessionKey,
+    toolContext: {
+      currentChannelProvider: params.currentProvider,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadId,
+    },
+    deliveredPayload: params.deliveredPayload,
+  });
 }

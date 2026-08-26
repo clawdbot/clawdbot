@@ -93,7 +93,7 @@ function workerRecoverySessionsList(includeError: boolean) {
           ...(includeError
             ? {
                 recoveryError: "cloud worker disappeared: provider reported lease destroyed",
-                terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+                terminalReason: "stale terminal worker failure",
                 terminalAtMs: now,
               }
             : {}),
@@ -176,11 +176,55 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
       expect(await historyCard.textContent()).toContain(conflict.stagedResultRef);
       await capture(page, "01-live-conflict.png");
 
-      await page.getByRole("button", { name: "Dismiss workspace conflict notice" }).click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      const composer = page.locator(".agent-chat__composer-shell");
+      const title = notice.locator(".chat-composer-neighbor-card__copy strong");
+      const summary = notice.locator(".chat-composer-neighbor-card__copy > span");
+      const dismiss = notice.getByRole("button", { name: "Dismiss workspace conflict notice" });
+      await expect
+        .poll(async () => {
+          const [composerBox, noticeBox] = await Promise.all([
+            composer.boundingBox(),
+            notice.boundingBox(),
+          ]);
+          return composerBox && noticeBox
+            ? {
+                center: Math.abs(
+                  composerBox.x + composerBox.width / 2 - (noticeBox.x + noticeBox.width / 2),
+                ),
+                inset: composerBox.width - noticeBox.width,
+              }
+            : null;
+        })
+        .toEqual({ center: 0, inset: 28 });
+      await expect
+        .poll(() =>
+          title.evaluate((node) => ({
+            title: getComputedStyle(node).whiteSpace,
+            summary: getComputedStyle(node.nextElementSibling!).whiteSpace,
+          })),
+        )
+        .toEqual({ title: "nowrap", summary: "nowrap" });
+      for (const item of [title, summary, dismiss]) {
+        const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
+        expect(itemBox).not.toBeNull();
+        expect(noticeBox).not.toBeNull();
+        if (!itemBox || !noticeBox) {
+          throw new Error("expected mobile conflict notice layout boxes");
+        }
+        expect(itemBox.x).toBeGreaterThanOrEqual(noticeBox.x);
+        expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(noticeBox.x + noticeBox.width);
+        expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
+        expect(itemBox.y + itemBox.height).toBeLessThanOrEqual(noticeBox.y + noticeBox.height);
+      }
+      await capture(page, "02-mobile-live-conflict.png");
+
+      await dismiss.click();
       await notice.waitFor({ state: "detached" });
       await historyCard.waitFor();
-      await capture(page, "02-dismissed-live-notice.png");
+      await capture(page, "03-dismissed-live-notice.png");
 
+      await page.setViewportSize({ width: 1440, height: 900 });
       await gateway.setMethodResponse("sessions.list", sessionsList(false));
       await page.reload();
       await page.locator(".chat-workspace-conflict-event").waitFor({ timeout: 10_000 });
@@ -190,7 +234,43 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
       expect(await page.locator(".chat-workspace-conflict-event").textContent()).toContain(
         conflict.stagedResultRef,
       );
-      await capture(page, "03-reloaded-durable-history.png");
+      await capture(page, "04-reloaded-durable-history.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders historical workspace recovery failures from transcript history", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "custom",
+          customType: "cloud-workspace-recovery-failed",
+          content:
+            "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
+          timestamp: Date.now() - 500,
+        },
+      ],
+      methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
+      sessionKey,
+    });
+
+    try {
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+      expect(response?.status()).toBe(200);
+      await page
+        .getByText("OpenClaw preserved the result and will retry.", { exact: false })
+        .waitFor({
+          timeout: 10_000,
+        });
+      await capture(page, "04-workspace-recovery-failed-history.png");
     } finally {
       await context.close();
     }
@@ -221,13 +301,14 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
       expect(response?.status()).toBe(200);
       await page.getByText("Remote work completed successfully.").waitFor({ timeout: 10_000 });
       expect(await page.getByRole("alert").count()).toBe(0);
-      await capture(page, "04-before-workspace-recovery-error.png");
+      await capture(page, "05-before-workspace-recovery-error.png");
 
       await gateway.setMethodResponse("sessions.list", workerRecoverySessionsList(true));
       await page.reload();
       const alert = page.getByRole("alert").filter({ hasText: "Runner failed" });
       await alert.waitFor({ timeout: 10_000 });
       expect(await alert.textContent()).toContain("provider reported lease destroyed");
+      expect(await alert.textContent()).not.toContain("stale terminal worker failure");
       await capture(page, "05-after-workspace-recovery-error.png");
     } finally {
       await context.close();

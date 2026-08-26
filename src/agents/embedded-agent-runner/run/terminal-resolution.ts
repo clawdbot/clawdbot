@@ -191,6 +191,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   agentMeta: EmbeddedAgentMeta;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal?: EmbeddedRunFailureSignal;
+  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
   maxReasoningOnlyRetryAttempts: number;
   maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
@@ -355,6 +356,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
+          terminalAuthFailure: input,
           attempt,
         });
   const incompleteTurnFallbackSafe = Boolean(
@@ -495,11 +497,15 @@ async function surfaceIncompleteTurn(
   });
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
   if (input.authProfileId) {
-    await input.maybeMarkAuthProfileFailure({
-      profileId: input.authProfileId,
-      reason: input.assistantProfileFailureReason,
-      modelId: input.modelId,
-    });
+    try {
+      await input.maybeMarkAuthProfileFailure({
+        profileId: input.authProfileId,
+        reason: input.assistantProfileFailureReason,
+        modelId: input.modelId,
+      });
+    } catch (error) {
+      log.warn(`terminal auth bookkeeping failed; preserving result: ${String(error)}`);
+    }
   }
   return {
     action: "complete",
@@ -530,6 +536,7 @@ async function surfaceIncompleteTurn(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
       },
       ...copyAttemptDeliveryState(input.attempt),
@@ -689,6 +696,7 @@ function completeEmbeddedRun(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         completion: {
           ...(stopReason ? { stopReason } : {}),
           ...(stopReason ? { finishReason: stopReason } : {}),

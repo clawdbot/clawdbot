@@ -141,6 +141,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "secrets.egressProxy", kind: "restart" },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
+  // Capability ownership changes must replace the plugin generation that owns its routes.
+  { prefix: "talk.provider", kind: "hot", actions: ["reload-plugins"] },
+  { prefix: "talk.realtime.provider", kind: "hot", actions: ["reload-plugins"] },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [

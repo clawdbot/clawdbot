@@ -34,8 +34,9 @@ type VmRun = {
   didTimeout: () => boolean;
 };
 
-// Each worker handles exactly one exec/resume payload, so cancellations are run-scoped.
+// Each worker handles exactly one exec/resume payload, so bridge state is run-scoped.
 const canceledBridgeRequestIds: string[] = [];
+let bridgeAdmissionFailure: CodeModeWorkerFailure | undefined;
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
@@ -76,7 +77,11 @@ function createHostRequestHandler(params: {
 ) => JSValueHandle {
   return (methodHandle, argsHandle, bridgeIdHandle) => {
     if (params.pendingRequests.length >= params.config.maxPendingToolCalls) {
-      throw new Error("too many pending code mode tool calls");
+      bridgeAdmissionFailure ??= new CodeModeWorkerFailure(
+        "invalid_input",
+        "too many pending code mode tool calls",
+      );
+      throw bridgeAdmissionFailure;
     }
     const method = methodHandle.toString();
     if (
@@ -363,6 +368,9 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
+    if (bridgeAdmissionFailure) {
+      throw bridgeAdmissionFailure;
+    }
     output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {

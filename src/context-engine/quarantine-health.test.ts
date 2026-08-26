@@ -12,11 +12,7 @@ import {
   clearPersistedContextEngineQuarantineForProcess,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
-import {
-  clearContextEnginesForOwner,
-  listContextEngineQuarantines,
-  registerContextEngineForOwner,
-} from "./registry.js";
+import { listContextEngineQuarantines } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
 const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
@@ -242,39 +238,6 @@ describe("context engine quarantine health", () => {
 
         expect(listContextEngineQuarantines()).toEqual([]);
       });
-    });
-  });
-
-  it("clears persisted quarantine records when owner engines unload", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-owner-", async () => {
-      const owner = "plugin:lossless-claw";
-      registerContextEngineForOwner(
-        "lossless-claw",
-        () => ({
-          info: { id: "lossless-claw", name: "Lossless Claw", version: "1" },
-          async ingest() {
-            return { ingested: true };
-          },
-          async assemble({ messages }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
-        }),
-        owner,
-      );
-      recordPersistedContextEngineQuarantine({
-        engineId: "lossless-claw",
-        owner,
-        operation: "bootstrap",
-        reason: "plugin disabled",
-        failedAt: new Date(123),
-      });
-
-      clearContextEnginesForOwner(owner);
-
-      expect(listContextEngineQuarantines()).toEqual([]);
     });
   });
 });

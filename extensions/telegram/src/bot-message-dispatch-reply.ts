@@ -372,8 +372,7 @@ export async function deliverReply(
       turn.streamMode === "progress" &&
       info.kind === "block" &&
       effectivePayload.isCommentary === true;
-    // CLI finals exclude separately classified commentary. Send that block outside
-    // the disposable progress stream or its collapse summary erases the text.
+    // CLI finals exclude separately classified commentary, so it must outlive the progress draft.
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
       info.kind === "block" &&

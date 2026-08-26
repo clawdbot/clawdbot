@@ -598,6 +598,7 @@ export function createHooksRequestHandler(
               model: action.model,
               thinking: action.thinking,
               timeoutSeconds: action.timeoutSeconds,
+              mappingId: action.mappingId,
               allowUnsafeExternalContent: action.allowUnsafeExternalContent,
               externalContentSource: resolveMappedHookExternalContentSource({
                 subPath,

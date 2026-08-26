@@ -200,6 +200,16 @@ describe("gateway concurrency benchmark script", () => {
         error: "sessions.list failed: unauthorized",
         ok: false,
       });
+      const unicodeSample = await testing.sampleGateway({
+        deadlineAt: performance.now() + 5_000,
+        port: address.port,
+        rpc: async () => {
+          throw new Error(`${"x".repeat(499)}😀`);
+        },
+        runStartedAt: performance.now(),
+        serial: true,
+      });
+      expect(unicodeSample.sessionsList.error).toBe("x".repeat(499));
       const failure = testing.formatRunFailure(
         new Error(testing.formatProbeFailure(sample)),
         {

@@ -84,10 +84,8 @@ export function createDiffsHttpHandler(params: {
     if (!access.localRequest) {
       const throttled = viewerFailureLimiter.check(access.remoteKey);
       if (!throttled.allowed) {
-        res.statusCode = 429;
-        setSharedHeaders(res, "text/plain; charset=utf-8");
         res.setHeader("Retry-After", String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))));
-        res.end("Too Many Requests");
+        respondText(res, 429, "Too Many Requests");
         return true;
       }
     }
@@ -170,6 +168,7 @@ async function serveAsset(
       asset.contentType,
       pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
     );
+    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -186,6 +185,9 @@ async function serveAsset(
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so error responses keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("content-length", String(Buffer.byteLength(body)));
   res.end(body);
 }
 

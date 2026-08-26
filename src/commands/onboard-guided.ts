@@ -15,7 +15,7 @@ import type {
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import { requestTelemetryConsent, requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
 import {
@@ -109,10 +109,12 @@ async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<strin
   const { mutateConfigFileWithRetry } = await import("../config/config.js");
   const committed = await mutateConfigFileWithRetry({
     mutate: (draft) => {
-      if (draft.wizard?.securityAcknowledgedAt) {
-        return;
+      if (!draft.wizard?.securityAcknowledgedAt) {
+        draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
       }
-      draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
+      if (config.telemetry?.consentedAt && !draft.telemetry?.consentedAt) {
+        draft.telemetry = config.telemetry;
+      }
     },
   });
   return committed.nextConfig.wizard?.securityAcknowledgedAt;
@@ -167,8 +169,16 @@ async function runGuidedOnboardingFlow(
     prompter,
     config: existingConfig,
   });
+  acknowledgedConfig = await requestTelemetryConsent({
+    opts,
+    prompter,
+    config: acknowledgedConfig,
+  });
   let securityAcknowledgedAt = acknowledgedConfig.wizard?.securityAcknowledgedAt;
-  if (!existingConfig.wizard?.securityAcknowledgedAt) {
+  if (
+    !existingConfig.wizard?.securityAcknowledgedAt ||
+    (!existingConfig.telemetry?.consentedAt && acknowledgedConfig.telemetry?.consentedAt)
+  ) {
     const persistedAcknowledgement = await (
       deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement
     )(acknowledgedConfig);

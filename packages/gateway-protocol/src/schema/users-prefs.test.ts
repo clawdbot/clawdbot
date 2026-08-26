@@ -4,10 +4,12 @@ import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
+  UserProfileSchema,
   UsersPrefsGetResultSchema,
   UsersPrefsSetResultSchema,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
+  validateUsersSetRoleParams,
 } from "../index.js";
 
 describe("user preference protocol schemas", () => {
@@ -50,5 +52,38 @@ describe("user preference protocol schemas", () => {
     ).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "ok" })).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "no_durable_identity" })).toBe(true);
+  });
+
+  it("accepts bounded role assignments and explicit role removal", () => {
+    expect(validateUsersSetRoleParams({ profileId: "profile-1", role: "guest" })).toBe(true);
+    expect(validateUsersSetRoleParams({ profileId: "profile-1", role: null })).toBe(true);
+
+    for (const invalid of [
+      { profileId: "profile-1" },
+      { profileId: "profile-1", role: "" },
+      { profileId: "profile-1", role: "   " },
+      { profileId: "profile-1", role: "x".repeat(129) },
+      { profileId: "profile-1", role: "guest", scopes: ["operator.admin"] },
+    ]) {
+      expect(validateUsersSetRoleParams(invalid)).toBe(false);
+    }
+  });
+
+  it("keeps profile roles additive and preserves role-free profile payloads", () => {
+    const profile = {
+      id: "profile-1",
+      displayName: null,
+      avatarMime: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: 1,
+      emails: [],
+      githubIdentity: null,
+      hasAvatar: false,
+    };
+
+    expect(Value.Check(UserProfileSchema, profile)).toBe(true);
+    expect(Value.Check(UserProfileSchema, { ...profile, role: "guest" })).toBe(true);
+    expect(Value.Check(UserProfileSchema, { ...profile, role: null })).toBe(false);
   });
 });

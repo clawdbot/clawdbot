@@ -120,7 +120,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   packages.
 - `extended-stable` resolves eligible official npm plugins with bare/default
   or `latest` intent to the exact installed core version. It does not query
-  plugin `@extended-stable` tags at runtime.
+  plugin `@extended-stable` tags at runtime. Version-bound runtime plugins use
+  the base release cohort for correction versions (for example, `YYYY.M.P-2`
+  uses plugin `YYYY.M.P`).
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status

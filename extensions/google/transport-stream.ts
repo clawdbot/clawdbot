@@ -34,6 +34,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
   sanitizeTransportPayloadText,
   sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
@@ -562,6 +563,7 @@ function convertGoogleMessages(
 ) {
   const contents: Array<Record<string, unknown>> = [];
   const replayToolCallThoughtSignatures = new Map<string, string>();
+  const sameRouteToolCallIds = new Set<string>();
   const shouldReplayToolCallThoughtSignature = requiresToolCallThoughtSignature(model.id);
   const routeModel = normalizeGoogleTransportModelRoute(model);
   const transformedMessages = transformTransportMessages(
@@ -653,6 +655,9 @@ function convertGoogleMessages(
           continue;
         }
         if (block.type === "toolCall") {
+          if (isSameRoute) {
+            sameRouteToolCallIds.add(block.id);
+          }
           const replayKey = toolCallThoughtSignatureReplayKey(block);
           const replayedThoughtSignature =
             shouldReplayToolCallThoughtSignature && isSameRoute
@@ -678,7 +683,7 @@ function convertGoogleMessages(
             functionCall: {
               name: block.name,
               args: coerceTransportToolCallArguments(block.arguments),
-              ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+              ...(isSameRoute || requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(thoughtSignature ? { thoughtSignature } : {}),
           });
@@ -719,7 +724,9 @@ function convertGoogleMessages(
           ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
-          ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
+          ...(sameRouteToolCallIds.has(msg.toolCallId) || requiresToolCallId(model.id)
+            ? { id: msg.toolCallId }
+            : {}),
         },
       };
       if (activeToolResultParts) {
@@ -1052,9 +1059,10 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
       parent.addEventListener("abort", abortFromParent, { once: true });
     }
   }
-  if (timeoutMs > 0) {
+  if (!controller.signal.aborted && timeoutMs > 0) {
     timeout = setTimeout(() => {
       timedOut = true;
+      timeout = undefined;
       controller.abort(new Error("Google Gemini first response retry deadline reached"));
     }, timeoutMs);
     timeout.unref?.();
@@ -1104,6 +1112,20 @@ type GoogleSseAttempt =
     }
   | { type: "timeout" };
 
+async function notifyGoogleTransportHttpResponse(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+  response: Response,
+  signal?: AbortSignal,
+): Promise<void> {
+  await notifyProviderHttpResponse({
+    options,
+    response,
+    model: canonicalGoogleModel(model),
+    signal,
+  });
+}
+
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
   url: string;
@@ -1113,44 +1135,63 @@ async function openGoogleSseAttempt(params: {
   parentSignal?: AbortSignal;
   firstResponseTimeoutMs: number;
   errorPrefix: string;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
 }): Promise<GoogleSseAttempt> {
   const attemptSignal =
     params.firstResponseTimeoutMs > 0
       ? createChildSignal(params.parentSignal, params.firstResponseTimeoutMs)
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
-  try {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, params.errorPrefix);
-    }
-    const chunks = parseGoogleSseChunks(response, signal);
-    const iterator = chunks[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    attemptSignal?.clearDeadline();
-    if (first.done) {
-      return {
-        type: "ready",
-        chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-      };
-    }
-    return {
-      type: "ready",
-      firstChunk: first.value,
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-    };
-  } catch (error) {
+  const handleTimedOperationError = (error: unknown): GoogleSseAttempt => {
     attemptSignal?.cleanup();
     if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
       return { type: "timeout" };
     }
     throw error;
+  };
+  let response: Response;
+  try {
+    response = await params.guardedFetch(params.url, {
+      method: "POST",
+      headers: params.headers,
+      body: serializeGoogleRequest(params.request, params.videoSlots),
+      signal,
+    });
+  } catch (error) {
+    return handleTimedOperationError(error);
   }
+  try {
+    // Response hooks share the first-response deadline. A stalled hook must cancel
+    // the unread body and enter the same Gemini fallback as a stalled fetch or body.
+    await notifyGoogleTransportHttpResponse(params.model, params.options, response, signal);
+  } catch (error) {
+    return handleTimedOperationError(error);
+  }
+  if (!response.ok) {
+    attemptSignal?.cleanup();
+    throw await createProviderHttpError(response, params.errorPrefix);
+  }
+  const chunks = parseGoogleSseChunks(response, signal);
+  const iterator = chunks[Symbol.asyncIterator]();
+  let first: IteratorResult<GoogleSseChunk>;
+  try {
+    first = await iterator.next();
+  } catch (error) {
+    return handleTimedOperationError(error);
+  }
+  attemptSignal?.clearDeadline();
+  if (first.done) {
+    return {
+      type: "ready",
+      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    };
+  }
+  return {
+    type: "ready",
+    firstChunk: first.value,
+    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+  };
 }
 
 async function openGoogleSseChunks(params: {
@@ -1174,6 +1215,12 @@ async function openGoogleSseChunks(params: {
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
+    await notifyGoogleTransportHttpResponse(
+      params.model,
+      params.options,
+      response,
+      params.options?.signal,
+    );
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
@@ -1191,6 +1238,12 @@ async function openGoogleSseChunks(params: {
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
+    await notifyGoogleTransportHttpResponse(
+      params.model,
+      params.options,
+      response,
+      params.options?.signal,
+    );
     if (!response.ok) {
       throw await createProviderHttpError(response, errorPrefix);
     }
@@ -1209,6 +1262,8 @@ async function openGoogleSseChunks(params: {
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: retryMs,
     errorPrefix,
+    model: params.model,
+    options: params.options,
   });
   if (firstAttempt.type === "ready") {
     return firstAttempt;
@@ -1229,6 +1284,8 @@ async function openGoogleSseChunks(params: {
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: 0,
     errorPrefix,
+    model: params.model,
+    options: params.options,
   });
   if (retryAttempt.type === "timeout") {
     throw new Error("Google Gemini first response retry timed out unexpectedly");
@@ -1276,17 +1333,30 @@ async function* parseGoogleSseChunks(
       signal?.throwIfAborted();
       if (done) {
         buffer += decoder.decode();
-        if (
-          buffer
-            .split(/\r\n|\n|\r/u)
-            .some((line) => line.startsWith("data:") && line.slice(5).trim().length > 0)
-        ) {
+        const trailingData = buffer
+          .split(/\r\n|\n|\r/u)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+        const trailingPayload = trailingData || buffer.trim();
+        if (!trailingPayload || (!trailingData && !trailingPayload.startsWith("{"))) {
+          completed = true;
+          break;
+        }
+        let trailingChunk: unknown;
+        try {
+          trailingChunk = JSON.parse(trailingPayload);
+        } catch {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }
-        completed = true;
-        break;
+        if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
+          throw new Error("Google SSE stream ended with an incomplete frame");
+        }
+        // Provider errors can arrive as bare JSON or data frames without their final delimiter.
+        buffer = `data: ${JSON.stringify(trailingChunk)}\n\n`;
+      } else {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
       let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
       while (boundary) {
         const rawEvent = buffer.slice(0, boundary.index);
@@ -1611,7 +1681,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               }
             }
           }
-          if (typeof candidate?.finishReason === "string") {
+          if (
+            typeof candidate?.finishReason === "string" &&
+            candidate.finishReason !== "FINISH_REASON_UNSPECIFIED"
+          ) {
             sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
             if (output.stopReason === "error") {

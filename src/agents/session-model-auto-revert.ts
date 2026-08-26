@@ -96,6 +96,7 @@ async function reconcileAgentPatchedSessionModel(params: {
         authProfileOverride: marker.prevAuthProfileOverride,
         authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
         authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+        contextWindow: marker.prevContextWindow,
         thinkingLevel: marker.prevThinkingLevel,
         modelFallback: undefined,
         liveModelSwitchPending: undefined,

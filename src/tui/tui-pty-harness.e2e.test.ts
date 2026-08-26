@@ -248,9 +248,9 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "reconciles active and terminal runs after reconnect history",
-    () => exerciseTuiReconnectOutcomes(STARTUP_TIMEOUT_MS),
-    STARTUP_TEST_TIMEOUT_MS,
+    "reconciles active, replacement, and terminal runs after reconnect history",
+    () => exerciseTuiReconnectOutcomes(35_000),
+    45_000,
   );
 
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
@@ -736,12 +736,12 @@ describe.sequential("TUI PTY harness", () => {
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
       );
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
     },
     TEST_TIMEOUT_MS,
   );

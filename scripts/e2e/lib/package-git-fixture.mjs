@@ -47,6 +47,7 @@ function prepare(root) {
     ...packageJson.scripts,
     openclaw: "node openclaw.mjs",
   };
+  delete packageJson.scripts.postinstall;
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
   const aiRuntimePackageJson = path.join(aiRuntimeSource, "package.json");
   if (!fs.existsSync(aiRuntimePackageJson)) {

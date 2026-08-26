@@ -380,6 +380,9 @@ describe("atomic subagent completion admission store", () => {
           "UPDATE subagent_runs SET payload_json = ?, fallback_frozen_result_text = NULL WHERE run_id = ?",
         )
         .run(JSON.stringify(legacyPayload), input.subagent.runId);
+      database.db
+        .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+        .run("2026.7.0");
 
       resetTaskRegistryForTests({ persist: false });
       subagentRuns.clear();

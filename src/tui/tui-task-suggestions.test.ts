@@ -457,6 +457,87 @@ describe("TUI task suggestions", () => {
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      label: "shows a fixed-store alias owned by the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      suggestionAgent: "main",
+      suggestionSession: "support",
+      visible: true,
+    },
+    {
+      label: "rejects a fixed-store alias owned by another agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      suggestionAgent: "work",
+      suggestionSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a fixed-store alias without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      suggestionAgent: undefined,
+      suggestionSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a matching canonical key with a contradictory explicit owner",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      suggestionAgent: "work",
+      suggestionSession: "agent:main:support",
+      visible: false,
+    },
+    {
+      label: "accepts a canonical key whose parsed owner identifies the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      suggestionAgent: undefined,
+      suggestionSession: "agent:main:support",
+      visible: true,
+    },
+    {
+      label: "rejects a foreign canonical key against a bare selected alias",
+      selectedAgent: "main",
+      selectedSession: "support",
+      suggestionAgent: "main",
+      suggestionSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects a global suggestion without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "global",
+      suggestionAgent: undefined,
+      suggestionSession: "global",
+      visible: false,
+    },
+    {
+      label: "preserves case-sensitive opaque session references",
+      selectedAgent: "main",
+      selectedSession: "agent:main:matrix:group:!Room:example.org",
+      suggestionAgent: "main",
+      suggestionSession: "matrix:group:!room:example.org",
+      visible: false,
+    },
+  ])(
+    "$label",
+    ({ selectedAgent, selectedSession, suggestionAgent, suggestionSession, visible }) => {
+      const harness = createHarness();
+      harness.setAgentId(selectedAgent);
+      harness.setSessionKey(selectedSession);
+
+      harness.controller.handleEvent("task.suggestion", {
+        action: "created",
+        suggestion: suggestionPayload({ agentId: suggestionAgent, sessionKey: suggestionSession }),
+      });
+
+      expect(harness.openOverlay).toHaveBeenCalledTimes(visible ? 1 : 0);
+    },
+  );
+
   it("closes a suggestion resolved by another client", () => {
     const harness = createHarness();
     harness.controller.handleEvent("task.suggestion", {

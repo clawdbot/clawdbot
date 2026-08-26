@@ -85,6 +85,7 @@ describe("codex plugin", () => {
   it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
     const registerAgentHarness = vi.fn();
     const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
     const registerSessionCatalog = vi.fn();
 
     expect(() =>
@@ -98,6 +99,7 @@ describe("codex plugin", () => {
           runtime: createCodexTestRuntime(() => explicitAgentConfig),
           registerAgentHarness,
           registerNodeHostCommand,
+          registerNodeInvokePolicy,
           registerSessionCatalog,
         }),
       ),
@@ -110,8 +112,26 @@ describe("codex plugin", () => {
         "codex.appServer.threads.list.v1",
         "codex.appServer.thread.turns.list.v1",
         "codex.terminal.resume.v1",
+        "codex.exec-server.stdio.v1",
       ]),
     );
+    const nodeExecServerCommand = registerNodeHostCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.command === "codex.exec-server.stdio.v1");
+    expect(nodeExecServerCommand).toMatchObject({
+      command: "codex.exec-server.stdio.v1",
+      cap: "codex.exec-server",
+      dangerous: true,
+      duplex: true,
+    });
+    const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
+      .map(([policy]) => policy)
+      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
+    expect(nodeExecServerPolicy).toMatchObject({
+      commands: ["codex.exec-server.stdio.v1"],
+      dangerous: true,
+    });
+    expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
   });
 
   it("proactively monitors an explicitly configured remote websocket app-server", () => {
@@ -134,12 +154,14 @@ describe("codex plugin", () => {
       }),
     );
 
-    expect(registerService).toHaveBeenCalledOnce();
-    expect(mockCallArg(registerService)).toMatchObject({
-      id: "codex-app-server-connection-health",
-      start: expect.any(Function),
-      stop: expect.any(Function),
-    });
+    expect(registerService).toHaveBeenCalledTimes(2);
+    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
+      expect.objectContaining({
+        id: "codex-app-server-connection-health",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
   });
 
   it("does not start remote connection monitoring for local Codex transports", () => {
@@ -158,7 +180,12 @@ describe("codex plugin", () => {
         }),
       );
 
-      expect(registerService).not.toHaveBeenCalled();
+      expect(registerService).toHaveBeenCalledOnce();
+      expect(mockCallArg(registerService)).toMatchObject({
+        id: "codex-desktop-generation",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      });
     }
   });
 
@@ -286,7 +313,11 @@ describe("codex plugin", () => {
     const nodeCommands = registerNodeHostCommand.mock.calls.map(
       ([command]) => (command as { command: string }).command,
     );
-    expect(nodeCommands).toEqual(["codex.cli.sessions.list", "codex.cli.session.resume"]);
+    expect(nodeCommands).toEqual([
+      "codex.cli.sessions.list",
+      "codex.cli.session.resume",
+      "codex.exec-server.stdio.v1",
+    ]);
     expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
     expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
     expect(registerSessionCatalog).not.toHaveBeenCalled();
@@ -938,6 +969,7 @@ describe("codex plugin", () => {
         },
       },
     };
+    const runtime = createCodexTestRuntime(() => liveConfig);
     plugin.register(
       createTestPluginApi({
         id: "codex",
@@ -945,7 +977,7 @@ describe("codex plugin", () => {
         source: "test",
         config: {},
         pluginConfig: { codexPlugins: { enabled: false } },
-        runtime: createCodexTestRuntime(() => liveConfig),
+        runtime,
         registerAgentHarness,
         registerCommand: vi.fn(),
         registerMediaUnderstandingProvider: vi.fn(),
@@ -967,6 +999,8 @@ describe("codex plugin", () => {
       {
         bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
+        runtime,
+        runtimeModelId: undefined,
         nativeHookRelay: { enabled: true },
       },
     );

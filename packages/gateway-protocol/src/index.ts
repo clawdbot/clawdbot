@@ -29,6 +29,10 @@ export {
 export * from "./schema/session-classification.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-delete.js";
+export {
+  SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
+  SESSION_CREATE_RETRY_WINDOW_MS,
+} from "./schema/sessions-create.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";

@@ -93,6 +93,8 @@ const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
+const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
+const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -135,18 +137,31 @@ function readTrustedClawHubToolchainIdentity(): {
   };
 }
 
-function runCommand(command: string, args: string[], options: { cwd?: string } = {}): string {
+export function runReleaseVerifierCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; maxBufferBytes?: number; timeoutMs?: number } = {},
+): string {
   return execFileSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBufferBytes ?? RELEASE_COMMAND_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs ?? RELEASE_COMMAND_TIMEOUT_MS,
   }).trim();
 }
 
-function runCommandInherited(command: string, args: string[]): void {
-  execFileSync(command, args, {
-    stdio: "inherit",
-  });
+function isNpmPropagationError(error: unknown): boolean {
+  if (!isJsonRecord(error)) {
+    return false;
+  }
+  const details = [error.code, error.message, error.stderr]
+    .map((value) =>
+      Buffer.isBuffer(value) ? value.toString("utf8") : typeof value === "string" ? value : "",
+    )
+    .join("\n");
+  return /\b(?:E404|ETARGET)\b|No match found for version/u.test(details);
 }
 
 export async function runNpmViewWithRetry(
@@ -164,13 +179,16 @@ export async function runNpmViewWithRetry(
       new Promise((resolveDelay) => {
         setTimeout(resolveDelay, delayMs);
       }));
-  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
+  const run = options.run ?? ((npmArgs: string[]) => runReleaseVerifierCommand("npm", npmArgs));
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return run([...args, "--prefer-online"]);
     } catch (error) {
+      if (!isNpmPropagationError(error)) {
+        throw error;
+      }
       lastError = error;
     }
     if (attempt < attempts) {
@@ -564,7 +582,7 @@ async function verifyClawHubPackage(params: {
 }
 
 function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "release",
     "view",
     params.tag,
@@ -597,7 +615,7 @@ function verifyWorkflowRun(params: {
   allowedHeadBranches?: string[];
   rerunFailed: boolean;
 }): WorkflowRunSummary {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
     params.id,
@@ -641,7 +659,7 @@ function verifyWorkflowRun(params: {
     );
   });
   if (failedJobs.length > 0 && params.rerunFailed) {
-    runCommandInherited("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
+    runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
@@ -1082,12 +1100,14 @@ export function validateClawHubBootstrapEvidence(params: {
 }
 
 function readGitHubApiJson(repo: string, endpoint: string, label: string): unknown {
-  return parseJson(runCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
+  return parseJson(runReleaseVerifierCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
 }
 
 function readGitHubToken(): string {
   return requireString(
-    process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? runCommand("gh", ["auth", "token"]),
+    process.env.GH_TOKEN ??
+      process.env.GITHUB_TOKEN ??
+      runReleaseVerifierCommand("gh", ["auth", "token"]),
     "GitHub token",
   );
 }
@@ -1276,7 +1296,9 @@ export async function verifyBetaRelease(
     throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
   }
   if (args.releaseSha !== undefined) {
-    const checkedOutSha = runCommand("git", ["rev-parse", "HEAD"], { cwd: rootDir });
+    const checkedOutSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
+      cwd: rootDir,
+    });
     if (checkedOutSha !== args.releaseSha) {
       throw new Error(`release checkout SHA is ${checkedOutSha}; expected ${args.releaseSha}.`);
     }
@@ -1298,7 +1320,9 @@ export async function verifyBetaRelease(
       rootDir,
       args.postpublishVerifier,
     );
-    runCommandInherited("node", ["--import", "tsx", postpublishVerifier, args.version]);
+    execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
+      stdio: "inherit",
+    });
     lines.push("openclaw postpublish verifier OK");
   }
 

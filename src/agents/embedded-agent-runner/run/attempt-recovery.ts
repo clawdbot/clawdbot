@@ -11,7 +11,7 @@ import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import { isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
+import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -20,6 +20,7 @@ import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-s
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
+import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
@@ -112,6 +113,11 @@ export async function recoverEmbeddedRunAttempt(input: {
   } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
+  const canContinueSettledMidTurnOverflow =
+    promptErrorSource === "precheck" &&
+    attempt.preflightRecovery?.source === "mid-turn" &&
+    resolveSettledToolBatchEvidence(attempt).allToolsProvenSettled &&
+    !hasAsyncActivity(attempt.toolMetas);
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
     currentAttemptCompletedAssistant !== undefined
@@ -138,6 +144,11 @@ export async function recoverEmbeddedRunAttempt(input: {
         : updates.lastRetryFailoverReason,
     thinkLevel: updates?.thinkLevel ?? runtime.thinkLevel,
   });
+  const replayUnsafeOutcome = {
+    action: "proceed" as const,
+    shouldSurfaceCodexCompletionTimeout:
+      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
+  };
 
   if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
     const errorText = formatErrorMessage(promptError);
@@ -165,12 +176,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
-  if (!currentAttemptReplaySafe) {
-    return {
-      action: "proceed",
-      shouldSurfaceCodexCompletionTimeout:
-        attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
-    };
+  if (!currentAttemptReplaySafe && !canContinueSettledMidTurnOverflow) {
+    return replayUnsafeOutcome;
   }
 
   const requestedSelection = shouldSwitchToLiveModel({
@@ -185,7 +192,12 @@ export async function recoverEmbeddedRunAttempt(input: {
     currentAuthProfileId: preparedRuntime.preferredProfileId,
     currentAuthProfileIdSource: params.authProfileIdSource,
   });
-  if (!signalOwnedInterruption && requestedSelection && canRestartForLiveSwitch) {
+  if (
+    currentAttemptReplaySafe &&
+    !signalOwnedInterruption &&
+    requestedSelection &&
+    canRestartForLiveSwitch
+  ) {
     await clearLiveModelSwitchPending({
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
@@ -207,7 +219,7 @@ export async function recoverEmbeddedRunAttempt(input: {
           ? "user"
           : "auto",
     },
-    requested: requestedSelection,
+    requested: currentAttemptReplaySafe ? requestedSelection : undefined,
   });
   const commonRecoveryInput = {
     runParams: params,
@@ -291,6 +303,11 @@ export async function recoverEmbeddedRunAttempt(input: {
         finalPromptText: attempt.finalPromptText,
       }),
     };
+  }
+  // Settled-tool continuation authorizes only current-transcript overflow recovery.
+  // Every path below can replay or replace the original attempt and remains fail-closed.
+  if (!currentAttemptReplaySafe) {
+    return replayUnsafeOutcome;
   }
   const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
     attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,

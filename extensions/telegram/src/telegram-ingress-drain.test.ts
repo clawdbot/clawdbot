@@ -10,6 +10,7 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import {
@@ -162,6 +163,61 @@ describe("createTelegramIngressMonitor", () => {
       const pending = await queue.listPending({ limit: "all" });
       expect(pending.some((row) => row.id === eventId)).toBe(true);
 
+      await monitor.stop();
+    });
+  });
+
+  it("reconciles a cached General topic when private bot topics are disabled", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const updateId = 9;
+      const eventId = String(updateId).padStart(16, "0");
+      const update = {
+        update_id: updateId,
+        message: {
+          text: "hello",
+          from: { id: 111 },
+          chat: { id: -9003, type: "supergroup" },
+        },
+      };
+      const payload: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId,
+        receivedAt: updateId,
+        update,
+      };
+      await resolveTelegramForumFlag({
+        chatId: -9003,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+      });
+      await queue.enqueue(eventId, payload, { laneKey: "telegram:-9003" });
+
+      const dispatch = vi.fn(async (_update, lifecycle) => {
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9003:topic:1" }),
+        ]);
+        await lifecycle.onAdopted();
+        return { kind: "completed" as const };
+      });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        botInfo: { id: 999, has_topics_enabled: false } as never,
+        dispatch,
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();
     });
   });

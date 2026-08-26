@@ -253,6 +253,83 @@ suite.define(() => {
     }
   });
 
+  it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Composer resize history ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Composer resize history 49").waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      await waitForChatScrollIdle(page);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      for (let line = 1; line <= 8; line += 1) {
+        await composer.fill(
+          Array.from({ length: line }, (_, index) => `Growing composer line ${index + 1}`).join(
+            "\n",
+          ),
+        );
+        await waitForChatScrollIdle(page);
+        expect(
+          await chatThreadDistanceFromBottom(page),
+          `composer line count ${line}`,
+        ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      }
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "composer-resize-pinned.png"),
+        });
+      }
+
+      await composer.fill("Growing composer line 1");
+      await waitForChatScrollIdle(page);
+      await scrollChatThreadToTop(page);
+      const readingScrollTop = await page
+        .locator(".chat-thread")
+        .evaluate((element) => element.scrollTop);
+      await composer.fill(
+        Array.from({ length: 8 }, (_, index) => `Reading composer line ${index + 1}`).join("\n"),
+      );
+      await waitForChatScrollIdle(page);
+      expect(
+        await page
+          .locator(".chat-thread")
+          .evaluate((element, initial) => Math.abs(element.scrollTop - initial), readingScrollTop),
+      ).toBeLessThanOrEqual(1);
+
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "composer-resize-manual-scroll.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -462,23 +539,24 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
-        const alert = page.locator(".chat-run-error");
+        const alert = page.locator(".chat-error");
         await alert.getByText(errorText).waitFor({ timeout: 10_000 });
         expect(await alert.locator("button").count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
-        expect(
-          await alert.evaluate((element) =>
-            element.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-          ),
-        ).toBe(true);
         const [alertBox, composerBox] = await Promise.all([
           alert.boundingBox(),
           page.locator(".agent-chat__composer-shell").boundingBox(),
         ]);
         expect(alertBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
-        expect(Math.abs((alertBox?.x ?? 0) - (composerBox?.x ?? 0))).toBeLessThan(1);
-        expect(Math.abs((alertBox?.width ?? 0) - (composerBox?.width ?? 0))).toBeLessThan(1);
+        expect(
+          Math.abs(
+            (alertBox?.x ?? 0) +
+              (alertBox?.width ?? 0) / 2 -
+              ((composerBox?.x ?? 0) + (composerBox?.width ?? 0) / 2),
+          ),
+        ).toBeLessThan(1);
+        expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
 
         await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
         await page.getByRole("button", { name: "Send message" }).click();
@@ -636,7 +714,7 @@ suite.define(() => {
         state: "delta",
       });
 
-      await page.getByText(response).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
       await indicator.waitFor({ timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
@@ -858,10 +936,11 @@ suite.define(() => {
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
+      const initialStream = `I will inspect the file. ${"Prior streamed output. ".repeat(20)}`;
       await gateway.emitGatewayEvent("chat", {
-        deltaText: "I will inspect the file.",
+        deltaText: initialStream,
         message: {
-          content: [{ text: "I will inspect the file.", type: "text" }],
+          content: [{ text: initialStream, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -869,7 +948,8 @@ suite.define(() => {
         sessionKey: "main",
         state: "delta",
       });
-      await page.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
 
       await gateway.emitGatewayEvent("agent", {
         data: {
@@ -887,20 +967,42 @@ suite.define(() => {
       const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
       await toolBubble.waitFor({ timeout: 10_000 });
 
-      const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
-        return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
-          const text = group.textContent ?? "";
-          if (text.includes("I will inspect the file.")) {
+      const nextStream = "```ts\nconst answer = 42;";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: nextStream,
+        message: {
+          content: [{ text: nextStream, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await expect
+        .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
+        .toContain("const answer = 42;");
+
+      const composedGroup = transcript
+        .locator(".chat-group.assistant")
+        .filter({ hasText: "I will inspect the file." });
+      expect(await composedGroup.count()).toBe(1);
+      const visibleOrder = await composedGroup.evaluate((group: Element) =>
+        Array.from(group.querySelectorAll(".chat-bubble")).flatMap((bubble: Element) => {
+          if ((bubble.textContent ?? "").includes("I will inspect the file.")) {
             return ["assistant stream"];
           }
-          if (group.querySelector('[data-message-id^="tool:assistant:call-read"]')) {
+          if (bubble.matches('[data-message-id^="tool:assistant:call-read"]')) {
             return ["tool card"];
           }
+          if ((bubble.textContent ?? "").includes("const answer = 42;")) {
+            return ["assistant continuation"];
+          }
           return [];
-        });
-      });
+        }),
+      );
 
-      expect(visibleOrder).toEqual(["assistant stream", "tool card"]);
+      expect(visibleOrder).toEqual(["assistant stream", "tool card", "assistant continuation"]);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -71,8 +71,8 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.15.0"
-ARMV7_DEFAULT_NODE_VERSION="22.22.3"
+DEFAULT_NODE_VERSION="24.19.0"
+ARMV7_DEFAULT_NODE_VERSION="22.23.2"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
@@ -105,7 +105,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.15.0; 22.22.3 on Linux ARMv7)
+  --node-version <ver>                Node version (default: 24.19.0; 22.23.2 on Linux ARMv7)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -432,7 +432,7 @@ select_node_version_for_platform() {
     NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
   fi
   if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
-    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.22.3."
+    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.23.2."
   fi
 }
 
@@ -1133,7 +1133,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.15.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -1152,10 +1152,16 @@ ensure_pnpm() {
     emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"corepack\"}"
     log "Installing pnpm via Corepack..."
     "$(node_dir)/bin/corepack" enable >/dev/null 2>&1 || true
-    "$(node_dir)/bin/corepack" prepare pnpm@11 --activate
-    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
-      emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
-      return 0
+    # Corepack downloads fail hard on npm registry key rotation (its bundled
+    # signature set goes stale); the npm fallback below must stay reachable.
+    if "$(node_dir)/bin/corepack" prepare pnpm@11 --activate; then
+      if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
+        emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
+        return 0
+      fi
+    else
+      emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"warn\",\"reason\":\"corepack-failed\"}"
+      log "Corepack could not provision pnpm; falling back to npm."
     fi
   fi
 
@@ -1450,7 +1456,9 @@ clone_git_checkout_transactionally() {
   fi
   TMPFILES+=("$staging_dir")
 
-  git clone "$repo_url" "$staging_dir" || clone_status=$?
+  # Blobless partial clone: the dev checkout only needs current files plus pullable
+  # history refs; full multi-gigabyte blob history would dominate install time.
+  git clone --filter=blob:none "$repo_url" "$staging_dir" || clone_status=$?
   if [[ "$clone_status" -ne 0 ]]; then
     return "$clone_status"
   fi
@@ -1624,12 +1632,25 @@ is_gateway_daemon_loaded() {
   fi
 
   local status_json=""
-  status_json="$("$claw" daemon status --json 2>/dev/null || true)"
+  # Unlike daemon status, gateway status reports service.loaded during pending migrations.
+  status_json="$("$claw" gateway status --json 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
     return 1
   fi
 
-  printf '%s' "$status_json" | node -e '
+  # Managed installs must parse with their provisioned Node even when the system has none.
+  local node_bin="${PREFIX}/tools/node/bin/node"
+  if [[ ! -x "$node_bin" ]]; then
+    if command -v node >/dev/null 2>&1; then
+      node_bin="$(command -v node)"
+    else
+      # Approximate POSIX-safe fallback when neither managed nor system Node is available.
+      printf '%s\n' "$status_json" | grep -Eq '"loaded"[[:space:]]*:[[:space:]]*true'
+      return
+    fi
+  fi
+
+  printf '%s' "$status_json" | "$node_bin" -e '
 const fs = require("fs");
 const raw = fs.readFileSync(0, "utf8").trim();
 if (!raw) process.exit(1);

@@ -12,6 +12,7 @@ import {
   resetMemoryToolMockState,
   setMemoryCloseImpl,
   setMemoryCustomStatus,
+  setMemoryPendingSyncSources,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemorySourceCounts,
@@ -552,6 +553,25 @@ describe("memory_search unavailable payloads", () => {
       action: "Run: openclaw memory status --index --agent main",
     });
     expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("does not qualify results while session-only catch-up is in progress", async () => {
+    setMemoryStatusDirty(true);
+    setMemoryPendingSyncSources(["sessions"]);
+    setMemorySearchImpl(async () => []);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("session-catch-up", { query: "hidden codeword" });
+
+    expect(result.details).toMatchObject({ results: [] });
+    expect(result.details).not.toHaveProperty("stale");
+    expect(result.details).not.toHaveProperty("warning");
+    expect(result.details).not.toHaveProperty("action");
   });
 
   it("surfaces embedding bootstrap degradation when keyword search has no hits", async () => {

@@ -280,6 +280,60 @@ describe("createChildAdapter", () => {
     expect(disconnectMock).toHaveBeenCalledOnce();
   });
 
+  it("keeps ordinary children supervised through repeated operational errors", async () => {
+    const { child, emitClose, emitExit } = createStubChild(7865);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+    const resolved = vi.fn();
+    const rejected = vi.fn();
+    const wait = adapter.wait();
+    void wait.then(resolved, rejected);
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+        expect(() => child.emit("error", error)).not.toThrow();
+        expect(child.listenerCount("error")).toBe(1);
+        expect(child.listenerCount("exit")).toBe(1);
+        expect(child.listenerCount("close")).toBe(1);
+        await Promise.resolve();
+        expect(resolved).not.toHaveBeenCalled();
+        expect(rejected).not.toHaveBeenCalled();
+      }
+
+      emitExit(0);
+      emitClose(0);
+      await expect(wait).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      adapter.dispose();
+    }
+
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("close")).toBe(0);
+  });
+
+  it("fails owned worker authority closed on child process errors", async () => {
+    const { child, disconnectMock } = createStubChild(7866);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "worker"],
+      ownedWorker: true,
+    });
+    const wait = adapter.wait();
+    const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+
+    child.emit("error", error);
+
+    await expect(wait).rejects.toBe(error);
+    adapter.dispose();
+    expect(disconnectMock).toHaveBeenCalledOnce();
+    expect(child.listenerCount("error")).toBe(0);
+  });
+
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
     const { child } = createStubChild();
     const secretStream = new PassThrough();
@@ -904,14 +958,16 @@ describe("createChildAdapter", () => {
     });
     const first = vi.fn();
     const second = vi.fn();
+    const raw = vi.fn();
 
-    adapter.onStdout(first);
+    adapter.onStdout(first, raw);
     adapter.onStdout(second);
     child.stdout?.emit("data", Buffer.from([0xb2]));
 
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+    expect(raw).toHaveBeenCalledWith(Buffer.from([0xb2]));
   });
 
   it("guards stream errors before output listeners are registered", async () => {

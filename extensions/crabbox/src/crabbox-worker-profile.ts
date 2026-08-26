@@ -7,6 +7,7 @@ import {
   type WorkerProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export { nonEmptyString };
 
@@ -17,6 +18,7 @@ const PROFILE_KEYS = new Set([
   "idleTimeout",
   "provider",
   "setup",
+  "setupEnv",
   "ttl",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
@@ -39,10 +41,12 @@ type CrabboxProfile = {
   class: string;
   desktop?: boolean;
   heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
   idleTimeout: string;
   provider: string;
   ttl: string;
   setup?: string;
+  setupEnv?: string[];
 };
 
 const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
@@ -60,14 +64,18 @@ type IsExecutable = (candidate: string) => boolean;
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
-function requirePositiveDuration(value: unknown, key: string): string {
+function requirePositiveDuration(
+  value: unknown,
+  key: string,
+): { duration: string; milliseconds: number } {
   const duration = nonEmptyString(value);
-  if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
+  const nanoseconds = duration ? parsePositiveGoDurationNanoseconds(duration) : undefined;
+  if (!duration || nanoseconds === undefined) {
     throw new WorkerProviderError(
       `Crabbox profile ${key} must be a positive Go duration such as 60m`,
     );
   }
-  return duration;
+  return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
@@ -98,12 +106,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeout: string): number {
-  const idleNanoseconds = parsePositiveGoDurationNanoseconds(idleTimeout);
-  if (idleNanoseconds === undefined) {
-    throw new Error("Crabbox heartbeat requires a positive idle timeout");
-  }
-  const idleTimeoutMs = Number(idleNanoseconds) / 1_000_000;
+function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -125,8 +128,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (!machineClass) {
     throw new WorkerProviderError("Crabbox profile class must be a non-empty string");
   }
-  const ttl = requirePositiveDuration(profile.ttl, "ttl");
-  const idleTimeout = requirePositiveDuration(profile.idleTimeout, "idleTimeout");
+  const { duration: ttl } = requirePositiveDuration(profile.ttl, "ttl");
+  const { duration: idleTimeout, milliseconds: idleTimeoutMs } = requirePositiveDuration(
+    profile.idleTimeout,
+    "idleTimeout",
+  );
   const binaryValue = profile.binary;
   const binary = binaryValue === undefined ? undefined : nonEmptyString(binaryValue);
   if (binaryValue !== undefined && !binary) {
@@ -139,6 +145,32 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   const setup = setupValue === undefined ? undefined : nonEmptyString(setupValue);
   if (setupValue !== undefined && !setup) {
     throw new WorkerProviderError("Crabbox profile setup must be a non-empty command string");
+  }
+  let setupEnv: string[] | undefined;
+  if (profile.setupEnv !== undefined) {
+    if (!Array.isArray(profile.setupEnv)) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must be an array");
+    }
+    if (profile.setupEnv.length > 16) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must contain at most 16 names");
+    }
+    setupEnv = profile.setupEnv.map((name) => {
+      if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+        throw new WorkerProviderError(
+          "Crabbox profile setupEnv must contain only valid POSIX environment variable names",
+        );
+      }
+      if (name === "CRABBOX_ENV_ALLOW") {
+        throw new WorkerProviderError(`Crabbox profile setupEnv name ${name} is reserved`);
+      }
+      return name;
+    });
+    if (new Set(setupEnv).size !== setupEnv.length) {
+      throw new WorkerProviderError("Crabbox profile setupEnv must not contain duplicate names");
+    }
+    if (setupEnv.length > 0 && !setup) {
+      throw new WorkerProviderError("Crabbox profile setupEnv requires setup");
+    }
   }
   const desktop = profile.desktop;
   if (desktop !== undefined && typeof desktop !== "boolean") {
@@ -153,12 +185,52 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     binary,
     class: machineClass,
     desktop,
-    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeout),
+    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeoutMs),
+    heartbeatTimeoutMs: Math.min(
+      CRABBOX_HEARTBEAT_TIMEOUT_MS,
+      Math.max(1, Math.floor(idleTimeoutMs / 2)),
+    ),
     idleTimeout,
     provider,
     setup,
+    setupEnv,
     ttl,
   };
+}
+
+function resolveCrabboxProfileSetupEnv(
+  setupEnv: readonly string[] | undefined,
+): Record<string, string> | undefined {
+  if (!setupEnv?.length) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    setupEnv.map((name) => {
+      const value = process.env[name];
+      if (!Object.hasOwn(process.env, name) || value === undefined) {
+        throw new WorkerProviderError(`Crabbox profile setupEnv variable is missing: ${name}`);
+      }
+      return [name, value];
+    }),
+  );
+}
+
+export function resolveCrabboxProvisionProfile(
+  profile: WorkerProfile,
+  requestedClassValue: unknown,
+): { profile: CrabboxProfile; forwardedEnv?: Record<string, string> } {
+  const configured = parseCrabboxProfile(profile);
+  const requestedClass = nonEmptyString(requestedClassValue);
+  if (
+    requestedClassValue !== undefined &&
+    (!requestedClass || requestedClass.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH)
+  ) {
+    throw new WorkerProviderError(
+      "Crabbox machine class must be a non-empty string of at most 128 characters",
+    );
+  }
+  const resolved = requestedClass ? { ...configured, class: requestedClass } : configured;
+  return { profile: resolved, forwardedEnv: resolveCrabboxProfileSetupEnv(resolved.setupEnv) };
 }
 
 export function listCrabboxMachineOptions(

@@ -230,6 +230,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const stop = async () => {
     stopRequested = true;
     await closeIfListening();
+    webhookAuthRateLimiter.dispose();
   };
 
   const start = (): Promise<void> => {

@@ -1,5 +1,6 @@
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Slack tests cover channel plugin behavior.
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import { slackPlugin } from "./channel.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { setSlackRuntime } from "./runtime.js";
 
@@ -1605,7 +1607,11 @@ describe("slackPlugin outbound", () => {
         },
       },
     ]);
-    expect(result).toEqual({ channel: "slack", messageId: "m-final" });
+    expect(result).toMatchObject({
+      channel: "slack",
+      messageId: "m-final",
+      receipt: { platformMessageIds: ["m-media-1", "m-media-2", "m-final"] },
+    });
   });
 
   it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
@@ -1670,6 +1676,118 @@ describe("slackPlugin outbound", () => {
     expectRecordFields(options[0], "canary option", { value: "canary" });
     expectRecordFields(options[1], "production option", { value: "production" });
     expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
+  });
+
+  it.each([
+    { surface: "interactive", type: "text" },
+    { surface: "presentation", type: "text" },
+    { surface: "presentation", type: "context" },
+  ] as const)(
+    "delivers oversized $surface $type in order across the real Slack outbound adapter",
+    async ({ surface, type }) => {
+      const sendSlack = vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "m-chunk-1" })
+        .mockResolvedValueOnce({ messageId: "m-chunk-2" });
+      const text = "x".repeat(3_000 * 50 + 1);
+      const buttons = {
+        type: "buttons" as const,
+        buttons: [{ label: "Continue", value: "continue" }],
+      };
+      const presentationTextBlock =
+        type === "context" ? { type: "context" as const, text } : { type: "text" as const, text };
+      const payload =
+        surface === "interactive"
+          ? { text: "", interactive: { blocks: [{ type: "text" as const, text }, buttons] } }
+          : { text: "", presentation: { blocks: [presentationTextBlock, buttons] } };
+
+      const result = await requireSlackSendPayload()({
+        cfg,
+        to: "channel:C123",
+        text: "",
+        payload,
+        accountId: "default",
+        deps: { sendSlack },
+      });
+      const batches = sendSlack.mock.calls.map((_call, index) =>
+        requireArray(requireMockCallArg(sendSlack, index, 2).blocks, "Slack blocks"),
+      );
+      const delivered = batches.flat().flatMap((entry) => {
+        const block = requireRecord(entry, "Slack block");
+        const textObject =
+          block.type === "context"
+            ? requireArray(block.elements, "context elements")[0]
+            : block.type === "section"
+              ? block.text
+              : undefined;
+        return textObject ? [String(requireRecord(textObject, "Slack text").text)] : [];
+      });
+
+      expect(batches.map((blocks) => blocks.length)).toEqual([50, 2]);
+      expect(delivered.join("")).toBe(text);
+      expect(batches[1]?.[1]).toMatchObject({ type: "actions" });
+      expect(result).toMatchObject({
+        channel: "slack",
+        messageId: "m-chunk-2",
+        receipt: { platformMessageIds: ["m-chunk-1", "m-chunk-2"] },
+      });
+    },
+  );
+
+  it("retains media and every reply receipt without losing an earlier question card", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const questionMeta = {
+      slackQuestionActionIds: ["openclaw:question_button:1:1"],
+      [SLACK_QUESTION_FINALIZATION_BLOCKS]: [{ type: "divider" as const }],
+    };
+    const createResult = (messageId: string, kind: "media" | "card") => ({
+      messageId,
+      channelId: "C123",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", messageId }],
+        kind,
+      }),
+    });
+    const sendSlack = vi
+      .fn()
+      .mockResolvedValueOnce(createResult("m-upload", "media"))
+      .mockResolvedValueOnce({ ...createResult("m-question", "card"), meta: questionMeta })
+      .mockResolvedValueOnce(createResult("m-final", "card"));
+
+    const result = await requireSlackSendPayload()({
+      cfg,
+      to: "channel:C123",
+      text: "",
+      accountId: "default",
+      deps: { sendSlack },
+      payload: {
+        text: "",
+        mediaUrls: ["https://example.com/context.png"],
+        channelData: {
+          slack: { blocks: Array.from({ length: 48 }, () => ({ type: "divider" as const })) },
+        },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Answer",
+                  action: { type: "question", questionId, optionValue: "one" },
+                },
+              ],
+            },
+            { type: "text", text: "x".repeat(3_001) },
+          ],
+        },
+      },
+    });
+
+    expect(sendSlack).toHaveBeenCalledTimes(3);
+    expect(result.messageId).toBe("m-final");
+    expect(result.receipt?.platformMessageIds).toEqual(["m-upload", "m-question", "m-final"]);
+    expect(result.receipt?.parts.map((part) => part.index)).toEqual([0, 1, 2]);
+    expect(result.meta).toEqual({ ...questionMeta, slackQuestionMessageId: "m-question" });
   });
 });
 

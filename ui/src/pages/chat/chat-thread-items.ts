@@ -13,7 +13,7 @@ import {
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -298,6 +298,22 @@ export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
 }
 
+export function readPendingSendFailure(message: unknown): {
+  error?: string;
+  id: string;
+} | null {
+  const metadata = asRecord(asRecord(message)?.["__openclaw"]);
+  const state = metadata?.state;
+  const id = metadata?.id;
+  if (metadata?.kind !== "pending-send" || state !== "failed" || typeof id !== "string") {
+    return null;
+  }
+  return {
+    id,
+    ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
+  };
+}
+
 function readChatThreadMessageIdentity(message: unknown) {
   const record = asRecord(message);
   const surfaceId =
@@ -536,8 +552,10 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-export function hasRenderableNormalizedMessage(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
+export function hasRenderableNormalizedMessage(
+  message: unknown,
+  normalized = safeNormalizeMessage(message),
+): boolean {
   if (!normalized) {
     return false;
   }
@@ -553,27 +571,20 @@ export function sanitizeStreamText(text: string): string {
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
-  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
-  if (content.length === 0) {
-    return null;
-  }
-  return {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: {
-      kind: "pending-send",
+  const runId = item.sendRunId ?? item.pendingRunId;
+  return buildLocalUserMessage({
+    text: item.text,
+    attachments: item.attachments,
+    createdAt: item.createdAt,
+    ...(runId ? { runId } : {}),
+    replyToId: item.replyToId,
+    sender: item.sender,
+    pending: {
       id: item.id,
       state: item.sendState,
-      ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
-      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
-      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
-      ...(item.sender?.profileAvatarUrl
-        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
-        : {}),
+      error: item.sendError,
     },
-  };
+  });
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {

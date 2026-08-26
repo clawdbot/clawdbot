@@ -119,7 +119,9 @@ describe("Signal durable ingress", () => {
       try {
         await recovered.waitForIdle();
         expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-        expect(recoveredDispatch).toHaveBeenCalledWith(event, expect.any(Object));
+        const [recoveredEvent, recoveredLifecycle] = recoveredDispatch.mock.calls[0] ?? [];
+        expect(recoveredEvent).toEqual(event);
+        expect(recoveredLifecycle).toEqual(expect.any(Object));
       } finally {
         await recovered.monitor.stop();
       }

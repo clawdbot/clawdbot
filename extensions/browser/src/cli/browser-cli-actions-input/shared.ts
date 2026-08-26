@@ -3,9 +3,12 @@
  */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../../browser/act-policy.js";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  callBrowserRequest,
+  withBrowserActionTimeoutSlack,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -18,18 +21,6 @@ type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };
-
-const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
-
-/** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
-export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
-  return (
-    addTimerTimeoutGraceMs(
-      timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-      BROWSER_ACTION_TRANSPORT_SLACK_MS,
-    ) ?? 1
-  );
-}
 
 /** Resolves inherited Browser action context from a commander command. */
 export function resolveBrowserActionContext(
@@ -84,8 +75,20 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readFile(path: string): Promise<string> {
-  return await fs.readFile(path, "utf8");
+async function readFile(filePath: string, maxBytes?: number): Promise<string> {
+  if (maxBytes === undefined) {
+    return await fs.readFile(filePath, "utf8");
+  }
+  try {
+    // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath), maxBytes });
+    return buffer.toString("utf8");
+  } catch (cause) {
+    if (cause instanceof FsSafeError && cause.code === "too-large") {
+      throw createActionsInputTooLargeError("--actions-file", cause);
+    }
+    throw cause;
+  }
 }
 
 /** Reads and validates JSON form-field descriptors from inline text or a file. */
@@ -129,13 +132,21 @@ export async function readFields(opts: {
   });
 }
 
-/** Cap on batch action JSON read from stdin; keeps a runaway pipe from filling memory. */
-const ACTIONS_STDIN_MAX_BYTES = 1_000_000;
+/** Cap on batch action JSON read from files or stdin. */
+const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
+
+function createActionsInputTooLargeError(source: string, cause?: unknown): FsSafeError {
+  return new FsSafeError(
+    "too-large",
+    `${source} exceeds ${ACTIONS_INPUT_MAX_BYTES} bytes. Split the batch plan into smaller files or run multiple openclaw browser batch commands.`,
+    { cause },
+  );
+}
 
 /** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
 async function readStdinText(
   stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_STDIN_MAX_BYTES,
+  maxBytes = ACTIONS_INPUT_MAX_BYTES,
 ): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -143,7 +154,7 @@ async function readStdinText(
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buf.length;
     if (total > maxBytes) {
-      throw new Error(`actions stdin exceeds ${maxBytes} bytes.`);
+      throw createActionsInputTooLargeError("--actions-file - stdin");
     }
     chunks.push(buf);
   }
@@ -159,7 +170,9 @@ export async function readActionsPayload(opts: {
     throw new Error("Specify only one of --actions or --actions-file");
   }
   if (opts.actionsFile) {
-    return opts.actionsFile === "-" ? await readStdinText() : await readFile(opts.actionsFile);
+    return opts.actionsFile === "-"
+      ? await readStdinText()
+      : await readFile(opts.actionsFile, ACTIONS_INPUT_MAX_BYTES);
   }
   return opts.actions ?? "";
 }

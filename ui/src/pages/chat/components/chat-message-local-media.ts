@@ -7,7 +7,7 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
   }
   return (
     isCanonicalInboundMediaSource(trimmed) ||
-    trimmed.startsWith("file://") ||
+    /^file:/iu.test(trimmed) ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
     /^[a-zA-Z]:[\\/]/.test(trimmed)
@@ -32,15 +32,15 @@ function isCanonicalInboundMediaSource(source: string): boolean {
 
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
-  if (!isLocalAssistantAttachmentSource(trimmed)) {
+  if (!isLocalAssistantAttachmentSource(trimmed) || isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
-  if (isCanonicalInboundMediaSource(trimmed)) {
-    return null;
-  }
-  if (trimmed.startsWith("file://")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const url = new URL(trimmed);
+      if (url.hostname || /%2f|%5c/iu.test(url.pathname)) {
+        return null;
+      }
       const pathname = decodeURIComponent(url.pathname);
       if (/^\/[a-zA-Z]:\//.test(pathname)) {
         return pathname.slice(1);

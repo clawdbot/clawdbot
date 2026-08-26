@@ -23,6 +23,7 @@ type Options = {
   sessionLabel: string;
   activeRun: boolean;
   deviceDisabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   loadCatalog: () => Promise<Catalog>;
 };
 
@@ -165,6 +166,7 @@ export function showSessionPlacementMoveDialog(
                                     selectedId: profileSelected ? profile.id : "",
                                     submitting: false,
                                     icon: icons.server,
+                                    profileDisabledReason: options.profileDisabledReason,
                                     onSelect: (profileId) => select({ kind: "profile", profileId }),
                                   })}
                                   ${profileSelected && machines.length > 0

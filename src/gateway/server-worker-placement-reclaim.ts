@@ -107,7 +107,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // immediately before drain so revoked callers cannot commit stale placement authority.
         authorize?.();
         const drainingPlacement = begin();
-        reclaimedPlacement = await reclaim(worktreePath, drainingPlacement);
+        reclaimedPlacement = await reclaim(worktreePath, drainingPlacement, authorize);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       },
     });
@@ -152,7 +152,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           // Failed teardown is still a session mutation: reauthorize inside the shared lifecycle
           // fence before provider cleanup or the failed-to-local transition becomes durable.
           authorize?.();
-          reclaimedPlacement = await reclaim();
+          reclaimedPlacement = await reclaim(authorize);
         },
       });
       if (!reclaimedPlacement) {

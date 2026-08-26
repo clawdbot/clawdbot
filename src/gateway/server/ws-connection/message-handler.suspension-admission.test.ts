@@ -88,6 +88,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
 
   attachGatewayWsMessageHandler({
     socket,
+    bootId: "suspension-admission-test-boot",
     upgradeReq: {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },

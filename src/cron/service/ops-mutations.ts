@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -140,9 +141,9 @@ function finalizeUpdatedJob(params: {
 
   const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
   const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;
-  if (job.trigger?.script !== nextJob.trigger?.script || previousScript !== nextScript) {
-    // Trigger and payload scripts share one durable state slot; only its exact
-    // executable owner may inherit it, while explicit replacement values win.
+  if (!isDeepStrictEqual(job.trigger, nextJob.trigger) || previousScript !== nextScript) {
+    // Trigger and payload scripts share one durable state slot. Exact persisted
+    // definitions own it, matching in-flight ownership; explicit replacements win.
     for (const field of [
       "triggerState",
       "triggerEvalCount",
@@ -203,6 +204,13 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
 }) {
   const { state, snapshot, previousJob, nextJob } = params;
+  if (
+    nextJob.state.queuedAtMs !== undefined &&
+    resolveCronJobConfigRevision(previousJob) !== resolveCronJobConfigRevision(nextJob)
+  ) {
+    // Retire the occurrence with its owning edit; A→B→A cannot revive a queued snapshot.
+    delete nextJob.state.queuedAtMs;
+  }
   if (state.store) {
     const index = state.store.jobs.findIndex((entry) => entry.id === nextJob.id);
     if (index >= 0) {
@@ -425,6 +433,9 @@ export async function add(
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
+    if (opts?.createdActor) {
+      job.createdActor = structuredClone(opts.createdActor);
+    }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,

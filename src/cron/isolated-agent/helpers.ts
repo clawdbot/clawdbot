@@ -1,13 +1,10 @@
 /** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  stripHeartbeatToken,
-} from "../../auto-reply/heartbeat.js";
+import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 type DeliveryPayload = Pick<
@@ -172,13 +169,6 @@ function payloadHasNonTextDeliveryContent(payload: DeliveryPayload): boolean {
   return hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true });
 }
 
-function isHeartbeatAcknowledgementText(text: string | undefined): boolean {
-  return stripHeartbeatToken(text, {
-    mode: "heartbeat",
-    maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  }).shouldSkip;
-}
-
 function isHeartbeatAcknowledgementPayload(payload: DeliveryPayload): boolean {
   return !payloadHasNonTextDeliveryContent(payload) && isHeartbeatAcknowledgementText(payload.text);
 }
@@ -195,10 +185,8 @@ function resolveCronDeliveryPayloads(params: {
   const hasNonTextContent = params.payloads.some(payloadHasNonTextDeliveryContent);
   const terminalText = params.finalAssistantVisibleText ?? params.payloads.at(-1)?.text;
   if (!hasNonTextContent && isHeartbeatAcknowledgementText(terminalText)) {
-    const controlOnly = params.payloads.every(
-      (payload) =>
-        stripHeartbeatToken(payload.text, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip ||
-        isSilentReplyPayloadText(payload.text, HEARTBEAT_TOKEN),
+    const controlOnly = params.payloads.every((payload) =>
+      isHeartbeatAcknowledgementText(payload.text, 0),
     );
     return {
       deliveryPayloads: params.payloads,
@@ -293,9 +281,9 @@ export function resolveCronPayloadOutcome(params: {
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
+  const normalizedFinalAssistantVisibleText =
+    finalText && !isSilentReplyPayloadText(finalText) ? finalText : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
@@ -310,8 +298,8 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
-  // Some tools emit warning/error payloads before a final answer. Treat those
-  // as non-terminal only when later visible output proves the run recovered.
+  // Only genuinely visible terminal text can recover preceding tool warnings;
+  // silent control replies must leave the error fatal for scheduler alerting.
   const hasNonTerminalToolErrorWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
@@ -333,7 +321,7 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
-  // Structured error payloads are fatal unless later successful output or a
+  // Structured error payloads stay fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&

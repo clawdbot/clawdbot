@@ -165,6 +165,27 @@ function resetPollRetrySuggestion(sessionId: string): void {
 
 type FinishedSession = NonNullable<ReturnType<typeof getFinishedSession>>;
 
+function finishedSessionDetails(sessionId: string, finished: FinishedSession) {
+  return {
+    status: finished.status === "completed" ? "completed" : "failed",
+    sessionId,
+    exitCode: finished.exitCode ?? undefined,
+    ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
+    ...(finished.exitReason
+      ? {
+          exitReason: finished.exitReason,
+          timedOut:
+            finished.exitReason === "overall-timeout" ||
+            finished.exitReason === "no-output-timeout",
+        }
+      : {}),
+    ...(finished.noOutputTimedOut !== undefined
+      ? { noOutputTimedOut: finished.noOutputTimedOut }
+      : {}),
+    name: deriveSessionName(finished.command),
+  };
+}
+
 function finishedPollResult(
   sessionId: string,
   finished: FinishedSession,
@@ -194,23 +215,8 @@ function finishedPollResult(
       },
     ],
     details: {
-      status: finished.status === "completed" ? "completed" : "failed",
-      sessionId,
-      exitCode: finished.exitCode ?? undefined,
-      ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
-      ...(finished.exitReason
-        ? {
-            exitReason: finished.exitReason,
-            timedOut:
-              finished.exitReason === "overall-timeout" ||
-              finished.exitReason === "no-output-timeout",
-          }
-        : {}),
-      ...(finished.noOutputTimedOut !== undefined
-        ? { noOutputTimedOut: finished.noOutputTimedOut }
-        : {}),
+      ...finishedSessionDetails(sessionId, finished),
       aggregated: finished.aggregated,
-      name: deriveSessionName(finished.command),
     },
   };
 }
@@ -474,13 +480,11 @@ export function createProcessTool(
             content: [
               {
                 type: "text",
-                text: appendExecTimeoutRetryGuidance(
+                text:
                   (output || "(no new output)") +
-                    aggregateOutputNote +
-                    retainedOutputNote +
-                    (buildInputWaitHint(runtime) || "\n\nProcess still running."),
-                  undefined,
-                ),
+                  aggregateOutputNote +
+                  retainedOutputNote +
+                  (buildInputWaitHint(runtime) || "\n\nProcess still running."),
               },
             ],
             details: {
@@ -545,28 +549,24 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
-            const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
                 {
                   type: "text",
-                  text:
+                  text: appendExecTimeoutRetryGuidance(
                     (slice || "(no output recorded)") +
-                    logDefaultTailNote +
-                    retentionCapNote(scopedFinished),
+                      defaultTailNote(totalLines, window.usingDefaultTail) +
+                      retentionCapNote(scopedFinished),
+                    scopedFinished.exitReason,
+                  ),
                 },
               ],
               details: {
-                status,
-                sessionId: params.sessionId,
+                ...finishedSessionDetails(params.sessionId, scopedFinished),
                 total: totalLines,
                 totalLines,
                 totalChars,
                 truncated: scopedFinished.truncated,
-                exitCode: scopedFinished.exitCode ?? undefined,
-                exitSignal: scopedFinished.exitSignal ?? undefined,
-                name: deriveSessionName(scopedFinished.command),
               },
             };
           }

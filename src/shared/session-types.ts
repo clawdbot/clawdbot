@@ -1,4 +1,5 @@
 import type {
+  GatewayAgentRuntime as ProtocolGatewayAgentRuntime,
   SessionCreatedActor,
   SessionsAssignOwnerParams,
   WorkerExecutionMode,
@@ -25,6 +26,7 @@ export type GatewayAgentRuntime = {
   fallback?: "openclaw" | "none";
   cloudPlacementSupported?: boolean;
   cloudPlacementExecutionMode?: WorkerExecutionMode;
+  devicePlacement?: ProtocolGatewayAgentRuntime["devicePlacement"];
   devicePlacementSupported?: boolean;
   source:
     | "env"
@@ -41,6 +43,12 @@ export type GatewayAgentRuntime = {
 export type GatewayThinkingLevelOption = {
   id: string;
   label: string;
+};
+
+export type GatewayContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
 };
 
 export type GatewayAgentKind = "agent" | "system";

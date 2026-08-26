@@ -169,6 +169,11 @@ describe("resolveLobsterPetMode", () => {
       "busy",
     );
   });
+
+  it("stops looking busy after a registry-active run reaches a terminal status", () => {
+    expect(resolveLobsterPetMode(true, [{ status: "done", hasActiveRun: true }])).toBe("idle");
+    expect(resolveLobsterPetMode(true, [{ status: "running", hasActiveRun: true }])).toBe("busy");
+  });
 });
 
 describe("resolveLobsterRunOutcome", () => {

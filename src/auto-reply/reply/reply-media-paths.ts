@@ -55,6 +55,7 @@ export function createReplyMediaPathNormalizer(params: {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+  sandboxRoot?: string;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
@@ -69,7 +70,10 @@ export function createReplyMediaPathNormalizer(params: {
     channel: params.messageProvider,
     accountId: params.accountId,
   });
-  let sandboxRootPromise: Promise<string | undefined> | undefined;
+  const explicitSandboxRoot = params.sandboxRoot?.trim();
+  let sandboxRootPromise: Promise<string | undefined> | undefined = explicitSandboxRoot
+    ? Promise.resolve(explicitSandboxRoot)
+    : undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
   const resolveSandboxRoot = async (): Promise<string | undefined> => {

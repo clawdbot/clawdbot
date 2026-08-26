@@ -222,6 +222,20 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
+  it("suppresses the Create PR row when the merged PR falls outside the display cap", async () => {
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
+    const closedPull = (n: number) =>
+      pullListItem({ number: n, title: `closed ${n}`, state: "closed" });
+
+    const result = await loadBranchState({
+      // GitHub sorts by updated desc: three fresher closed-unmerged PRs push
+      // the merged PR past the MAX_PULL_REQUESTS display slice.
+      pullRequests: [closedPull(5), closedPull(4), closedPull(3), mergedPull(mergedHead)],
+    });
+    // A merged head that is not displayed still proves the pushed tip landed.
+    expect(result.branch).toBeUndefined();
+  });
+
   it("sizes only post-merge work, without a create link, once the PR landed", async () => {
     const mergedHead = await initializeFeatureHead({ trackFeature: true });
     await appendFile("a.txt", "follow-up\n");

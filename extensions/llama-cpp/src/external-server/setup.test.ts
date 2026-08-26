@@ -206,31 +206,68 @@ describe("llama-server setup", () => {
     expect(discoverMock).not.toHaveBeenCalled();
   });
 
-  it("does not select a failed router model while a healthy model is available", async () => {
+  it.each([
+    {
+      name: "prefers a loaded model over an unloaded higher-ranked family",
+      models: [
+        { id: "meta-llama/Llama-3.3-8B", status: "loaded" },
+        { id: "google/gemma-4-27b", status: "unloaded" },
+      ],
+      expected: "llama-cpp/meta-llama/Llama-3.3-8B",
+    },
+    {
+      name: "prefers a sleeping model over an unloaded higher-ranked family",
+      models: [
+        { id: "meta-llama/Llama-3.3-8B", status: "sleeping" },
+        { id: "google/gemma-4-27b", status: "unloaded" },
+      ],
+      expected: "llama-cpp/meta-llama/Llama-3.3-8B",
+    },
+    {
+      name: "preserves family preference among loaded models",
+      models: [
+        { id: "meta-llama/Llama-3.3-8B", status: "loaded" },
+        { id: "google/gemma-4-27b", status: "loaded" },
+      ],
+      expected: "llama-cpp/google/gemma-4-27b",
+    },
+    {
+      name: "preserves family preference when no model is loaded",
+      models: [
+        { id: "meta-llama/Llama-3.3-8B", status: "unloaded" },
+        { id: "google/gemma-4-27b", status: "unloaded" },
+      ],
+      expected: "llama-cpp/google/gemma-4-27b",
+    },
+    {
+      name: "prefers a healthy unloaded model over a failed loaded model",
+      models: [
+        { id: "google/gemma-4-27b", status: "loaded", failed: true },
+        { id: "meta-llama/Llama-3.3-8B", status: "unloaded" },
+      ],
+      expected: "llama-cpp/meta-llama/Llama-3.3-8B",
+    },
+    {
+      name: "returns no candidate for an empty model catalog",
+      models: [],
+      expected: null,
+    },
+  ] as const)("$name", async ({ models, expected }) => {
     const discovery = successfulDiscovery();
     const baseModel = discovery.models[0];
     if (!baseModel) {
       throw new Error("expected discovery fixture model");
     }
-    discovery.models = [
-      {
-        ...baseModel,
-        config: { ...baseModel.config, id: "qwen-failed", name: "qwen-failed" },
-        status: "unloaded",
-        failed: true,
-      },
-      {
-        ...baseModel,
-        config: { ...baseModel.config, id: "healthy-model", name: "healthy-model" },
-        status: "unloaded",
-        failed: false,
-      },
-    ];
+    discovery.models = models.map((model) => ({
+      ...baseModel,
+      config: { ...baseModel.config, id: model.id, name: model.id },
+      status: model.status,
+      failed: "failed" in model && model.failed,
+    }));
     discoverMock.mockResolvedValue(discovery);
 
-    await expect(detectLlamaServerSetup({ config: {}, env: {} })).resolves.toMatchObject({
-      modelRef: "llama-cpp/healthy-model",
-    });
+    const result = await detectLlamaServerSetup({ config: {}, env: {} });
+    expect(result?.modelRef ?? null).toBe(expected);
   });
 
   it("prefers configured Authorization over ambient auth during guided detection", async () => {

@@ -204,7 +204,7 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           collect: Type.Optional(
             Type.Boolean({
-              description: "Swarm collector child for parallel fan-out; await via agents_wait.",
+              description: "Swarm collector child for parallel fan-out.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -370,7 +370,7 @@ export function createSessionsSpawnTool(
       );
       if (unsupportedParam) {
         throw new ToolInputError(
-          `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+          `sessions_spawn does not support "${unsupportedParam}"; remove channel-delivery parameters.`,
         );
       }
       const unsupportedTimeoutParam = resolveSnakeCaseParamKey(params, "timeoutSeconds");

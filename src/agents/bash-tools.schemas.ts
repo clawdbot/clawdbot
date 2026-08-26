@@ -26,7 +26,8 @@ export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({
-      description: "Working directory; omit for default. Blank/whitespace is invalid.",
+      description:
+        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
     }),
   ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),

@@ -24,7 +24,7 @@ function cronJob(id: string, name: string) {
 }
 
 suite.define(() => {
-  it("shows saved descriptions in compact rows and task details for every payload kind", async () => {
+  it("shows saved descriptions in list rows and task details for every payload kind", async () => {
     const jobs = [
       {
         ...cronJob("described-event", "System reminder"),
@@ -81,7 +81,7 @@ suite.define(() => {
 
         for (const job of jobs) {
           const description = page.locator(`[data-test-id="cron-row-description-${job.id}"]`);
-          expect((await description.textContent())?.trim()).toBe(`· ${job.description.trim()}`);
+          expect((await description.textContent())?.trim()).toBe(job.description.trim());
           expect(await description.getAttribute("title")).toBe(
             `Description: ${job.description.trim()}`,
           );
@@ -89,14 +89,6 @@ suite.define(() => {
         expect(
           await page.locator(`[data-test-id="cron-row-description-${undescribedJob.id}"]`).count(),
         ).toBe(0);
-
-        const describedRow = await page
-          .locator(`[data-test-id="cron-row-${jobs[1].id}"]`)
-          .boundingBox();
-        const undescribedRow = await page
-          .locator(`[data-test-id="cron-row-${undescribedJob.id}"]`)
-          .boundingBox();
-        expect(describedRow?.height).toBe(undescribedRow?.height);
 
         for (const job of jobs) {
           const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);

@@ -8,6 +8,11 @@ const suite = createControlUiE2eSuite({
   name: "Control UI session-list event scope",
 });
 
+async function openSessionFilters(page: Page) {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+}
+
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
 suite.define(() => {
@@ -66,6 +71,7 @@ suite.define(() => {
       kind: "direct",
       label: hiddenLabel,
       updatedAt: 2,
+      archived: false,
     });
 
     await expect
@@ -245,6 +251,7 @@ suite.define(() => {
     expect(initialPageParams).toMatchObject({ limit: 50 });
     expect(initialPageParams).not.toHaveProperty("activeMinutes");
 
+    await openSessionFilters(currentPage);
     const activeMinutes = sessionsPage.getByLabel("Updated within");
     const limit = sessionsPage.getByLabel("Limit");
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
@@ -295,6 +302,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     await gateway.waitForRequest("sessions.list");
+    await openSessionFilters(currentPage);
     const activeMinutes = currentPage.getByLabel("Updated within");
     const limit = currentPage.getByLabel("Limit");
     const cases = [

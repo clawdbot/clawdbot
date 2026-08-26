@@ -31,6 +31,11 @@ import {
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mts";
 import type { DockerE2eLane } from "./lib/docker-e2e-scenarios.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { sleep } from "./lib/sleep.mjs";
 import {
   createPrepublishPluginRegistryArtifact,
@@ -54,7 +59,6 @@ export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
 export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
 const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
-const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
@@ -82,10 +86,10 @@ type SchedulerLane = Pick<DockerE2eLane, "name"> &
 type TimingStore = Awaited<ReturnType<typeof loadTimingStore>>;
 
 type ShellCommandResult = Omit<ReturnType<typeof shellCommandSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 type ShellCaptureResult = Omit<ReturnType<typeof shellCaptureSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 
 type ShellCommandOptions = {
@@ -818,7 +822,7 @@ export function resolveDockerPreflightPlatform(arch: NodeJS.Architecture = proce
 
 export function dockerPreflightSmokeCommand(arch: NodeJS.Architecture = process.arch) {
   const platform = resolveDockerPreflightPlatform(arch);
-  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
+  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.24 true`;
 }
 
 export function runShellCommand({
@@ -1625,28 +1629,11 @@ function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | 
 }
 
 function shellProcessGroupAlive(child: ChildProcess) {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!shellProcessGroupAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, SHELL_PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !shellProcessGroupAlive(child);
+function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function finishTimedOutShellProcessTree(
@@ -1669,15 +1656,12 @@ async function finishTimedOutShellProcessTree(
 }
 
 function terminateChild(child: ChildProcess, signal: ShutdownSignal) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to killing the direct child below.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 function terminateActiveChildren(signal: ShutdownSignal) {

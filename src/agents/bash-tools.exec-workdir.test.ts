@@ -3,7 +3,7 @@
  * Verifies cwd selection and validation before exec launches or remote node
  * forwarding.
  */
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-exec-workdir-"));
   try {
-    await run(dir);
+    await run(await realpath(dir));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -97,12 +97,53 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("canonicalizes local workdirs before approval and execution", async () => {
+    await withTempDir(async (workspaceDir) => {
+      const target = path.join(workspaceDir, "target");
+      const link = path.join(workspaceDir, "link");
+      await mkdir(target);
+      await symlink(target, link, "dir");
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: link,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: target });
+    });
+  });
+
   it("uses configured local cwd when workdir is omitted", async () => {
     await withTempDir(async (workspaceDir) => {
       await expect(
         resolveExecWorkdir({
           host: "gateway",
           defaultCwd: workspaceDir,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("treats exact empty workdir as omitted when a local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
+          defaultCwd: workspaceDir,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("treats exact empty workdir as omitted when no local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
         }),
       ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
     });
@@ -151,6 +192,23 @@ describe("resolveExecWorkdir", () => {
       await expect(
         resolveExecWorkdir({
           host: "sandbox",
+          sandbox: sandboxConfig(workspaceDir),
+        }),
+      ).resolves.toEqual({
+        kind: "sandbox",
+        hostCwd: workspaceDir,
+        containerCwd: "/workspace",
+        scriptPreflightCwd: workspaceDir,
+      });
+    });
+  });
+
+  it("treats exact empty workdir as omitted for sandbox hosts", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "sandbox",
+          workdir: "",
           sandbox: sandboxConfig(workspaceDir),
         }),
       ).resolves.toEqual({
@@ -980,6 +1038,26 @@ describe("resolveExecWorkdir", () => {
         nodeCwd: "/remote/node/default",
       }),
     ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/workspace" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts with a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        nodeCwd: "/remote/node/default",
+      }),
+    ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/default" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts without a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        defaultCwd: "/gateway/default",
+      }),
+    ).resolves.toEqual({ kind: "node" });
   });
 
   it("rejects blank explicit node workdirs", async () => {

@@ -1,12 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ConfigSnapshot,
-  GatewaySessionRow,
-  SkillStatusEntry,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import "../../components/modal-dialog.ts";
@@ -33,23 +28,21 @@ import {
 } from "../../lib/sessions/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { nextBooleanToolOverrides, readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
 import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
+import {
+  ComposerSkillCatalog,
+  composerWebSearchBaseEnabled,
+} from "./composer-capability-catalog.ts";
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
 type CapabilityMutationResult =
   | { ok: true }
   | { ok: false; error: string; stage: "config" | "session" };
-
-function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
-  return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
-}
 
 function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   const revision =
@@ -62,24 +55,8 @@ function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
 }
 
-function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
-  const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
-  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter === true;
-  const baseEnabled = !skill.disabled;
-  return {
-    key: skill.skillKey,
-    name: skill.name,
-    enabled: baseEnabled && !missingDeps && !blocked,
-    baseEnabled,
-    ...(missingDeps ? { missingDeps: true } : {}),
-    ...(blocked ? { blocked: true } : {}),
-  };
-}
-
 export class ChatComposerCapabilityHost {
-  private readonly skills = new Map<string, ChatComposerMenuSkill[]>();
-  private readonly loading = new Set<string>();
-  private readonly loadErrors = new Set<string>();
+  private readonly skillCatalog: ComposerSkillCatalog;
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
@@ -91,7 +68,9 @@ export class ChatComposerCapabilityHost {
   private addBusy = false;
   private addError: string | null = null;
 
-  constructor(private readonly notify: () => void) {}
+  constructor(private readonly notify: () => void) {
+    this.skillCatalog = new ComposerSkillCatalog(notify);
+  }
 
   static async addMcpServer(options: {
     scope: ComposerMcpServerScope;
@@ -165,41 +144,13 @@ export class ChatComposerCapabilityHost {
       void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     }
     const client = state.client;
-    if (!state.connected || !client || this.skills.has(agentId) || this.loading.has(agentId)) {
-      return;
-    }
     const connectionEpoch = state.connectionEpoch;
-    const isCurrent = () =>
-      state.client === client &&
-      this.client === client &&
-      state.connected &&
-      state.connectionEpoch === connectionEpoch &&
-      this.connectionEpoch === connectionEpoch;
-    this.loadErrors.delete(agentId);
-    this.loading.add(agentId);
-    this.notify();
-    void loadSkillStatusReport(client, agentId)
-      .then((report) => {
-        if (report && isCurrent()) {
-          this.skills.set(
-            agentId,
-            report.skills
-              .map(toComposerSkill)
-              .toSorted((left, right) => left.name.localeCompare(right.name)),
-          );
-        }
-      })
-      .catch(() => {
-        if (isCurrent()) {
-          this.loadErrors.add(agentId);
-        }
-      })
-      .finally(() => {
-        if (isCurrent()) {
-          this.loading.delete(agentId);
-          this.notify();
-        }
-      });
+    this.skillCatalog.load(
+      client,
+      connectionEpoch,
+      agentId,
+      () => state.connected && state.client === client && state.connectionEpoch === connectionEpoch,
+    );
   }
 
   private effectiveToolsKeys(
@@ -571,9 +522,7 @@ export class ChatComposerCapabilityHost {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
       this.connectionEpoch = state.connectionEpoch;
-      this.skills.clear();
-      this.loading.clear();
-      this.loadErrors.clear();
+      this.skillCatalog.synchronize(state.client, state.connectionEpoch);
       this.patchTokens.clear();
       this.effectiveTools = null;
       this.effectiveToolsErrorKey = null;
@@ -625,23 +574,15 @@ export class ChatComposerCapabilityHost {
         : null;
     return {
       basePath: state.basePath,
-      skills:
-        this.skills.get(agentId)?.map((skill) =>
-          Object.assign({}, skill, {
-            enabled:
-              skill.missingDeps || skill.blocked
-                ? false
-                : (readOwnEntry(session?.toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
-          }),
-        ) ?? null,
-      skillsLoading: this.loading.has(agentId),
-      skillsError: this.loadErrors.has(agentId),
+      skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
+      skillsLoading: this.skillCatalog.isLoading(agentId),
+      skillsError: this.skillCatalog.hasError(agentId),
       mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
       toolsEffectiveResult,
       toolsEffectiveLoading,
       toolsEffectiveError,
       toolAccessMutationBlockedReason,
-      webSearchBaseEnabled: webSearchBaseEnabled(runtimeConfig),
+      webSearchBaseEnabled: composerWebSearchBaseEnabled(runtimeConfig),
       mutationBlockedReason,
       canAdmin: access.canAdmin && gatewayAvailable,
       adminBlockedReason,

@@ -12,6 +12,7 @@ import {
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
+import type { ChatProgressCardPlacement } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -24,7 +25,6 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
@@ -38,12 +38,11 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  progressCardInRail: boolean;
+  progressCardPlacement: ChatProgressCardPlacement;
   onDismissProgressCard?: (card: ProgressCard) => void;
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
   catalog: boolean;
@@ -61,12 +60,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       currentAgentId,
       board,
       sidebarLayout,
-      progressCardInRail,
+      progressCardPlacement,
       onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog,
@@ -86,6 +84,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     );
     const chat = renderChat({
       ...chatProps,
+      historyState: catalog ? undefined : state,
       header: board.face === "dashboard" ? nothing : header,
     });
     // Keep this root stable across board face changes so the guarded board runtime
@@ -119,7 +118,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           backgroundTasks,
           chat: chatProps,
           content,
-          fullMessageLoader,
           host: state,
           layout: sidebarLayout,
           transcript: this.taskSidebarTranscript,
@@ -129,7 +127,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
-      progressCard: progressCardInRail ? this.progressCard.card : null,
+      progressCard: progressCardPlacement === "rail" ? this.progressCard.card : null,
       onDismissProgressCard,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -151,6 +149,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,
+        layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
         hideBoard: () => this.handleBoardDockChange("hidden"),

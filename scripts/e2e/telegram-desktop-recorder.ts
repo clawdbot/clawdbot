@@ -26,6 +26,10 @@ import {
 import {
   parseRecorderArgs,
   readRecorderSession,
+  RECORDER_AUTHORIZATION_FAILURE_FILENAME,
+  recorderAuthorizationFailureFactSchema,
+  type RecorderAuthorizationFailure,
+  type ActionsOptions,
   type ArtifactsOptions,
   type RecoverOptions,
   recorderUsageText,
@@ -38,6 +42,7 @@ import {
   type StartOptions,
   type StatusOptions,
   type StopOptions,
+  type TeardownOptions,
   type ViewOptions,
   writeRecorderSession,
 } from "./telegram-desktop-recorder-contract.ts";
@@ -53,8 +58,7 @@ export {
 const REMOTE_ROOT = "/tmp/openclaw-telegram-desktop-recorder";
 const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
-const DEFAULT_PREVIEW_FPS = 24;
-const DEFAULT_PREVIEW_WIDTH = 1920;
+const DEFAULT_PREVIEW_FPS = 4;
 const PROOF_VIEWPORT_HEIGHT = 600;
 
 function proofViewport(window: RecorderSession["window"]): {
@@ -90,7 +94,14 @@ const confirmedQrSchema = z.object({
   }),
 });
 
-class FreshDesktopRequiredError extends Error {}
+class DesktopAuthorizationError extends Error {
+  readonly failure: RecorderAuthorizationFailure;
+
+  constructor(message: string, failure: RecorderAuthorizationFailure, options?: ErrorOptions) {
+    super(`${failure.classification}: ${message}`, options);
+    this.failure = failure;
+  }
+}
 
 const recorderStartupSchema = z.object({
   desktopSessionId: z.string().min(1).optional(),
@@ -175,14 +186,13 @@ export DISPLAY=:99
 win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
 test -n "$win"
 eval "$(xdotool getwindowgeometry --shell "$win")"
-printf '%s %s %s %s\n' "$X" "$Y" "$WIDTH" "$HEIGHT"`;
+printf '%s %s %s %s %s\n' "$win" "$X" "$Y" "$WIDTH" "$HEIGHT"`;
 }
 
-function renderHideTelegramWindow(): string {
+function renderHideTelegramWindow(windowId: string): string {
   return `set -euo pipefail
 export DISPLAY=:99
-win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
-test -n "$win"
+win=${shellQuote(windowId)}
 xdotool windowminimize "$win"
 sleep 0.2`;
 }
@@ -237,19 +247,26 @@ exit 1`;
 
 export function parseWindowGeometry(raw: string): {
   height: number;
+  id: string;
   width: number;
   x: number;
   y: number;
 } {
-  const parts = raw.trim().split(/\s+/u).map(Number);
-  if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value) || value < 0)) {
+  const [id, ...rawGeometry] = raw.trim().split(/\s+/u);
+  const parts = rawGeometry.map(Number);
+  if (
+    !id ||
+    !/^0x[0-9a-f]+$/iu.test(id) ||
+    parts.length !== 4 ||
+    parts.some((value) => !Number.isFinite(value) || value < 0)
+  ) {
     throw new Error(`Telegram Desktop window geometry was not readable: ${raw.trim()}`);
   }
   const [x, y, width, height] = parts as [number, number, number, number];
   if (width < 200 || height < 200) {
     throw new Error(`Telegram Desktop window is too small to crop: ${width}x${height}`);
   }
-  return { height, width, x, y };
+  return { height, id, width, x, y };
 }
 
 function driverCommand(userDriver: string[], args: string[]) {
@@ -325,7 +342,9 @@ async function authorizeDesktop(params: {
   let lastFailure: unknown;
   let lastLink = "";
   let acceptedWithoutTransition = 0;
+  let qrAttemptCount = 0;
   for (let attempt = 1; attempt <= 6; attempt += 1) {
+    qrAttemptCount = attempt;
     let link: string;
     try {
       const qr = await params.operations.sshRun({
@@ -384,6 +403,7 @@ async function authorizeDesktop(params: {
   // an absent screenshot.
   const evidencePath = path.join(params.outputDir, "telegram-login-screen.png");
   let evidence: string;
+  let loginScreenshotPath: string | undefined;
   try {
     await params.operations.scpFromRemote({
       cwd: params.cwd,
@@ -392,18 +412,34 @@ async function authorizeDesktop(params: {
       remote: `${REMOTE_ROOT}/telegram-login-qr.png`,
       run: params.operations.runCommand,
     });
+    loginScreenshotPath = evidencePath;
     evidence = ` Login screen: ${evidencePath}`;
   } catch (error) {
     evidence = ` Login screen could not be fetched: ${coerceErrorMessage(error)}`;
   }
-  const message =
+  const classification =
     acceptedWithoutTransition >= 2
+      ? "token-accepted-no-transition"
+      : acceptedWithoutTransition === 1
+        ? "main-window-timeout"
+        : "qr-unreadable";
+  const message =
+    classification === "token-accepted-no-transition"
       ? `Telegram server accepted ${acceptedWithoutTransition} login tokens, but Telegram Desktop stayed on the QR screen${detail}.${evidence}`
-      : `Telegram Desktop did not leave the login screen after 6 attempts${detail}.${evidence}`;
-  if (acceptedWithoutTransition >= 2) {
-    throw new FreshDesktopRequiredError(message, { cause: lastFailure });
-  }
-  throw new Error(message, { cause: lastFailure });
+      : classification === "main-window-timeout"
+        ? `Telegram Desktop did not reach the main window after an accepted login token${detail}.${evidence}`
+        : `Telegram Desktop did not leave the login screen after 6 attempts${detail}.${evidence}`;
+  throw new DesktopAuthorizationError(
+    message,
+    {
+      acceptedTokenCount: acceptedWithoutTransition,
+      classification,
+      failedAt: new Date().toISOString(),
+      loginScreenshotPath,
+      qrAttemptCount,
+    },
+    { cause: lastFailure },
+  );
 }
 
 // The recorder runs as a different user than the agent that drives it, so an output dir
@@ -440,6 +476,27 @@ function resolveRecorderPath(cwd: string, supplied: string, option: string): str
 
 function resolveOutputDir(cwd: string, outputDir: string): string {
   return resolveRecorderPath(cwd, outputDir, "--output-dir");
+}
+
+function appendAuthorizationFailure(
+  outputDir: string,
+  failure: RecorderAuthorizationFailure,
+): void {
+  const file = path.join(outputDir, RECORDER_AUTHORIZATION_FAILURE_FILENAME);
+  const current = fs.existsSync(file)
+    ? recorderAuthorizationFailureFactSchema.parse(JSON.parse(fs.readFileSync(file, "utf8")))
+    : { failures: [], schemaVersion: 1 as const };
+  const fact = recorderAuthorizationFailureFactSchema.parse({
+    failures: [...current.failures, failure],
+    schemaVersion: 1,
+  });
+  const temporary = `${file}.${process.pid}.tmp`;
+  // 0644: cross-identity evidence — the Mantis workflow runs the recorder as the
+  // desktop user while the lane reads this fact as mantis-sut to enforce its
+  // retry budget; the 0770 attempt directory bounds visibility. 0600 would make
+  // the lane's read fail EACCES and silently disable the budget.
+  fs.writeFileSync(temporary, `${JSON.stringify(fact, null, 2)}\n`, { mode: 0o644 });
+  fs.renameSync(temporary, file);
 }
 
 async function stopBox(params: {
@@ -483,6 +540,40 @@ async function terminateDesktopSessions(params: {
   z.object({ ok: z.literal(true) }).parse(JSON.parse(result.stdout));
 }
 
+async function destroyRecorderSessionResources(
+  cwd: string,
+  session: RecorderSession,
+  operations: Pick<RecorderOperations, "runCommand">,
+): Promise<string[]> {
+  const errors: string[] = [];
+  try {
+    await terminateDesktopSession({
+      cwd,
+      desktopSessionId: session.desktopSessionId,
+      run: operations.runCommand,
+      userDriver: session.userDriver,
+    });
+  } catch (error) {
+    errors.push(`terminate Telegram Desktop session: ${coerceErrorMessage(error)}`);
+  }
+  if (session.leaseOwned) {
+    try {
+      await stopBox({
+        crabboxBin: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox",
+        cwd,
+        leaseId: session.leaseId,
+        provider: session.provider,
+        run: operations.runCommand,
+      });
+    } catch (error) {
+      if (!coerceErrorMessage(error).includes("lease not found")) {
+        errors.push(`stop Crabbox: ${coerceErrorMessage(error)}`);
+      }
+    }
+  }
+  return errors;
+}
+
 async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }): Promise<void> {
   try {
     await params.run({
@@ -501,17 +592,109 @@ async function assertLocalTelegramImage(params: { cwd: string; run: RunCommand }
   }
 }
 
-async function startRecorderAttempt(
+type RecorderResource = Pick<
+  RecorderSession,
+  "desktopSessionId" | "leaseId" | "leaseOwned" | "provider" | "userDriver"
+>;
+
+async function beginRecorderCapture(params: {
+  cwd: string;
+  inspect: CrabboxInspect;
+  operations: RecorderOperations;
+  opts: StartOptions;
+  outputDir: string;
+  resource: RecorderResource;
+  sessionPath: string;
+}): Promise<{ session: RecorderSession; sessionPath: string }> {
+  await params.operations.sshRun({
+    command: renderTelegramViewCommand({
+      binary: TELEGRAM_BINARY,
+      link: telegramPrivatePostLink(params.opts.chat, params.opts.messageId),
+      workdir: TELEGRAM_WORKDIR,
+    }),
+    cwd: params.cwd,
+    inspect: params.inspect,
+    run: params.operations.runCommand,
+  });
+  const geometry = await params.operations.sshRun({
+    command: renderReadWindowGeometry(),
+    cwd: params.cwd,
+    inspect: params.inspect,
+    run: params.operations.runCommand,
+    stdio: "pipe",
+  });
+  const windowGeometry = parseWindowGeometry(geometry.stdout);
+  await params.operations.sshRun({
+    command: renderHideTelegramWindow(windowGeometry.id),
+    cwd: params.cwd,
+    inspect: params.inspect,
+    run: params.operations.runCommand,
+  });
+  const sessionBase = {
+    chat: params.opts.chat,
+    desktopSessionId: params.resource.desktopSessionId,
+    leaseId: params.resource.leaseId,
+    leaseOwned: params.resource.leaseOwned,
+    outputDir: params.outputDir,
+    recordFps: params.opts.recordFps,
+    remotePaths,
+    schemaVersion: 2 as const,
+    startedAt: new Date().toISOString(),
+    userDriver: params.resource.userDriver,
+    window: windowGeometry,
+  };
+  const session: RecorderSession =
+    params.resource.provider === "docker"
+      ? {
+          ...sessionBase,
+          imageSource: TELEGRAM_DESKTOP_DOCKER_IMAGE,
+          provider: "docker",
+        }
+      : {
+          ...sessionBase,
+          imageSource: TELEGRAM_DESKTOP_AWS_IMAGE,
+          provider: "aws",
+        };
+  // Publish the current capture destination before ffmpeg starts so crash recovery
+  // exports or stops only this attempt, never an earlier attempt's artifacts.
+  writeRecorderSession(params.sessionPath, session);
+  await params.operations.sshRun({
+    command: renderStartRemoteRecording({ paths: remotePaths, recordFps: params.opts.recordFps }),
+    cwd: params.cwd,
+    inspect: params.inspect,
+    run: params.operations.runCommand,
+  });
+  return { session, sessionPath: params.sessionPath };
+}
+
+async function inspectHealthySession(params: {
+  crabboxBin: string;
+  cwd: string;
+  operations: RecorderOperations;
+  session: RecorderSession;
+}): Promise<CrabboxInspect | undefined> {
+  try {
+    const inspect = await sessionInspect(params);
+    const mainWindow = await desktopReachedMainWindow({
+      cwd: params.cwd,
+      inspect,
+      operations: params.operations,
+      seconds: 5,
+    });
+    return mainWindow.reached ? inspect : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function provisionRecorder(
   cwd: string,
   opts: StartOptions,
   operations: RecorderOperations,
-  freshContainerAttempt: number,
+  outputDir: string,
+  sessionPath: string,
 ): Promise<{ session: RecorderSession; sessionPath: string }> {
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
-  const outputDir = resolveOutputDir(cwd, opts.outputDir);
-  fs.mkdirSync(outputDir, { recursive: true });
-  assertOutputDirWritable(outputDir);
-  const sessionPath = path.join(outputDir, "recorder.json");
   const startupPath = recorderStartupPath(sessionPath);
   let leaseId = opts.leaseId;
   const leaseOwned = !opts.leaseId;
@@ -526,7 +709,7 @@ async function startRecorderAttempt(
   };
   // Provisioning crosses process and provider boundaries. Persist each acquired
   // handle so a later workflow step can reclaim it after cancellation or SIGKILL.
-  writeRecorderStartup(startupPath, startup, freshContainerAttempt === 1);
+  writeRecorderStartup(startupPath, startup, true);
   try {
     if (!leaseId) {
       if (opts.provider === "docker") {
@@ -587,71 +770,27 @@ async function startRecorderAttempt(
       outputDir,
       userDriver: opts.userDriver,
     });
-    // Always open the target chat before recording: at the recorder's width Telegram shows
-    // either the chat list or one conversation, and the list is the QA account's own.
-    await operations.sshRun({
-      command: renderTelegramViewCommand({
-        binary: TELEGRAM_BINARY,
-        link: telegramPrivatePostLink(opts.chat, opts.messageId),
-        workdir: TELEGRAM_WORKDIR,
-      }),
+    const result = await beginRecorderCapture({
       cwd,
       inspect,
-      run: operations.runCommand,
+      operations,
+      opts,
+      outputDir,
+      resource: {
+        desktopSessionId,
+        leaseId,
+        leaseOwned,
+        provider: opts.provider,
+        userDriver: opts.userDriver,
+      },
+      sessionPath,
     });
-    // Crop from the window Telegram actually got: window managers and providers
-    // place it differently, and a fixed crop silently cuts the chat pane.
-    const geometry = await operations.sshRun({
-      command: renderReadWindowGeometry(),
-      cwd,
-      inspect,
-      run: operations.runCommand,
-      stdio: "pipe",
-    });
-    const windowGeometry = parseWindowGeometry(geometry.stdout);
-    // The lane clears prior history before recorder start. Keep the empty chat hidden until
-    // the first session-owned send is ready, so setup frames reveal neither account UI nor chat.
-    await operations.sshRun({
-      command: renderHideTelegramWindow(),
-      cwd,
-      inspect,
-      run: operations.runCommand,
-    });
-    await operations.sshRun({
-      command: renderStartRemoteRecording({ paths: remotePaths, recordFps: opts.recordFps }),
-      cwd,
-      inspect,
-      run: operations.runCommand,
-    });
-    const sessionBase: Omit<RecorderSession, "imageSource" | "provider"> = {
-      chat: opts.chat,
-      desktopSessionId,
-      keepBox: false,
-      leaseId,
-      leaseOwned,
-      recordFps: opts.recordFps,
-      remotePaths,
-      schemaVersion: 1,
-      window: windowGeometry,
-      startedAt: new Date().toISOString(),
-      userDriver: opts.userDriver,
-    };
-    const session: RecorderSession =
-      opts.provider === "docker"
-        ? {
-            ...sessionBase,
-            imageSource: TELEGRAM_DESKTOP_DOCKER_IMAGE,
-            provider: opts.provider,
-          }
-        : {
-            ...sessionBase,
-            imageSource: TELEGRAM_DESKTOP_AWS_IMAGE,
-            provider: opts.provider,
-          };
-    writeRecorderSession(sessionPath, session);
     fs.rmSync(startupPath);
-    return { session, sessionPath };
+    return result;
   } catch (error) {
+    if (error instanceof DesktopAuthorizationError) {
+      appendAuthorizationFailure(outputDir, error.failure);
+    }
     const cleanupErrors: string[] = [];
     if (desktopAuthorizationRequested) {
       try {
@@ -682,17 +821,9 @@ async function startRecorderAttempt(
         cleanupErrors.push(coerceErrorMessage(cleanupError));
       }
     }
-    if (
-      error instanceof FreshDesktopRequiredError &&
-      cleanupErrors.length === 0 &&
-      leaseOwned &&
-      opts.provider === "docker" &&
-      freshContainerAttempt === 1
-    ) {
-      return await startRecorderAttempt(cwd, opts, operations, freshContainerAttempt + 1);
-    }
     if (cleanupErrors.length === 0) {
       fs.rmSync(startupPath, { force: true });
+      fs.rmSync(sessionPath, { force: true });
     }
     const suffix = cleanupErrors.length ? ` Cleanup also failed: ${cleanupErrors.join("; ")}` : "";
     throw new Error(`${coerceErrorMessage(error)}${suffix}`, { cause: error });
@@ -704,7 +835,40 @@ export async function startRecorder(
   opts: StartOptions,
   operations: RecorderOperations = defaultOperations,
 ): Promise<{ session: RecorderSession; sessionPath: string }> {
-  return await startRecorderAttempt(cwd, opts, operations, 1);
+  const outputDir = resolveOutputDir(cwd, opts.outputDir);
+  fs.mkdirSync(outputDir, { recursive: true });
+  assertOutputDirWritable(outputDir);
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  if (!fs.existsSync(sessionPath)) {
+    return await provisionRecorder(cwd, opts, operations, outputDir, sessionPath);
+  }
+  const session = readRecorderSession(sessionPath);
+  if (
+    session.chat !== opts.chat ||
+    session.provider !== opts.provider ||
+    session.userDriver.join("\0") !== opts.userDriver.join("\0")
+  ) {
+    throw new Error("Existing recorder session does not match this start request.");
+  }
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const inspect = await inspectHealthySession({ crabboxBin, cwd, operations, session });
+  if (inspect) {
+    return await beginRecorderCapture({
+      cwd,
+      inspect,
+      operations,
+      opts,
+      outputDir,
+      resource: session,
+      sessionPath,
+    });
+  }
+  const cleanupErrors = await destroyRecorderSessionResources(cwd, session, operations);
+  if (cleanupErrors.length) {
+    throw new Error(`Unhealthy recorder session cleanup failed:\n${cleanupErrors.join("\n")}`);
+  }
+  fs.rmSync(sessionPath);
+  return await provisionRecorder(cwd, opts, operations, outputDir, sessionPath);
 }
 
 export async function recoverRecorderStartup(
@@ -761,8 +925,8 @@ export function recorderArtifacts(
   opts: ArtifactsOptions,
 ): { artifacts: Record<string, string> } {
   const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
-  const outputDir = path.dirname(sessionPath);
   const session = readRecorderSession(sessionPath);
+  const outputDir = session.outputDir;
   const artifacts: Record<string, string> = {};
   for (const [name, file] of Object.entries(session.artifacts ?? {})) {
     const resolved = path.resolve(file);
@@ -816,6 +980,93 @@ export async function viewRecorder(
   });
 }
 
+const desktopActionsSchema = z
+  .array(
+    z.discriminatedUnion("command", [
+      z.object({
+        button: z.number().int().min(1).max(5).default(1),
+        command: z.literal("click"),
+        x: z.number().int().nonnegative(),
+        y: z.number().int().nonnegative(),
+      }),
+      z.object({
+        command: z.literal("key"),
+        keys: z
+          .array(z.string().regex(/^[A-Za-z0-9_+:-]+$/u))
+          .min(1)
+          .max(20),
+      }),
+      z.object({ command: z.literal("sleep"), milliseconds: z.number().int().min(1).max(30_000) }),
+      z.object({
+        command: z.literal("type"),
+        delayMs: z.number().int().min(0).max(1_000).default(5),
+        text: z.string().min(1).max(10_000),
+      }),
+    ]),
+  )
+  .min(1)
+  .max(100);
+
+export async function runRecorderActions(
+  cwd: string,
+  opts: ActionsOptions,
+  operations: RecorderOperations = defaultOperations,
+): Promise<{ results: Array<{ command: string; stderr: string; stdout: string }> }> {
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const actionsPath = resolveRecorderPath(cwd, opts.actionsFile, "--actions-file");
+  const actionsStat = fs.lstatSync(actionsPath);
+  if (!actionsStat.isFile() || actionsStat.isSymbolicLink() || actionsStat.size > 64 * 1024) {
+    throw new Error("--actions-file must be a regular file no larger than 64 KiB.");
+  }
+  const actions = desktopActionsSchema.parse(JSON.parse(fs.readFileSync(actionsPath, "utf8")));
+  const session = readRecorderSession(sessionPath);
+  for (const action of actions) {
+    if (
+      action.command === "click" &&
+      (action.x >= session.window.width || action.y >= session.window.height)
+    ) {
+      throw new Error("click coordinates must stay inside the Telegram window.");
+    }
+  }
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+  const results: Array<{ command: string; stderr: string; stdout: string }> = [];
+  for (const action of actions) {
+    if (action.command === "sleep") {
+      await sleep(action.milliseconds);
+      results.push({ command: "sleep", stderr: "", stdout: "" });
+      continue;
+    }
+    const telegramWindow = `win=${shellQuote(session.window.id)}
+if ! wmctrl -lx | awk -v win="$win" 'tolower($1) == tolower(win) && tolower($0) ~ /telegramdesktop/ {found=1} END {exit !found}'; then
+  echo "Recorded Telegram window $win no longer exists." >&2
+  exit 1
+fi
+eval "$(xdotool getwindowgeometry --shell "$win")"
+if [ "$X" -ne ${session.window.x} ] || [ "$Y" -ne ${session.window.y} ] || [ "$WIDTH" -ne ${session.window.width} ] || [ "$HEIGHT" -ne ${session.window.height} ]; then
+  echo "Recorded Telegram window $win moved or resized." >&2
+  exit 1
+fi
+`;
+    const actionCommand =
+      action.command === "click"
+        ? `xdotool windowactivate --sync "$win" mousemove --window "$win" ${action.x} ${action.y} click ${action.button}`
+        : action.command === "key"
+          ? `xdotool key --window "$win" ${action.keys.map(shellQuote).join(" ")}`
+          : `xdotool type --window "$win" --delay ${action.delayMs} -- ${shellQuote(action.text)}`;
+    const result = await operations.sshRun({
+      command: `export DISPLAY=:99\n${telegramWindow}${actionCommand}`,
+      cwd,
+      inspect,
+      run: operations.runCommand,
+      stdio: "pipe",
+      timeoutMs: opts.timeoutSeconds * 1000,
+    });
+    results.push({ command: action.command, ...result });
+  }
+  return { results };
+}
+
 async function captureScreenshot(params: {
   crop: ReturnType<typeof proofViewport>;
   cwd: string;
@@ -849,7 +1100,7 @@ export async function screenshotRecorder(
   const output =
     opts.output ??
     path.join(
-      path.dirname(opts.sessionPath),
+      path.relative(cwd, session.outputDir),
       `telegram-desktop-recorder-screenshot-${new Date().toISOString().replace(/[:.]/gu, "-")}.png`,
     );
   const outputPath = resolveRecorderPath(cwd, output, "--output");
@@ -874,7 +1125,7 @@ export async function stopRecorder(
   const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
   const session = readRecorderSession(sessionPath);
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
-  const outputDir = path.dirname(sessionPath);
+  const outputDir = session.outputDir;
   const errors: string[] = [];
   const artifacts: Record<string, string> = {};
   const attempt = async (label: string, action: () => Promise<void>) => {
@@ -885,14 +1136,12 @@ export async function stopRecorder(
     }
   };
   let inspect: CrabboxInspect | undefined;
-  let leaseGone = false;
   await attempt("inspect", async () => {
     try {
       inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
     } catch (error) {
       // A lease that no longer exists is the desired end state, not a failure.
       if (coerceErrorMessage(error).includes("lease not found")) {
-        leaseGone = true;
         return;
       }
       throw error;
@@ -942,78 +1191,58 @@ export async function stopRecorder(
   }
   const motionVideoPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.mp4");
   const motionGifPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.gif");
-  // Previews read the recovered recording; with no lease there is no video to
-  // trim, and running ffmpeg on the missing file would fail an otherwise
-  // complete cleanup.
+  // A missing lease produces no local video, so there is no preview to build.
   if (artifacts.video) {
-    await attempt("motion preview", async () => {
-      await operations.createMotionPreview({
-        crabboxBin,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        gifPath: motionGifPath,
-        run: operations.runCommand,
-        trimmedVideoPath: motionVideoPath,
-        videoPath,
-        width: DEFAULT_PREVIEW_WIDTH,
+    if (opts.crop === "telegram-window") {
+      const croppedVideoPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.mp4",
+      );
+      const croppedGifPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.gif",
+      );
+      await attempt("cropped motion preview", async () => {
+        const sinceSeconds = opts.since
+          ? Math.max(0, (Date.parse(opts.since) - Date.parse(session.startedAt)) / 1_000 - 1)
+          : undefined;
+        await operations.createCroppedMotionPreview({
+          crabboxBin,
+          crop: proofViewport(session.window),
+          croppedGifPath,
+          croppedVideoPath,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          run: operations.runCommand,
+          startSeconds: sinceSeconds,
+          videoPath,
+        });
+        artifacts.previewGifCropped = croppedGifPath;
+        artifacts.trimmedVideoCropped = croppedVideoPath;
       });
-      artifacts.previewGif = motionGifPath;
-      artifacts.trimmedVideo = motionVideoPath;
-    });
-  }
-  if (opts.crop === "telegram-window" && artifacts.trimmedVideo) {
-    const croppedVideoPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.mp4",
-    );
-    const croppedGifPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.gif",
-    );
-    await attempt("cropped motion preview", async () => {
-      await operations.createCroppedMotionPreview({
-        crop: proofViewport(session.window),
-        croppedGifPath,
-        croppedVideoPath,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        run: operations.runCommand,
-        videoPath: motionVideoPath,
+    } else {
+      await attempt("motion preview", async () => {
+        await operations.createMotionPreview({
+          crabboxBin,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          gifPath: motionGifPath,
+          run: operations.runCommand,
+          trimmedVideoPath: motionVideoPath,
+          videoPath,
+          width: 1920,
+        });
+        artifacts.previewGif = motionGifPath;
+        artifacts.trimmedVideo = motionVideoPath;
       });
-      artifacts.previewGifCropped = croppedGifPath;
-      artifacts.trimmedVideoCropped = croppedVideoPath;
-    });
-  }
-  // --keep-box keeps the whole debugging surface: the Desktop authorization stays
-  // valid for WebVNC until the operator finishes; a later `stop` without it revokes.
-  if (!opts.keepBox) {
-    await attempt("terminate Telegram Desktop session", async () => {
-      await terminateDesktopSession({
-        cwd,
-        desktopSessionId: session.desktopSessionId,
-        run: operations.runCommand,
-        userDriver: session.userDriver,
-      });
-    });
-  }
-  if (!opts.keepBox && session.leaseOwned && !leaseGone) {
-    await attempt("stop Crabbox", async () => {
-      await stopBox({
-        crabboxBin,
-        cwd,
-        leaseId: session.leaseId,
-        provider: session.provider,
-        run: operations.runCommand,
-      });
-    });
+    }
   }
   const stopped: RecorderSession = {
     ...session,
-    // Keep paths recorded by an earlier stop (--keep-box, then a later stop once
-    // the lease expired); fresh copies overwrite their own entries.
+    // Keep paths recorded by an earlier stop if a later cleanup sees an expired lease;
+    // fresh copies overwrite their own entries.
     artifacts: { ...session.artifacts, ...artifacts },
     cleanupErrors: errors.length ? errors : undefined,
-    keepBox: opts.keepBox,
     stoppedAt: new Date().toISOString(),
   };
   writeRecorderSession(sessionPath, stopped);
@@ -1021,6 +1250,35 @@ export async function stopRecorder(
     throw new Error(`Recorder stop completed with errors:\n${errors.join("\n")}`);
   }
   return stopped;
+}
+
+export async function teardownRecorder(
+  cwd: string,
+  opts: TeardownOptions,
+  operations: Pick<RecorderOperations, "runCommand"> = defaultOperations,
+): Promise<{ tornDown: boolean }> {
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const startupPath = recorderStartupPath(sessionPath);
+  if (fs.existsSync(startupPath)) {
+    await recoverRecorderStartup(
+      cwd,
+      { command: "recover", sessionPath: opts.sessionPath },
+      operations,
+    );
+    fs.rmSync(sessionPath, { force: true });
+    return { tornDown: true };
+  }
+  if (!fs.existsSync(sessionPath)) {
+    return { tornDown: false };
+  }
+  const session = readRecorderSession(sessionPath);
+  const errors = await destroyRecorderSessionResources(cwd, session, operations);
+  if (errors.length) {
+    writeRecorderSession(sessionPath, { ...session, cleanupErrors: errors });
+    throw new Error(`Recorder teardown completed with errors:\n${errors.join("\n")}`);
+  }
+  fs.rmSync(sessionPath);
+  return { tornDown: true };
 }
 
 async function statusRecorder(
@@ -1068,12 +1326,20 @@ async function main(): Promise<void> {
     console.log(`Telegram Desktop opened message ${opts.messageId}.`);
     return;
   }
+  if (opts.command === "actions") {
+    console.log(JSON.stringify(await runRecorderActions(cwd, opts), null, 2));
+    return;
+  }
   if (opts.command === "screenshot") {
     console.log(await screenshotRecorder(cwd, opts));
     return;
   }
   if (opts.command === "stop") {
     console.log(JSON.stringify(await stopRecorder(cwd, opts), null, 2));
+    return;
+  }
+  if (opts.command === "teardown") {
+    console.log(JSON.stringify(await teardownRecorder(cwd, opts), null, 2));
     return;
   }
   console.log(JSON.stringify(await statusRecorder(cwd, opts, defaultOperations), null, 2));

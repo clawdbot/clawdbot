@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import "./app-host.ts";
@@ -36,6 +36,7 @@ describe("OpenClaw shell document title", () => {
     approvalCount?: number;
     agentsList?: AgentsListResult | null;
     assistantAgentId?: string;
+    environment?: { label: string; color: "amber" };
     sessions?: GatewaySessionRow[] | null;
   }): ApplicationContext {
     return {
@@ -46,6 +47,7 @@ describe("OpenClaw shell document title", () => {
         },
         connection: { gatewayUrl: "ws://gateway.test" },
       },
+      config: { current: { environment: options.environment ?? null } },
       agents: { state: { agentsList: options.agentsList ?? null } },
       overlays: {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
@@ -70,6 +72,29 @@ describe("OpenClaw shell document title", () => {
     shell.routeState = { routeId: "usage" };
     shell.syncDocumentTitle();
     expect(document.title).toBe("Usage — OpenClaw");
+  });
+
+  it("does not read stored outboxes for a connected document title", () => {
+    const shell = createShell(createContext({}));
+    const summarizeStoredChatOutboxes = vi.fn(() => ({ total: 3 }));
+    shell.routeState = { routeId: "usage" };
+    shell.outboxStoreRuntime = { summarizeStoredChatOutboxes };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Usage — OpenClaw");
+    expect(summarizeStoredChatOutboxes).not.toHaveBeenCalled();
+  });
+
+  it("appends the configured environment to route and custodian titles", () => {
+    const shell = createShell(createContext({ environment: { label: "edge", color: "amber" } }));
+    shell.routeState = { routeId: "usage" };
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("Usage — OpenClaw · edge");
+
+    shell.routeState = { routeId: "custodian" };
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("Ask OpenClaw · edge");
   });
 
   it("uses the active session's derived title for a non-main chat", () => {

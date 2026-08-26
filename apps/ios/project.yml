@@ -17,7 +17,7 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 147.0.0
+    exactVersion: 151.0.0
 
 schemes:
   OpenClaw:
@@ -50,6 +50,9 @@ schemes:
     build:
       targets:
         OpenClawWatchApp: all
+    test:
+      targets:
+        - OpenClawWatchTests
 
 targets:
   OpenClaw:
@@ -503,5 +506,38 @@ targets:
       path: UITests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawUITests
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+
+  OpenClawWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    deploymentTarget: "11.0"
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+    sources:
+      - path: WatchTests
+    dependencies:
+      - target: OpenClawWatchApp
+    settings:
+      base:
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID).tests"
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClawWatchApp.app/OpenClawWatchApp"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_DEBUG_WATCH_APP_BUNDLE_ID).tests"
+    info:
+      path: Tests/Info.plist
+      properties:
+        CFBundleDisplayName: "$(PRODUCT_NAME)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"

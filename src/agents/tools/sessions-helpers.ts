@@ -32,7 +32,8 @@ export {
 } from "./sessions-resolution.js";
 
 /** Coarse session category used by session list/status tools. */
-type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
+type SessionKind = (typeof SESSION_LIST_KINDS)[number];
 
 const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
   main: "main",

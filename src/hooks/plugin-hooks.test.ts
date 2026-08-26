@@ -3,8 +3,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -12,6 +14,7 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
+import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 describe("bundle plugin hooks", () => {
@@ -34,6 +37,8 @@ describe("bundle plugin hooks", () => {
   });
 
   afterEach(() => {
+    setCurrentPluginMetadataSnapshot(undefined);
+    vi.restoreAllMocks();
     clearInternalHooks();
     setInternalHooksEnabled(true);
     if (previousBundledHooksDir === undefined) {
@@ -123,6 +128,24 @@ describe("bundle plugin hooks", () => {
       fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
     );
     expect(entry.metadata?.events).toEqual(["command:new"]);
+  });
+
+  it("reuses published plugin metadata without rescanning manifests", async () => {
+    const bundleRoot = await writeBundleHookFixture();
+    const config = createConfig(true);
+    const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+    setCurrentPluginMetadataSnapshot(snapshot, { config, workspaceDir });
+    const hookDir = fs.realpathSync.native(path.join(bundleRoot, "hooks"));
+    const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
+    const scanManifests = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex");
+
+    for (let iteration = 0; iteration < 2; iteration += 1) {
+      expect(resolvePluginHookDirs({ workspaceDir, config })).toEqual([
+        { dir: hookDir, pluginId: "sample-bundle" },
+      ]);
+    }
+
+    expect(scanManifests).not.toHaveBeenCalled();
   });
 
   it("loads and executes enabled bundle hooks through the internal hook loader", async () => {

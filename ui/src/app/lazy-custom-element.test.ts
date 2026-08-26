@@ -101,6 +101,38 @@ describe("optional custom element requests", () => {
     expect(requests.visibleState).toBeUndefined();
   });
 
+  it("skips the action replay while the host has not rendered the element", async () => {
+    // Regression: replaying while the shell is still splash-gated re-dispatches
+    // an event nothing handles, which re-enters the controller in a microtask
+    // cycle that starves the boot (Gateway socket included).
+    const requestUpdate = vi.fn();
+    const rendered = new Map<string, Element>();
+    const host = {
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+      queryRenderedElement: (tagName: string) => rendered.get(tagName) ?? null,
+    };
+    const requests = new LazyCustomElementRequestController(host, undefined, async () => false);
+    const action = vi.fn();
+    const tagName = uniqueTag();
+    const element = {
+      tagName,
+      label: "test panel",
+      loadModule: async () => {
+        customElements.define(tagName, class extends HTMLElement {});
+      },
+    };
+
+    requests.request(element, action);
+    await waitForFast(() => expect(requests.visibleState).toBeUndefined());
+    expect(action).not.toHaveBeenCalled();
+
+    rendered.set(tagName, document.createElement(tagName));
+    requests.request(element, action);
+    await waitForFast(() => expect(action).toHaveBeenCalledOnce());
+    expect(requests.visibleState).toBeUndefined();
+  });
+
   it("resumes an active request after a foreground request replaces its visible slot", async () => {
     let rejectActive: ((error: Error) => void) | undefined;
     let resolveForeground: (() => void) | undefined;
@@ -253,5 +285,28 @@ describe("optional custom element requests", () => {
     requests.request(element);
     await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(element.loadModule).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a preload failure when an active surface opts into recovery", async () => {
+    const error = new Error("chunk unavailable");
+    const { requests } = createRequestHarness();
+    const element = {
+      tagName: uniqueTag(),
+      label: "active panel",
+      loadModule: vi.fn(async () => {
+        throw error;
+      }),
+    };
+
+    requests.preload(element, { reportError: true });
+
+    await waitForFast(() =>
+      expect(requests.visibleState).toMatchObject({
+        element,
+        error,
+        stale: false,
+        status: "error",
+      }),
+    );
   });
 });

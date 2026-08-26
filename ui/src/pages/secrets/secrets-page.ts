@@ -160,21 +160,21 @@ class SecretsPage extends OpenClawLightDomElement {
     });
   }
 
+  private validateValue(value: string, kind: SecretsStoreDraft["kind"]): string | null {
+    if (kind === "secret" && value.length === 0) {
+      return t("secretsStore.required");
+    }
+    if (new TextEncoder().encode(value).byteLength > MAX_VALUE_BYTES) {
+      return t("secretsStore.tooLarge");
+    }
+    return null;
+  }
+
   private validateDraft(): string | null {
     if (!ENV_SECRET_REF_ID_RE.test(this.draft.name)) {
       return t("secretsStore.badName");
     }
-    if (
-      this.dialogMode === "edit" &&
-      this.draft.kind === "secret" &&
-      this.draft.value.length === 0
-    ) {
-      return t("secretsStore.required");
-    }
-    if (new TextEncoder().encode(this.draft.value).byteLength > MAX_VALUE_BYTES) {
-      return t("secretsStore.tooLarge");
-    }
-    return null;
+    return this.validateValue(this.draft.value, this.draft.kind);
   }
 
   private submitDraft() {
@@ -243,12 +243,12 @@ class SecretsPage extends OpenClawLightDomElement {
       this.formError = t("secretsStore.required");
       return;
     }
-    const oversized = parsed.entries.find(
-      (entry) => new TextEncoder().encode(entry.value).byteLength > MAX_VALUE_BYTES,
-    );
-    if (oversized) {
-      this.formError = `${oversized.name}: ${t("secretsStore.tooLarge")}`;
-      return;
+    for (const entry of parsed.entries) {
+      const error = this.validateValue(entry.value, entry.kind);
+      if (error) {
+        this.formError = `${entry.name}: ${error}`;
+        return;
+      }
     }
     void this.runStoreTask(async (store) => {
       const result = await bulkSetSecretsStoreEntries(store, parsed.entries);

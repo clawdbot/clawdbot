@@ -25,6 +25,7 @@ import {
 type MatrixPreparedSingleText = {
   trimmedText: string;
   convertedText: string;
+  preparedBody: string;
   singleEventLimit: number;
   eventTextLength: number;
   fitsInSingleEvent: boolean;
@@ -194,13 +195,12 @@ export function prepareMatrixSingleText(
       MATRIX_FORMAT_PROFILE.chunk.limit,
     ),
   );
-  const eventTextLength = Math.max(
-    convertedText.length,
-    markdownToMatrixBody(convertedText).length,
-  );
+  const preparedBody = markdownToMatrixBody(convertedText);
+  const eventTextLength = Math.max(convertedText.length, preparedBody.length);
   return {
     trimmedText,
     convertedText,
+    preparedBody,
     singleEventLimit,
     eventTextLength,
     fitsInSingleEvent: eventTextLength <= singleEventLimit,

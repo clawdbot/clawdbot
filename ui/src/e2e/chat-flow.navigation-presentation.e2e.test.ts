@@ -13,6 +13,18 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
+  return thread.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    const rows = [...element.querySelectorAll<HTMLElement>("[data-virtual-row-key]")];
+    const row = rows.find((candidate) => candidate.getBoundingClientRect().bottom > top);
+    return row
+      ? { key: row.dataset.virtualRowKey ?? null, offset: row.getBoundingClientRect().top - top }
+      : null;
+  });
+}
+
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
@@ -122,6 +134,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForChatScrollIdle(page);
+      await gateway.waitForRequest("agent.identity.get");
+      const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await expect.poll(() => thread.count()).toBe(1);
       const initialDistance = await thread.evaluate((element) => {
@@ -129,13 +143,14 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(initialDistance).toBeLessThanOrEqual(8);
-      const storedScrollTop = await thread.evaluate((element) => {
+      await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         transcript.scrollTop = Math.floor((transcript.scrollHeight - transcript.clientHeight) / 3);
         transcript.dispatchEvent(new Event("scroll", { bubbles: true }));
-        return transcript.scrollTop;
       });
-      expect(storedScrollTop).toBeGreaterThan(0);
+      await waitForChatScrollIdle(page);
+      const storedAnchor = await readTopTranscriptAnchor(thread);
+      expect(storedAnchor?.key).not.toBeNull();
 
       const sessionLink = (sessionKey: string) =>
         page.locator(
@@ -144,6 +159,9 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
+        initialIdentityRequestCount,
+      );
       const firstVisitDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
@@ -164,10 +182,12 @@ suite.define(() => {
           scrollTop: transcript.scrollTop,
         };
       });
+      const restoredAnchor = await readTopTranscriptAnchor(thread);
+      expect(restoredAnchor?.key).toBe(storedAnchor?.key);
       expect(
-        Math.abs(restored.scrollTop - storedScrollTop),
-        JSON.stringify({ restored, storedScrollTop }),
-      ).toBeLessThanOrEqual(120);
+        Math.abs((restoredAnchor?.offset ?? 0) - (storedAnchor?.offset ?? 0)),
+        JSON.stringify({ restoredAnchor, storedAnchor }),
+      ).toBeLessThanOrEqual(2);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
@@ -801,7 +821,7 @@ suite.define(() => {
             },
           }),
         );
-        window.dispatchEvent(new StorageEvent("storage", { key }));
+        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: sessionStorage }));
       }, firstKey);
       await page
         .locator(

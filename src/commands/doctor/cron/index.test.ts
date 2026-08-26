@@ -311,6 +311,41 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     ).resolves.toEqual([]);
   });
 
+  it("includes disabled authority debt in the remediation inventory", async () => {
+    const storePath = await makeTempStorePath();
+    const legacyAuthorityJob = {
+      owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops" },
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    };
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        ...legacyAuthorityJob,
+        id: "legacy-authority-enabled",
+        name: "Enabled authority debt",
+      }),
+      createCurrentCronJob({
+        ...legacyAuthorityJob,
+        id: "legacy-authority-disabled",
+        name: "Disabled authority debt",
+        enabled: false,
+      }),
+    ]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+    const finding = findings.find(
+      ({ requirement }) => requirement === "cron-scheduled-authority-reauthorization",
+    );
+
+    expect(finding).toEqual(
+      expect.objectContaining({
+        message: "2 tool-bearing automations require explicit scheduled authority reauthorization.",
+        fixHint: expect.stringContaining("openclaw automations list --all"),
+      }),
+    );
+  });
+
   it("reports a legacy quarantine sidecar without creating or modifying a SQLite database", async () => {
     const storePath = await makeTempStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
@@ -892,10 +927,14 @@ describe("maybeRepairLegacyCronStore", () => {
   describe("in-flight cron job advisory", () => {
     const RUNNING_AT_MS = Date.parse("2026-05-01T00:00:00.000Z");
 
-    it("warns about jobs still marked in-flight without touching the store", async () => {
+    it("warns about disabled jobs still marked in-flight without hiding the inventory", async () => {
       const storePath = await makeTempStorePath();
       await writeCurrentCronStore(storePath, [
-        createCurrentCronJob({ id: "running-job", state: { runningAtMs: RUNNING_AT_MS } }),
+        createCurrentCronJob({
+          id: "running-job",
+          enabled: false,
+          state: { runningAtMs: RUNNING_AT_MS },
+        }),
       ]);
       const prompter = makePrompter(true);
 
@@ -906,8 +945,9 @@ describe("maybeRepairLegacyCronStore", () => {
       });
 
       expectNoteContaining("1 automation is still marked in-flight", "Cron");
-      expectNoteContaining("shows it as `running`", "Cron");
+      expectNoNoteContaining("shows it as `running`", "Cron");
       expectNoteContaining("marks such runs interrupted the next time it starts", "Cron");
+      expectNoteContaining("openclaw automations list --all", "Cron");
       expectNoteContaining("openclaw automations show <id>", "Cron");
 
       // Observer-only: no repair prompt and the running marker is left untouched.
@@ -932,7 +972,7 @@ describe("maybeRepairLegacyCronStore", () => {
       });
 
       expectNoteContaining("2 automations are still marked in-flight", "Cron");
-      expectNoteContaining("shows them as `running`", "Cron");
+      expectNoteContaining("openclaw automations list --all", "Cron");
     });
 
     it("stays silent when no job is marked in-flight", async () => {

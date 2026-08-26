@@ -21,6 +21,7 @@ function createBaseContextParams(
     conversation: {
       kind: "group",
       id: "room-1",
+      routePeer: { kind: "group", id: "route-room-1" },
     },
     route: {
       agentId: "main",
@@ -108,6 +109,14 @@ describe("resolveInboundSupplementalSenderAllowed", () => {
 });
 
 describe("buildChannelInboundEventContext", () => {
+  it("does not claim authoritative route facts when the producer omits the route peer", () => {
+    const ctx = buildTestInboundEventContext({
+      conversation: { kind: "group", id: "room-1" },
+    });
+
+    expect(ctx.ConversationRouteContextObserved).toBeUndefined();
+  });
+
   it("maps normalized inbound facts into a finalized message context", async () => {
     const ctx = buildChannelInboundEventContext({
       channel: "test",
@@ -128,6 +137,7 @@ describe("buildChannelInboundEventContext", () => {
       conversation: {
         kind: "group",
         id: "room-1",
+        routePeer: { kind: "group", id: "route-room-1" },
         label: "Room One",
         spaceId: "workspace",
         threadId: "thread-1",
@@ -204,6 +214,8 @@ describe("buildChannelInboundEventContext", () => {
     });
 
     expect(ctx.InboundAccessAuthorized).toBe(true);
+    expect(ctx.ConversationRouteContextObserved).toBe(true);
+    expect(ctx.ConversationRoutePeerId).toBe("route-room-1");
 
     const expectedFields = {
       Body: "[User One] hello",

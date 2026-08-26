@@ -951,7 +951,7 @@ export async function startLocalSut(
   let mock: ReturnType<typeof spawnLogged> | undefined;
   try {
     const drained = await drainUpdates(params.sutToken);
-    const config = writeConfig(params);
+    const config = writeConfig({ ...params, mockHost: "127.0.0.1" });
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
     mock = spawnLoggedCommand(
       params.nodeBin ?? process.execPath,
@@ -1118,10 +1118,26 @@ async function startLocalSutDaemon(params: {
       throw new Error("Container-isolated fork SUT does not support the MCP App Funnel fixture.");
     }
     const sut = await startMantisSut({
+      configPatch: {
+        ...(params.humanDelayFixedMs === undefined
+          ? {}
+          : {
+              agents: {
+                defaults: {
+                  humanDelay: {
+                    maxMs: params.humanDelayFixedMs,
+                    minMs: params.humanDelayFixedMs,
+                    mode: "custom",
+                  },
+                },
+              },
+            }),
+        ...(params.linkPreview === undefined
+          ? {}
+          : { channels: { telegram: { linkPreview: params.linkPreview } } }),
+      },
       gatewayPort: params.gatewayPort,
       groupId: params.groupId,
-      humanDelayFixedMs: params.humanDelayFixedMs,
-      linkPreview: params.linkPreview,
       mockPort: params.mockPort,
       mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
       mockResponseText: params.mockResponseText,
@@ -1138,7 +1154,7 @@ async function startLocalSutDaemon(params: {
     };
   }
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
+  const config = writeSutConfig({ ...params, mockHost: "127.0.0.1" });
   const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
   const runtimeLogRoot = params.sutContainer ? config.tempRoot : params.outputDir;
   const requestLog = path.join(runtimeLogRoot, "mock-openai-requests.ndjson");
@@ -1284,6 +1300,7 @@ async function createCroppedMotionPreview(params: {
   videoPath: string;
 }) {
   return await createSharedCroppedMotionPreview({
+    crabboxBin: params.opts.crabboxBin,
     crop: params.crop,
     croppedGifPath: params.croppedGifPath,
     croppedVideoPath: params.croppedVideoPath,

@@ -131,10 +131,10 @@ export function renderChatModelPickerOption(params: {
                 >${t("chat.modelControls.default")}</span
               >`
             : nothing}
+          ${modelMeta
+            ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
+            : nothing}
         </span>
-        ${modelMeta
-          ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-          : nothing}
       </span>
       <span class="chat-controls__model-option-action">
         ${selected

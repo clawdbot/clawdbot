@@ -1,4 +1,5 @@
 /** Tests channel plugin id resolution from config, manifests, and installed state. */
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -115,7 +116,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
     {
       id: "microsoft",
       enabledByDefault: true,
-      contracts: { speechProviders: ["microsoft"] },
+      contracts: { speechProviders: ["microsoft", "edge"] },
     },
     {
       id: "tts-local-cli",
@@ -143,6 +144,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         videoGenerationProviders: ["openai"],
         embeddingProviders: ["openai"],
       },
+    },
+    {
+      id: "xai",
+      enabledByDefault: true,
+      contracts: { realtimeVoiceProviders: ["xai", "grok-voice"] },
     },
     {
       id: "ollama",
@@ -589,6 +595,16 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         tts: { provider: "microsoft" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the sole Talk speech provider from its capability alias",
+      { channels: {}, talk: { providers: { edge: {} } } } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the selected Talk realtime capability alias",
+      { channels: {}, talk: { realtime: { provider: "grok-voice" } } } as OpenClawConfig,
+      ["browser", "xai", "memory-core"],
     ],
     [
       "includes bundled speech providers configured by provider block",
@@ -3408,6 +3424,101 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
       }),
     ).toContain("external-env-channel");
   });
+
+  it("does not let namespace discovery bypass an incomplete trusted channel contract", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "external-env-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: { plugins: { allow: ["external-env-channel-plugin"] } } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: { EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com" },
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("preserves explicit channel intent when ambient credentials are incomplete", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "external-env-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          channels: { "external-env-channel": { token: "configured" } },
+          plugins: { allow: ["external-env-channel-plugin"] },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: { EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com" },
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([
+      {
+        channelId: "external-env-channel",
+        sources: ["explicit-config"],
+        effective: true,
+        pluginIds: ["external-env-channel-plugin"],
+        blockedReasons: [],
+      },
+    ]);
+  });
+
+  it.each(["global", "config"] as const)(
+    "evaluates the trusted %s installed Slack owner's credential contract",
+    (origin) => {
+      listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+        { channelId: "slack", source: "env" },
+      ]);
+      const slackRoot = fileURLToPath(new URL("../../extensions/slack/", import.meta.url));
+      const record = {
+        ...withManifestLoadPaths({
+          id: "slack",
+          origin,
+          channels: ["slack"],
+          providers: [],
+          cliBackends: [],
+          packageChannel: {
+            id: "slack",
+            configuredState: {
+              env: { anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] },
+              specifier: "./configured-state",
+              exportName: "hasConfiguredSlackChannelState",
+            },
+          },
+        }),
+        rootDir: slackRoot,
+      } satisfies PluginManifestRecord;
+      const config = { plugins: { allow: ["slack"] } } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredChannelPresencePolicy({
+          config,
+          env: { SLACK_BOT_TOKEN: "xoxb-test" },
+          manifestRecords: [record],
+          includePersistedAuthState: false,
+        }),
+      ).toStrictEqual([]);
+      expect(
+        resolveConfiguredChannelPresencePolicy({
+          config,
+          env: { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" },
+          manifestRecords: [record],
+          includePersistedAuthState: false,
+        }),
+      ).toStrictEqual([
+        {
+          channelId: "slack",
+          sources: ["env", "manifest-env"],
+          effective: true,
+          pluginIds: ["slack"],
+          blockedReasons: [],
+        },
+      ]);
+    },
+  );
 
   it("lets explicit bundled channel config bypass restrictive allowlists", () => {
     const config = {

@@ -82,6 +82,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
   return {
     handler: {
       connId: `conn-${role}`,
+      bootId: "gateway-boot-a",
       gatewayMethods: [],
       events: [],
       buildRequestContext: () => ({ nodeRegistry: { get: () => undefined } }),
@@ -187,6 +188,7 @@ describe("sendGatewayHello update detail scope", () => {
       }),
     );
     expect(helloPayload(context)?.server.buildId).toBe("build-a");
+    expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
   });
 

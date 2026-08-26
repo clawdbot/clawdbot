@@ -841,6 +841,7 @@ export function renderAgentSkills(params: {
                     allowSet,
                     usingAllowlist,
                     editable,
+                    filterActive: Boolean(filter),
                     onToggle: params.onToggle,
                   }),
                 )}
@@ -858,10 +859,12 @@ function renderAgentSkillGroup(
     allowSet: Set<string>;
     usingAllowlist: boolean;
     editable: boolean;
+    filterActive: boolean;
     onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   },
 ) {
-  const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+  const collapsedByDefault =
+    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
   return html`
     <details class="agent-skills-group" ?open=${!collapsedByDefault}>
       <summary class="agent-skills-header">

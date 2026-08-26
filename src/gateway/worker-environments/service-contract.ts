@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -93,6 +94,7 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;
   machineClass?: string;
@@ -104,7 +106,12 @@ export type WorkerPlacementDispatchRequest = {
 
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
-  "profileId" | "executionMode" | "deviceId" | "machineClass" | "inheritedProfile"
+  | "profileId"
+  | "executionMode"
+  | "devicePlacement"
+  | "deviceId"
+  | "machineClass"
+  | "inheritedProfile"
 >;
 
 export type WorkerPlacementReclaimRequest = {

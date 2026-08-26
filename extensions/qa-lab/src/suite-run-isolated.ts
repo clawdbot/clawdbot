@@ -114,7 +114,6 @@ export async function runQaFlowSuiteIsolated(
           concurrency,
           channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          channelDriverSelection: params?.channelDriverSelection,
           isolatedWorkers: true,
           writeEvidenceFile: false,
           scenarioIds:
@@ -170,24 +169,24 @@ export async function runQaFlowSuiteIsolated(
         updateScenarioRun();
         try {
           const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
-          const childSuiteResult: QaSuiteResult = await runQaFlowSuite(
-            markQaSuiteNestedRun(
-              buildQaIsolatedScenarioWorkerParams({
-                repoRoot,
-                outputDir: scenarioOutputDir,
-                providerMode,
-                transportId,
-                channelDriver: params?.channelDriver,
-                channelDriverSelection: params?.channelDriverSelection,
-                primaryModel,
-                alternateModel,
-                fastMode,
-                startLab,
-                scenario,
-                input: params,
-              }),
-            ),
+          const workerParams = markQaSuiteNestedRun(
+            buildQaIsolatedScenarioWorkerParams({
+              repoRoot,
+              outputDir: scenarioOutputDir,
+              providerMode,
+              transportId,
+              channelDriver: params?.channelDriver,
+              channelDriverSelection: params?.channelDriverSelection,
+              primaryModel,
+              alternateModel,
+              fastMode,
+              startLab,
+              scenario,
+              input: params,
+            }),
           );
+          startedScenarioIds.add(scenario.id);
+          const childSuiteResult: QaSuiteResult = await runQaFlowSuite(workerParams);
           for (const scenarioId of childSuiteResult.startedScenarioIds) {
             startedScenarioIds.add(scenarioId);
           }

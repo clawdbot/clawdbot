@@ -18,15 +18,11 @@ import type {
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
-import {
-  migrationCheckpointIdentitiesMatch,
-  resolveMigrationCheckpointIdentity,
-} from "./doctor-config-preflight-checkpoint.js";
+import { resolveMigrationCheckpointIdentity } from "./doctor-config-preflight-checkpoint.js";
 import { maybeMigrateLegacyConfig } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
@@ -35,18 +31,12 @@ import {
   readDoctorConfigPreflightSnapshot,
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
-import {
-  formatStartupPluginVerificationFailure,
-  refreshStartupPluginQuarantine,
-  runStartupUpgradeConvergence,
-} from "./doctor-config-preflight-plugin-verification.js";
+import { completeStartupMigrationPreflight } from "./doctor-config-preflight-startup.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
+import { maybeRepairPluginOpenClawHostLinks } from "./doctor-plugin-host-links.js";
 import {
-  formatStartupMigrationFailure,
   refuseStartupMigrationsForLiveGatewayOwner,
   throwStartupMigrationGuardRejected,
-  throwStartupMigrationIdentityChanged,
-  throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import {
@@ -461,6 +451,18 @@ export async function runDoctorConfigPreflight(
       throwStartupMigrationGuardRejected();
     }
     if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
+      if (gatewayStartupCheckpointRequired && snapshot.valid) {
+        if (!startupMigrationLease) {
+          throw new Error("Startup plugin host-link repair requires the startup migration lease.");
+        }
+        // Repair host links under the pinned lease before plugin migrations import packages.
+        await measurePreflightStep("plugin-host-link-repair", () =>
+          maybeRepairPluginOpenClawHostLinks({
+            env: startupMigrationEnv,
+            prompter: { shouldRepair: true },
+          }),
+        );
+      }
       const {
         autoMigrateLegacyState,
         autoMigrateLegacyPluginDoctorState,
@@ -636,96 +638,23 @@ export async function runDoctorConfigPreflight(
       configSnapshotRead = persistedSnapshotRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
-    if (
-      (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) &&
-      startupMigrationHeartbeatError
-    ) {
-      throw startupMigrationHeartbeatError instanceof Error
-        ? startupMigrationHeartbeatError
-        : new Error("OpenClaw startup migration lease heartbeat failed.");
-    }
-    if (
-      shouldRecordStateCheckpoint &&
-      stateMigrationsAllowed &&
-      freshConfigGuardAllowed &&
-      startupMigrationWarnings.length === 0 &&
-      snapshot.valid
-    ) {
-      if (!migrationCheckpoint) {
-        throw new Error("OpenClaw state migration checkpoint module was not loaded.");
-      }
-      migrationCheckpoint.recordSuccessfulStateMigrations({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-        lease: startupMigrationLease,
-      });
-    }
-    if (gatewayStartupCheckpointRequired) {
-      if (startupMigrationWarnings.length > 0) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: startupMigrationWarnings,
-            blockers: [],
-          }),
-        );
-      }
-      if (shouldRecordStartupCheckpoint && !snapshot.valid) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: [],
-            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-          }),
-        );
-      }
-      // This state is established before the first Gateway plugin load and remains
-      // fixed for the boot. Refresh it on every process start because migration
-      // checkpoints do not persist plugin availability or quarantine state.
-      setActiveDegradedPlugins([]);
-      if (snapshot.valid) {
-        const pluginConvergence = shouldRecordStartupCheckpoint
-          ? await runStartupUpgradeConvergence({
-              cfg: baseConfig,
-              env: process.env,
-              ...(options.measure ? { measure: options.measure } : {}),
-            })
-          : await refreshStartupPluginQuarantine({
-              cfg: baseConfig,
-              env: process.env,
-              ...(options.measure ? { measure: options.measure } : {}),
-            });
-        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-        if (pluginConvergence.blockingDiagnostic) {
-          throwStartupMigrationRefusal(
-            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-          );
-        }
-        if (shouldRecordStartupCheckpoint) {
-          const convergedSnapshotRead = await readConfigSnapshotForPreflight(false);
-          const convergedBaseConfig =
-            convergedSnapshotRead.snapshot.sourceConfig ??
-            convergedSnapshotRead.snapshot.config ??
-            {};
-          const convergedIdentity = resolveMigrationCheckpointIdentity({
-            snapshot: convergedSnapshotRead.snapshot,
-            baseConfig: convergedBaseConfig,
-            pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
-          });
-          if (!migrationCheckpointIdentitiesMatch(migrationCheckpointIdentity, convergedIdentity)) {
-            throwStartupMigrationIdentityChanged();
-          }
-        }
-      }
-    }
-    if (shouldRecordStartupCheckpoint) {
-      if (!migrationCheckpoint) {
-        throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
-      }
-      migrationCheckpoint.recordSuccessfulStartupMigrations({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-        lease: startupMigrationLease,
-      });
-    }
+    await completeStartupMigrationPreflight({
+      baseConfig,
+      freshConfigGuardAllowed,
+      gatewayStartupCheckpointRequired,
+      migrationCheckpoint,
+      migrationCheckpointIdentity,
+      measure: options.measure,
+      readConfigSnapshotForPreflight,
+      shouldRecordStartupCheckpoint,
+      shouldRecordStateCheckpoint,
+      snapshot,
+      startupMigrationEnv,
+      startupMigrationHeartbeatError,
+      startupMigrationLease,
+      startupMigrationWarnings,
+      stateMigrationsAllowed,
+    });
 
     return {
       snapshot,

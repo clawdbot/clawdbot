@@ -226,6 +226,7 @@ type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
     toolCallId?: string;
     agentId?: string;
     sessionKey?: string;
+    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
     timeoutMs?: number;
   }) => Promise<{
     id?: string;

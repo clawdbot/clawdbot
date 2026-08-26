@@ -19,12 +19,6 @@ const resolveManifestProviderAuthChoices = vi.hoisted(() =>
 const resolveProviderWizardOptions = vi.hoisted(() =>
   vi.fn<() => ProviderWizardOption[]>(() => []),
 );
-const resolveLegacyAuthChoiceAliasesForCli = vi.hoisted(() => vi.fn<() => string[]>(() => []));
-
-vi.mock("./auth-choice-legacy.js", () => ({
-  resolveLegacyAuthChoiceAliasesForCli,
-}));
-
 function includesOnboardingScope(
   scopes: readonly ("text-inference" | "image-generation" | "music-generation")[] | undefined,
   scope: "text-inference" | "image-generation" | "music-generation" | "all",
@@ -116,7 +110,6 @@ describe("buildAuthChoiceOptions", () => {
   beforeEach(() => {
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     resolveProviderWizardOptions.mockReturnValue([]);
-    resolveLegacyAuthChoiceAliasesForCli.mockReturnValue([]);
   });
 
   it("includes core and provider-specific auth choices", () => {
@@ -360,7 +353,6 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     const options = getOptions(true);
     const cliChoices = formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: false,
       includeSkip: true,
     }).split("|");
 
@@ -371,18 +363,6 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("skip");
     expect(options.map((option) => option.value)).toContain("ollama");
     expect(cliChoices).toContain("ollama");
-  });
-
-  it("can include legacy aliases in cli help choices", () => {
-    resolveLegacyAuthChoiceAliasesForCli.mockReturnValue(["claude-cli", "codex-cli"]);
-
-    const cliChoices = formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: true,
-      includeSkip: true,
-    }).split("|");
-
-    expect(cliChoices).toContain("claude-cli");
-    expect(cliChoices).toContain("codex-cli");
   });
 
   it("keeps static cli help choices off the plugin-backed catalog", () => {
@@ -405,10 +385,7 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
 
-    const cliChoices = formatStaticAuthChoiceChoicesForCli({
-      includeLegacyAliases: false,
-      includeSkip: true,
-    }).split("|");
+    const cliChoices = formatStaticAuthChoiceChoicesForCli({ includeSkip: true }).split("|");
 
     expect(cliChoices).not.toContain("ollama");
     expect(cliChoices).not.toContain("openai-api-key");
@@ -785,7 +762,6 @@ describe("buildAuthChoiceOptions", () => {
     const options = getOptions();
     const optionValues = options.map((option) => option.value);
     const cliChoiceValues = formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: false,
       includeSkip: true,
     }).split("|");
 

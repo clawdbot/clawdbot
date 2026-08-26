@@ -715,8 +715,10 @@ describe("Discord model picker interactions", () => {
     ).toContain("selection expired");
   });
 
-  it("requires submit click before routing selected model through /model pipeline", async () => {
-    const context = createModelPickerContext();
+  it("requires submit and retains Gateway ownership through the /model pipeline", async () => {
+    const dispatchReplyFromConfig =
+      vi.fn<NonNullable<ModelPickerContext["dispatchReplyFromConfig"]>>();
+    const context = { ...createModelPickerContext(), dispatchReplyFromConfig };
     const pickerData = createDefaultModelPickerData();
     const modelCommand = createModelCommandDefinition();
 
@@ -745,6 +747,10 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "openai/gpt-4o",
     });
+    const dispatchCall = firstMockArg(dispatchSpy, "dispatchCommandInteraction") as
+      | Parameters<DispatchDiscordCommandInteraction>[0]
+      | undefined;
+    expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
   });
 
   it("applies the selected model even when component channel.name throws on a partial channel", async () => {

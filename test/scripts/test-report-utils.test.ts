@@ -8,7 +8,6 @@ import {
   collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
-  tryReadJsonFile,
 } from "../../scripts/test-report-utils.mts";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
@@ -88,25 +87,6 @@ describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
         status: "passed",
       },
     ]);
-  });
-});
-
-describe("scripts/test-report-utils tryReadJsonFile", () => {
-  it("returns the fallback when the file is missing", () => {
-    const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
-
-    expect(tryReadJsonFile(missingPath, { ok: true })).toEqual({ ok: true });
-  });
-
-  it("reads valid JSON files", () => {
-    const tempPath = path.join(os.tmpdir(), `openclaw-json-${Date.now()}.json`);
-    fs.writeFileSync(tempPath, JSON.stringify({ ok: true }));
-
-    try {
-      expect(tryReadJsonFile(tempPath, null)).toEqual({ ok: true });
-    } finally {
-      fs.unlinkSync(tempPath);
-    }
   });
 });
 

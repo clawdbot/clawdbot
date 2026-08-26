@@ -580,51 +580,55 @@ export async function createMotionPreview(params: {
 }
 
 export async function createCroppedMotionPreview(params: {
+  crabboxBin: string;
   crop: TelegramCrop;
   croppedGifPath: string;
   croppedVideoPath: string;
   cwd: string;
   fps: number;
+  startSeconds?: number;
   run?: RunCommand;
   videoPath: string;
 }): Promise<{ crop: string; fps: number; outputWidth: number }> {
   const run = params.run ?? runCommand;
   const crop = `crop=${params.crop.width}:${params.crop.height}:${params.crop.x}:${params.crop.y}`;
   const scale = `scale=${params.crop.cropWidth}:-2:flags=lanczos`;
-  await run({
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-vf",
-      `${crop},${scale}`,
-      "-pix_fmt",
-      "yuv420p",
-      params.croppedVideoPath,
-    ],
-    command: "ffmpeg",
-    cwd: params.cwd,
-    stdio: "inherit",
-  });
-  await run({
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-filter_complex",
-      `${crop},fps=${params.fps},${scale},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-      params.croppedGifPath,
-    ],
-    command: "ffmpeg",
-    cwd: params.cwd,
-    stdio: "inherit",
-  });
+  const croppedSourcePath = `${params.croppedVideoPath}.source.mp4`;
+  try {
+    await run({
+      args: [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        ...(params.startSeconds && params.startSeconds > 0
+          ? ["-ss", params.startSeconds.toFixed(3)]
+          : []),
+        "-i",
+        params.videoPath,
+        "-vf",
+        `${crop},${scale}`,
+        "-pix_fmt",
+        "yuv420p",
+        croppedSourcePath,
+      ],
+      command: "ffmpeg",
+      cwd: params.cwd,
+      stdio: "inherit",
+    });
+    await createMotionPreview({
+      crabboxBin: params.crabboxBin,
+      cwd: params.cwd,
+      fps: params.fps,
+      gifPath: params.croppedGifPath,
+      run,
+      trimmedVideoPath: params.croppedVideoPath,
+      videoPath: croppedSourcePath,
+      width: params.crop.cropWidth,
+    });
+  } finally {
+    fs.rmSync(croppedSourcePath, { force: true });
+  }
   return { crop, fps: params.fps, outputWidth: params.crop.cropWidth };
 }
 

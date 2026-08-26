@@ -64,6 +64,80 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
 }
 
 suite.define(() => {
+  it("reads the requested draft before global expiry maintenance settles", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block" },
+      async ({ context, page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const scope = {
+          gatewayOwner: "foreground-gateway",
+          recoveryScope: "foreground-credential",
+          scopeKey: "foreground-draft",
+        };
+        const seedStoreHandle = await page.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        await page.evaluate(
+          ({ draftScope, draftStore }) =>
+            draftStore.writeDurableComposerDraft(
+              draftScope,
+              { revision: 1, text: "restore before maintenance", attachments: [] },
+              { expectedRevision: 0, writeId: "foreground-write" },
+            ),
+          { draftScope: scope, draftStore: seedStoreHandle },
+        );
+
+        await page.close();
+        const reopened = await context.newPage();
+        await reopened.addInitScript(() => {
+          const blockedTransactions = new WeakSet<IDBTransaction>();
+          const originalOpenCursor = Object.getOwnPropertyDescriptor(
+            IDBObjectStore.prototype,
+            "openCursor",
+          )?.value as IDBObjectStore["openCursor"];
+          IDBObjectStore.prototype.openCursor = function (this: IDBObjectStore, ...args) {
+            if (this.name === "composerDrafts") {
+              blockedTransactions.add(this.transaction);
+            }
+            return originalOpenCursor.apply(this, args);
+          };
+          IDBTransaction.prototype.addEventListener = function (
+            this: IDBTransaction,
+            type: string,
+            listener: EventListenerOrEventListenerObject,
+            options?: boolean | AddEventListenerOptions,
+          ) {
+            if (type === "complete" && blockedTransactions.has(this)) {
+              return;
+            }
+            return EventTarget.prototype.addEventListener.call(this, type, listener, options);
+          } as IDBTransaction["addEventListener"];
+        });
+        await installMockGateway(reopened);
+        await reopened.goto(`${suite.server.baseUrl}settings`);
+        const reopenedStoreHandle = await reopened.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        const result = await reopened.evaluate(
+          ({ draftScope, draftStore }) =>
+            Promise.race([
+              draftStore.readDurableComposerDraft(draftScope),
+              new Promise((resolve) => {
+                setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000);
+              }),
+            ]),
+          { draftScope: scope, draftStore: reopenedStoreHandle },
+        );
+
+        expect(result).toMatchObject({
+          status: "found",
+          draft: { text: "restore before maintenance" },
+        });
+      },
+    );
+  });
+
   it("expires drafts across abandoned credential owners on the next database open", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },

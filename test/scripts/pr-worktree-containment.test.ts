@@ -358,6 +358,8 @@ describePosix("scripts/pr worktree containment", () => {
     for (let index = 0; index < 32; index += 1) {
       writeFileSync(join(fixture.root, `transition-batch-${index}.txt`), `${index}\n`);
     }
+    const literalPath = "transition-[literal]*?.txt";
+    writeFileSync(join(fixture.root, literalPath), "literal path\n");
     git(fixture.root, "add", ".");
     git(fixture.root, "commit", "-m", "add transition batch");
     git(fixture.root, "update-ref", "refs/pull/42/head", "HEAD");
@@ -374,6 +376,10 @@ describePosix("scripts/pr worktree containment", () => {
       [
         "#!/usr/bin/env bash",
         'printf "%s\\n" "$*" >> "$GIT_COMMAND_LOG"',
+        'if [[ ( "${1:-}" == "restore" || "${2:-}" == "restore" ) && "$#" -gt 12 ]]; then',
+        '  printf "%s\\n" "Argument list too long" >&2',
+        "  exit 126",
+        "fi",
         'exec "$REAL_GIT" "$@"',
       ].join("\n"),
     );
@@ -392,6 +398,9 @@ describePosix("scripts/pr worktree containment", () => {
     expect(
       commands.filter((command) => command.startsWith("ls-files --others --ignored ")),
     ).toHaveLength(0);
+    expect(readFileSync(join(fixture.root, ".worktrees", "pr-42", literalPath), "utf8")).toBe(
+      "literal path\n",
+    );
     expectCanonicalCheckoutUnchanged(fixture);
   });
 });

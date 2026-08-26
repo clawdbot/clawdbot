@@ -156,6 +156,9 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
   // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
   const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
@@ -169,9 +172,6 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   }
 
   if (message.role === "bashExecution") {
-    if (message.excludeFromContext === true) {
-      return 0;
-    }
     const bashMessage: BashExecutionMessage = message;
     tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;

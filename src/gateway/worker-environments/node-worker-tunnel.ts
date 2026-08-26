@@ -29,11 +29,12 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import type {
-  WorkerTunnelStatus,
-  WorkerTurnLaunchRequest,
-  WorkerTurnTunnelHandle,
-  WorkerWorkspaceCommand,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelStatus,
+  type WorkerTurnLaunchRequest,
+  type WorkerTurnTunnelHandle,
+  type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -61,11 +62,6 @@ const RETRYABLE_TRANSPORT_CODES = new Set([
   "UNAVAILABLE",
 ]);
 
-type TerminalNodeWorkerSupervisorReceipt = Extract<
-  NodeWorkerSupervisorReceipt,
-  { state: "completed" | "failed" | "interrupted" | "cancelled" }
->;
-
 type NodeWorkerLaunch = (request: {
   deviceId: string;
   input: {
@@ -80,7 +76,7 @@ type NodeWorkerLaunch = (request: {
   timeoutMs: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
-}) => Promise<TerminalNodeWorkerSupervisorReceipt>;
+}) => Promise<Exclude<NodeWorkerSupervisorReceipt, { state: "pending" | "running" }>>;
 
 type NodeWorkerWorkspaceBinding = {
   localPath: string;
@@ -210,10 +206,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const findNode = async (
     entry: NodeTunnelEntry,
     signal: AbortSignal,
-  ): Promise<{
-    transport: NodeWorkerSupervisorTransport;
-    node: NodeWorkerSupervisorNodeProof;
-  }> => {
+  ): Promise<{ transport: NodeWorkerSupervisorTransport; node: NodeWorkerSupervisorNodeProof }> => {
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("device worker node transport is unavailable");
@@ -222,7 +215,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       (candidate) => candidate.nodeId === entry.deviceId,
     );
     if (!node) {
-      throw new Error("device worker node is not connected with the supervisor dialect");
+      throw new WorkerTunnelOwnerDisconnectedError(
+        "device worker node is not connected with the supervisor dialect",
+      );
     }
     return { transport, node };
   };
@@ -326,23 +321,21 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       sharedHost: true,
       runWorkspaceCommand: async (command) => await exec(command),
     });
-    const captureManifest = async (remoteWorkspaceDir: string, baseCommit: string | null) => {
+    const captureManifest = async (dir: string, base: string | null, reference: string) => {
       const captured = await exec({
         argv: [
           "node",
           "-e",
           REMOTE_WORKSPACE_MANIFEST_JS,
-          remoteWorkspaceDir,
-          ...(baseCommit ? [baseCommit, "eligible"] : []),
+          dir,
+          ...(base ? [base, "eligible"] : ["", "all"]),
+          reference.slice("sha256:".length),
         ],
         transportRetry: "idempotent",
       });
       const manifestRef = captured.stdout.trim();
-      if (
-        captured.termination !== "exit" ||
-        captured.code !== 0 ||
-        !/^sha256:[a-f0-9]{64}$/u.test(manifestRef)
-      ) {
+      const validRef = /^sha256:[a-f0-9]{64}$/u.test(manifestRef);
+      if (captured.termination !== "exit" || captured.code !== 0 || !validRef) {
         throw new Error("Node workspace manifest capture failed");
       }
       return manifestRef;
@@ -371,6 +364,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         const remoteManifestRef = await captureManifest(
           restoredWorkspace.remoteWorkspaceDir,
           prepared.snapshot.manifest.baseCommit,
+          restoredWorkspace.manifestRef,
         );
         if (remoteManifestRef !== restoredWorkspace.manifestRef) {
           throw new Error("Node workspace changed before tunnel recovery");
@@ -420,6 +414,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           const observed = await captureManifest(
             request.remoteWorkspaceDir,
             uploaded.base.baseCommit,
+            expectedRemoteRef,
           );
           if (observed !== expectedRemoteRef) {
             throw new Error("Cloud workspace changed during final reconciliation");
@@ -572,7 +567,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
             recordNodeSyncPath(entry.environmentId, entry.sessionId, origin, originStartedAt);
             if (origin.kind === "synced") {
-              return origin.result;
+              return await workspace.finalizeSync(request, origin.result);
             }
             const transferred = await exec({
               argv: ["openclaw-internal-workspace-transfer"],
@@ -591,11 +586,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             ) {
               throw new Error("Node workspace transfer failed");
             }
-            return {
+            return await workspace.finalizeSync(request, {
               mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
               remoteWorkspaceDir: transferred.workspaceDir,
               manifestRef: prepared.snapshot.manifestRef,
-            };
+            });
           } finally {
             options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
           }
@@ -713,8 +708,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
     },
     async stopAll(): Promise<void> {
-      await Promise.all([...entries.values()].map(stopEntry));
-      await options.workspaceTransfer.closeAll();
+      const stopped = await Promise.allSettled([...entries.values()].map(stopEntry));
+      // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
+      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
+      const failure = stopped.find((result) => result.status === "rejected");
+      if (failure) {
+        throw failure.reason;
+      }
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

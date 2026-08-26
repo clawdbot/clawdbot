@@ -8,6 +8,7 @@ import {
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
@@ -56,7 +57,9 @@ function sendStateLabel(item: ChatQueueItem): string | null {
 }
 
 export function renderChatQueue(props: ChatQueueProps) {
-  const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
+  const visibleQueue = props.queue.filter(
+    (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
+  );
   if (!visibleQueue.length) {
     return nothing;
   }

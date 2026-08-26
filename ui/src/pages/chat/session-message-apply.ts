@@ -12,7 +12,17 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
+import {
+  latestPersistedSteerBoundary,
+  latestStreamBoundaryRunId,
+  persistedSteerTargetRunId,
+  rolloverChatStream,
+} from "./stream-causal-boundary.ts";
+import {
+  assistantMessageReplacesCurrentStream,
+  maybeResetToolStreamRun,
+} from "./stream-reconciliation.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -119,7 +129,6 @@ export function applySessionMessagePayload(
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
     },
   };
-  const previousMessageCount = state.chatMessages.length;
   const projection = reduceChatSessionProjection(
     state,
     {
@@ -129,15 +138,34 @@ export function applySessionMessagePayload(
     },
     { scope, runActive },
   );
+  if (incoming.role === "assistant" && projection.messages.includes(message)) {
+    prunePersistedAssistantStreamSegments(state, message);
+    if (assistantOwnerRunId) {
+      if (
+        runActive === false ||
+        (state.chatStream !== null && assistantMessageReplacesCurrentStream(state, message))
+      ) {
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+      }
+      if (runActive === false) {
+        maybeResetToolStreamRun(state, assistantOwnerRunId);
+      }
+    }
+  }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;
+  const persistedSteerBoundary = steerTargetRunId
+    ? latestPersistedSteerBoundary(projection.messages, steerTargetRunId)
+    : null;
   if (
     incoming.role === "user" &&
     runActive === true &&
     incoming.runId &&
     steerTargetRunId &&
     (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&
-    projection.messages.length > previousMessageCount
+    persistedSteerBoundary?.runId === incoming.runId &&
+    latestStreamBoundaryRunId(state) !== incoming.runId
   ) {
     state.chatRunId = steerTargetRunId;
     rolloverChatStream(state, {

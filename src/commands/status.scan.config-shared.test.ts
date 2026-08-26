@@ -23,6 +23,7 @@ describe("status.scan.config-shared", () => {
     const readConfigSnapshot = vi.fn(async () => ({
       config: { channels: { quietchat: {} } },
       sourceConfig: { channels: { quietchat: {} } },
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: { channels: { quietchat: {} } },
@@ -43,6 +44,7 @@ describe("status.scan.config-shared", () => {
       coldStart: true,
       sourceConfig: {},
       resolvedConfig: {},
+      configDiagnostics: null,
       secretDiagnostics: [],
     });
   });
@@ -53,6 +55,7 @@ describe("status.scan.config-shared", () => {
     const readConfigSnapshot = vi.fn(async () => ({
       config: sourceConfig,
       sourceConfig,
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig,
@@ -73,6 +76,7 @@ describe("status.scan.config-shared", () => {
       coldStart: false,
       sourceConfig,
       resolvedConfig,
+      configDiagnostics: null,
       secretDiagnostics: ["resolved"],
     });
   });
@@ -103,7 +107,11 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status",
-      readConfigSnapshot: async () => ({ config: loadedConfig, sourceConfig }),
+      readConfigSnapshot: async () => ({
+        config: loadedConfig,
+        sourceConfig,
+        configDiagnostics: null,
+      }),
       resolveConfig,
       env: { VITEST: "true" },
     });
@@ -113,12 +121,33 @@ describe("status.scan.config-shared", () => {
     expect(result.resolvedConfig).toBe(resolvedConfig);
   });
 
+  it("carries invalid config diagnostics alongside the best-effort config", async () => {
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status",
+      readConfigSnapshot: async () => ({
+        config: {},
+        sourceConfig: {},
+        configDiagnostics,
+      }),
+      resolveConfig: async () => ({ resolvedConfig: {}, diagnostics: [] }),
+      env: { VITEST: "true" },
+    });
+
+    expect(result.configDiagnostics).toBe(configDiagnostics);
+  });
+
   it("adds a status diagnostic for gateway token source conflicts", async () => {
     const sourceConfig = { gateway: { auth: { token: "config-token" } } };
     const resolvedConfig = sourceConfig;
     const readConfigSnapshot = vi.fn(async () => ({
       config: sourceConfig,
       sourceConfig,
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig,
@@ -143,6 +172,7 @@ describe("status.scan.config-shared", () => {
     const readConfigSnapshot = vi.fn(async () => ({
       config: sourceConfig,
       sourceConfig,
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,
@@ -172,6 +202,7 @@ describe("status.scan.config-shared", () => {
     const readConfigSnapshot = vi.fn(async () => ({
       config: sourceConfig,
       sourceConfig,
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,
@@ -200,6 +231,7 @@ describe("status.scan.config-shared", () => {
     const readConfigSnapshot = vi.fn(async () => ({
       config: sourceConfig,
       sourceConfig,
+      configDiagnostics: null,
     }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,

@@ -3,6 +3,7 @@ import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { ChannelType, getChannelMessage, type Client } from "../internal/discord.js";
 import {
   resolveDiscordChannelIdSafe,
@@ -31,14 +32,6 @@ import type {
   DiscordThreadStarterRestMessage,
 } from "./threading.types.js";
 
-function isDiscordThreadType(type: ChannelType | undefined): boolean {
-  return (
-    type === ChannelType.PublicThread ||
-    type === ChannelType.PrivateThread ||
-    type === ChannelType.AnnouncementThread
-  );
-}
-
 function isDiscordForumParentType(parentType: ChannelType | undefined): boolean {
   return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
 }
@@ -63,7 +56,7 @@ export function resolveDiscordThreadChannel(params: {
   if (isThreadChannel) {
     return channel as unknown as DiscordThreadChannel;
   }
-  if (!isDiscordThreadType(channelInfo?.type)) {
+  if (!isDiscordThreadChannelType(channelInfo?.type)) {
     return null;
   }
   const messageChannelId =

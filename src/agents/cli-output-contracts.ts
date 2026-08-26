@@ -31,6 +31,10 @@ export type CliTerminalFailure =
     }
   | { reason: "synthetic_no_response" };
 
+export type CliTerminalInterruption = {
+  reason: "aborted" | "timeout";
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
@@ -44,6 +48,8 @@ export type CliOutput = {
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
+  /** A caller interruption that ended the turn after usable assistant text was streamed. */
+  terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
     process?: CliProcessDiagnostics;
   };

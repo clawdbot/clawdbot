@@ -112,7 +112,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
-  if (sandboxRoot && !sandboxFsBridge) {
+  if (
+    sandboxRoot &&
+    !sandboxFsBridge &&
+    (options.includeBaseCodingTools || options.includeShellTools)
+  ) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
@@ -244,6 +248,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {

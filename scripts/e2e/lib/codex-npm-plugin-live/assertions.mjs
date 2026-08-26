@@ -15,6 +15,7 @@ import {
   realPathMaybe,
   stateDir,
 } from "../codex-install-utils.mjs";
+import { assertCodexReleasePackageContract } from "../codex-release-package-assertions.mjs";
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -447,7 +448,7 @@ function findCodexPackageJson(packageName) {
   return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
-function assertNpmDeps() {
+function assertNpmDeps(options = {}) {
   const npmRoot = managedNpmRoot();
   const installPath = codexInstallPath();
   const pluginPackageJson = path.join(installPath, "package.json");
@@ -468,11 +469,13 @@ function assertNpmDeps() {
   }
   assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
-  const bin = resolveCodexBin();
-  if (!fs.existsSync(bin)) {
-    throw new Error(`missing managed Codex binary: ${bin}`);
-  }
-  assertPathInside(npmRoot, bin, "managed Codex binary");
+  assertCodexReleasePackageContract({
+    pluginPackageJson,
+    codexPackageJson: openAiCodexPackageJson,
+    packageRoots: [codexNpmProjectRoot(), installPath, npmRoot],
+    managedRoot: npmRoot,
+    recordEvidence: options.recordEvidence,
+  });
 }
 
 function resolveCodexBin() {
@@ -505,7 +508,7 @@ function resolveCodexBin() {
 }
 
 function printCodexBin() {
-  assertNpmDeps();
+  assertNpmDeps({ recordEvidence: false });
   process.stdout.write(`${resolveCodexBin()}\n`);
 }
 

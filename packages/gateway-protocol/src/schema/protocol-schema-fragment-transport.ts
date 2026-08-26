@@ -19,6 +19,7 @@ export const TransportProtocolSchemas = {
   CronJobNotFoundErrorDetails: errorCodes.CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetails: errorCodes.MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: errorCodes.McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetails: errorCodes.OutboundDeliveryQueuedErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetails:
     errorCodes.SkillProposalRevisionChangedErrorDetailsSchema,
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,

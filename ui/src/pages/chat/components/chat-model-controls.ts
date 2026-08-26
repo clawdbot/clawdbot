@@ -25,6 +25,11 @@ import { renderChatModelPicker, type ChatModelCatalogState } from "./chat-model-
 
 export type { ChatModelCatalogState } from "./chat-model-picker.ts";
 
+type ChatContextWindowTarget = Pick<
+  SessionsListResult["defaults"],
+  "contextWindow" | "contextWindows" | "contextWindowDefault"
+>;
+
 type ChatModelControlsProps = {
   activeRunId: string | null;
   agentDefaultModel?: string;
@@ -46,9 +51,11 @@ type ChatModelControlsProps = {
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  contextWindowTarget?: ChatContextWindowTarget;
   thinkingDefaults?: SessionsListResult["defaults"];
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
+  onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
@@ -163,7 +170,7 @@ function resolveCatalogTriggerStatus(
   if (state.status === "error") {
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
-  if (!state.hasSnapshot && ["idle", "loading", "refreshing"].includes(state.status)) {
+  if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
     return t("chat.modelControls.loadingModels");
   }
   if (state.hasSnapshot && optionCount === 0) {
@@ -347,8 +354,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
   };
   const catalogLoadingWithoutSnapshot =
-    !managedCatalog.hasSnapshot &&
-    ["idle", "loading", "refreshing"].includes(managedCatalog.status);
+    !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
   const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
@@ -366,16 +372,47 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
+  // One owner supplies the whole tuple: mixing an override session's fields with
+  // the defaults row can render the default model's options for a session whose
+  // model declares none, then patch an invalid option id.
+  const contextWindowOwner =
+    props.contextWindowTarget ?? activeSession ?? props.sessionsResult?.defaults;
+  const contextWindows = contextWindowOwner?.contextWindows ?? [];
+  const selectedContextWindow =
+    contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
+  const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+  const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
+  const showReasoning = thinking.options.length > 0;
+  const mobileSecondary =
+    showReasoning || (showFastMode && fastMode.supported)
+      ? {
+          disabled: effortDisabled,
+          label: showReasoning ? t("chat.modelControls.effort") : t("chat.modelControls.fastMode"),
+          value: showReasoning ? effortLabel : fastMode.label,
+        }
+      : undefined;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
-        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
+        contextWindow:
+          contextWindows.length > 1
+            ? {
+                options: contextWindows,
+                selected: selectedContextWindow,
+                ...(defaultContextWindow ? { defaultId: defaultContextWindow } : {}),
+                disabled: commonDisabled || effortMutationDisabled,
+                onSelect: async (next, targetSessionKey) => {
+                  await props.onContextWindowSelect?.(next, targetSessionKey);
+                },
+              }
+            : undefined,
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
+        mobileSecondary,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,

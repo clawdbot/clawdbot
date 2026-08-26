@@ -140,9 +140,10 @@ function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTo
   return gated;
 }
 
-function createBoundCallerIdentity(params: AgentHarnessHostAttempt) {
+function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAuthority: () => void) {
   return createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: params.admittedRunContext,
+    receiptAuthority,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
@@ -176,7 +177,7 @@ export function createAgentHarnessHostCapabilities(params: {
       throw new Error("agent harness host capability is no longer active");
     }
   };
-  const callerIdentity = createBoundCallerIdentity(attempt);
+  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }

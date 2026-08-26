@@ -81,7 +81,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
     private static let execApprovalsReadRetryAttempts = 5
 
-    private let isPreview: Bool
+    let isPreview: Bool
     @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
         @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
     @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
@@ -258,6 +258,10 @@ final class AppState {
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
             }
         }
+    }
+
+    var talkRealtimeRelayEnabled = isTalkRealtimeRelayEnabled() {
+        didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
     }
 
     var talkPhaseSoundsEnabled: Bool {

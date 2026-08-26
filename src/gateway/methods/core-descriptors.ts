@@ -40,6 +40,7 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "users.linkEmail",
   "users.setAvatar",
   "users.setDisplayName",
+  "users.setRole",
 ]);
 const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "artifacts.",
@@ -187,6 +188,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["users.linkEmail", "users", "operator.admin", "<=2026.7"],
   ["users.setDisplayName", "users", "operator.write", "<=2026.7"],
   ["users.setAvatar", "users", "operator.write", "<=2026.7"],
+  ["users.setRole", "users", "operator.admin", "2026.8"],
   ["tasks.list", "tasks", "operator.read", "<=2026.7"],
   ["tasks.get", "tasks", "operator.read", "<=2026.7"],
   ["tasks.cancel", "tasks", "operator.write", "<=2026.7"],
@@ -342,10 +344,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.status", "cron", "operator.read", "<=2026.7"],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
-  ["cron.add", "cron", "operator.admin", "<=2026.7"],
-  ["cron.update", "cron", "operator.admin", "<=2026.7"],
-  ["cron.remove", "cron", "operator.admin", "<=2026.7"],
-  ["cron.run", "cron", "operator.admin", "<=2026.7"],
+  ["cron.add", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.update", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.remove", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.run", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the

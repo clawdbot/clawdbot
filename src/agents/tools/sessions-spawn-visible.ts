@@ -63,6 +63,7 @@ export type VisibleSessionsSpawnDeps = {
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   agentSessionKey?: string;
+  requesterTurnRunId?: string;
   completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -199,7 +200,7 @@ export async function maybeSpawnVisibleSession(params: {
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
     return {
       status: "error",
-      error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
+      error: `Invalid agentId "${params.requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
     };
   }
   const requesterAgentId = resolveSessionAgentId({
@@ -213,7 +214,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg.agents?.defaults?.subagents?.requireAgentId ??
     false;
   if (requireAgentId && !params.requestedAgentId) {
-    return { status: "forbidden", error: "sessions_spawn requires agentId. Use agents_list." };
+    return { status: "forbidden", error: "sessions_spawn requires agentId; use an allowed agent." };
   }
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
@@ -381,6 +382,7 @@ export async function maybeSpawnVisibleSession(params: {
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
         runId,
+        requesterTurnRunId: params.options?.requesterTurnRunId,
         childSessionKey,
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,

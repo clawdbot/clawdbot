@@ -41,6 +41,72 @@ import type {
   OnboardGatewayHealthCall,
   OnboardHealthCommandCall,
 } from "./onboard-non-interactive.test-helpers.js";
+import { logNonInteractiveOnboardingFailure } from "./onboard-non-interactive/local/output.js";
+
+describe("logNonInteractiveOnboardingFailure", () => {
+  const callerFix = "Fix: use the phase-specific recovery path.";
+  const failure = {
+    mode: "local" as const,
+    phase: "gateway-health",
+    message: "Gateway did not become reachable.",
+    detail: "connect ECONNREFUSED 127.0.0.1:18997",
+    hints: ["Phase-specific context.", callerFix],
+  };
+
+  it("uses a caller-supplied Fix hint in human and JSON output", () => {
+    const error = vi.fn();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      opts: {},
+      runtime: { ...runtime, error },
+    });
+
+    const humanLines = String(error.mock.calls[0]?.[0]).split("\n");
+    expect(humanLines.filter((line) => line.startsWith("Fix:"))).toEqual([callerFix]);
+
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
+    expect(parsed.hints.filter((hint) => hint.startsWith("Fix:"))).toEqual([callerFix]);
+  });
+
+  it("keeps the classification recovery hint when the caller supplies no hints", () => {
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      hints: undefined,
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
+    expect(parsed.hints).toEqual([
+      "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.",
+    ]);
+  });
+
+  it("leaves hints for a non-gateway-health phase unchanged", () => {
+    const hints = [callerFix, "Keep the configured environment available."];
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+      mode: "local",
+      phase: "daemon-install",
+      message: "Gateway service install did not complete successfully.",
+      hints,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { classification?: string; hints: string[] };
+    expect(parsed.classification).toBeUndefined();
+    expect(parsed.hints).toEqual(hints);
+  });
+});
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
@@ -62,13 +128,67 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     envSnapshot.restore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     gatewayReachableState.mock = undefined;
+    const { resetSecretRedactionRegistryForTest } =
+      await import("../logging/secret-redaction-registry.test-support.js");
+    resetSecretRedactionRegistryForTest();
     testConfigStore.clear();
     capturedReplaceConfigFileCalls.length = 0;
     configWritePluginLeaseDepths.length = 0;
     vi.clearAllMocks();
   });
+
+  it.each([false, true])(
+    "rejects invalid existing config without writes while honoring JSON output (json: %s)",
+    async (json) => {
+      await withStateDir("state-invalid-config-", async (stateDir) => {
+        const snapshot = await readConfigFileSnapshotMock();
+        readConfigFileSnapshotMock.mockResolvedValueOnce({
+          ...snapshot,
+          exists: true,
+          valid: false,
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        });
+        const output = vi.fn();
+        const error = vi.fn();
+        const captureRuntime: RuntimeEnv = {
+          log: output,
+          error,
+          exit: (code) => {
+            throw new Error(`exit:${code}`);
+          },
+        };
+        const message = "Config invalid. Run `openclaw doctor` to repair it, then re-run setup.";
+
+        await expect(
+          runNonInteractiveSetup(
+            {
+              ...createOnboardLocalDaemonOptions(stateDir),
+              installDaemon: false,
+              skipHealth: true,
+              json,
+            },
+            captureRuntime,
+          ),
+        ).rejects.toThrow("exit:1");
+
+        expect(error).toHaveBeenCalledWith(message);
+        if (json) {
+          expect(output).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+            ok: false,
+            phase: "options",
+            message,
+          });
+        } else {
+          expect(output).not.toHaveBeenCalled();
+        }
+        expect(capturedReplaceConfigFileCalls).toHaveLength(0);
+        expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("rejects concurrent onboarding runs sharing one state directory", async () => {
     await withStateDir("state-concurrent-onboard-", async (stateDir) => {
@@ -609,10 +729,17 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("emits structured JSON diagnostics when daemon health fails", async () => {
     await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
       gatewayReachableState.mock = vi.fn(async () => ({
         ok: false,
-        detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        detail: `gateway closed (1006 abnormal closure (no close frame)): ${registeredSecret}`,
       }));
+      readLastGatewayErrorLineMock.mockResolvedValueOnce(
+        `Gateway failed to start: required secrets are unavailable: ${registeredSecret}`,
+      );
 
       const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
       await expectOnboardLocalJsonSetupFailure({
@@ -651,6 +778,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
+      expect(readCapturedJson()).not.toContain(registeredSecret);
     });
   }, 60_000);
 
@@ -694,12 +822,22 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("routes thrown health-check errors through the onboarding failure owner", async () => {
     await withStateDir("state-local-health-failure-text-", async (stateDir) => {
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
       gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
-      healthCommandMock.mockRejectedValueOnce(new Error("health request timed out"));
+      healthCommandMock.mockRejectedValueOnce(
+        new Error(`health request timed out: ${registeredSecret}`),
+      );
 
-      await expect(
-        runNonInteractiveSetup(createOnboardLocalDaemonOptions(stateDir), runtime),
-      ).rejects.toThrow(/health check failed[\s\S]*health request timed out/);
+      const failure = await runNonInteractiveSetup(
+        createOnboardLocalDaemonOptions(stateDir),
+        runtime,
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toMatch(/health check failed[\s\S]*health request timed out/);
+      expect(String(failure)).not.toContain(registeredSecret);
     });
   }, 60_000);
 

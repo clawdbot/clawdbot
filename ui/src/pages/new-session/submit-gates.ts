@@ -37,6 +37,7 @@ type ReasonedSubmitGate =
   | "cloud"
   | "worktree-unavailable"
   | "worktree-name"
+  | "terminal-capabilities"
   | "terminal-folder";
 export type NewSessionSubmitBlock =
   | { gate: SilentSubmitGate; reason?: undefined }
@@ -49,6 +50,20 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
+  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
+  if (runtimeReason) {
+    return runtimeReason;
+  }
+  if (place.repository.kind === "checking") {
+    return t("newSession.checkingGit");
+  }
+  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+    return t("newSession.gitCheckUnavailable");
+  }
+  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;
@@ -59,6 +74,7 @@ type SubmitGateHost = {
   readonly submissionOutcomeUnknown: SubmissionOutcomeReason | null;
   readonly pendingAttachmentReads: number;
   readonly hasDraftAttachments: boolean;
+  readonly hasCapabilityOverrides: boolean;
   submissionSnapshot(): DraftSubmissionSnapshot;
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
@@ -123,6 +139,12 @@ export function resolveNewSessionSubmitBlock(
   if (!access.allowed) {
     return { gate: "access", reason: access.reason };
   }
+  if (kind === "terminal" && host.hasCapabilityOverrides) {
+    return {
+      gate: "terminal-capabilities",
+      reason: t("newSession.terminalCapabilityOverridesUnsupported"),
+    };
+  }
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };
   }
@@ -154,7 +176,7 @@ export function resolveNewSessionSubmitBlock(
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
-  if (place.deviceId && deviceRuntimeUnsupportedReason) {
+  if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const placementTarget = host.placementTargetForSubmission();

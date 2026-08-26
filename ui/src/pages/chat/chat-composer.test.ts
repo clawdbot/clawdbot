@@ -151,19 +151,19 @@ describe("renderChatComposer controls", () => {
     });
 
     expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim()).toBe(
       "Offline — 3 queued; messages send when the connection returns.",
     );
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
-    expect(empty.container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
-      "Offline — messages will be queued and sent when the connection returns.",
-    );
+    expect(
+      empty.container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim(),
+    ).toBe("Offline — messages will be queued and sent when the connection returns.");
 
     const online = renderComposer({ queuedOutboxCount: 3 });
-    expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
+    expect(online.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
   });
 
   it("replaces the composer with the archived-session notice", () => {
@@ -188,7 +188,11 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();
-    button(container, t("chat.runControls.stopGenerating")).click();
+    const stop = container.querySelector<HTMLButtonElement>(
+      `[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
+    expect(stop).not.toBeNull();
+    stop?.click();
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
@@ -211,13 +215,12 @@ describe("renderChatComposer controls", () => {
       draft: "a draft that hides the placeholder",
     });
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const reasonRow = container.querySelector<HTMLElement>(".agent-chat__disabled-reason");
-    expect(reasonRow?.textContent).toContain(reason);
-    expect(container.textContent?.split(reason)).toHaveLength(2);
-    expect(textarea?.placeholder).toBe(t("chat.composer.placeholder", { name: "OpenClaw" }));
-    expect(textarea?.disabled).toBe(true);
-    expect(textarea?.getAttribute("aria-describedby")?.split(" ")).toContain(reasonRow?.id);
+    // The placeholder carries the reason only for an empty composer; the
+    // dedicated reason row must keep the explanation visible alongside a draft.
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toContain(
+      reason,
+    );
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
@@ -266,9 +269,11 @@ describe("renderChatComposer controls", () => {
     expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
       "true",
     );
-    expect(items.find((item) => item.value === "studio-mic")?.querySelector("svg")?.innerHTML).toBe(
-      iconMarkup(icons.check),
-    );
+    expect(
+      items
+        .find((item) => item.value === "studio-mic")
+        ?.querySelector(".chat-talk-input-picker__check"),
+    ).not.toBeNull();
 
     items.find((item) => item.value === "headset")?.click();
     await dropdown?.updateComplete;
@@ -391,7 +396,6 @@ describe("renderChatComposer controls", () => {
     // type="checkbox" would make wa-dropdown-item paint its own leading check
     // and toggle it on click, so the row would show two disagreeing marks.
     expect(items.map((item) => item.getAttribute("type"))).toEqual(["normal", "normal"]);
-    expect(items.map((item) => item.querySelectorAll("svg").length)).toEqual([1, 0]);
     expect(items[0]?.querySelector(".chat-talk-input-picker__check")?.getAttribute("slot")).toBe(
       "details",
     );
@@ -649,6 +653,7 @@ describe("renderChatComposer status", () => {
     draw();
     let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
       updateComplete: Promise<unknown>;
+      props: { onCollapsedChange: (collapsed: boolean) => void };
     };
     await panel.updateComplete;
     expect(container.querySelector(".agent-chat__input")).toBeNull();
@@ -659,7 +664,7 @@ describe("renderChatComposer status", () => {
 
     composerProps.draft = "Host updated this draft while the question was open";
 
-    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
+    panel.props.onCollapsedChange(true);
     draw();
     await Promise.resolve();
     let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -667,7 +672,7 @@ describe("renderChatComposer status", () => {
     expect(document.activeElement).toBe(textarea);
 
     panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-    panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
+    panel.props.onCollapsedChange(false);
     draw();
     await panel.updateComplete;
     expect(container.querySelector(".agent-chat__input")).toBeNull();
@@ -727,7 +732,7 @@ describe("renderChatComposer status", () => {
 
     expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
   });
-  it("renders only a fresh interrupted run as visible status chrome", () => {
+  it("keeps terminal status out of the composer chrome", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({
       runStatus: { phase: "done", runId: "run-0", sessionKey: "main", occurredAt: 900 },
@@ -738,8 +743,9 @@ describe("renderChatComposer status", () => {
       runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 900 },
       composerControls: html`<button type="button">Settings</button>`,
     });
+    expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
     expect(
-      view.container.querySelector(".agent-chat__run-status--interrupted")?.textContent,
+      view.container.querySelector(".agent-chat__run-status-announcement")?.textContent,
     ).toContain("Interrupted");
 
     now.mockReturnValue(7_000);

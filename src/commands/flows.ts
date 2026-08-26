@@ -7,13 +7,14 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
+  isTerminalTaskFlow,
   TASK_FLOW_STATUSES,
   type TaskFlowRecord,
   type TaskFlowStatus,
@@ -23,8 +24,11 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { isTerminalFlowStatus } from "../tasks/task-registry-common.js";
-import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  formatTaskStatus,
+  formatTaskStatusDetail,
+  isTaskStatusIssue,
+} from "../tasks/task-status.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
@@ -118,14 +122,17 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
 }
 
 function formatFlowListSummary(flows: TaskFlowRecord[]) {
-  const active = flows.filter(
-    (flow) => flow.status === "queued" || flow.status === "running",
-  ).length;
-  const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  const cancelRequested = flows.filter(
-    (flow) => flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
-  ).length;
-  return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
+  const counts = { active: 0, waiting: 0, blocked: 0, issues: 0, cancelRequested: 0 };
+  for (const flow of flows) {
+    counts.active += Number(flow.status === "queued" || flow.status === "running");
+    counts.waiting += Number(flow.status === "waiting");
+    counts.blocked += Number(flow.status === "blocked");
+    counts.issues += Number(flow.status === "failed" || flow.status === "lost");
+    counts.cancelRequested += Number(flow.cancelRequestedAt != null && !isTerminalTaskFlow(flow));
+  }
+  const waiting = counts.waiting ? ` · ${counts.waiting} waiting` : "";
+  const issues = counts.issues ? ` · ${counts.issues} issues` : "";
+  return `${counts.active} active${waiting} · ${counts.blocked} blocked${issues} · ${counts.cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
 function summarizeWait(flow: TaskFlowRecord): string {
@@ -211,8 +218,13 @@ export async function flowsShowCommand(
 ) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(formatFlowLookupMiss(opts.lookup));
-    runtime.exit(1);
+    const message = formatFlowLookupMiss(opts.lookup);
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
     return;
   }
   const tasks = listTasksForFlowId(flow.flowId);
@@ -243,7 +255,7 @@ export async function flowsShowCommand(
     `createdAt: ${formatFlowTimestamp(flow.createdAt)}`,
     `updatedAt: ${formatFlowTimestamp(flow.updatedAt)}`,
     `endedAt: ${formatFlowTimestamp(flow.endedAt)}`,
-    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
+    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${tasks.filter(isTaskStatusIssue).length} issues`,
   ];
   for (const line of lines) {
     runtime.log(sanitizeTerminalText(line));
@@ -259,7 +271,7 @@ export async function flowsShowCommand(
     const safeDetail = detail ? ` · ${safeFlowDisplayText(detail)}` : "";
     runtime.log(
       sanitizeTerminalText(
-        `- ${task.taskId} ${task.status} ${safeFlowDisplayText(task.runId)} ${safeLabel}${safeDetail}`,
+        `- ${task.taskId} ${formatTaskStatus(task)} ${safeFlowDisplayText(task.runId)} ${safeLabel}${safeDetail}`,
       ),
     );
   }

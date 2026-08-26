@@ -39,7 +39,7 @@ describe("ModelSetupWizardRunner", () => {
       1,
       "openclaw.setup.auth.start",
       { sessionId: expect.any(String), agentId: "research", authChoice: "openai-oauth" },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      { timeoutMs: null },
     );
     expect(runner.state).toMatchObject({ phase: "step" });
     const answer = runner.answer(undefined, false);
@@ -119,7 +119,7 @@ describe("ModelSetupWizardRunner", () => {
       1,
       "openclaw.setup.prepare.start",
       { sessionId: expect.any(String), authChoice: "llama-cpp" },
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      { timeoutMs: null },
     );
     expect(runner.state).toMatchObject({
       phase: "step",
@@ -127,6 +127,295 @@ describe("ModelSetupWizardRunner", () => {
       step: { type: "progress" },
     });
   });
+
+  it.each([
+    ["openclaw.setup.auth.start", "cancel"],
+    ["openclaw.setup.auth.start", "settled cancel"],
+    ["openclaw.setup.auth.start", "close"],
+    ["openclaw.setup.prepare.start", "cancel"],
+    ["openclaw.setup.prepare.start", "settled cancel"],
+    ["openclaw.setup.prepare.start", "close"],
+  ] as const)(
+    "releases a late %s session after %s so setup can restart",
+    async (method, action) => {
+      let runningSession: string | null = null;
+      let firstSessionId = "";
+      let resolveFirstStart: () => void = () => {
+        throw new Error("the first setup request did not start");
+      };
+      let startCount = 0;
+      const request = vi.fn(
+        async (
+          requestMethod: string,
+          params?: { sessionId?: string },
+          options?: { signal?: AbortSignal },
+        ) => {
+          if (requestMethod === method) {
+            const sessionId = params?.sessionId;
+            if (!sessionId) {
+              throw new Error("missing setup session");
+            }
+            if (startCount++ === 0) {
+              firstSessionId = sessionId;
+              return await new Promise((resolve, reject) => {
+                options?.signal?.addEventListener(
+                  "abort",
+                  () => reject(new Error("Gateway retired the aborted start request")),
+                  { once: true },
+                );
+                resolveFirstStart = () => {
+                  runningSession = sessionId;
+                  resolve({ sessionId, done: false, status: "running" });
+                };
+              });
+            }
+            if (runningSession) {
+              throw new Error("wizard already running");
+            }
+            return { sessionId, done: true, status: "done" };
+          }
+          if (requestMethod === "wizard.cancel") {
+            if (runningSession !== params?.sessionId) {
+              throw new Error("wizard not found");
+            }
+            runningSession = null;
+            return { status: "cancelled" };
+          }
+          throw new Error(`unexpected request ${requestMethod}`);
+        },
+      );
+      const client = { request } as unknown as GatewayBrowserClient;
+      const runner = new ModelSetupWizardRunner({
+        getClient: () => client,
+        getAgentId: () => null,
+        onChange: () => undefined,
+        requestFailedMessage: () => "failed",
+        cancelledMessage: () => "cancelled",
+        sessionExpiredMessage: () => "expired",
+      });
+
+      const firstStart = runner.start("original", method);
+      if (action === "cancel") {
+        await runner.cancel();
+      } else if (action === "settled cancel") {
+        await runner.cancel({ settleActiveRequest: true });
+      } else {
+        runner.close();
+      }
+      resolveFirstStart();
+      await firstStart;
+
+      expect(runningSession).toBeNull();
+      expect(request).toHaveBeenCalledWith(
+        "wizard.cancel",
+        { sessionId: firstSessionId },
+        { timeoutMs: 30_000 },
+      );
+      await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
+      expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+    },
+  );
+
+  it.each([
+    ["openclaw.setup.auth.start", false],
+    ["openclaw.setup.prepare.start", false],
+    ["openclaw.setup.auth.start", true],
+    ["openclaw.setup.prepare.start", true],
+  ] as const)(
+    "retains late %s responses after the local deadline (terminal: %s)",
+    async (method, terminal) => {
+      vi.useFakeTimers();
+      try {
+        let runningSession: string | null = null;
+        let firstSessionId = "";
+        let resolveFirstStart: () => void = () => {
+          throw new Error("the first setup request did not start");
+        };
+        let startCount = 0;
+        const request = vi.fn(
+          async (
+            requestMethod: string,
+            params?: { sessionId?: string },
+            options?: { signal?: AbortSignal; timeoutMs?: number | null },
+          ) => {
+            if (requestMethod === method) {
+              const sessionId = params?.sessionId;
+              if (!sessionId) {
+                throw new Error("missing setup session");
+              }
+              if (startCount++ === 0) {
+                firstSessionId = sessionId;
+                return await new Promise((resolve, reject) => {
+                  options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                    once: true,
+                  });
+                  if (typeof options?.timeoutMs === "number") {
+                    setTimeout(
+                      () => reject(new Error("Gateway retired the timed-out request")),
+                      options.timeoutMs,
+                    );
+                  }
+                  resolveFirstStart = () => {
+                    if (!terminal) {
+                      runningSession = sessionId;
+                    }
+                    resolve({ sessionId, done: terminal, status: terminal ? "done" : "running" });
+                  };
+                });
+              }
+              if (runningSession) {
+                throw new Error("wizard already running");
+              }
+              return { sessionId, done: true, status: "done" };
+            }
+            if (requestMethod === "wizard.cancel") {
+              if (runningSession !== params?.sessionId) {
+                throw new Error("wizard not found");
+              }
+              runningSession = null;
+              return { status: "cancelled" };
+            }
+            throw new Error(`unexpected request ${requestMethod}`);
+          },
+        );
+        const client = { request } as unknown as GatewayBrowserClient;
+        const runner = new ModelSetupWizardRunner({
+          getClient: () => client,
+          getAgentId: () => null,
+          onChange: () => undefined,
+          requestFailedMessage: () => "failed",
+          cancelledMessage: () => "cancelled",
+          sessionExpiredMessage: () => "expired",
+        });
+
+        const timedOutStart = runner.start("original", method);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await timedOutStart;
+        expect(runner.state).toEqual({
+          phase: "error",
+          message: `gateway request timed out after 30000ms: ${method}`,
+        });
+
+        resolveFirstStart();
+        await vi.runAllTimersAsync();
+        expect(runningSession).toBeNull();
+        const cancelCalls = request.mock.calls.filter(
+          ([requestMethod]) => requestMethod === "wizard.cancel",
+        );
+        const lateCancelCalls = cancelCalls.filter(
+          ([, params]) => params?.sessionId === firstSessionId,
+        );
+        expect(lateCancelCalls).toHaveLength(terminal ? 1 : 2);
+
+        await runner.cancel();
+        await expect(runner.start("replacement", method)).resolves.toEqual({ startMethod: method });
+        expect(runner.state).toEqual({ phase: "done", authChoice: "replacement" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("cleans the original Gateway session without disturbing a replacement connection", async () => {
+    let originalSessionId = "";
+    let resolveOriginalStart: () => void = () => {
+      throw new Error("the original setup request did not start");
+    };
+    const originalRequest = vi.fn(
+      async (
+        method: string,
+        params?: { sessionId?: string },
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (method === "openclaw.setup.auth.start") {
+          originalSessionId = params?.sessionId ?? "";
+          return await new Promise((resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+            resolveOriginalStart = () =>
+              resolve({ sessionId: originalSessionId, done: false, status: "running" });
+          });
+        }
+        return { status: "cancelled" };
+      },
+    );
+    const replacementRequest = vi.fn(async (method: string, params?: { sessionId?: string }) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: params?.sessionId, done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return {
+          done: false,
+          status: "running",
+          step: { id: "replacement", type: "text", message: "Replacement setup" },
+        };
+      }
+      throw new Error(`unexpected replacement request ${method}`);
+    });
+    const originalClient = { request: originalRequest } as unknown as GatewayBrowserClient;
+    const replacementClient = { request: replacementRequest } as unknown as GatewayBrowserClient;
+    let currentClient = originalClient;
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => currentClient,
+      getAgentId: () => null,
+      onChange: () => undefined,
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
+    });
+
+    const originalStart = runner.start("original");
+    runner.close();
+    currentClient = replacementClient;
+    await runner.start("replacement");
+    resolveOriginalStart();
+    await originalStart;
+
+    expect(originalRequest).toHaveBeenCalledWith(
+      "wizard.cancel",
+      { sessionId: originalSessionId },
+      { timeoutMs: 30_000 },
+    );
+    expect(replacementRequest.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(
+      false,
+    );
+    expect(runner.state).toMatchObject({ phase: "step", authChoice: "replacement" });
+  });
+
+  it.each(["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const)(
+    "does not cancel a terminal %s result after its wizard closes",
+    async (method) => {
+      let resolveStart: () => void = () => {
+        throw new Error("the setup request did not start");
+      };
+      const request = vi.fn(async (requestMethod: string) => {
+        if (requestMethod === method) {
+          return await new Promise((resolve) => {
+            resolveStart = () => resolve({ done: true, status: "done" });
+          });
+        }
+        throw new Error(`unexpected request ${requestMethod}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const runner = new ModelSetupWizardRunner({
+        getClient: () => client,
+        getAgentId: () => null,
+        onChange: () => undefined,
+        requestFailedMessage: () => "failed",
+        cancelledMessage: () => "cancelled",
+        sessionExpiredMessage: () => "expired",
+      });
+
+      const start = runner.start("original", method);
+      runner.close();
+      resolveStart();
+      await start;
+
+      expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual([method]);
+      expect(runner.state).toEqual({ phase: "idle" });
+    },
+  );
 
   it("clears an expired session and abort without cancelling or replaying the answer", async () => {
     let nextCount = 0;

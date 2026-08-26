@@ -91,7 +91,7 @@ export function extractThinkingCached(message: unknown): string | null {
   return value;
 }
 
-export function extractRawText(message: unknown): string | null {
+function extractRawText(message: unknown): string | null {
   if (message == null) {
     return null;
   }

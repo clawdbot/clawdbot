@@ -102,6 +102,7 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "users.setRole",
   "desktop.observe",
   "desktop.launch",
   "device.scopes.requestUpgrade",

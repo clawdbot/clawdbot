@@ -533,6 +533,14 @@ describe("sessions tool", () => {
           }),
         }),
       );
+      expect(events).not.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            customType: "openclaw.system-note",
+            excludeFromContext: expect.anything(),
+          }),
+        }),
+      );
     });
   });
 

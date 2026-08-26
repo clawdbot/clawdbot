@@ -198,6 +198,7 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     [{ key: "agent:main:thread", profileId: "development" }, "operator.admin"],
     [{ key: "agent:main:thread", profileId: "   " }, "operator.admin"],
     [{ key: "agent:main:thread", deviceId: "device-1" }, "operator.write"],
+    [{ key: "agent:main:thread", autoDevice: true }, "operator.write"],
     [
       { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
       "operator.write",

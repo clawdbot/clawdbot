@@ -44,7 +44,7 @@ function installStartupPaintShell(window: TestWindow, html: string): void {
 
   const startupScript = Array.from(
     parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
-  ).find((script) => script.textContent?.includes("var THEMES = { claw: 1, knot: 1, dash: 1 }"));
+  ).find((script) => script.textContent?.includes("var THEMES = {"));
   if (!startupScript?.textContent) {
     throw new Error("Expected inline startup theme script in index.html");
   }
@@ -96,6 +96,18 @@ describe("Control UI mount fallback", () => {
     ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
     ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
     ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+    [
+      "Absolutely dark",
+      { theme: "absolutely", themeMode: "dark" },
+      "absolutely",
+      "rgb(38, 38, 36)",
+    ],
+    [
+      "Absolutely light",
+      { theme: "absolutely", themeMode: "light" },
+      "absolutely-light",
+      "rgb(250, 249, 245)",
+    ],
   ])(
     "paints %s before the app stylesheet loads",
     async (_name, settings, expectedTheme, expectedBackground) => {
@@ -216,13 +228,21 @@ describe("Control UI mount fallback", () => {
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const unregister = vi.fn().mockResolvedValue(true);
+    const getRegistrations = vi.fn().mockResolvedValue([{ unregister }]);
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    Object.defineProperty(frameWindow.navigator, "serviceWorker", {
+      configurable: true,
+      value: { getRegistrations },
+    });
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalled());
     await waitForWindowTimeout(frameWindow, 10);
 
     expect(fetch).toHaveBeenCalledTimes(6);
+    expect(getRegistrations).toHaveBeenCalled();
     expect(
       requireElementById(
         frameWindow,

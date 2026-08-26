@@ -91,6 +91,7 @@ export function createApplicationGateway(
     ...(options.bootstrapProfile ? { bootstrapProfile: options.bootstrapProfile } : {}),
     password: initialPassword,
   };
+  let connectionRevision = 0;
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "stopped",
@@ -293,6 +294,7 @@ export function createApplicationGateway(
       nextConnection.bootstrapToken !== connection.bootstrapToken ||
       nextConnection.bootstrapProfile !== connection.bootstrapProfile;
     if (credentialsChanged) {
+      connectionRevision += 1;
       void clearStoredChatSnapshots();
     }
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
@@ -542,6 +544,9 @@ export function createApplicationGateway(
     get connection() {
       return connection;
     },
+    get connectionRevision() {
+      return connectionRevision;
+    },
     get eventLog() {
       return eventLog;
     },
@@ -613,15 +618,15 @@ function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | nu
   return trimmed ? trimmed : null;
 }
 
-function readSessionDefaults(
+export function readSessionDefaults(
   hello: GatewayHelloOk,
-): { defaultAgentId?: string | null } | undefined {
+): { defaultAgentId?: string | null; modelConfigured?: boolean } | undefined {
   const snapshot = hello.snapshot;
   if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
     return undefined;
   }
   const defaults = snapshot.sessionDefaults;
   return defaults && typeof defaults === "object"
-    ? (defaults as { defaultAgentId?: string | null })
+    ? (defaults as { defaultAgentId?: string | null; modelConfigured?: boolean })
     : undefined;
 }

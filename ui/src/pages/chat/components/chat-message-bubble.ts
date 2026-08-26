@@ -41,7 +41,7 @@ import {
   renderAssistantMessageMarkdown,
   renderMarkdownText,
   renderUserMessageMarkdown,
-  resolveNormalizedMessageMarkdown,
+  resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-markdown.ts";
 import {
@@ -64,7 +64,6 @@ import {
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
-  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 
@@ -282,8 +281,8 @@ export function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const actionText = opts.actionMarkdown ?? extractedText;
+  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const actionText = opts.actionMarkdown ?? displayMarkdown;
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
@@ -294,7 +293,7 @@ export function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = extractedText?.trim() ? extractedText : null;
+  const markdown = displayMarkdown ? displayMarkdown : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -503,11 +502,9 @@ export function renderGroupedMessage(
                 @focus=${syncToolDisclosureOverflow}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
-                    toggleToolDisclosureKeepingScroll(event, () =>
-                      opts.onToggleToolMessageExpanded?.(
-                        toolMessageDisclosureId,
-                        toolMessageExpanded,
-                      ),
+                    opts.onToggleToolMessageExpanded?.(
+                      toolMessageDisclosureId,
+                      toolMessageExpanded,
                     );
                   }
                 }}
@@ -642,6 +639,7 @@ export function renderGroupedMessage(
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
+                        opts.isStreaming ? messageKey : undefined,
                       )
                     : renderMarkdownText(
                         bodyMarkdown,

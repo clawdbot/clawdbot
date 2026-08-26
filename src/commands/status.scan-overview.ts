@@ -1,6 +1,7 @@
 // Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
+import type { BestEffortConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -76,6 +77,7 @@ export type StatusScanOverviewResult = {
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   secretDiagnostics: string[];
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
@@ -125,7 +127,6 @@ export async function collectStatusScanOverview(params: {
   channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
-  skipConfigPluginValidation?: boolean;
   includeAdvertisedControlUiLinks?: boolean;
   progress?: {
     setLabel(label: string): void;
@@ -149,16 +150,22 @@ export async function collectStatusScanOverview(params: {
     coldStart,
     sourceConfig,
     resolvedConfig: cfg,
+    configDiagnostics,
     secretDiagnostics,
   } = await loadStatusScanCommandConfig({
     env,
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readConfigSnapshot: async () =>
-      (await configModuleLoader.load()).readBestEffortConfigSnapshot({
-        observe: false,
-        skipPluginValidation: params.skipConfigPluginValidation,
-      }),
+    readConfigSnapshot: async () => {
+      const { snapshot } = await (
+        await import("../cli/command-config-snapshot.js")
+      ).readCommandConfigSnapshot({ observe: false, skipPluginValidation: true });
+      return {
+        config: snapshot.runtimeConfig,
+        sourceConfig: snapshot.sourceConfig,
+        configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
+      };
+    },
     resolveConfig: async (loadedConfig) =>
       await (
         await commandConfigResolutionModuleLoader.load()
@@ -326,6 +333,7 @@ export async function collectStatusScanOverview(params: {
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,
     sourceConfig,
+    configDiagnostics,
     secretDiagnostics,
     osSummary,
     tailscaleMode: bootstrap.tailscaleMode,

@@ -15,7 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { resolveTerminalAssistantTranscriptRunId } from "../../sessions/transcript-events.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import {
@@ -321,8 +324,11 @@ async function applyWorkerTranscriptCommit(params: {
   sessionId: string;
   target: ResolvedWorkerSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const redactedMessages = params.messages.map(
-    (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+  const redactedMessages = params.messages.map((message) =>
+    attachSessionTranscriptRunId(
+      redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+      params.runId,
+    ),
   );
   const expectedState = {
     sessionId: params.sessionId,

@@ -2,7 +2,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  clearActiveCredentialDegradedOwner,
+  setActiveCredentialDegradedOwner,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -183,7 +187,7 @@ vi.mock("../routing/session-key.js", async () => {
     LEGACY_IMPLICIT_AGENT_ID: "main",
     normalizeAgentId: vi.fn((value: string) => value),
     normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
-    parseAgentSessionKey: vi.fn(() => null),
+    parseAgentSessionKey: vi.fn(actual.parseAgentSessionKey),
   };
 });
 
@@ -219,6 +223,7 @@ describe("getStatusSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setActiveDegradedPlugins([]);
+    clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
     statusSummaryMocks.taskRegistrySummary = {
       total: 0,
@@ -406,28 +411,44 @@ describe("getStatusSummary", () => {
     });
   });
 
-  it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
+  it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
     setActiveDegradedSecretOwners([
       {
-        ownerKind: "account",
-        ownerId: "discord:ops",
+        ownerKind: "provider",
+        ownerId: "openai",
         state: "unavailable",
-        degradationState: "cold",
-        paths: ["channels.discord.accounts.ops.token"],
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
         reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
       },
     ]);
+    setActiveCredentialDegradedOwner({
+      ownerKind: "account",
+      ownerId: "telegram:work",
+      state: "unavailable",
+      paths: ["channels.telegram.accounts.work.tokenFile"],
+      refKeys: [],
+      reason: "credential failure includes PRIVATE_REF_ID",
+    });
 
     const summary = await getStatusSummary();
 
     expect(summary.degradedSecretOwners).toEqual([
       {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
+        reason: "secret resolution failed",
+      },
+      {
         ownerKind: "account",
-        ownerId: "discord:ops",
+        ownerId: "telegram:work",
         state: "unavailable",
         degradationState: "cold",
-        paths: ["channels.discord.accounts.ops.token"],
+        paths: ["channels.telegram.accounts.work.tokenFile"],
         reason: "secret resolution failed",
       },
     ]);
@@ -1050,5 +1071,24 @@ describe("getStatusSummary", () => {
         model: "claude-opus-4-8",
       }),
     );
+  });
+
+  it("resolves aggregate selected models from each row's agent", async () => {
+    const models: Record<string, string> = { ops: "ops", research: "research" };
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation(
+      (_cfg, _entry, id) => ({ provider: "openai", model: models[id ?? ""] ?? "global" }),
+    );
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },
+        "agent:research:main": { sessionId: "research-session", updatedAt: 2 },
+        main: { sessionId: "global-session", updatedAt: 1 },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+    const selected = summary.sessions.recent.map(({ selectedModel }) => selectedModel);
+
+    expect(selected).toEqual(["openai/ops", "openai/research", "openai/global"]);
   });
 });

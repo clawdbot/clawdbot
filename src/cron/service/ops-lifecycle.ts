@@ -213,6 +213,7 @@ export async function start(state: CronServiceState): Promise<void> {
 
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
+  state.lifecycleGeneration += 1;
   state.stopped = true;
   cancelCronRunAdmissionWaiters(state);
   state.schedulerStarted = false;

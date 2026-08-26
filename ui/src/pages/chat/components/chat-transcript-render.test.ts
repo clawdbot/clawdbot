@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -37,6 +38,141 @@ function touchPointerUp(element: Element): void {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
+    const sessionKey = "agent:main:archived-notice";
+    const archivedSession: GatewaySessionRow = {
+      key: sessionKey,
+      kind: "direct",
+      updatedAt: 2_000,
+      archived: true,
+      archivedAt: 2_000,
+      archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+    };
+    const sessions: SessionsListResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [archivedSession],
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-archived-notice", sessionKey, [
+        { role: "user", content: "Before archive", timestamp: 1_000 },
+        { role: "assistant", content: "After archive", timestamp: 3_000 },
+      ]),
+      sessions,
+    };
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+
+    const notice = requireElement(container, ".chat-notice");
+    expect(notice.textContent).toContain("Archived by Ada");
+    expect(notice.dataset.ts).toBe("2000");
+    expect(notice.querySelector(".chat-bubble")).toBeNull();
+    expect(container.querySelectorAll(".chat-bubble")).toHaveLength(2);
+    expect(
+      [...container.querySelectorAll(".chat-virtual-row")].map((row) =>
+        row.querySelector(".chat-notice") ? "notice" : "message",
+      ),
+    ).toEqual(["message", "notice", "message"]);
+
+    sessions.sessions[0] = {
+      ...archivedSession,
+      archivedBy: { type: "human", id: "profile-bob" },
+    };
+    rerender();
+    expect(requireElement(container, ".chat-notice").textContent).toContain(
+      "Archived by profile-bob",
+    );
+
+    sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
+    rerender();
+    expect(container.querySelector(".chat-notice")).toBeNull();
+
+    sessions.sessions[0] = {
+      ...archivedSession,
+      archived: false,
+      archivedAt: undefined,
+      archivedBy: undefined,
+    };
+    rerender();
+    expect(container.querySelector(".chat-notice")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it("renders interrupted status after a partial assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted", "agent:main:main", [
+        {
+          role: "user",
+          content: "Start the task",
+          timestamp: 1_000,
+          __openclaw: { idempotencyKey: "run-1:user" },
+        },
+        { role: "assistant", content: "Partial response", timestamp: 2_000 },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        occurredAt: 3_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
+    expect(status.textContent).toContain("Interrupted");
+    expect(status.closest(".chat-group")).toBeNull();
+    transcript.hostDisconnected();
+  });
+
+  it("renders interrupted status after the current turn when it has no assistant reply", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-interrupted-empty", "agent:main:main", [
+        { role: "user", content: "Earlier task", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+        {
+          role: "user",
+          content: "Stop this task",
+          timestamp: 3_000,
+          __openclaw: { idempotencyKey: "run-2:user" },
+        },
+      ]),
+      runStatus: {
+        phase: "interrupted" as const,
+        runId: "run-2",
+        sessionKey: "agent:main:main",
+        occurredAt: 4_000,
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const status = requireElement(container, ".chat-turn-terminal-status--interrupted");
+    expect(status.textContent).toContain("Interrupted");
+    expect(status.closest(".chat-group")).toBeNull();
+    expect(container.querySelector(".chat-group.assistant")?.contains(status)).toBe(false);
+    transcript.hostDisconnected();
+  });
 
   it("reveals touched metadata across stored and live groups within one transcript", async () => {
     const firstTranscript = createTestTranscript();
@@ -256,7 +392,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1" },
+          __openclaw: { id: "assistant-full-1", truncated: true },
           timestamp: 1_000,
         },
       ]),
@@ -274,7 +410,6 @@ describe("chat transcript rendering", () => {
       sessionKey: "agent:work:main",
       agentId: "work",
       messageId: "assistant-full-1",
-      kind: "assistant_message",
     });
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -296,7 +431,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1" },
+          __openclaw: { id: "assistant-retry-1", truncated: true },
           timestamp: 1_000,
         },
       ]),

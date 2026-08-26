@@ -8,6 +8,10 @@ import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js"
 import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
+  isEmbeddedRunTerminalToolFailure,
+} from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
@@ -197,10 +201,6 @@ export async function finalizeCronRun(params: {
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
-    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
-      input_tokens: input,
-      output_tokens: output,
-    };
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
     // Keep telemetry totals consistent when a provider reports only a partial
     // aggregate alongside the normalized billing buckets.
@@ -208,9 +208,13 @@ export async function finalizeCronRun(params: {
       typeof usage.total === "number" && Number.isFinite(usage.total)
         ? Math.max(bucketTotalTokens, usage.total)
         : bucketTotalTokens;
-    if (aggregateTotalTokens > 0) {
-      telemetryUsage.total_tokens = aggregateTotalTokens;
-    }
+    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+      input_tokens: input,
+      output_tokens: output,
+      ...(aggregateTotalTokens > 0 ? { total_tokens: aggregateTotalTokens } : {}),
+      ...(cacheRead > 0 ? { cache_read_tokens: cacheRead } : {}),
+      ...(cacheWrite > 0 ? { cache_write_tokens: cacheWrite } : {}),
+    };
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
@@ -349,6 +353,11 @@ export async function finalizeCronRun(params: {
     hasFatalErrorPayload,
     embeddedRunError,
   } = cronPayloadOutcome;
+  const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
+  const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
+  if (hasFatalErrorPayload && hasTerminalToolFailure) {
+    summary = CODE_MODE_MCP_CATALOG_MISS_MESSAGE;
+  }
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -372,7 +381,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload
+        hasFatalErrorPayload && !hasTerminalToolFailure
           ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",

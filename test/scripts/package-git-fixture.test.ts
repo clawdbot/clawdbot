@@ -21,6 +21,7 @@ describe("package git fixture", () => {
           scripts: {
             build: "node build.mjs",
             openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           },
         },
         null,
@@ -98,6 +99,7 @@ describe("package git fixture", () => {
           scripts: {
             lint: "node lint.mjs",
             openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           },
         },
         null,
@@ -113,12 +115,9 @@ describe("package git fixture", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    expect(packageJson).toMatchObject({
-      dependencies: { chalk: "5.6.2" },
-      scripts: {
-        lint: "node lint.mjs",
-        openclaw: "node openclaw.mjs",
-      },
+    expect(packageJson.scripts).toEqual({
+      lint: "node lint.mjs",
+      openclaw: "node openclaw.mjs",
     });
     expect(packageJson.dependencies).not.toHaveProperty("@openclaw/ai");
   });

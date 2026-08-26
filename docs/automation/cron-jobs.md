@@ -75,6 +75,8 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
 | `on-exit` | `--on-exit`        | Fire once when a watched command exits (event trigger; survives turn teardown; optional `--on-exit-cwd`) |
 | `stream`  | `--stream-command` | Fire from batched lines produced by a supervised long-lived command                                      |
 
+These schedule flags work with both `openclaw automations add` and `openclaw automations edit <job-id>`. For example, `openclaw automations edit <job-id> --on-exit "./watch.sh" --on-exit-cwd /srv/app` converts an existing job to an exit-triggered schedule.
+
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
@@ -323,7 +325,7 @@ Agent-turn jobs default to the creating conversation when the create request car
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
@@ -557,6 +559,14 @@ Model override note:
 
 Gateway can expose HTTP webhook endpoints for external triggers. Enable in config:
 
+A configured mapping `id` is retained only as bounded ingress-source
+attribution when that mapping reaches agent admission. It is not an
+authenticated service principal or invoker. Direct `/hooks/agent` and requests
+authenticated only by the shared hook token stay unattributed unless another
+authoritative principal source exists. If a transform returns `null`, the
+request keeps its visible HTTP 204 outcome and stops before creating a run,
+task, execution identity, or audit receipt.
+
 ```json5
 {
   hooks: {
@@ -624,12 +634,12 @@ Query-string tokens are rejected.
     - Supplying both a concrete `channel` and `to` enables direct announce delivery.
     - Set `accountId` with `channel` and `to` to select a configured, enabled account on multi-account channels. Unknown, disabled, or invalid account IDs return `400` and schedule no run.
 
-    The HTTP response waits only for runner admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the run entered its agent runner. Pre-run failures return `{ ok: false, error, runId }` with:
+    The HTTP response waits only for canonical session/global placement admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the execution path acquired that admission; the run may still be preparing its model runtime. Pre-admission failures return `{ ok: false, error, runId }` with:
 
     - `400` when delivery coordinates or account selection are invalid; correct the request before retrying.
     - `409` when the target session changed or otherwise rejects new work; retry after resolving the session conflict.
-    - `502` when Gateway or cron preparation fails before runner entry.
-    - `503` when runner admission does not complete within 15 seconds. Timed-out queued work is canceled and does not start later.
+    - `502` when Gateway or cron preparation fails before placement admission.
+    - `503` when placement admission does not occur within 15 seconds. Timed-out queued work is canceled and does not start later.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

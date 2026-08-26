@@ -162,7 +162,7 @@ export function resolveSkillCommandInvocation(params: {
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
   const normalizedArgs = args?.trim() ?? "";
   const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
+    ? template.replaceAll("$ARGUMENTS", () => normalizedArgs)
     : template;
   if (!normalizedArgs || template.includes("$ARGUMENTS")) {
     return rendered.trim();

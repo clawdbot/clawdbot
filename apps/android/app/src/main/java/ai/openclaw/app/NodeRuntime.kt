@@ -72,7 +72,6 @@ import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CameraHandler
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.ContactsHandler
-import ai.openclaw.app.node.DEFAULT_SEAM_COLOR_ARGB
 import ai.openclaw.app.node.DebugHandler
 import ai.openclaw.app.node.DeviceHandler
 import ai.openclaw.app.node.DeviceNotificationListenerService
@@ -91,8 +90,8 @@ import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
-import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
+import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
@@ -178,6 +177,8 @@ private const val CRON_JOBS_PAGE_SIZE = 200
 private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
+private const val USAGE_INCOMPLETE_RETRY_DELAY_MS = 5_000L
+private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
 
@@ -1185,8 +1186,8 @@ class NodeRuntime private constructor(
   private val _gatewayUpdateAvailable = MutableStateFlow<GatewayUpdateAvailableSummary?>(null)
   val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = _gatewayUpdateAvailable.asStateFlow()
 
-  private val _seamColorArgb = MutableStateFlow(DEFAULT_SEAM_COLOR_ARGB)
-  val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
+  private val _gatewayAccentArgb = MutableStateFlow<Long?>(null)
+  val gatewayAccentArgb: StateFlow<Long?> = _gatewayAccentArgb.asStateFlow()
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
   private val _providerModelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
@@ -1254,6 +1255,8 @@ class NodeRuntime private constructor(
   val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
   private val _usageErrorText = MutableStateFlow<NativeText?>(null)
   val usageErrorText: StateFlow<String?> = _usageErrorText.resolveOptionalNativeText()
+  private val usageRefreshGuard = LatestGatewayRefreshGuard()
+  private var usageIncompleteRetryJob: Job? = null
   private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
   val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
   private val _skillsRefreshing = MutableStateFlow(false)
@@ -1334,6 +1337,9 @@ class NodeRuntime private constructor(
   @Volatile internal var gatewayDataRequestTimeoutObserverForTests: ((method: String, timeoutMs: Long) -> Unit)? = null
 
   @Volatile internal var clawHubSkillInstallBeforeClaimObserverForTests: (() -> Unit)? = null
+
+  @Volatile internal var usageIncompleteRetryDelayMsForTests: Long? = null
+
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
@@ -1407,7 +1413,7 @@ class NodeRuntime private constructor(
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
-        _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+        _gatewayAccentArgb.value = null
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         // Create/adopt before history refresh; this keeps the first connected read on the
@@ -1426,6 +1432,7 @@ class NodeRuntime private constructor(
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshBrandingFromGateway()
           refreshWakeWordsFromGateway()
           refreshExecApprovalsFromGateway()
           if (voiceReplySpeakerLazy.isInitialized()) {
@@ -1676,7 +1683,7 @@ class NodeRuntime private constructor(
     replaceGatewayMethods(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
-    _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+    _gatewayAccentArgb.value = null
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
@@ -1702,6 +1709,8 @@ class NodeRuntime private constructor(
     if (retirePendingCronRuns) {
       pendingCronRunRegistry.clear { _pendingCronRunJobIds.value = it }
     }
+    usageIncompleteRetryJob?.cancel()
+    usageRefreshGuard.invalidate()
     _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
     _usageRefreshing.value = false
     _usageErrorText.value = null
@@ -5532,11 +5541,9 @@ class NodeRuntime private constructor(
       val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
-      val ui = config?.get("ui").asObjectOrNull()
-      val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val parsed = parseHexColorArgb(raw)
+      val parsed = resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
-        _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
+        _gatewayAccentArgb.value = parsed
       }
     } catch (_: Throwable) {
       // ignore
@@ -6085,20 +6092,85 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshUsageFromGateway() =
-    refreshGatewaySummary(
-      summary = _usageSummary,
-      refreshing = _usageRefreshing,
-      errorText = _usageErrorText,
-      disconnectedSummary = GatewayUsageSummary(updatedAtMs = null, providers = emptyList()),
-      failureText = nativeText("Could not load usage."),
-    ) { gatewayScope ->
-      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
-      GatewayUsageSummary(
-        updatedAtMs = root.long("updatedAt"),
-        providers = parseUsageProviders(root?.get("providers") as? JsonArray),
-      )
+  private suspend fun refreshUsageFromGateway() {
+    usageIncompleteRetryJob?.cancel()
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val refreshGeneration = usageRefreshGuard.begin()
+    if (refreshUsageOnceFromGateway(gatewayScope, refreshGeneration) && _usageSummary.value.refreshing) {
+      scheduleIncompleteUsageRetry(gatewayScope, refreshGeneration)
     }
+  }
+
+  private fun publishUsageRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    publish: () -> Unit,
+  ): Boolean {
+    var refreshCurrent = false
+    val scopeCurrent =
+      publishGatewayData(gatewayScope) {
+        refreshCurrent = usageRefreshGuard.publishIfCurrent(refreshGeneration, publish)
+      }
+    return scopeCurrent && refreshCurrent
+  }
+
+  private suspend fun refreshUsageOnceFromGateway(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+  ): Boolean {
+    publishUsageRefresh(gatewayScope, refreshGeneration) {
+      _usageRefreshing.value = true
+      _usageErrorText.value = null
+    }
+    if (!operatorConnected) {
+      return publishUsageRefresh(gatewayScope, refreshGeneration) {
+        _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+        _usageRefreshing.value = false
+      }
+    }
+    return try {
+      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
+      val nextSummary =
+        GatewayUsageSummary(
+          updatedAtMs = root.long("updatedAt"),
+          providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+          refreshing = root.boolean("refreshing"),
+        )
+      publishUsageRefresh(gatewayScope, refreshGeneration) { _usageSummary.value = nextSummary }
+    } catch (_: Throwable) {
+      publishUsageRefresh(gatewayScope, refreshGeneration) {
+        // Preserve same-identity provider rows across a transient refresh failure.
+        _usageSummary.value = _usageSummary.value.copy(refreshing = false)
+        _usageErrorText.value = nativeText("Could not load usage.")
+      }
+    } finally {
+      publishUsageRefresh(gatewayScope, refreshGeneration) { _usageRefreshing.value = false }
+    }
+  }
+
+  private fun scheduleIncompleteUsageRetry(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+  ) {
+    // Mirrors the shared clients: three delayed retries, cancelled by a new cycle or gateway.
+    usageIncompleteRetryJob?.cancel()
+    usageIncompleteRetryJob =
+      scope.launch {
+        repeat(USAGE_INCOMPLETE_RETRY_LIMIT) {
+          delay(usageIncompleteRetryDelayMsForTests ?: USAGE_INCOMPLETE_RETRY_DELAY_MS)
+          if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
+          if (!refreshUsageOnceFromGateway(gatewayScope, refreshGeneration)) return@launch
+          if (!_usageSummary.value.refreshing) return@launch
+        }
+        publishUsageRefresh(gatewayScope, refreshGeneration) {
+          // Clearing the marker alone renders as "No usage data yet.", which claims
+          // the operator has no providers. Reuse the transient-failure text so a
+          // spent retry budget reads as the load failure it is.
+          _usageSummary.value = _usageSummary.value.copy(refreshing = false)
+          _usageErrorText.value = nativeText("Could not load usage.")
+        }
+      }
+  }
 
   private suspend fun refreshSkillsFromGateway(): Boolean =
     refreshGatewaySummary(
@@ -8330,10 +8402,10 @@ internal fun gatewayRegistryEntry(
     )
   }
 
-/** HTTP(S) origin serving the connected gateway's Control UI pages. */
+/** HTTP(S) base URL serving the connected gateway's Control UI pages. */
 internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
   val scheme = if (endpoint.tlsEnabled) "https" else "http"
-  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
+  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}"
 }
 
 data class GatewayModelSummary(
@@ -8407,6 +8479,7 @@ data class GatewayCronJobSummary(
 data class GatewayUsageSummary(
   val updatedAtMs: Long?,
   val providers: List<GatewayUsageProviderSummary>,
+  val refreshing: Boolean = false,
 )
 
 data class GatewayUsageProviderSummary(

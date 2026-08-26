@@ -620,9 +620,19 @@ describe("cron cli", () => {
     },
   );
 
-  it("reduces each history RPC timeout as the cron run wait budget elapses", async () => {
+  it.each([
+    { name: "without a system clock jump", clockJumpMs: 0 },
+    { name: "after the system clock jumps forward", clockJumpMs: 3_600_000 },
+    { name: "after the system clock jumps backward", clockJumpMs: -3_600_000 },
+  ])("reduces each history RPC timeout $name", async ({ clockJumpMs }) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-27T12:00:00.000Z"));
+    const monotonicNow = performance.now.bind(performance);
+    let monotonicSample = 0;
+    vi.spyOn(performance, "now").mockImplementation(
+      () => monotonicNow() + ++monotonicSample / 1_000,
+    );
+    const startedAt = new Date("2026-07-27T12:00:00.000Z");
+    vi.setSystemTime(startedAt);
 
     const pendingRun = runCronRunAndCaptureExit({
       enqueued: true,
@@ -644,6 +654,7 @@ describe("cron cli", () => {
     expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
       1,
     );
+    vi.setSystemTime(new Date(startedAt.getTime() + clockJumpMs));
     await vi.advanceTimersByTimeAsync(25);
 
     const { calls, exitSpy, runOpts } = await pendingRun;
@@ -654,6 +665,7 @@ describe("cron cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(runOpts.timeout).toBe("600000");
     expect(pollTimeouts).toHaveLength(2);
+    expect(pollTimeouts.every(Number.isSafeInteger)).toBe(true);
     expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
     expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
     expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);

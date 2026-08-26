@@ -1,10 +1,7 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
-import {
-  buildGatewaySessionEventFields,
-  projectSessionEventActiveRunIds,
-} from "../session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
@@ -96,18 +93,12 @@ function broadcastSessionsChanged(
       ts: Date.now(),
       ...(sessionRow
         ? {
-            ...buildGatewaySessionEventFields({
+            ...buildGatewaySessionSnapshot({
               sessionRow,
               agentId: effectiveAgentId,
+              activeRunState,
               status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
-              hasActiveRun: activeRunState?.active,
-              activeRunIds: projectSessionEventActiveRunIds(activeRunState),
             }),
-            effectiveFastMode: sessionRow.effectiveFastMode,
-            effectiveFastModeSource: sessionRow.effectiveFastModeSource,
-            fastAutoOnSeconds: sessionRow.fastAutoOnSeconds,
-            traceLevel: sessionRow.traceLevel,
-            pluginExtensions: sessionRow.pluginExtensions,
           }
         : {}),
     },

@@ -15,6 +15,7 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
+import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -787,19 +788,12 @@ export async function prepareBundledAiRuntimePackage(
     if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
       throw new Error("packed @openclaw/ai package must declare a version");
     }
-    for (const [name, version] of Object.entries(stagedPackageJson.dependencies ?? {})) {
-      if (typeof version !== "string") {
-        throw new Error(`packed @openclaw/ai dependency ${name} must declare a string version`);
-      }
-      if (version === "0.0.0-private") {
-        continue;
-      }
-      const rootVersion = packageJson.dependencies?.[name];
-      if (rootVersion !== version && rootVersion !== `workspace:${version}`) {
-        throw new Error(
-          `root package.json must declare ${name}@${version} to bundle @openclaw/ai without duplicate dependencies`,
-        );
-      }
+    const alignedDependencies = validateBundledPackageDependencyAlignment({
+      bundledDependencies: stagedPackageJson.dependencies,
+      bundledPackageLabel: "packed @openclaw/ai",
+      rootDependencies: packageJson.dependencies,
+    });
+    for (const [name, version] of alignedDependencies) {
       packageJson.dependencies![name] = version;
     }
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from

@@ -332,7 +332,7 @@ describe("github-copilot plugin", () => {
     });
   });
 
-  it("owns Claude replay thinking cleanup", () => {
+  it("owns session-bound replay thinking cleanup", () => {
     const provider = registerProviderWithPluginConfig({});
     const messages = [
       {
@@ -345,12 +345,19 @@ describe("github-copilot plugin", () => {
       },
     ];
 
-    expect(provider.buildReplayPolicy?.({ modelId: "claude-haiku-4.5" } as never)).toEqual({
+    expect(
+      provider.buildReplayPolicy?.({
+        modelId: "claude-haiku-4.5",
+        modelApi: "anthropic-messages",
+      } as never),
+    ).toMatchObject({
       dropThinkingBlocks: true,
+      validateAnthropicTurns: true,
     });
     expect(
       provider.sanitizeReplayHistory?.({
         modelId: "claude-haiku-4.5",
+        modelApi: "anthropic-messages",
         messages,
       } as never),
     ).toEqual([
@@ -361,6 +368,19 @@ describe("github-copilot plugin", () => {
     ]);
     expect(
       provider.sanitizeReplayHistory?.({
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+        messages,
+      } as never),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ]);
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelApi: "openai-completions",
         modelId: "gpt-5.4",
         messages,
       } as never),
@@ -413,6 +433,34 @@ describe("github-copilot plugin", () => {
 
     expect(result).toBeNull();
     expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not exchange auth or discover models for an unavailable direct SecretRef", async () => {
+    const agentDir = await createAgentDir();
+    const provider = registerProviderWithPluginConfig({});
+
+    await expect(
+      provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_COPILOT_CATALOG_TOKEN",
+                },
+              },
+            },
+          },
+        },
+        agentDir,
+        env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
+      }),
+    ).rejects.toThrow("models.providers.github-copilot.apiKey");
+
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {

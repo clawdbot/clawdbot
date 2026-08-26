@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
@@ -361,6 +362,7 @@ export async function finishUpdate(params: {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
+  let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
   let skipLegacyServiceRestart = false;
   const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
     updateMode: resultWithPostUpdate.mode,
@@ -421,6 +423,10 @@ export async function finishUpdate(params: {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
+          serviceState.command,
+          params.ownedManagedUpdateEnv ?? process.env,
+        );
         gatewayPort = resolveUpdatedGatewayRestartPort({
           config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
           processEnv: process.env,
@@ -434,6 +440,16 @@ export async function finishUpdate(params: {
         // An ambiguous wrapper may be stopped and restored, but only proven
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnv = serviceOwnershipConfirmed;
+        if (refreshGatewayServiceEnv && gatewayServiceInstallEnv === null) {
+          refreshGatewayServiceEnv = false;
+          const message =
+            "Gateway service metadata refresh was skipped because systemd drop-in environment ownership could not be inspected.";
+          if (params.opts.json) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(theme.warn(message));
+          }
+        }
       }
     } catch (err) {
       if (err instanceof GatewayServiceUpdateOwnershipError) {
@@ -467,6 +483,7 @@ export async function finishUpdate(params: {
       opts: params.opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
       serviceEnv: gatewayServiceEnv,
+      serviceInstallEnv: gatewayServiceInstallEnv,
       gatewayPort,
       restartScriptPath,
       invocationCwd: params.invocationCwd,

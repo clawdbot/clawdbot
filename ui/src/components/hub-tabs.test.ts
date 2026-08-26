@@ -28,6 +28,35 @@ describe("renderHubTabs", () => {
     expect(container.querySelector("#example-tab-memory .hub-tab__badge")?.textContent).toBe("New");
   });
 
+  it("forwards the aria-label to the shadow tablist", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      render(
+        renderHubTabs({
+          id: "example",
+          active: "files",
+          tabs: [{ value: "files", label: "Files" }],
+          ariaLabel: "Example sections",
+          panelId: "example-panel",
+          onSelect: () => undefined,
+        }),
+        container,
+      );
+      const group = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+        "wa-tab-group",
+      );
+      await group?.updateComplete;
+      // syncTabGroupLabel resolves on the same updateComplete chain; yield once more.
+      await group?.updateComplete;
+      expect(group?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe(
+        "Example sections",
+      );
+    } finally {
+      container.remove();
+    }
+  });
+
   it("selects only enabled tabs from direct user activation", () => {
     const onSelect = vi.fn();
     const container = document.createElement("div");
