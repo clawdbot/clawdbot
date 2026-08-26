@@ -1,5 +1,5 @@
 // Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing image/audio/video attachments.
+// Validates, stores, serves, and cleans up outgoing media and document attachments.
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -12,6 +12,7 @@ import {
   asNonNegativeFiniteNumber,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import pLimit from "p-limit";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -110,7 +111,7 @@ type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
 
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video">;
+type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -165,7 +166,7 @@ type ManagedOutgoingImageTicketPayload = {
 export type ManagedOutgoingMediaArtifactDownload = {
   artifactId: string;
   sessionKey: string;
-  type: ManagedMediaKind;
+  type: Exclude<ManagedMediaKind, "document"> | "file";
   title: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -818,7 +819,9 @@ function resolveManagedSessionOwnerAgentId(
 
 function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
   const kind = mediaKindFromMime(record.original.contentType);
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : null;
+  return kind === "image" || kind === "audio" || kind === "video" || kind === "document"
+    ? kind
+    : null;
 }
 
 function buildManagedMediaBlock(
@@ -830,9 +833,23 @@ function buildManagedMediaBlock(
     throw new Error("Managed media record has an unsupported content type");
   }
   const fullUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
+  const artifactId = buildManagedOutgoingArtifactId(record.attachmentId, kind);
+  if (kind === "document") {
+    return {
+      type: "attachment",
+      attachment: {
+        artifactId,
+        url: fullUrl,
+        kind,
+        label: record.original.filename ?? record.alt,
+        mimeType: record.original.contentType,
+        sizeBytes: record.original.sizeBytes,
+      },
+    };
+  }
   return {
     type: kind,
-    artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
+    artifactId,
     url: fullUrl,
     openUrl: fullUrl,
     ...(kind === "image" ? { alt: record.alt } : { fileName: record.original.filename }),
@@ -908,10 +925,17 @@ function collectManagedOutgoingAttachmentRefs(
 ) {
   const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
   for (const block of blocks ?? []) {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    const attachment =
+      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      !attachment
+    ) {
       continue;
     }
-    for (const candidate of [block.url, block.openUrl]) {
+    for (const candidate of [block.url, block.openUrl, attachment?.url]) {
       if (typeof candidate !== "string") {
         continue;
       }
@@ -1252,7 +1276,7 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   return {
     artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
     sessionKey: record.sessionKey,
-    type: kind,
+    type: kind === "document" ? "file" : kind,
     title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
     ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
     ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
@@ -1373,7 +1397,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const hintedKind =
       dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
         ? dataUrlKind
-        : inferredKind === "image" || inferredKind === "audio" || inferredKind === "video"
+        : inferredKind === "image" ||
+            inferredKind === "audio" ||
+            inferredKind === "video" ||
+            inferredKind === "document"
           ? inferredKind
           : "media";
 
@@ -1425,6 +1452,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
                   limits.maxBytes,
                   maxBytesForKind("audio"),
                   maxBytesForKind("video"),
+                  maxBytesForKind("document"),
                   MEDIA_MAX_BYTES,
                 ),
               );
@@ -1437,7 +1465,12 @@ export async function createManagedOutgoingMediaBlocks(params: {
         continue;
       }
       const mediaKind = mediaKindFromMime(savedOriginalContentType);
-      if (mediaKind !== "image" && mediaKind !== "audio" && mediaKind !== "video") {
+      if (
+        mediaKind !== "image" &&
+        mediaKind !== "audio" &&
+        mediaKind !== "video" &&
+        mediaKind !== "document"
+      ) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;
@@ -1614,6 +1647,9 @@ function buildManagedMediaContentDisposition(value: string | null, contentType: 
   const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
   const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
   const filename = base || fallback;
+  if (mediaKindFromMime(contentType) === "document") {
+    return buildAssistantMediaContentDisposition(filename, contentType);
+  }
   return /^[\x20-\x7e]+$/u.test(filename)
     ? `inline; filename="${filename}"`
     : buildAssistantMediaContentDisposition(filename, contentType);

@@ -26,9 +26,11 @@ vi.mock("../../media/read-capability.js", () => ({
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {
+  attachments?: Array<{ name?: string; trustedLocalMedia?: boolean }>;
   mediaUrl?: string;
   mediaUrls?: string[];
   text?: string;
+  trustedLocalMedia?: boolean;
 };
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -123,6 +125,16 @@ describe("createReplyMediaPathNormalizer", () => {
     );
     const mediaAccess = requireRecord(options.mediaAccess, "media access");
     expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
+    expect(result.trustedLocalMedia).toBe(true);
+    expect(result.attachments).toEqual([{ name: "photo.png", trustedLocalMedia: true }]);
+  });
+
+  it("does not grant local-media trust to remote-only replies", async () => {
+    const normalize = createTestReplyMediaNormalizer();
+
+    const result = await normalize({ mediaUrls: ["https://example.com/voice.mp3"] });
+
+    expect(result.trustedLocalMedia).toBeUndefined();
   });
 
   it("preserves reply metadata when media normalization clones the payload", async () => {

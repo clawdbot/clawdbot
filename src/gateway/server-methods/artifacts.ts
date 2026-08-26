@@ -96,6 +96,9 @@ function normalizeArtifactType(value: string): string {
   if (normalized === "file" || normalized === "input_file") {
     return "file";
   }
+  if (normalized === "attachment") {
+    return "file";
+  }
   return "file";
 }
 
@@ -216,6 +219,7 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
     type === "audio" ||
     type === "video" ||
     type === "file" ||
+    type === "attachment" ||
     type === "input_image" ||
     type === "input_audio" ||
     type === "input_video" ||
@@ -260,13 +264,16 @@ function collectArtifactsFromMessage(params: {
       continue;
     }
     const type = normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+    const attachment = asOptionalRecord(block.attachment);
     const title =
       asNonEmptyString(block.title) ??
       asNonEmptyString(block.fileName) ??
       asNonEmptyString(block.filename) ??
       asNonEmptyString(block.alt) ??
+      asNonEmptyString(attachment?.label) ??
       `${type} ${params.artifacts.length + 1}`;
-    const declaredArtifactId = asNonEmptyString(block.artifactId);
+    const declaredArtifactId =
+      asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
     const id =
       declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
         ? declaredArtifactId
@@ -280,7 +287,7 @@ function collectArtifactsFromMessage(params: {
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
-    const download = resolveBlockDownload(block, { includeData });
+    const download = resolveBlockDownload(attachment ?? block, { includeData });
     const summary: ArtifactRecord = {
       id,
       type,

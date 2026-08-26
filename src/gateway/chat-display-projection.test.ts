@@ -22,6 +22,46 @@ function projectHistoryTransports(message: Record<string, unknown>) {
   return [websocket, sse];
 }
 
+describe("managed document chat history", () => {
+  it("keeps the attachment envelope while stripping URL capabilities", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+            kind: "document",
+            label: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 12,
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=secret",
+          },
+        },
+      ],
+    };
+
+    expect(sanitizeChatHistoryMessages([message])).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+              kind: "document",
+              label: "report.csv",
+              mimeType: "text/csv",
+              sizeBytes: 12,
+              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+});
+
 describe("oversized multimodal chat history", () => {
   it("projects one mixed-media message through every history boundary", async () => {
     const inlineImage = Buffer.from("inline image").toString("base64");

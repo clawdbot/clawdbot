@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendReplyMediaFailureWarning,
   readPairingQrReplyChannelData,
@@ -366,10 +367,21 @@ export function stripManagedOutgoingAssistantContentBlocks(
     return undefined;
   }
   const filtered = content.filter((block) => {
-    if (block?.type !== "image" && block?.type !== "audio" && block?.type !== "video") {
+    const attachment =
+      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      !attachment
+    ) {
       return true;
     }
-    return !(isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl));
+    return !(
+      isManagedOutgoingMediaUrl(block.url) ||
+      isManagedOutgoingMediaUrl(block.openUrl) ||
+      isManagedOutgoingMediaUrl(attachment?.url)
+    );
   });
   return filtered.length > 0 ? filtered : undefined;
 }
@@ -422,8 +434,10 @@ export function hasManagedOutgoingAssistantContent(
   return Boolean(
     content?.some(
       (block) =>
-        (block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
-        (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl)),
+        ((block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+          (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
+        (block?.type === "attachment" &&
+          isManagedOutgoingMediaUrl(asOptionalRecord(block.attachment)?.url)),
     ),
   );
 }

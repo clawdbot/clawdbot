@@ -2046,7 +2046,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("drops downloaded non-image sources without leaving orphaned originals", async () => {
+  it("creates managed document attachment envelopes for trusted local files", async () => {
     const pdfPath = path.join(stateDir, "not-an-image.pdf");
     await fs.writeFile(pdfPath, Buffer.from("%PDF-1.4\n% test\n"));
 
@@ -2055,16 +2055,56 @@ describe("createManagedOutgoingImageBlocks", () => {
       mediaUrls: [pdfPath],
       stateDir,
       localRoots: [stateDir],
+      allowLocalNonImage: true,
+      messageId: "msg-1",
     });
-    expect(blocks).toStrictEqual([]);
-    const originalsDir = path.join(stateDir, "media", "outgoing", "originals");
-    let originals: string[] | null = null;
-    try {
-      originals = await fs.readdir(originalsDir);
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
-    expect(originals ?? []).toStrictEqual([]);
+
+    expect(blocks).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          kind: "document",
+          label: "not-an-image.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 16,
+          url: expect.stringMatching(/^\/api\/chat\/media\/outgoing\//u),
+        }),
+      },
+    ]);
+
+    const attachment = (blocks[0] as { attachment?: { artifactId?: string; url?: string } })
+      .attachment;
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: attachment?.url ?? "",
+      authResponse: { authMethod: "token" },
+      transcriptMessages: [
+        {
+          role: "assistant",
+          content: blocks,
+          __openclaw: { id: "msg-1" },
+        },
+      ],
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("application/pdf");
+    expect(result.headers["content-disposition"]).toContain("attachment;");
+    expect(result.body).toEqual(Buffer.from("%PDF-1.4\n% test\n"));
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "agent:main:main",
+      artifactId: attachment?.artifactId ?? "",
+      stateDir,
+    });
+    expect(download).toMatchObject({
+      artifactId: attachment?.artifactId,
+      type: "file",
+      title: "not-an-image.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 16,
+    });
   });
 
   it("does not apply the configured image cap to managed audio", async () => {

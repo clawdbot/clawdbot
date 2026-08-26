@@ -157,18 +157,24 @@ export function createReplyMediaPathNormalizer(params: {
     }
   };
 
-  const normalizeMediaSource = async (raw: string): Promise<string> => {
+  const normalizeMediaSource = async (
+    raw: string,
+  ): Promise<{ mediaUrl: string; trustedLocalMedia: boolean; fileName?: string }> => {
     const media = raw.trim();
     if (!media) {
-      return media;
+      return { mediaUrl: media, trustedLocalMedia: false };
     }
     assertMediaNotDataUrl(media);
     if (isPassThroughRemoteMediaSource(media)) {
-      return media;
+      return { mediaUrl: media, trustedLocalMedia: false };
     }
     const absoluteWorkspaceMedia = resolveAbsoluteWorkspaceMedia(media);
     if (absoluteWorkspaceMedia) {
-      return await persistLocalReplyMedia(absoluteWorkspaceMedia);
+      return {
+        mediaUrl: await persistLocalReplyMedia(absoluteWorkspaceMedia),
+        trustedLocalMedia: true,
+        fileName: path.basename(absoluteWorkspaceMedia),
+      };
     }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&
@@ -194,20 +200,33 @@ export function createReplyMediaPathNormalizer(params: {
         }
         throw err;
       }
-      return await persistLocalReplyMedia(sandboxResolvedMedia);
+      return {
+        mediaUrl: await persistLocalReplyMedia(sandboxResolvedMedia),
+        trustedLocalMedia: true,
+        fileName: path.basename(sandboxResolvedMedia),
+      };
     }
     if (isRelativeLocalMedia) {
-      return await persistLocalReplyMedia(resolveWorkspaceRelativeMedia(media));
+      const workspaceMedia = resolveWorkspaceRelativeMedia(media);
+      return {
+        mediaUrl: await persistLocalReplyMedia(workspaceMedia),
+        trustedLocalMedia: true,
+        fileName: path.basename(workspaceMedia),
+      };
     }
     if (!isLikelyLocalMediaSource(media)) {
-      return media;
+      return { mediaUrl: media, trustedLocalMedia: false };
     }
     if (FILE_URL_RE.test(media)) {
       throw new Error(
         "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
       );
     }
-    return await persistLocalReplyMedia(media);
+    return {
+      mediaUrl: await persistLocalReplyMedia(media),
+      trustedLocalMedia: true,
+      fileName: path.basename(media),
+    };
   };
 
   return async (payload) => {
@@ -217,10 +236,12 @@ export function createReplyMediaPathNormalizer(params: {
     }
 
     const normalizedMedia: string[] = [];
+    const normalizedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
     const seen = new Set<string>();
+    let hasTrustedLocalMedia = payload.trustedLocalMedia === true;
     let firstMediaDropError: unknown;
-    for (const media of mediaList) {
-      let normalized: string;
+    for (const [mediaIndex, media] of mediaList.entries()) {
+      let normalized: Awaited<ReturnType<typeof normalizeMediaSource>>;
       try {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
@@ -228,11 +249,18 @@ export function createReplyMediaPathNormalizer(params: {
         logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
         continue;
       }
-      if (!normalized || seen.has(normalized)) {
+      if (!normalized.mediaUrl || seen.has(normalized.mediaUrl)) {
         continue;
       }
-      seen.add(normalized);
-      normalizedMedia.push(normalized);
+      seen.add(normalized.mediaUrl);
+      normalizedMedia.push(normalized.mediaUrl);
+      hasTrustedLocalMedia ||= normalized.trustedLocalMedia;
+      const existingAttachment = payload.attachments?.[mediaIndex] ?? {};
+      normalizedAttachments.push({
+        ...existingAttachment,
+        ...(normalized.fileName && !existingAttachment.name ? { name: normalized.fileName } : {}),
+        ...(normalized.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+      });
     }
 
     const text =
@@ -254,6 +282,10 @@ export function createReplyMediaPathNormalizer(params: {
       text,
       mediaUrl: normalizedMedia[0],
       mediaUrls: normalizedMedia,
+      ...(normalizedAttachments.some((attachment) => Object.keys(attachment).length > 0)
+        ? { attachments: normalizedAttachments }
+        : {}),
+      ...(hasTrustedLocalMedia ? { trustedLocalMedia: true } : {}),
     });
   };
 }

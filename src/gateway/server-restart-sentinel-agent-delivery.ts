@@ -355,7 +355,10 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
               if (
                 !blocks.some(
                   (block) =>
-                    block.type === "image" || block.type === "audio" || block.type === "video",
+                    block.type === "image" ||
+                    block.type === "audio" ||
+                    block.type === "video" ||
+                    block.type === "attachment",
                 )
               ) {
                 throw new Error("queued internal generated media could not be prepared");
