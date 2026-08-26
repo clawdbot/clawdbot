@@ -6,10 +6,6 @@ import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import {
-  formatUpdateCampaignLabel,
-  formatUpdateTargetLabel,
-} from "../../app/update-overlay-helpers.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -83,13 +79,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   }
 
   private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
-    if (!this.narrow) {
+    if (!this.narrow || !this.context.overlays.snapshot.controlUiRefreshRequired) {
       return [];
     }
-    const actions: HeaderMenuStatusAction[] = [];
-    const overlay = this.context.overlays.snapshot;
-    if (overlay.controlUiRefreshRequired) {
-      actions.push({
+    return [
+      {
         id: "refresh",
         label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
           "chat.sidebar.serverUpdatedRefresh",
@@ -97,47 +91,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         icon: icons.refresh,
         tone: "info",
         onActivate: () => globalThis.location.reload(),
-      });
-      return actions;
-    }
-
-    const campaignLabel = formatUpdateCampaignLabel(overlay.updateSchedule);
-    const targetLabel = formatUpdateTargetLabel(overlay.updateSchedule, overlay.updateAvailable);
-    const updateBusy = overlay.updateRunning || overlay.updateReconciliationPending;
-    const update = overlay.updateAvailable;
-    const target = overlay.updateSchedule?.target;
-    const updateAvailable = Boolean(
-      update &&
-      !overlay.updateSchedule?.campaign &&
-      !overlay.updateStatusBanner &&
-      (update.latestVersion !== update.currentVersion ||
-        (target?.kind === "git" && target.commitsBehind > 0)),
-    );
-    const updateLabel = overlay.updateStatusBanner?.text
-      ? overlay.updateStatusBanner.text
-      : campaignLabel
-        ? targetLabel
-          ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
-          : campaignLabel
-        : updateBusy
-          ? t("updates.sidebar.updating")
-          : updateAvailable
-            ? t("updates.page.available", { target: targetLabel ?? update?.latestVersion ?? "" })
-            : null;
-    if (updateLabel) {
-      actions.push({
-        id: "update",
-        label: updateLabel,
-        icon: overlay.updateStatusBanner
-          ? icons.alertTriangle
-          : updateBusy
-            ? icons.refresh
-            : icons.download,
-        tone: overlay.updateStatusBanner?.tone ?? (updateBusy ? "info" : "warn"),
-        onActivate: () => this.context.navigate("updates"),
-      });
-    }
-    return actions;
+      },
+    ];
   }
 
   protected renderPaneHeader(

@@ -40,25 +40,32 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
   if (compact) {
     await page.locator(".chat-header-session-menu__trigger").click();
-    const updateButton = page.getByText("Update available v2.0.0", { exact: true });
-    await updateButton.waitFor({ timeout: 10_000 });
-    return { compact, gateway, updateButton };
+    expect(await page.getByText("Update available v2.0.0", { exact: true }).count()).toBe(0);
+    await page.screenshot({
+      animations: "disabled",
+      path: path.join(PROOF_DIR, "04a-compact-session-menu-without-update.png"),
+    });
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   }
-  await page.locator(".sidebar-issues-button").click();
+  await page.locator(".sidebar-issues-button:visible").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
   await updateIssue.locator("summary").click();
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
+  if (compact) {
+    await page.screenshot({
+      animations: "disabled",
+      path: path.join(PROOF_DIR, "04b-compact-update-inbox.png"),
+    });
+  }
   return { compact, gateway, updateButton };
 }
 
-async function openConfirmation(page: Page, updateButton: Locator, compact = false) {
+async function openConfirmation(page: Page, updateButton: Locator) {
   await updateButton.click();
-  if (compact) {
-    await page.getByRole("button", { name: "Update now", exact: true }).click();
-  }
 }
 
 suite.define(() => {
@@ -235,7 +242,7 @@ suite.define(() => {
             suite.server.baseUrl,
             compact,
           );
-          await openConfirmation(page, updateButton, compact);
+          await openConfirmation(page, updateButton);
           await confirmationDialog(page).waitFor();
           expect(
             await confirmationCopy(page)
