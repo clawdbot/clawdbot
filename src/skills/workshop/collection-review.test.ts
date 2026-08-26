@@ -8,6 +8,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -462,9 +463,14 @@ describe("skill collection review", () => {
         env: testState.env,
       });
 
-      expect(secondResult).toMatchObject({ status: "error" });
-      expect(secondResult.summary).toContain("timed out waiting for skill collection review claim");
-      expect(secondResult.error).toBe(secondResult.summary);
+      const expectedError =
+        `Skill collection review failed for ${workspaceDir}: OpenClawStateLeaseError: ` +
+        `timed out waiting for skill collection review claim skill-collection-review/${sha256Hex(workspaceDir)}`;
+      expect(secondResult).toEqual({
+        status: "error",
+        summary: expectedError,
+        error: expectedError,
+      });
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(readSkillReviewOutcomes({ env: testState.env })).toEqual(stateBeforeContention);
     } finally {

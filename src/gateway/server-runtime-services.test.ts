@@ -1052,9 +1052,7 @@ function createLog() {
   };
 }
 
-function createTestCron() {
-  return { start: vi.fn<() => Promise<void>>(async () => {}) };
-}
+const createTestCron = () => ({ start: vi.fn<() => Promise<void>>(async () => {}) });
 
 function createTestCronState(
   cron: { start: () => Promise<void> } = createTestCron(),
@@ -1129,5 +1127,6 @@ function createMaintenanceHandles() {
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: setInterval(() => undefined, 60_000),
+    skillUsageCleanup: vi.fn(),
   };
 }

@@ -382,10 +382,10 @@ describe("cron service timer seam coverage", () => {
       const evaluateCronTrigger = vi.fn(() => evaluation.promise);
       const enqueueSystemEvent = vi.fn();
       const requestHeartbeat = vi.fn();
-      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-      const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
-      const runSkillCollectionReview = vi.fn(async () => ({ status: "ok" as const }));
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+      const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+      const runSkillCollectionReview = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+      const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
       const state = createCronServiceState({
         storePath,
         cronEnabled: true,
