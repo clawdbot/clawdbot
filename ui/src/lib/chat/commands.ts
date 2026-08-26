@@ -572,6 +572,7 @@ export type InlineSlashCompletion = {
   start: number;
   end: number;
   inline: boolean;
+  skillOnly?: boolean;
   argumentStart?: number;
 };
 
@@ -582,7 +583,7 @@ export function findInlineSlashCompletion(
 ): InlineSlashCompletion | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);
-  const match = prefix.match(/(?:^|\s)\/([^\s/:]*)$/u);
+  const match = prefix.match(/(?:^|\s)\/([^\s/:]*)(:?)$/u);
   if (!match || match.index === undefined) {
     return null;
   }
@@ -595,7 +596,7 @@ export function findInlineSlashCompletion(
   while (end < text.length && !/\s/u.test(text[end] ?? "")) {
     end += 1;
   }
-  const query = text.slice(start + 1, boundedCaret);
+  const query = match[1] ?? "";
   if (!/^[^\s/:]*$/u.test(query)) {
     return null;
   }
@@ -603,7 +604,11 @@ export function findInlineSlashCompletion(
     query,
     start,
     end,
-    inline: text.slice(0, start).trim().length > 0 || text.slice(end).trim().length > 0,
+    inline:
+      text.slice(0, start).trim().length > 0 ||
+      text.slice(end).trim().length > 0 ||
+      match[2] === ":",
+    ...(match[2] === ":" ? { skillOnly: true } : {}),
   };
 }
 

@@ -50,6 +50,16 @@ describe("findInlineSlashCompletion", () => {
     });
   });
 
+  it("recognizes a trailing colon as a skill-only inline reference", () => {
+    expect(findInlineSlashCompletion("Please use /weather:")).toEqual({
+      query: "weather",
+      start: 11,
+      end: 20,
+      inline: true,
+      skillOnly: true,
+    });
+  });
+
   it("ignores URLs, paths, and escaped double slashes", () => {
     expect(findInlineSlashCompletion("https://example.com/wea")).toBeNull();
     expect(findInlineSlashCompletion("Open tmp/wea")).toBeNull();

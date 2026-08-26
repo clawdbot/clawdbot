@@ -196,7 +196,7 @@ export function updateSlashMenu(
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
     inlineOnly: completion.inline,
-    allowImmediateInlineCommands: host.canRunInlineCommand(),
+    allowImmediateInlineCommands: host.canRunInlineCommand() && !completion.skillOnly,
   }).filter((command) => host.commandFilter?.(command) ?? true);
   state.slashMenuCompletion = completion;
   state.slashMenuItems = [

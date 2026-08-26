@@ -4114,6 +4114,23 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("Please use $weather ");
   });
 
+  it("uses a trailing colon to select only an inline skill reference", () => {
+    replaceSkillCommands({ key: "weather", description: "Check the weather." });
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+
+    inputDraftAtEnd(container, "Please use /weather:");
+    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toBe("/weather");
+    keydownComposer(container, "Enter");
+
+    expect(onSlashCommand).not.toHaveBeenCalled();
+    expect(draft).toBe("Please use $weather ");
+  });
+
   it.each([
     ["reset", "/reset"],
     ["exec gateway", "/exec gateway"],
