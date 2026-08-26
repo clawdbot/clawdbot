@@ -1,27 +1,16 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
-import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
-import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
-import type { ThinkLevel } from "../thinking.js";
-import {
-  createAgentLifecycleTerminalBackstop,
-  type AgentLifecycleTerminalBackstop,
-} from "./agent-lifecycle-terminal.js";
+import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearCliSessionBindingForRun,
@@ -31,58 +20,19 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
-import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import type { FollowupRun } from "./queue.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
-type CliPresentation = Pick<
-  ReturnType<typeof createAgentTurnPresentation>,
-  | "blockReplyHandler"
-  | "classifyStreamingPartial"
-  | "sanitizeStreamingText"
-  | "startPresentationWhileTyping"
->;
-
-export async function runCliFallbackCandidate(params: {
-  preparedRunAdmission: PreparedAgentRunAdmission;
-  turn: AgentTurnParams;
-  candidateRun: FollowupRun["run"];
-  runtimeConfig: OpenClawConfig;
-  provider: string;
-  model: string;
-  cliExecutionProvider: string;
-  candidateThinkLevel?: ThinkLevel;
-  candidateFastMode: Pick<RunCliAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
-  runId: string;
-  lifecycleGeneration: string;
-  runAbortSignal?: AbortSignal;
-  runLane: RunCliAgentParams["lane"];
-  isFinalFallbackAttempt?: boolean;
-  suppressQueuedUserPersistenceForCandidate: boolean;
-  userTurnTranscriptRecorder: RunCliAgentParams["userTurnTranscriptRecorder"];
-  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
-  onContextEngineTurnCandidate: RunCliAgentParams["onContextEngineTurnCandidate"];
-  notifyUserMessagePersisted: () => void;
-  fastModeStartedAtMs: number;
-  fastModeAutoProgressState: FastModeAutoProgressState;
-  bootstrapContextRunKind: BootstrapContextRunKind;
-  bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
-  signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
-  notifyAgentRunStart: () => void;
-  preserveProgressCallbackStartOrder: boolean;
-  presentation: CliPresentation;
-  timing: AgentTurnTimingTracker;
-  onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
-}): Promise<{
+export async function runCliFallbackCandidate(
+  params: AgentFallbackCandidateCommonParams & {
+    cliExecutionProvider: string;
+    lifecycleGeneration: string;
+  },
+): Promise<{
   result: Awaited<ReturnType<typeof runCliAgentWithLifecycle>>;
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
@@ -349,6 +299,9 @@ export async function runCliFallbackCandidate(params: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
             sessionTarget,
+            // Placement admission may wait behind an older turn. Read the live
+            // session policy only after this candidate owns the local placement.
+            sessionEntry: turn.getActiveSessionEntry(),
             chatType:
               normalizeChatType(turn.followupRun.originatingChatType) ??
               normalizeChatType(turn.sessionCtx.ChatType) ??
