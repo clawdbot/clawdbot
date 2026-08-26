@@ -776,7 +776,9 @@
                 "FEISHU_VERIFICATION_TOKEN",
                 "FEISHU_ENCRYPT_KEY"
               ]
-            }
+            },
+            "specifier": "./configured-state",
+            "exportName": "hasConfiguredFeishuChannelState"
           },
           "label": "Feishu",
           "selectionLabel": "Feishu/Lark (飞书)",
@@ -1119,7 +1121,7 @@
           "id": "line",
           "configuredState": {
             "env": {
-              "anyOf": [
+              "allOf": [
                 "LINE_CHANNEL_ACCESS_TOKEN",
                 "LINE_CHANNEL_SECRET"
               ]
@@ -1436,7 +1438,9 @@
                 "MSTEAMS_APP_PASSWORD",
                 "MSTEAMS_TENANT_ID"
               ]
-            }
+            },
+            "specifier": "./configured-state",
+            "exportName": "hasConfiguredMSTeamsChannelState"
           },
           "label": "Microsoft Teams",
           "selectionLabel": "Microsoft Teams (Teams SDK)",
@@ -1479,7 +1483,9 @@
                 "NEXTCLOUD_TALK_BOT_SECRET",
                 "NEXTCLOUD_TALK_API_PASSWORD"
               ]
-            }
+            },
+            "specifier": "./configured-state",
+            "exportName": "hasConfiguredNextcloudTalkChannelState"
           },
           "label": "Nextcloud Talk",
           "selectionLabel": "Nextcloud Talk (self-hosted)",
@@ -2077,7 +2083,9 @@
                 "SLACK_APP_TOKEN",
                 "SLACK_USER_TOKEN"
               ]
-            }
+            },
+            "specifier": "./configured-state",
+            "exportName": "hasConfiguredSlackChannelState"
           },
           "approvalFlags": [
             "native"
@@ -2200,12 +2208,11 @@
                 "TWILIO_AUTH_TOKEN",
                 "TWILIO_PHONE_NUMBER",
                 "TWILIO_SMS_FROM",
-                "TWILIO_MESSAGING_SERVICE_SID",
-                "SMS_PUBLIC_WEBHOOK_URL",
-                "SMS_WEBHOOK_PATH",
-                "SMS_ALLOWED_USERS"
+                "TWILIO_MESSAGING_SERVICE_SID"
               ]
-            }
+            },
+            "specifier": "./configured-state",
+            "exportName": "hasConfiguredSmsChannelState"
           },
           "label": "SMS",
           "selectionLabel": "SMS (Twilio)",
@@ -2320,13 +2327,9 @@
           "id": "synology-chat",
           "configuredState": {
             "env": {
-              "anyOf": [
+              "allOf": [
                 "SYNOLOGY_CHAT_TOKEN",
-                "SYNOLOGY_CHAT_INCOMING_URL",
-                "SYNOLOGY_NAS_HOST",
-                "SYNOLOGY_ALLOWED_USER_IDS",
-                "SYNOLOGY_RATE_LIMIT",
-                "OPENCLAW_BOT_NAME"
+                "SYNOLOGY_CHAT_INCOMING_URL"
               ]
             }
           },
@@ -2681,8 +2684,7 @@
           "configuredState": {
             "env": {
               "anyOf": [
-                "ZALO_BOT_TOKEN",
-                "ZALO_WEBHOOK_SECRET"
+                "ZALO_BOT_TOKEN"
               ]
             }
           },

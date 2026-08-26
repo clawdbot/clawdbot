@@ -513,6 +513,46 @@ describe("handleChatGatewayEvent", () => {
     expect(state.lastLocalTerminalReconcile).toBeUndefined();
   });
 
+  it("does not let a stale run id override session ownership", () => {
+    const visibleMessage = createTextChatMessage("assistant", "selected session stays visible");
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "shared-run-id",
+      chatMessages: [visibleMessage],
+      chatMessagesBySession: new Map(),
+      chatStream: "selected session stream",
+    });
+    const inactiveSessionKey = "agent:main:inactive-session";
+    seedChatSnapshot(state, { sessionKey: inactiveSessionKey });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "shared-run-id",
+        sessionKey: inactiveSessionKey,
+        state: "delta",
+        deltaText: "wrong-session stream",
+      }),
+    ).toBe(null);
+    const inactiveFinal = createTextChatMessage("assistant", "wrong-session final");
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "shared-run-id",
+        sessionKey: inactiveSessionKey,
+        state: "final",
+        message: inactiveFinal,
+      }),
+    ).toBe(null);
+
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatStream).toBe("selected session stream");
+    expect(state.chatRunId).toBe("shared-run-id");
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: inactiveSessionKey,
+      }),
+    ).toEqual([inactiveFinal]);
+  });
+
   it("ignores selected-agent global events for another agent", () => {
     const state = createState({
       sessionKey: "global",

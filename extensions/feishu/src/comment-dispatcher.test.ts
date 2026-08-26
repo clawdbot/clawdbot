@@ -209,6 +209,144 @@ describe("createFeishuCommentReplyDispatcher", () => {
       { mediaUrls: [" "], mediaUrl: "https://example.com/fallback.png" },
       "https://example.com/fallback.png",
     ],
+    [
+      "presentation-only actionable command",
+      {
+        presentation: {
+          title: "Deployment",
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Deployment\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "caption, actionable presentation, and safe attachment",
+      {
+        text: "Review this",
+        mediaUrl: "https://example.com/attachment.png",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.\n\nhttps://example.com/attachment.png",
+    ],
+    [
+      "legacy interactive command",
+      {
+        interactive: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "select option with an actionable command",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              placeholder: "Choose deployment",
+              options: [
+                {
+                  label: "Deploy",
+                  action: { type: "command" as const, command: "/deploy staging" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "select callback without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              options: [
+                {
+                  label: "Choose",
+                  action: { type: "callback" as const, value: "private_choice" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Options:\n- Choose",
+    ],
+    [
+      "disabled command without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Disabled",
+                  disabled: true,
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Disabled",
+    ],
+    [
+      "URL-only button without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Open",
+                  action: { type: "url" as const, url: "https://example.com/action" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Open: https://example.com/action",
+    ],
   ])("delivers %s as safe plain-text comment links", async (_label, payload, expected) => {
     const created = createTestCommentReplyDispatcher();
 

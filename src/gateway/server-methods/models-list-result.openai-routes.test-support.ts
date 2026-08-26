@@ -45,6 +45,9 @@ export function registerTestCatalogAccess(
 export async function listModels(params: {
   agentId?: string;
   catalog: ModelCatalogEntry[];
+  catalogLoadDelayMs?: number;
+  publishedCatalog?: ModelCatalogEntry[];
+  refresh?: boolean;
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
@@ -55,7 +58,7 @@ export async function listModels(params: {
 }) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
-  const loadGatewayModelCatalogSnapshot = async () =>
+  const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
     ({
       agentId,
       agentDir: "/tmp/models-list-openai-agent",
@@ -68,24 +71,34 @@ export async function listModels(params: {
       }),
       metadataSnapshot:
         params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
-      entries: params.catalog,
-      routeVariants: params.catalog,
+      entries,
+      routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
     }) satisfies PreparedGatewayModelCatalogSnapshot;
+  const loadGatewayModelCatalogSnapshot = async () => {
+    if (params.catalogLoadDelayMs !== undefined) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, params.catalogLoadDelayMs);
+      });
+    }
+    return createCatalogSnapshot(params.catalog);
+  };
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: loadGatewayModelCatalogSnapshot,
-    readPrepared: loadGatewayModelCatalogSnapshot,
+    readPrepared: params.publishedCatalog
+      ? async () => createCatalogSnapshot(params.publishedCatalog ?? [])
+      : loadGatewayModelCatalogSnapshot,
   });
   const context = {
     getRuntimeConfig: () => config,
     loadGatewayModelCatalogSnapshot,
-    logGateway: { debug: () => {} },
+    logGateway: { debug: () => {}, warn: () => {} },
   } as unknown as GatewayRequestContext;
   return await buildModelsListResult({
     context,
     agentId,
-    params: { view: params.view ?? "all" },
+    params: { view: params.view ?? "all", ...(params.refresh ? { refresh: true } : {}) },
     ...(params.discoveryModes
       ? {
           preloadedCatalog: {

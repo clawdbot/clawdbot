@@ -671,6 +671,17 @@ describe("runGoogleGenerateContentLifecycle", () => {
     },
   );
 
+  it("keeps an unspecified Google finish reason nonterminal", async () => {
+    const { result } = await runGoogleFixture([
+      googleResponse({
+        parts: [{ text: "partial output" }],
+        finishReason: FinishReason.FINISH_REASON_UNSPECIFIED,
+      }),
+    ]);
+
+    expect(result).toMatchObject({ stopReason: "error", errorCode: "STREAM_INCOMPLETE" });
+  });
+
   it("closes partial text before reporting a failed candidate", async () => {
     const { events, result } = await runGoogleFixture(
       [

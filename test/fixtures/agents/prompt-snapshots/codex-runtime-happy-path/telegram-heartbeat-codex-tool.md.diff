@@ -1,5 +1,5 @@
 --- telegram-direct-codex-message-tool.md	sha256=0a75703590d0c2198fdadbf2e427bd7f3242ebfb7d10ae339585e17f566be58c
-+++ telegram-heartbeat-codex-tool.md	sha256=31b09c09f2f9f3489cd4ef29b368dfd5390708ab9fa320edc3ccfb73d8a1f06b
++++ telegram-heartbeat-codex-tool.md	sha256=c2205edcd94a0c5735c4ef1d6250a10ae111b3df58d53583a13d6bb197104fa0
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -34,8 +34,8 @@
 @@ -235,2 +230,2 @@
 -    "chars": 54893,
 -    "roughTokens": 13724
-+    "chars": 56450,
-+    "roughTokens": 14113
++    "chars": 56455,
++    "roughTokens": 14114
 @@ -243,2 +238,2 @@
 -    "chars": 27336,
 -    "roughTokens": 6834
@@ -44,8 +44,8 @@
 @@ -247,2 +242,2 @@
 -    "chars": 82231,
 -    "roughTokens": 20558
-+    "chars": 84130,
-+    "roughTokens": 21033
++    "chars": 84135,
++    "roughTokens": 21034
 @@ -251,2 +246,2 @@
 -    "chars": 863,
 -    "roughTokens": 216
@@ -65,7 +65,7 @@
 @@ -699,0 +696,39 @@
 +  },
 +  {
-+    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
++    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; recurring work belongs in automations.",
 +    "inputSchema": {
 +      "additionalProperties": false,
 +      "properties": {

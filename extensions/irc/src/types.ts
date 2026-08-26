@@ -1,4 +1,5 @@
 // Irc type declarations define plugin contracts.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelDeliveryStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   DmConfig,
@@ -9,8 +10,7 @@ import type {
   MarkdownConfig,
   OpenClawConfig,
   ReplyToMode,
-  BaseProbeResult,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/config-contracts";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;

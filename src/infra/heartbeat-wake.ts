@@ -76,7 +76,6 @@ type PendingWakeReason = {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: HeartbeatScheduledTask[];
   /** Earliest instant at which this retained wake class may be dispatched. */
   notBeforeMs?: number;
@@ -142,10 +141,6 @@ function resolveWakePriority(params: {
   return REASON_PRIORITY.DEFAULT;
 }
 
-function normalizeWakeReason(reason?: string): string {
-  return normalizeHeartbeatWakeReason(reason);
-}
-
 function mergePendingWakeReasons(
   previous: PendingWakeReason,
   next: PendingWakeReason,
@@ -178,7 +173,6 @@ function mergePendingWakeReasons(
     preferred.retainedWork !== true &&
     (previous.retainedWork === true || next.retainedWork === true);
   const scheduledEveryMs = preferred.scheduledEveryMs ?? other.scheduledEveryMs;
-  const scheduledAnchorMs = preferred.scheduledAnchorMs ?? other.scheduledAnchorMs;
   const immediateBarrierSequences = [
     previous.immediateBarrierSequence,
     next.immediateBarrierSequence,
@@ -202,7 +196,6 @@ function mergePendingWakeReasons(
       ? { heartbeat: preferred.heartbeat ?? other.heartbeat }
       : {}),
     ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-    ...(scheduledAnchorMs !== undefined ? { scheduledAnchorMs } : {}),
     ...(mergedTasks.length ? { tasks: mergedTasks } : {}),
   };
   if (!bypassRetainedWork && (previous.retainedWork || next.retainedWork)) {
@@ -356,7 +349,6 @@ function queuePendingWakeReason(params: {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
   notBeforeMs?: number;
   blockTargetUntilMs?: number;
@@ -364,7 +356,7 @@ function queuePendingWakeReason(params: {
 }) {
   const requestedAt = params.requestedAt ?? performance.now();
   const enqueueSequence = params.enqueueSequence ?? ++wakeEnqueueSequence;
-  const normalizedReason = normalizeWakeReason(params.reason);
+  const normalizedReason = normalizeHeartbeatWakeReason(params.reason);
   const normalizedAgentId = normalizeHeartbeatWakeTarget(params.agentId);
   const normalizedSessionKey = normalizeHeartbeatWakeTarget(params.sessionKey);
   const wakeTargetKey = resolveHeartbeatWakeTargetKey({
@@ -393,7 +385,6 @@ function queuePendingWakeReason(params: {
     sessionKey: normalizedSessionKey,
     heartbeat: params.heartbeat,
     scheduledEveryMs: params.scheduledEveryMs,
-    scheduledAnchorMs: params.scheduledAnchorMs,
     ...(params.tasks?.length ? { tasks: [...params.tasks] } : {}),
     ...(params.notBeforeMs === undefined ? {} : { notBeforeMs: params.notBeforeMs }),
     ...(params.retainedWork ? { retainedWork: true } : {}),
@@ -452,7 +443,6 @@ function retryPendingWake(
     sessionKey: pendingWake.sessionKey,
     heartbeat: pendingWake.heartbeat,
     scheduledEveryMs: pendingWake.scheduledEveryMs,
-    scheduledAnchorMs: pendingWake.scheduledAnchorMs,
     tasks: pendingWake.tasks,
     requestedAt: pendingWake.requestedAt,
     enqueueSequence: pendingWake.enqueueSequence,
@@ -498,9 +488,6 @@ async function dispatchPendingWakeGroup(params: {
         ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
         ...(pendingWake.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: pendingWake.scheduledEveryMs }
-          : {}),
-        ...(pendingWake.scheduledAnchorMs !== undefined
-          ? { scheduledAnchorMs: pendingWake.scheduledAnchorMs }
           : {}),
         ...(pendingWake.tasks ? { tasks: pendingWake.tasks } : {}),
         ...(pendingWake.retainedWork ? { retainedWork: true } : {}),
@@ -745,7 +732,6 @@ export function requestHeartbeat(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
   const requestedAt = performance.now();

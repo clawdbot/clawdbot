@@ -53,6 +53,7 @@ import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
+  collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
@@ -99,9 +100,6 @@ function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAt
     .toSorted((left, right) => {
       if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
         return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
-      }
-      if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-        return left.sequence - right.sequence;
       }
       return left.sequence - right.sequence;
     })
@@ -764,8 +762,7 @@ export async function tryDispatchAcpReplyCore(params: {
       auditTerminalOutcome = "blocked";
       throw agentPolicyError;
     }
-    // Resolve turn attachments before media understanding so marker rendering
-    // suppresses exactly the image indexes ACP will deliver with the turn.
+    // Resolve bytes once before understanding so marker accounting shares the same snapshot.
     const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
@@ -794,18 +791,31 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const mediaAttachments = resolvedTurnAttachments.attachments;
+    const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
+    const recentHistoryStart =
+      resolvedTurnAttachments.attachments.length -
+      resolvedTurnAttachments.recentHistoryImages.length;
+    const mediaAttachmentEntries = resolvedTurnAttachments.attachments.flatMap(
+      (attachment, index) => {
+        const sourceIndex = resolvedTurnAttachments.attachmentIndexes?.[index];
+        return sourceIndex !== undefined &&
+          !describedImageIndexes.has(sourceIndex) &&
+          (describedImageIndexes.size === 0 || index < recentHistoryStart)
+          ? [{ attachment, sourceIndex }]
+          : [];
+      },
+    );
+    const mediaAttachments = mediaAttachmentEntries.map((entry) => entry.attachment);
+    const recentHistoryImages =
+      describedImageIndexes.size === 0 ? resolvedTurnAttachments.recentHistoryImages : [];
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
     const extractedAttachments = resolveInlineAgentImageAttachments(
       extractedFileImages.map(stripExtractedFileImageMetadata),
     );
-    const mediaAttachmentsAreOnlyRecentHistory =
-      mediaAttachments.length > 0 &&
-      mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
     const useMediaAttachments =
       mediaAttachments.length > 0 &&
       !(
-        mediaAttachmentsAreOnlyRecentHistory &&
+        mediaAttachments.length === recentHistoryImages.length &&
         (inlineAttachments.length > 0 || extractedAttachments.length > 0)
       );
     const attachmentEntries: OrderedAcpAttachment[] = [];
@@ -813,7 +823,7 @@ export async function tryDispatchAcpReplyCore(params: {
       appendOrderedAcpAttachments({
         entries: attachmentEntries,
         attachments: mediaAttachments,
-        sourceIndexes: resolvedTurnAttachments.attachmentIndexes,
+        sourceIndexes: mediaAttachmentEntries.map((entry) => entry.sourceIndex),
       });
     } else {
       appendOrderedAcpAttachments({
@@ -830,7 +840,7 @@ export async function tryDispatchAcpReplyCore(params: {
     const turnPromptText = useMediaAttachments
       ? appendRecentHistoryImageContext({
           promptText,
-          images: resolvedTurnAttachments.recentHistoryImages,
+          images: recentHistoryImages,
         })
       : promptText;
     transcriptPromptText = turnPromptText;

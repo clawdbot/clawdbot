@@ -597,7 +597,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

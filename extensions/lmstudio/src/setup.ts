@@ -430,38 +430,49 @@ async function discoverLmstudioSetupModels(params: {
   };
 }
 
-/** Read-only local discovery plus a success-gated config proposal for guided setup. */
-export async function prepareAppGuidedLmstudioSetup(
-  ctx: ProviderAppGuidedSetupContext & { modelRef?: string },
-): Promise<ProviderAuthResult | null> {
+async function resolveAppGuidedLmstudioConnection(ctx: ProviderAppGuidedSetupContext) {
   const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
   const baseUrl = resolveLmstudioInferenceBase(
     existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
   );
-  let headers: Record<string, string> | undefined;
-  let configuredValue: string | undefined;
   try {
-    headers = await resolveLmstudioProviderHeaders({
+    const headers = await resolveLmstudioProviderHeaders({
       config: ctx.config,
       env: ctx.env,
       headers: existingProvider?.headers,
     });
-    configuredValue = await resolveLmstudioConfiguredApiKey({
+    const configuredValue = await resolveLmstudioConfiguredApiKey({
       config: ctx.config,
       env: ctx.env,
       allowUnresolved: true,
     });
+    const accessValue = configuredValue ?? ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
+    return {
+      existingProvider,
+      accessValue,
+      discoveryRequest: {
+        baseUrl,
+        apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+        ...(headers ? { headers } : {}),
+        timeoutMs: 5000,
+      },
+    };
   } catch {
     return null;
   }
-  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
-  const accessValue = configuredValue ?? environmentValue;
-  const setupDiscovery = await discoverLmstudioSetupModels({
-    baseUrl,
-    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-    ...(headers ? { headers } : {}),
-    timeoutMs: 5000,
-  });
+}
+
+/** Read-only local discovery plus a success-gated config proposal for guided setup. */
+export async function prepareAppGuidedLmstudioSetup(
+  ctx: ProviderAppGuidedSetupContext & { modelRef?: string },
+): Promise<ProviderAuthResult | null> {
+  const connection = await resolveAppGuidedLmstudioConnection(ctx);
+  if (!connection) {
+    return null;
+  }
+  const { existingProvider, accessValue, discoveryRequest } = connection;
+  const { baseUrl, headers } = discoveryRequest;
+  const setupDiscovery = await discoverLmstudioSetupModels(discoveryRequest);
   if ("failure" in setupDiscovery) {
     return null;
   }
@@ -491,14 +502,6 @@ export async function prepareAppGuidedLmstudioSetup(
         })
       ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
       : undefined;
-  const providerAccess = { apiKey: persistedAccess };
-  const providerSetup = {
-    ...providerAccess,
-    existingProvider,
-    baseUrl,
-    headers: existingProvider?.headers,
-    models: setupDiscovery.value.models,
-  };
   return {
     profiles: [],
     defaultModel: `${PROVIDER_ID}/${selectedModelId}`,
@@ -506,7 +509,13 @@ export async function prepareAppGuidedLmstudioSetup(
       models: {
         mode: ctx.config.models?.mode ?? "merge",
         providers: {
-          [PROVIDER_ID]: buildLmstudioSetupProviderConfig(providerSetup),
+          [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
+            existingProvider,
+            baseUrl,
+            apiKey: persistedAccess,
+            headers: existingProvider?.headers,
+            models: setupDiscovery.value.models,
+          }),
         },
       },
     },
@@ -517,35 +526,11 @@ export async function prepareAppGuidedLmstudioSetup(
 export async function detectAppGuidedLmstudioAvailability(
   ctx: ProviderAppGuidedSetupContext,
 ): Promise<boolean> {
-  const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-  const baseUrl = resolveLmstudioInferenceBase(
-    existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
-  );
-  let headers: Record<string, string> | undefined;
-  let configuredValue: string | undefined;
-  try {
-    headers = await resolveLmstudioProviderHeaders({
-      config: ctx.config,
-      env: ctx.env,
-      headers: existingProvider?.headers,
-    });
-    configuredValue = await resolveLmstudioConfiguredApiKey({
-      config: ctx.config,
-      env: ctx.env,
-      allowUnresolved: true,
-    });
-  } catch {
+  const connection = await resolveAppGuidedLmstudioConnection(ctx);
+  if (!connection) {
     return false;
   }
-  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
-  const accessValue = configuredValue ?? environmentValue;
-  const discovery = await fetchLmstudioModels({
-    baseUrl,
-    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-    ...(headers ? { headers } : {}),
-    timeoutMs: 5000,
-  });
-  return discovery.reachable;
+  return (await fetchLmstudioModels(connection.discoveryRequest)).reachable;
 }
 
 /** Interactive LM Studio setup with connectivity and model-availability checks. */

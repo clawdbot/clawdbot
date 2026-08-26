@@ -88,7 +88,18 @@ describe("startup run repair auto-disable", () => {
     expect(requestHeartbeat).toHaveBeenCalledOnce();
   });
 
-  it("delivers an auto-disable safety notice when recurring heartbeat cadence is disabled", async () => {
+  it.each([
+    {
+      name: "the default owner",
+      creatorSessionKey: undefined,
+      executionSessionTarget: "isolated" as const,
+    },
+    {
+      name: "its creator instead of a different execution conversation",
+      creatorSessionKey: "agent:main:telegram:group:42:topic:77",
+      executionSessionTarget: "session:agent:main:telegram:group:99" as const,
+    },
+  ])("delivers an auto-disable safety notice to $name with cadence disabled", async (testCase) => {
     vi.useFakeTimers();
     const nowMs = Date.parse("2026-08-01T16:00:00.000Z");
     vi.setSystemTime(nowMs);
@@ -98,7 +109,8 @@ describe("startup run repair auto-disable", () => {
         list: [{ id: "main" }, { id: "other" }],
       },
     };
-    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
+    const sessionKey =
+      testCase.creatorSessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: "main" });
     const prompts: string[] = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
@@ -134,7 +146,6 @@ describe("startup run repair auto-disable", () => {
       cfg,
       readCurrentConfig: () => cfg,
       runOnce,
-      stableSchedulerSeed: "auto-disable-notification-proof",
     });
     try {
       const state = createCronServiceState({
@@ -164,7 +175,8 @@ describe("startup run repair auto-disable", () => {
         createdAtMs: nowMs - 60_000,
         updatedAtMs: nowMs,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
-        sessionTarget: "isolated",
+        sessionTarget: testCase.executionSessionTarget,
+        ...(testCase.creatorSessionKey ? { sessionKey: testCase.creatorSessionKey } : {}),
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "check important report" },
         state: { runningAtMs: nowMs, consecutiveErrors: 9 },
@@ -178,7 +190,7 @@ describe("startup run repair auto-disable", () => {
         nowMs,
         deferredNotifications,
       });
-      expect(job.sessionKey).toBeUndefined();
+      expect(job.sessionKey).toBe(testCase.creatorSessionKey);
       expect(deferredNotifications).toHaveLength(1);
       deferredNotifications[0]?.();
       await vi.advanceTimersByTimeAsync(1);

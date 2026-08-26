@@ -4,12 +4,14 @@
  * Materializes temporary SSH config, validates remote shell snippets, runs commands, and uploads workspace trees.
  */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { normalizeEnvVarKey } from "../../infra/host-env-security.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
@@ -288,20 +290,15 @@ export function buildExecRemoteCommand(params: {
   workdir?: string;
   env: Record<string, string>;
 }): string {
+  if (Object.keys(params.env).length > 0) {
+    throw new Error(
+      "SSH sandbox environment requires secure script staging; use prepareSshSandboxExec.",
+    );
+  }
   const body = params.workdir
     ? `cd ${shellEscape(params.workdir)} && ${params.command}`
     : params.command;
-  const argv =
-    Object.keys(params.env).length > 0
-      ? [
-          "env",
-          ...Object.entries(params.env).map(([key, value]) => `${key}=${value}`),
-          "/bin/sh",
-          "-c",
-          body,
-        ]
-      : ["/bin/sh", "-c", body];
-  return buildRemoteCommand(argv);
+  return buildRemoteCommand(["/bin/sh", "-c", body]);
 }
 
 /** Validate and build a remote exec command for untrusted model input. */
@@ -312,6 +309,85 @@ export function buildValidatedExecRemoteCommand(params: {
 }): string {
   assertValidExecRemoteCommand(params.command);
   return buildExecRemoteCommand(params);
+}
+
+function createSshSandboxExecCleanup(session: SshSandboxSession, remoteDir: string) {
+  return async (): Promise<void> => {
+    await runSshSandboxCommand({
+      session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        'rm -rf -- "$1"',
+        "openclaw-sandbox-exec-cleanup",
+        remoteDir,
+      ]),
+      allowFailure: true,
+    });
+  };
+}
+
+/** Stage exec environment through private SSH stdin, never local or remote argv. */
+export async function prepareSshSandboxExec(params: {
+  session: SshSandboxSession;
+  remoteCommand: string;
+  env: Record<string, string>;
+  tty?: boolean;
+}): Promise<{
+  argv: string[];
+  cleanup: () => Promise<void>;
+}> {
+  const env =
+    params.tty && params.env.TERM === undefined
+      ? { TERM: "xterm-256color", ...params.env }
+      : params.env;
+  for (const [key, value] of Object.entries(env)) {
+    if (normalizeEnvVarKey(key, { portable: true }) !== key) {
+      throw new Error(
+        `Invalid SSH sandbox environment variable name ${JSON.stringify(key)}; use a POSIX variable name.`,
+      );
+    }
+    if (value.includes("\0")) {
+      throw new Error(
+        `Invalid SSH sandbox environment variable ${JSON.stringify(key)}; values must not contain NUL bytes.`,
+      );
+    }
+  }
+  const remoteDir = `/tmp/openclaw-sandbox-exec-${randomUUID()}`;
+  const remoteScript = `${remoteDir}/exec.sh`;
+  const script = [
+    "#!/bin/sh",
+    "set -e",
+    `rm -rf -- ${shellEscape(remoteDir)}`,
+    ...Object.entries(env).map(([key, value]) => `export ${key}=${shellEscape(value)}`),
+    `exec ${params.remoteCommand}`,
+    "",
+  ].join("\n");
+  const cleanup = createSshSandboxExecCleanup(params.session, remoteDir);
+  try {
+    await runSshSandboxCommand({
+      session: params.session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        'umask 077 && mkdir -- "$1" && cat > "$1/exec.sh" && chmod 700 "$1/exec.sh"',
+        "openclaw-sandbox-exec-stage",
+        remoteDir,
+      ]),
+      stdin: script,
+    });
+  } catch (error) {
+    await cleanup().catch(() => undefined);
+    throw error;
+  }
+  return {
+    argv: buildSshSandboxArgv({
+      session: params.session,
+      remoteCommand: buildRemoteCommand(["/bin/sh", remoteScript]),
+      tty: params.tty,
+    }),
+    cleanup,
+  };
 }
 
 const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
@@ -563,9 +639,7 @@ export function buildSshSandboxArgv(params: {
     params.session.command,
     "-F",
     params.session.configPath,
-    ...(params.tty
-      ? ["-tt", "-o", "RequestTTY=force", "-o", "SetEnv=TERM=xterm-256color"]
-      : ["-T", "-o", "RequestTTY=no"]),
+    ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
     params.session.host,
     params.remoteCommand,
   ];

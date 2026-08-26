@@ -134,17 +134,19 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved browser devices. Requested scopes are capped to this list; requests without scopes receive this list. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.roles":
-    "Optional profile-bound operator roles for team Gateways. Each named role limits access to other people's sessions, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
+    "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
   "gateway.roles.default":
     "Required role assigned to authenticated profiles without a valid explicit assignment whenever operator roles are configured. Its name must match a configured role definition.",
   "gateway.roles.definitions":
-    "Nonempty administrator-named role definitions bundling the closed session-sharing, agent-access, and operator-scope policies applied to authenticated user profiles.",
+    "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
   "gateway.roles.definitions.*":
-    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling.",
+    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions.",
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
     'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
+  "gateway.roles.definitions.*.sandbox":
+    'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.scopes":

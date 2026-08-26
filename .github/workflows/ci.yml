@@ -3610,9 +3610,9 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    # Hosted runs may still be finalizing large Swift caches after every test
-    # passes; keep that post-job work non-blocking.
-    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
+    # Hosted paths include untrusted first-attempt PRs, so their timeout must
+    # follow the runner rather than inheriting Blacksmith's tighter budget.
+    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
       SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
@@ -3995,6 +3995,53 @@ jobs:
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
+
+      - name: Run focused Apple Watch operation simulator tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("Apple Watch"));
+              if (!simulator) {
+                console.error("No available Apple Watch simulator for operation lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          derived_data_path="$RUNNER_TEMP/openclaw-watch-lifecycle"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawWatchApp \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=${simulator_id}" \
+            -derivedDataPath "$derived_data_path" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+          xcrun simctl boot "$simulator_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcrun simctl install \
+            "$simulator_id" \
+            "$derived_data_path/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawWatchApp \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=${simulator_id}" \
+            -derivedDataPath "$derived_data_path" \
+            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
+            CODE_SIGNING_ALLOWED=NO \
+            test-without-building
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}

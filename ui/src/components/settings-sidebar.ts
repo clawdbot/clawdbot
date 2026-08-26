@@ -171,8 +171,7 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active =
-    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
+  const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
