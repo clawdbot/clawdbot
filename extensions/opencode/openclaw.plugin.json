@@ -1,7 +1,6 @@
 {
   "id": "opencode",
   "icon": "https://cdn.simpleicons.org/opencode",
-  "doctorContract": { "configRepair": true },
   "activation": { "onStartup": true },
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,

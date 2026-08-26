@@ -836,7 +836,7 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
     const config = {
-      tools: { media: { image: { preferredModel: "opencode/hy3-free" } } },
+      tools: { media: { image: { preferredModel: "opencode/gpt-5-nano" } } },
     };
     const pluginIds = collectRelevantDoctorPluginIds(config);
 

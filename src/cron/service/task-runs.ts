@@ -140,21 +140,37 @@ export function tryCreateCronTaskRunHandle(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
+  runReceipt?: CronRunReceiptHandle;
   publicRunId?: string;
-}): { runId: string; taskId: string; flowId?: string } | undefined {
-  const runId = createCronTaskRunId(params.job.id, params.startedAt, params.publicRunId);
-  return tryCreateCronTaskRunRecord({
-    state: params.state,
-    job: params.job,
-    jobId: params.job.id,
-    startedAt: params.startedAt,
-    runId,
-  });
+}): { runId: string; taskId?: string; flowId?: string } {
+  const runId = createCronTaskRunId(
+    params.job.id,
+    params.startedAt,
+    params.runReceipt?.receiptId,
+    params.publicRunId,
+  );
+  return (
+    tryCreateCronTaskRunRecord({
+      state: params.state,
+      job: params.job,
+      jobId: params.job.id,
+      startedAt: params.startedAt,
+      runId,
+    }) ?? { runId }
+  );
 }
 
-function createCronTaskRunId(jobId: string, startedAt: number, publicRunId?: string): string {
-  const discriminator = publicRunId?.trim() || randomUUID();
-  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}`;
+function createCronTaskRunId(
+  jobId: string,
+  startedAt: number,
+  receiptId?: string,
+  publicRunId?: string,
+): string {
+  const receipt = receiptId?.trim();
+  const publicId = publicRunId?.trim();
+  const discriminator = receipt || publicId || randomUUID();
+  const publicSuffix = publicId && publicId !== discriminator ? `:${publicId}` : "";
+  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}${publicSuffix}`;
 }
 
 function findLatestCronTaskRunForRecoveryFromRecords(
@@ -162,15 +178,25 @@ function findLatestCronTaskRunForRecoveryFromRecords(
   jobId: string,
   startedAt: number,
   storeKey: string,
+  receiptId?: string,
 ): TaskRecord | undefined {
   const executionRunId = createCronExecutionId(jobId, startedAt);
   const prefix = `${executionRunId}:`;
+  const receiptRunId = receiptId ? `${prefix}${receiptId}` : undefined;
   return records
     .filter((task) => {
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
         return false;
       }
       const taskStoreKey = cronTaskRecordStoreKey(task);
+      if (receiptRunId) {
+        // Receipt recovery accepts only its owner-native identity; legacy rows
+        // without that receipt prefix are ambiguous when runs share a millisecond.
+        return (
+          taskStoreKey === storeKey &&
+          (task.runId === receiptRunId || task.runId?.startsWith(`${receiptRunId}:`))
+        );
+      }
       if (taskStoreKey === undefined) {
         // Exact match covers detail-less pre-discriminator rows from older releases.
         return task.runId === executionRunId;
@@ -240,12 +266,14 @@ export function findCronTaskRunRecoveryInDatabase(params: {
   jobId: string;
   startedAt: number;
   storeKey: string;
+  receiptId?: string;
 }): { taskRunId?: string; finalized?: FinalizedCronTaskRun } {
   const task = findLatestCronTaskRunForRecoveryFromRecords(
     listTaskRecordsByRuntimeSourceIdInDatabase(params.database, "cron", params.jobId),
     params.jobId,
     params.startedAt,
     params.storeKey,
+    params.receiptId,
   );
   const finalized = finalizedCronTaskRun(task, params.jobId);
   return {

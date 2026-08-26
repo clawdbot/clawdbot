@@ -39,3 +39,6 @@ openclaw-approval-page {
     min-height: 100%;
   }
 }
+
+/* Only the shared page frame lives here; detailed approval styles load with
+ * the lazy page chunk (see approval-page.ts). */
