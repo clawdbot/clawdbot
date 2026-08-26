@@ -201,6 +201,34 @@ describe("runNonInteractiveRemoteSetup", () => {
     expect(commit?.nextConfig.gateway?.remote).toEqual(remote);
   });
 
+  it("preserves endpoint-bound config when the remote URL has equivalent spelling", async () => {
+    const existingRemote = {
+      url: `${remoteUrl}/`,
+      token: { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_TOKEN" },
+      tlsFingerprint: "sha256:test-fingerprint",
+      sshTarget: "operator@gateway.example.test",
+      edgeAuth: { "X-Edge-Auth": "existing-edge-secret" },
+    };
+
+    await runNonInteractiveRemoteSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "remote",
+        remoteUrl,
+        secretInputMode: "ref",
+        skipHooks: true,
+      },
+      runtime,
+      baseConfig: { gateway: { mode: "remote", remote: existingRemote } },
+    });
+
+    const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
+    expect(commit?.nextConfig.gateway?.remote).toEqual({
+      ...existingRemote,
+      url: remoteUrl,
+    });
+  });
+
   it("preserves an existing remote password SecretRef when no replacement is provided", async () => {
     const remote = {
       url: remoteUrl,

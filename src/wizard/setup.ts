@@ -4,6 +4,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
+import { remoteGatewayUrlChanged } from "../commands/onboard-remote-url.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
@@ -16,8 +17,7 @@ import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
@@ -369,7 +369,7 @@ async function runSetupWizardOnce(
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
   const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
   const optionRemotePassword = normalizeOptionalString(opts.remotePassword);
-  const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
+  const remoteUrlChanged = remoteGatewayUrlChanged(opts.remoteUrl, storedRemoteUrl);
   const remoteSeedConfig: OpenClawConfig =
     opts.remoteUrl === undefined &&
     opts.remoteToken === undefined &&

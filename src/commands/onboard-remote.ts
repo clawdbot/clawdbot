@@ -1,5 +1,8 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import {
+  gatewayCredentialScope,
+  gatewayOriginScope,
+} from "../../packages/gateway-client/src/gateway-origin-scope.js";
 /**
  * Interactive remote gateway onboarding.
  *
@@ -175,6 +178,10 @@ export async function promptRemoteGatewayConfig(
     validate: (value) => validateGatewayWebSocketUrl(value),
   });
   const url = ensureWsUrl(urlInput);
+  const storedRemote = cfg.gateway?.remote;
+  const sameCredentialTarget =
+    storedRemote?.url !== undefined &&
+    gatewayCredentialScope(url) === gatewayCredentialScope(storedRemote.url);
   const pinnedDiscoveryFingerprint =
     discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
 
@@ -187,8 +194,8 @@ export async function promptRemoteGatewayConfig(
     ],
   });
 
-  let token: SecretInput | undefined = cfg.gateway?.remote?.token;
-  let password: SecretInput | undefined = cfg.gateway?.remote?.password;
+  let token: SecretInput | undefined = sameCredentialTarget ? storedRemote.token : undefined;
+  let password: SecretInput | undefined = sameCredentialTarget ? storedRemote.password : undefined;
   if (authChoice === "token") {
     const selectedMode = await resolveSecretInputModeForEnvSelection({
       prompter,
@@ -290,6 +297,15 @@ export async function promptRemoteGatewayConfig(
     edgeAuthOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(edgeAuthOriginUrl)
       ? cfg.gateway?.remote?.edgeAuth
       : undefined;
+  const {
+    url: _storedUrl,
+    token: _storedToken,
+    password: _storedPassword,
+    edgeAuth: _storedEdgeAuth,
+    tlsFingerprint: storedTlsFingerprint,
+    ...storedTargetSettings
+  } = sameCredentialTarget && storedRemote ? storedRemote : {};
+  const tlsFingerprint = pinnedDiscoveryFingerprint ?? storedTlsFingerprint;
 
   return {
     ...cfg,
@@ -297,11 +313,12 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
+        ...storedTargetSettings,
         url,
         ...(edgeAuth !== undefined ? { edgeAuth } : {}),
         ...(token !== undefined ? { token } : {}),
         ...(password !== undefined ? { password } : {}),
-        ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
       },
     },
   };

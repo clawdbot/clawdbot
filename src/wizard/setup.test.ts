@@ -1268,6 +1268,45 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("reuses stored remote credentials for an equivalent URL spelling", async () => {
+    const storedRemote = {
+      url: "wss://stored.example.com:18789",
+      token: { source: "env" as const, provider: "default", id: "STORED_GATEWAY_TOKEN" },
+      tlsFingerprint: "sha256:test-fingerprint",
+      edgeAuth: { "X-Edge-Auth": "test-secret" },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({ gateway: { mode: "remote", remote: storedRemote } }),
+    );
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "remote",
+        remoteUrl: `${storedRemote.url}/`,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: {
+            ...storedRemote,
+            url: `${storedRemote.url}/`,
+          },
+        }),
+      }),
+      expect.any(Object),
+      {
+        secretInputMode: undefined,
+        edgeAuthOriginUrl: storedRemote.url,
+      },
+    );
+  });
+
   it("does not probe an invalid CLI remote URL with its token", async () => {
     const remoteToken = "REDACTED";
     validateGatewayWebSocketUrl.mockReturnValueOnce("Use wss:// for public gateways");

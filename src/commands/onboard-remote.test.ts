@@ -116,6 +116,84 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
   });
 
+  it("preserves credentials and target settings for an equivalently spelled URL", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/rpc/",
+          token: "stored-token",
+          transport: "ssh",
+          remotePort: 18790,
+          tlsFingerprint: "sha256:stored",
+          sshTarget: "user@gateway.example",
+          sshIdentity: "~/.ssh/id_gateway",
+          sshHostKeyPolicy: "strict",
+        },
+      },
+    };
+    const prompter = createPrompter({
+      confirm: vi.fn(async (params) => params.message.startsWith("Use existing gateway token")),
+      select: createSelectPrompter({
+        "Gateway auth": "token",
+        "How do you want to provide this gateway token?": "plaintext",
+      }),
+      text: vi.fn(async (params) =>
+        params.message === "Gateway WebSocket URL" ? "wss://gateway.example/rpc" : "",
+      ) as WizardPrompter["text"],
+    });
+
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+    expect(next.gateway?.remote).toEqual({
+      ...cfg.gateway?.remote,
+      url: "wss://gateway.example/rpc",
+    });
+  });
+
+  it("clears credentials and target settings when the URL query changes", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/rpc?account=personal",
+          token: "stored-token",
+          transport: "ssh",
+          remotePort: 18790,
+          tlsFingerprint: "sha256:stored",
+          sshTarget: "user@gateway.example",
+          sshIdentity: "~/.ssh/id_gateway",
+          sshHostKeyPolicy: "strict",
+        },
+      },
+    };
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Gateway WebSocket URL") {
+        return "wss://gateway.example/rpc?account=work";
+      }
+      if (params.message === "Gateway token") {
+        return "replacement-token";
+      }
+      return "";
+    }) as WizardPrompter["text"];
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => false),
+      select: createSelectPrompter({
+        "Gateway auth": "token",
+        "How do you want to provide this gateway token?": "plaintext",
+      }),
+      text,
+    });
+
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+    expect(next.gateway?.remote).toEqual({
+      url: "wss://gateway.example/rpc?account=work",
+      token: "replacement-token",
+    });
+    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).toContain("Gateway token");
+  });
+
   it("defaults discovered direct remote URLs to wss://", async () => {
     detectBinary.mockResolvedValue(true);
     discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
@@ -419,7 +497,12 @@ describe("promptRemoteGatewayConfig", () => {
     });
 
     const cfg = {
-      gateway: { remote: { token: "preexisting-remote-token" } },
+      gateway: {
+        remote: {
+          url: "wss://remote.example.com:18789",
+          token: "preexisting-remote-token",
+        },
+      },
     } as OpenClawConfig;
     const prompter = createPrompter({ confirm, select, text });
 
@@ -457,7 +540,12 @@ describe("promptRemoteGatewayConfig", () => {
     });
 
     const cfg = {
-      gateway: { remote: { password: "preexisting-remote-password" } },
+      gateway: {
+        remote: {
+          url: "wss://remote.example.com:18789",
+          password: "preexisting-remote-password",
+        },
+      },
     } as OpenClawConfig;
     const prompter = createPrompter({ confirm, select, text });
 
