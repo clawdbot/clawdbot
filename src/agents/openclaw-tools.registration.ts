@@ -4,6 +4,7 @@
  * Keeps optional tool gating separate from tool construction so config and execution contracts decide exposure.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ChannelQuestionInputMode } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
@@ -119,11 +120,17 @@ function shouldIncludePrimarySessionToolForOpenClawTools(
   return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
 }
 
-/** Includes ask_user only on a primary session and when normal deny policy permits it. */
+/** Includes ask_user only for capable primary sessions allowed by normal tool policy. */
 export function shouldIncludeAskUserToolForOpenClawTools(
-  params: PrimarySessionToolRegistrationParams,
+  params: PrimarySessionToolRegistrationParams & {
+    questionInputMode?: ChannelQuestionInputMode;
+  },
 ): boolean {
-  return shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params);
+  return (
+    params.questionInputMode !== undefined &&
+    params.questionInputMode !== "none" &&
+    shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params)
+  );
 }
 
 /** Keeps credential management on primary sessions allowed by the normal tool policy. */

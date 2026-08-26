@@ -806,6 +806,7 @@ export const telegramPlugin = createChatChannelPlugin({
           ...(isTelegramRichMessagesEnabled(cfg, accountId) ? ["markdownDetails"] : []),
         ];
       },
+      questionInputMode: "buttons",
       // Authoring contract lives here so every runtime (including native Codex)
       // sees it via inbound-meta response_format; core system-prompt no longer owns it.
       inboundFormattingHints: ({ cfg, accountId }) => {

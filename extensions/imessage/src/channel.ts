@@ -12,7 +12,6 @@ import {
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
@@ -97,10 +96,6 @@ function toIMessageMessageSendResult(
 const loadIMessageApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
 );
-const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
-  () => import("./question-reactions.js"),
-);
-
 async function prepareForwardedIMessageApprovalPayload(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
   approvalKind: ChannelApprovalKind;
@@ -120,14 +115,6 @@ async function registerDeliveredIMessageApprovalPayload(
     cfg: params.cfg,
     accountId: params.target.accountId,
   }).accountId;
-  (
-    await loadIMessageQuestionReactionsModule()
-  ).registerIMessageQuestionReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
   (
     await loadIMessageApprovalReactionsModule()
   ).registerIMessageApprovalReactionTargetForDeliveredPayload({
@@ -443,8 +430,6 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             approvalKind: hint.approvalKind,
           });
         },
-        renderPresentation: ({ payload, presentation }) =>
-          questionGatewayRuntime.prepareReactionPayloadForDelivery({ payload, presentation }),
         afterDeliverPayload: async (params) =>
           await registerDeliveredIMessageApprovalPayload(params),
         deliveryCapabilities: {

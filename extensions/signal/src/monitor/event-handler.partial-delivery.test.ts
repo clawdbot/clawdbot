@@ -15,28 +15,12 @@ import {
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "../approval-reactions.js";
 import { signalPlugin } from "../channel.js";
-import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
-const { getReplyFromConfigMock, resolveQuestionReactionMock, sendMessageSignalMock } = vi.hoisted(
-  () => ({
-    getReplyFromConfigMock: vi.fn(),
-    resolveQuestionReactionMock: vi.fn(),
-    sendMessageSignalMock: vi.fn(),
-  }),
-);
-
-vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
-  return {
-    ...actual,
-    questionGatewayRuntime: {
-      ...actual.questionGatewayRuntime,
-      resolveReaction: resolveQuestionReactionMock,
-    },
-  };
-});
+const { getReplyFromConfigMock, sendMessageSignalMock } = vi.hoisted(() => ({
+  getReplyFromConfigMock: vi.fn(),
+  sendMessageSignalMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
@@ -80,8 +64,6 @@ const [{ deliverReplies }, { startSignalIngressMonitor }, eventHandlerModule, ha
     import("./event-handler.js"),
     import("./event-handler.test-harness.js"),
   ]);
-const { questionGatewayRuntime } = await import("openclaw/plugin-sdk/question-gateway-runtime");
-
 type SignalIngressQueue = ReturnType<typeof createChannelIngressQueueForTests<unknown>>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 
@@ -104,11 +86,6 @@ describe("Signal partial final delivery ingress boundary", () => {
     );
     clearSignalApprovalReactionTargetsForTest();
     getReplyFromConfigMock.mockReset();
-    resolveQuestionReactionMock.mockReset().mockResolvedValue({
-      status: "answered",
-      questionId: "ask-partial",
-      optionValue: "One",
-    });
     sendMessageSignalMock.mockReset();
   });
 
@@ -211,110 +188,6 @@ describe("Signal partial final delivery ingress boundary", () => {
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
     } finally {
       await monitor.stop();
-    }
-  });
-
-  it("drains an abort after an accepted question and resolves the retained binding", async () => {
-    const abort = new AbortController();
-    const timestamp = 1_700_000_005_002;
-    const questionId = "ask_0123456789abcdef0123456789abcdef";
-    const presentation = {
-      blocks: [
-        { type: "text" as const, text: "Pick one" },
-        {
-          type: "buttons" as const,
-          buttons: ["One", "Two"].map((label) => ({
-            label,
-            action: { type: "question" as const, questionId, optionValue: label },
-          })),
-        },
-      ],
-    };
-    const payload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
-      payload: {
-        presentation,
-        channelData: { askUser: { questionId } },
-        mediaUrls: ["https://example.test/one.png", "https://example.test/two.png"],
-      },
-      presentation,
-    });
-    if (!payload) {
-      throw new Error("expected Signal question reaction payload");
-    }
-    getReplyFromConfigMock.mockResolvedValue(payload);
-    let firstSendAccepted!: () => void;
-    const firstSendAcceptedPromise = new Promise<void>((resolve) => {
-      firstSendAccepted = resolve;
-    });
-    sendMessageSignalMock.mockImplementationOnce(async () => {
-      firstSendAccepted();
-      abort.abort(new Error("Signal monitor stopping"));
-      return { messageId: "1700000006000" };
-    });
-    const cfg = {
-      session: { store: state.statePath("sessions") },
-      channels: {
-        signal: {
-          account: "+15550009999",
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-        },
-      },
-    } as OpenClawConfig;
-    const handler = eventHandlerModule.createSignalEventHandler(
-      harnessModule.createBaseSignalEventHandlerDeps({
-        cfg,
-        abortSignal: abort.signal,
-        baseUrl: "http://signal.test:8080",
-        account: "+15550009999",
-        deliverReplies: async (params) =>
-          await deliverReplies({ ...params, cfg, chunkMode: "length" }),
-      }),
-    );
-    const monitor = await startSignalIngressMonitor({
-      accountId: "default",
-      queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-      dispatch: async (event, lifecycle) => await handler(event, lifecycle),
-      runtime: { error: vi.fn(), log: vi.fn() },
-    });
-    const event = harnessModule.createSignalReceiveEvent({
-      timestamp,
-      dataMessage: { timestamp, message: "ask me", attachments: [] },
-    });
-
-    await monitor.receive(event);
-    await firstSendAcceptedPromise;
-    await monitor.stop();
-
-    expect(sendMessageSignalMock).toHaveBeenCalledOnce();
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    await expect(
-      maybeResolveSignalQuestionReaction({
-        cfg,
-        accountId: "default",
-        conversationKey: "+15550001111",
-        messageId: "1700000006000",
-        reactionKey: "1️⃣",
-        isRemove: false,
-        actorId: "+15550001111",
-        targetAuthor: "+15550009999",
-      }),
-    ).resolves.toBe(true);
-    expect(resolveQuestionReactionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, optionValue: "One" }),
-    );
-
-    const restarted = await startSignalIngressMonitor({
-      accountId: "default",
-      queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-      dispatch: async (incoming, lifecycle) => await handler(incoming, lifecycle),
-      runtime: { error: vi.fn(), log: vi.fn() },
-    });
-    try {
-      await restarted.receive(event);
-      expect(sendMessageSignalMock).toHaveBeenCalledOnce();
-    } finally {
-      await restarted.stop();
     }
   });
 

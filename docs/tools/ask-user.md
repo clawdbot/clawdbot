@@ -12,8 +12,9 @@ wait for the answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
 code, or a sensible default.
 
-The tool is available only in the main session. Subagents and other non-primary
-runs do not receive it.
+The tool is available only in the main session when the originating conversation
+surface can present and resolve the question. Subagents, other non-primary runs,
+and channels without question support do not receive it.
 
 ## Answer a question
 
@@ -23,26 +24,25 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps only a compact answer summary.
-- Telegram, Discord, and Slack render native buttons for a single-choice,
+- Discord, Slack, and Telegram render native buttons for a single-choice,
   single-question prompt.
-- A plain-text reply works on any channel. Reply with a number, an option label,
-  or your own answer.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI uses a
+Answers work on supported conversation surfaces. The web Control UI uses a
 docked stepper that replaces the composer while expanded; collapsing it restores
 the full composer beneath a slim question bar. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
 idiom. Every platform keeps the question-to-answer summary in the active chat
 timeline without timed eviction, and **Skip** is available everywhere.
 
-Prompts that cannot use native buttons, including multi-question and
-multi-select prompts, degrade to readable text on channels. The Control UI
-keeps the full structured stepper.
+Prompt rendering follows the capabilities of each supported channel. The
+Control UI keeps the full structured stepper. On other channels, `ask_user` is
+not exposed to the agent, so the agent continues conversationally instead of
+starting an interaction that the channel cannot complete.
 
 ## Timeout and no answer
 

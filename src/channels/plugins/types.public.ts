@@ -27,6 +27,7 @@ export type {
   ChannelMeta,
   ChannelOutboundTargetMode,
   ChannelPollResult,
+  ChannelQuestionInputMode,
   ChannelSetupInput,
   ChannelStatusIssue,
   ChannelStructuredComponents,

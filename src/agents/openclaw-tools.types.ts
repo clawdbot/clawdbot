@@ -5,6 +5,7 @@ import type {
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
+import type { ChannelQuestionInputMode } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -25,6 +26,8 @@ export type OpenClawToolsOptions = {
   /** Durable store key when it differs from the sandbox/policy session key. */
   runSessionKey?: string;
   agentChannel?: string;
+  /** Prepared active-conversation support for structured human questions. */
+  questionInputMode?: ChannelQuestionInputMode;
   runId?: string;
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;

@@ -6,6 +6,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { ChannelQuestionInputMode } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -19,6 +20,7 @@ import {
   resolveTrustedGroupId,
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
+import { resolveChannelQuestionInputMode } from "./channel-tools.js";
 import {
   resolveRequesterToolPolicies,
   type RequesterToolPolicySource,
@@ -136,6 +138,7 @@ export type ResolvedConversationCapabilityProfile = {
     sessionId?: string;
     messageProvider?: string | null;
     messageChannel?: string | null;
+    questionInputMode: ChannelQuestionInputMode;
     messageTo?: string | null;
     messageThreadId?: string | number | null;
     currentChannelId?: string | null;
@@ -213,6 +216,7 @@ export function resolveConversationCapabilityProfile(
   params: ConversationCapabilityProfileParams,
 ): ResolvedConversationCapabilityProfile {
   const messageProvider = params.messageProvider;
+  const questionInputChannel = normalizeMessageChannel(params.messageChannel ?? messageProvider);
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -339,6 +343,9 @@ export function resolveConversationCapabilityProfile(
       sessionId: params.sessionId,
       messageProvider,
       messageChannel: params.messageChannel,
+      questionInputMode: resolveChannelQuestionInputMode({
+        channel: questionInputChannel,
+      }),
       messageTo: params.messageTo,
       messageThreadId: params.messageThreadId,
       currentChannelId: params.currentChannelId,
