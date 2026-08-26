@@ -62,6 +62,7 @@ type OpenAIResponsesPayloadPolicy = {
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
+  usesInstructionsField: boolean;
 };
 
 type OpenAIResponsesPayloadCapabilities = {
@@ -217,7 +218,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsPromptCacheKey" | "supportsStore",
+  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -388,6 +389,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
+  // Defaults on: most Responses-compatible endpoints, including the native
+  // route, honor top-level `instructions`. An endpoint whose proxy silently
+  // ignores it (confirmed for at least one real route, xAI's compact
+  // endpoint) gets a per-model opt-out that falls back to embedding the
+  // system prompt in `input` instead, matching pre-instructions behavior.
+  const usesInstructionsField =
+    readCompatPayloadBoolean(model.compat, "supportsInstructions") !== false;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -402,6 +410,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
       isResponsesApi,
     useServerCompaction: options.enableServerCompaction === true && serverCompactionPlan.enabled,
+    usesInstructionsField,
   };
 }
 

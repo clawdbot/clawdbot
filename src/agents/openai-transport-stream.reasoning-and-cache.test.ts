@@ -243,4 +243,27 @@ describe("openai transport stream", () => {
 
     expect(params.instructions).toBe("system");
   });
+
+  it("embeds the system prompt back in input for a route that opts out of instructions", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsInstructions: false },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("system");
+  });
 });

@@ -185,18 +185,28 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-// Every Responses-API request carries the system prompt via `instructions`,
-// never as an `input` message: `input` is what HTTP continuation
-// (openai-responses-continuation.ts) compares byte-for-byte against the
-// cached previous request to decide whether it can reuse
+// A Responses-API request whose route honors `instructions` carries the
+// system prompt there, never as an `input` message: `input` is what HTTP
+// continuation (openai-responses-continuation.ts) compares byte-for-byte
+// against the cached previous request to decide whether it can reuse
 // previous_response_id. The embedded runner rebuilds the system prompt fresh
 // on every attempt from live runtime state (active background processes,
 // watched sessions, active-memory context) -- if that text sat inside
 // `input`, ordinary state churn between two turns would make the comparison
 // fail and permanently defeat continuation. `instructions` sits outside the
 // compared `input` array, so it can vary freely per turn with no effect on
-// continuation eligibility.
-function resolveOpenAIResponsesInstructions(model: Model, context: Context): string | undefined {
+// continuation eligibility. Routes that opt out via `compat.supportsInstructions:
+// false` (see openai-responses-payload-policy.ts) get no instructions field at
+// all -- convertOpenAIResponsesMessagesForRequest embeds the prompt back into
+// `input` for those instead.
+function resolveOpenAIResponsesInstructions(
+  model: Model,
+  context: Context,
+  usesInstructionsField: boolean,
+): string | undefined {
+  if (!usesInstructionsField) {
+    return undefined;
+  }
   const instructions = buildOpenAIResponsesInstructionsText(context);
   if (instructions && instructions.trim().length > 0) {
     return instructions;
@@ -276,7 +286,7 @@ function convertOpenAIResponsesMessagesForRequest(
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: false,
+    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     supportsDeveloperRole,
     replayReasoningItems: true,
     replayResponsesItemIds,
@@ -300,7 +310,11 @@ export function buildOpenAIResponsesParams(
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
-  const instructions = resolveOpenAIResponsesInstructions(model, context);
+  const instructions = resolveOpenAIResponsesInstructions(
+    model,
+    context,
+    payloadPolicy.usesInstructionsField,
+  );
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
