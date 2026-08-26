@@ -3,9 +3,9 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { FIRST_RUN_ACTIVATION_RECEIPT_KEY } from "./first-run-activation-pending.ts";
 import { activationTimeoutForKind } from "./state.ts";
 
+const FIRST_RUN_ACTIVATION_RECEIPT_KEY = "openclaw.modelSetup.pendingActivation.v1";
 const DEVICE_IDENTITY_KEY = "openclaw-device-identity-v1";
 const ACTIVATION_DEADLINE_SAFETY_MS = 5_000;
 
@@ -19,13 +19,6 @@ export type FirstRunActivationReceipt = {
   kind: string;
   deadlineMs: number;
   owner: string;
-};
-
-export type FirstRunActivationOwner = {
-  client: ActivationContext["gateway"]["snapshot"]["client"];
-  hello: ActivationContext["gateway"]["snapshot"]["hello"];
-  revision: number;
-  agentId: string | null;
 };
 
 function activationOwner(
@@ -163,20 +156,26 @@ export function clearFirstRunActivationReceipt(): void {
 }
 
 export function resumeFirstRunActivation(
-  context: ActivationContext,
-  owner: FirstRunActivationOwner,
-  navigation: { isStillDefaultLanding: () => boolean; redirect: () => void },
+  navigation: {
+    context: ActivationContext;
+    isStillDefaultLanding: () => boolean;
+    redirect: () => void;
+  },
+  ownerSnapshot: ActivationContext["gateway"]["snapshot"],
+  ownerRevision: number,
+  ownerAgentId: string | null,
   isSettled: () => boolean,
   settle: () => void,
 ): void {
+  const { context } = navigation;
   const snapshot = context.gateway.snapshot;
   if (
     !isSettled() &&
     snapshot.phase === "connected" &&
-    snapshot.client === owner.client &&
-    snapshot.hello === owner.hello &&
-    context.gateway.connectionRevision === owner.revision &&
-    (context.agentSelection.state.selectedId?.trim() || null) === owner.agentId &&
+    snapshot.client === ownerSnapshot.client &&
+    snapshot.hello === ownerSnapshot.hello &&
+    context.gateway.connectionRevision === ownerRevision &&
+    (context.agentSelection.state.selectedId?.trim() || null) === ownerAgentId &&
     navigation.isStillDefaultLanding() &&
     readFirstRunActivationReceipt(context) !== null
   ) {

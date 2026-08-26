@@ -1,34 +1,26 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
-import type { RouteId } from "../../app-routes.ts";
+import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { hasPendingFirstRunActivation } from "./first-run-activation-pending.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
   basePath: string,
   routeIdFromPath: (pathname: string, basePath: string) => string | null,
 ): boolean {
-  const query = new URLSearchParams(location.search);
-  const hash = new URLSearchParams(location.hash.startsWith("#") ? location.hash.slice(1) : "");
-  if (query.has("session") || hash.has("session")) {
+  if (
+    new URLSearchParams(location.search).has("session") ||
+    new URLSearchParams(location.hash.slice(1)).has("session")
+  ) {
     return false;
   }
   const routeId = routeIdFromPath(location.pathname, basePath);
-  if (routeId !== null && routeId !== "chat") {
-    return false;
-  }
-  return sessionRouteNamespaceFromPath(location.pathname, basePath) === null;
-}
-
-function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
-  // Session aliases are canonicalized into the pathname before this guard;
-  // the removed query-based session identity needs no separate comparison.
   return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+    (routeId === null || routeId === "chat") &&
+    sessionRouteNamespaceFromPath(location.pathname, basePath) === null
   );
 }
 
@@ -44,7 +36,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
 }): Promise<() => void> {
   const initialLocation = await params.initialLocationReady;
   if (
-    !locationsMatch(params.history.location(), initialLocation) &&
+    !sameRouteLocation(params.history.location(), initialLocation) &&
     params.shouldInstallLocation?.() !== false
   ) {
     if (params.installLocation) {
@@ -59,10 +51,10 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   }
   return startModelSetupFirstRunRedirect({
     context: params.context,
-    isStillDefaultLanding: () => locationsMatch(params.history.location(), initialLocation),
+    isStillDefaultLanding: () => sameRouteLocation(params.history.location(), initialLocation),
     redirect:
       params.redirect ?? (() => params.context.replace("model-setup", { search: "?firstRun=1" })),
-    onInitialDecision: params.onInitialDecision ?? (() => undefined),
+    onInitialDecision: params.onInitialDecision,
   });
 }
 
@@ -70,13 +62,13 @@ function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
   redirect: () => void;
-  onInitialDecision: () => void;
+  onInitialDecision?: () => void;
 }): () => void {
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {
       initialDecisionSettled = true;
-      params.onInitialDecision();
+      params.onInitialDecision?.();
     }
   };
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
@@ -96,40 +88,37 @@ function startModelSetupFirstRunRedirect(params: {
     }
     const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
     const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
-    const defaultAgentId = defaults?.defaultAgentId?.trim() || null;
-    const usesDefaultAgent = selectedAgentId === null || selectedAgentId === defaultAgentId;
-    const canRedirect =
+    if (
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
-      usesDefaultAgent &&
-      params.isStillDefaultLanding();
-    if (canRedirect && defaults?.modelConfigured === false) {
-      params.redirect();
-    } else if (
-      canRedirect &&
-      defaults?.modelConfigured === true &&
-      hasPendingFirstRunActivation()
+      (!selectedAgentId || selectedAgentId === defaults?.defaultAgentId?.trim()) &&
+      params.isStillDefaultLanding()
     ) {
-      const owner = {
-        client: snapshot.client,
-        hello: snapshot.hello,
-        revision: params.context.gateway.connectionRevision,
-        agentId: selectedAgentId,
-      };
-      // HMAC/SHA-256 stays out of every ordinary startup bundle; only a real
-      // pending receipt suspends routing until its authenticated owner loads.
-      void import("./first-run-activation-receipt.ts")
-        .then(({ resumeFirstRunActivation }) =>
-          resumeFirstRunActivation(
-            params.context,
-            owner,
-            params,
-            () => initialDecisionSettled,
-            settleInitialDecision,
-          ),
-        )
-        .catch(settleInitialDecision);
-      return;
+      if (defaults?.modelConfigured === false) {
+        params.redirect();
+      } else if (defaults?.modelConfigured) {
+        try {
+          if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
+            const ownerRevision = params.context.gateway.connectionRevision;
+            // Crypto stays lazy; only an existing receipt suspends startup.
+            void import("./first-run-activation-receipt.ts")
+              .then(({ resumeFirstRunActivation }) =>
+                resumeFirstRunActivation(
+                  params,
+                  snapshot,
+                  ownerRevision,
+                  selectedAgentId,
+                  () => initialDecisionSettled,
+                  settleInitialDecision,
+                ),
+              )
+              .catch(settleInitialDecision);
+            return;
+          }
+        } catch {
+          // Blocked browser storage cannot own durable activation recovery.
+        }
+      }
     }
     settleInitialDecision();
   };
