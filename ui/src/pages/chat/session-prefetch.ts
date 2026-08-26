@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { requestChatSessionSnapshot } from "./chat-history.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -300,6 +301,7 @@ class SessionPrefetcher {
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
       ),
     );
+    const maxPrefetchedSessions = Math.max(0, MAX_CACHED_CHAT_SESSIONS - openKeys.size);
     const rows = (snapshot.rows ?? []).toSorted(
       (left, right) => sessionActivityAt(right) - sessionActivityAt(left),
     );
@@ -320,6 +322,10 @@ class SessionPrefetcher {
         continue;
       }
       seen.add(snapshotKey);
+      // Warming older rows must never evict hotter or presented snapshots.
+      if (seen.size > maxPrefetchedSessions) {
+        break;
+      }
       const activityAt = sessionActivityAt(row);
       const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
       if (savedAt !== null && savedAt >= activityAt) {
