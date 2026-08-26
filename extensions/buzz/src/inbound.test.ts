@@ -1,4 +1,7 @@
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  runPreparedInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -306,6 +309,79 @@ describe("handleBuzzInbound", () => {
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { role: "bot", enabled: true, dispatches: 1 },
+    { role: "member", enabled: true, dispatches: 2 },
+    { role: undefined, enabled: true, dispatches: 2 },
+    { role: "bot", enabled: false, dispatches: 2 },
+  ])(
+    "bounds current roster role $role with protection enabled=$enabled",
+    async ({ role, enabled, dispatches }) => {
+      const runtime = createPluginRuntimeMock();
+      const runDispatch = vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 1 },
+      }));
+      const recordInboundSession = vi.fn(async () => undefined);
+      vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) =>
+        runPreparedInboundReply({
+          ...params,
+          routeSessionKey: params.route.sessionKey,
+          storePath: "/unused/buzz-bot-loop",
+          recordInboundSession,
+          runDispatch,
+        }),
+      );
+      setBuzzRuntime(runtime);
+      const bus = createBus();
+      bus.directory.replaceMemberships(
+        new Map([
+          [
+            ROOM_ID,
+            {
+              roomId: ROOM_ID,
+              createdAt: 1_777_000_000,
+              eventId: "membership-bot-loop",
+              publisherPublicKey: OTHER_PUBLIC_KEY,
+              members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY]),
+              roles: new Map(role ? [[SENDER_PUBLIC_KEY, role]] : []),
+            },
+          ],
+        ]),
+      );
+      const account = createAccount({ groups: { [ROOM_ID]: { requireMention: false } } });
+      const relayHost = `loop-${role ?? "unknown"}-${enabled}.example.test`;
+      account.relayUrl = `wss://${relayHost}/`;
+      const cfg = {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              enabled,
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      for (const [index, id] of ["loop-first", "loop-second"].entries()) {
+        if (index === 1) {
+          account.relayUrl = `wss://${relayHost.toUpperCase()}:443/`;
+        }
+        await handleBuzzInbound({
+          account,
+          cfg,
+          bus,
+          message: createMessage({ id, threadId: id, createdAt: 1_777_000_000 + index * 86_400 }),
+          ...createLifecycle(),
+        });
+      }
+
+      expect(runDispatch).toHaveBeenCalledTimes(dispatches);
+      expect(recordInboundSession).toHaveBeenCalledTimes(dispatches);
+    },
+  );
 
   it.each([
     {

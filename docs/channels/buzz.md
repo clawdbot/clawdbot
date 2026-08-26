@@ -339,6 +339,24 @@ routed agent can do after a message is accepted. Treat room messages as
 untrusted input, and configure that agent's [sandbox and tool policy](/gateway/sandbox-vs-tool-policy-vs-elevated)
 for the room's trust level.
 
+### Bot conversations
+
+Authorized room members with the relay-assigned **Bot** role can activate the
+agent under the same mention and sender rules. Within each Gateway, OpenClaw
+limits repeated exchanges between each bot pair in the same relay and room:
+the default budget is 20 accepted messages in 60 seconds, followed by a
+60-second cooldown. Changing threads does not reset the budget. Restarting the
+Gateway clears this in-memory budget; separate Gateways have separate budgets.
+Human messages are unaffected, and suppressed bot turns are logged without
+starting an agent run.
+
+Use the shared `channels.defaults.botLoopProtection` settings to adjust
+`maxEventsPerWindow`, `windowSeconds`, or `cooldownSeconds`. Setting
+`enabled: false` disables this protection. Bot classification comes from the latest
+received relay-signed room roster, never a display name or message content. If an
+authorized bot stops replying during a busy exchange, check the suppression log
+and allow the cooldown to expire before adjusting the budget.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:
