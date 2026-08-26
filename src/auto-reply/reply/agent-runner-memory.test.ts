@@ -522,6 +522,21 @@ describe("runMemoryFlushIfNeeded", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
+  it("preserves an external memory provider's disabled maintenance thresholds", async () => {
+    const resolver = vi.fn<MemoryFlushPlanResolver>(() =>
+      createModifiedMemoryFlushPlan({ reserveTokensFloor: 50_000 }),
+    );
+    registerMemoryCapability("third-party-memory", { flushPlanResolver: resolver });
+    const sessionEntry = createFlushSessionEntry({ totalTokens: 8_000 });
+
+    const result = await runDefaultMemoryFlush(sessionEntry, { modelContextTokens: 32_000 });
+    await runDefaultPreflight(sessionEntry, { modelContextTokens: 32_000 });
+
+    expect(result.outcome).toBe("skipped");
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ contextWindowTokens: 32_000 }));
+  });
+
   it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const followupRun = createTestFollowupRun({
       authProfileId: "anthropic:work",

@@ -134,7 +134,6 @@ extension NodeAppModel {
             }
 
             if !archived {
-                self.reconcileChatSessionReadState(snapshot.sessions)
                 // An interrupted page must not replace a more complete offline roster.
                 if snapshot.isComplete {
                     await self.storeCachedChatSessions(snapshot.sessions)

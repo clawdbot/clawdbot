@@ -44,6 +44,7 @@ import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistan
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   buildControlUiResourcePath,
   buildControlUiRootAssetPath,
@@ -111,7 +112,12 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string; realPath?: string }
+  | {
+      kind: "bundled";
+      path: string;
+      realPath?: string;
+      retainedAssets?: ControlUiAssetRetention;
+    }
   | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
   | { kind: "preparing" }
@@ -1007,7 +1013,17 @@ export async function handleControlUiHttpRequest(
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
   const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  let servingRootReal = rootReal;
+  let rejectRepresentationHardlinks = rejectHardlinks;
+  let safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  if (!safeFile && immutableAsset && rootState.kind === "bundled") {
+    const retained = rootState.retainedAssets?.resolveAsset(fileRel);
+    if (retained) {
+      servingRootReal = retained.rootRealPath;
+      rejectRepresentationHardlinks = true;
+      safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
+    }
+  }
   if (safeFile) {
     if (path.basename(safeFile.path) === "index.html") {
       if (req.method === "HEAD") {
@@ -1041,7 +1057,7 @@ export async function handleControlUiHttpRequest(
       sourceFile: safeFile,
       precompressed: immutableAsset,
       openPrecompressedFile: (compressedPath) =>
-        resolveSafeControlUiFile(rootReal, compressedPath, false),
+        resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);

@@ -371,6 +371,10 @@ export async function deliverLineAutoReply(params: {
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.
+      const lastRetryMessage = retryMessages.at(-1);
+      if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
+        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+      }
       try {
         await sendLineMessages(retryMessages, false);
       } catch {

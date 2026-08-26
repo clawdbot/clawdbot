@@ -52,7 +52,7 @@ let cachedUiCss: string | null = null;
 const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
-const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%2Emp4?download=1";
+const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
@@ -2272,16 +2272,25 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it(
-    "renders encoded media extensions from assistant output and transcript fields",
+    "renders encoded media extensions as images and compact cards",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
       const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      const video = page.locator(`video[src="${SHARED_APP_VIDEO_URL}"]`);
+      const videoDownload = page.locator(
+        `a.chat-assistant-attachment-card__download[href="${SHARED_APP_VIDEO_URL}"]`,
+      );
+      const videoCard = page
+        .locator(".chat-assistant-attachment-card--compact")
+        .filter({ has: videoDownload });
       await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await video.waitFor({ state: "attached", timeout: 10_000 });
+      await videoCard.waitFor({ state: "attached", timeout: 10_000 });
       expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await video.getAttribute("src")).toBe(SHARED_APP_VIDEO_URL);
+      expect(await videoDownload.getAttribute("href")).toBe(SHARED_APP_VIDEO_URL);
+      expect(
+        (await videoCard.locator(".chat-assistant-attachment-card__title").textContent())?.trim(),
+      ).toBe("clip%2Emp4");
+      expect(await videoCard.locator("video").count()).toBe(0);
     },
   );
 

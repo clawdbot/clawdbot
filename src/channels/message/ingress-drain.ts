@@ -507,10 +507,7 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, {
-          lastError: "turn-abandoned",
-          recordAttempt: false,
-        });
+        await releaseUnadopted(state, { lastError: "turn-abandoned" });
       },
     };
   };

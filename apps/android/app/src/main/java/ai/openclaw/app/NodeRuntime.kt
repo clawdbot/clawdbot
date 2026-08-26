@@ -29,6 +29,7 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
@@ -1330,6 +1331,7 @@ class NodeRuntime private constructor(
   private val gatewayMethodsLock = Any()
   private var gatewayApprovalRpcFamily = GatewayApprovalRpcFamily.Unavailable
   private var gatewayAdvertisedMethods: Set<String>? = null
+  private var gatewayAdvertisedCapabilities: Set<String>? = null
   private var gatewayMethodsEpoch = 0L
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
@@ -1408,6 +1410,7 @@ class NodeRuntime private constructor(
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         replaceGatewayMethods(hello.methods)
+        replaceGatewayCapabilities(hello.capabilities)
         val operatorScopes = normalizeOperatorScopes(hello.authScopes)
         _operatorScopes.value = operatorScopes
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
@@ -1681,6 +1684,7 @@ class NodeRuntime private constructor(
     _gatewayVersion.value = null
     _gatewayUpdateAvailable.value = null
     replaceGatewayMethods(null)
+    replaceGatewayCapabilities(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
@@ -1929,6 +1933,7 @@ class NodeRuntime private constructor(
           currentDefaultAgentId = { gatewayDefaultAgentId.value },
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
           gatewayAdvertisesMethod = ::gatewayAdvertisesMethod,
+          gatewayAdvertisesCapability = ::gatewayAdvertisesCapability,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
@@ -1945,6 +1950,7 @@ class NodeRuntime private constructor(
           json = json,
           requestGateway = AndroidScreenshotFixture::request,
           gatewayAdvertisesMethod = { _ -> true },
+          gatewayAdvertisesCapability = { _ -> true },
         )
     }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
@@ -2906,6 +2912,7 @@ class NodeRuntime private constructor(
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
     replaceGatewayMethods(setOf(GatewayMethod.DesktopObserve.rawValue))
+    replaceGatewayCapabilities(setOf(SESSION_UNREAD_ACK_CAPABILITY))
     _gatewayControlPage.value =
       GatewayControlPage(
         baseUrl = AndroidScreenshotFixture.controlUiBaseUrl,
@@ -7483,6 +7490,14 @@ class NodeRuntime private constructor(
   }
 
   private fun gatewayAdvertisesMethod(method: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
+
+  private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
+    synchronized(gatewayMethodsLock) {
+      gatewayAdvertisedCapabilities = capabilities
+    }
+  }
+
+  private fun gatewayAdvertisesCapability(capability: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedCapabilities?.let { capability in it } }
 
   private fun captureGatewayMethods(): GatewayMethodsSnapshot =
     synchronized(gatewayMethodsLock) {
