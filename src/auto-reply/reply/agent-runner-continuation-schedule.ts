@@ -28,15 +28,7 @@ export async function scheduleReplyContinuation(context: {
   continuation: ReplyContinuationController;
   getActiveSessionEntry: () => SessionEntry | undefined;
 }): Promise<void> {
-  const {
-    cfg,
-    sessionKey,
-    followupRun,
-    usage,
-    effectiveContinuationSignal,
-    continuation,
-    getActiveSessionEntry,
-  } = context;
+  const { cfg, sessionKey, followupRun, usage, continuation, getActiveSessionEntry } = context;
   const { activeSessionEntry: activeSessionEntryAfterSignal, bracketTokensAccumulated } =
     await handleContinuationSignal(context);
   let activeSessionEntry = activeSessionEntryAfterSignal;
