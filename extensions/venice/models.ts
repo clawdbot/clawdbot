@@ -29,13 +29,8 @@ const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 
 function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
+    ...entry,
     input: [...entry.input],
-    cost: VENICE_DEFAULT_COST,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
     compat: {
       supportsUsageInStreaming: false,
       ...entry.compat,

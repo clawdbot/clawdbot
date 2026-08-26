@@ -184,6 +184,49 @@ describe("venice-models", () => {
     }
   });
 
+  it("preserves authoritative manifest pricing in every bundled Venice model", () => {
+    expect(
+      VENICE_MODEL_CATALOG.map(({ id, cost, compat }) => ({
+        id,
+        cost,
+        supportsUsageInStreaming: compat?.supportsUsageInStreaming,
+      })),
+    ).toEqual(
+      manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => ({
+        id,
+        cost,
+        supportsUsageInStreaming: false,
+      })),
+    );
+  });
+
+  it("retains bundled prices for known live models without pricing unknown models", async () => {
+    stubVeniceModelsFetch([
+      { id: "zai-org-glm-4.7" },
+      { id: "claude-opus-5" },
+      { id: "stealth-ox-alpha" },
+      { id: "gemini-3-6-flash" },
+    ]);
+    const manifestCosts = new Map(
+      manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => [id, cost]),
+    );
+
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+
+    expect(models.map(({ id, cost }) => ({ id, cost }))).toEqual([
+      { id: "zai-org-glm-4.7", cost: manifestCosts.get("zai-org-glm-4.7") },
+      { id: "claude-opus-5", cost: manifestCosts.get("claude-opus-5") },
+      {
+        id: "stealth-ox-alpha",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      {
+        id: "gemini-3-6-flash",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+  });
+
   it("uses the shared fallback after a transient fetch failure", async () => {
     let attempts = 0;
     const fetchMock = vi.fn(async () => {
