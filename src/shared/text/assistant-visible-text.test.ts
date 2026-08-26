@@ -712,6 +712,25 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(fenced)).toBe(fenced);
   });
 
+  it("skips encoded closing markers inside code regions", () => {
+    const encodedClose = "]<]minimax[>[</tool_call>";
+    for (const codeExample of [
+      `Example: \`${encodedClose}\``,
+      ["```text", encodedClose, "```"].join("\n"),
+    ]) {
+      const input = [
+        "Before",
+        "]<]minimax[>[<tool_call>",
+        codeExample,
+        ']<]minimax[>[<invoke name="memory_get">payload</invoke>',
+        encodedClose,
+        "After",
+      ].join("\n");
+
+      expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+    }
+  });
+
   it("preserves standalone encoded Minimax delimiters in visible text", () => {
     const input = "The literal ]<]minimax[>[ delimiter is not a tool call.";
 

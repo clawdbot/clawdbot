@@ -636,24 +636,39 @@ export function stripToolCallXmlTags(
  */
 export function stripMinimaxToolCallXml(text: string): string {
   const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
-  const encodedToolCallEnvelopeRe =
-    /\]?<\]minimax\[>\[<tool_call>[\s\S]*?\]?<\]minimax\[>\[<\/tool_call>/g;
-  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallEnvelopeRe.test(text))) {
+  const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
+  const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
+  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallOpenRe.test(text))) {
     return text;
   }
-  encodedToolCallEnvelopeRe.lastIndex = 0;
+  encodedToolCallOpenRe.lastIndex = 0;
 
   const sourceCodeRegions = findCodeRegions(text);
   let normalized = "";
   let envelopeCursor = 0;
-  for (const match of text.matchAll(encodedToolCallEnvelopeRe)) {
-    const start = match.index ?? 0;
-    if (isInsideCode(start, sourceCodeRegions)) {
+  for (const openMatch of text.matchAll(encodedToolCallOpenRe)) {
+    const start = openMatch.index ?? 0;
+    if (start < envelopeCursor || isInsideCode(start, sourceCodeRegions)) {
       continue;
     }
+
+    encodedToolCallCloseRe.lastIndex = start + openMatch[0].length;
+    let closeMatch = encodedToolCallCloseRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, sourceCodeRegions)) {
+      closeMatch = encodedToolCallCloseRe.exec(text);
+    }
+    if (!closeMatch) {
+      continue;
+    }
+
+    const end = closeMatch.index + closeMatch[0].length;
     normalized += text.slice(envelopeCursor, start);
-    normalized += match[0].replace(encodedTransportBoundaryRe, "");
-    envelopeCursor = start + match[0].length;
+    if (sourceCodeRegions.some((region) => region.start >= start && region.end <= end)) {
+      envelopeCursor = end;
+      continue;
+    }
+    normalized += text.slice(start, end).replace(encodedTransportBoundaryRe, "");
+    envelopeCursor = end;
   }
   normalized += text.slice(envelopeCursor);
 
