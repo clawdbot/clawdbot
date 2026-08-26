@@ -3104,25 +3104,25 @@ internal fun canFinishOnboarding(
 private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
 private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
 
-internal fun initialCameraCapabilityEnabled(
+internal fun initialDeviceCapabilityEnabled(
   savedCapabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
-): Boolean = savedCapabilityEnabled && androidCameraPermissionGranted
+  androidPermissionGranted: Boolean,
+): Boolean = savedCapabilityEnabled && androidPermissionGranted
 
-internal fun cameraPermissionRowStatusText(
+internal fun deviceCapabilityRowStatusText(
   capabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
+  androidPermissionGranted: Boolean,
 ): NativeText =
   when {
     capabilityEnabled -> nativeText("Enabled")
-    androidCameraPermissionGranted -> nativeText("Off")
+    androidPermissionGranted -> nativeText("Off")
     else -> nativeText("Not allowed")
   }
 
-internal fun cameraCapabilityAfterRowTap(
+internal fun deviceCapabilityAfterRowTap(
   currentCapabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
-): Boolean? = if (androidCameraPermissionGranted) !currentCapabilityEnabled else null
+  androidPermissionGranted: Boolean,
+): Boolean? = if (androidPermissionGranted) !currentCapabilityEnabled else null
 
 private fun permissionRowStatusText(granted: Boolean): NativeText = if (granted) nativeText("Granted") else nativeText("Not granted")
 
@@ -3148,9 +3148,15 @@ private fun rememberPermissionState(
   val currentLocationMode by viewModel.locationMode.collectAsState()
   var microphoneGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.RECORD_AUDIO)) }
   val cameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA)
-  var cameraGranted by rememberSaveable { mutableStateOf(initialCameraCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
+  var cameraGranted by rememberSaveable { mutableStateOf(initialDeviceCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
+
+  fun hasLocationPermission(): Boolean =
+    hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+      hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+  val locationPermissionGranted = hasLocationPermission()
   var locationGranted by rememberSaveable {
-    mutableStateOf(hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION))
+    mutableStateOf(initialDeviceCapabilityEnabled(currentLocationMode != LocationMode.Off, locationPermissionGranted))
   }
   val photosPermissions = photoReadPermissionsForRequest()
   var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
@@ -3238,9 +3244,9 @@ private fun rememberPermissionState(
 
   fun requestCameraCapability() {
     val nextCapabilityEnabled =
-      cameraCapabilityAfterRowTap(
+      deviceCapabilityAfterRowTap(
         currentCapabilityEnabled = cameraGranted,
-        androidCameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+        androidPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
       )
     if (nextCapabilityEnabled != null) {
       cameraGranted = nextCapabilityEnabled
@@ -3260,14 +3266,26 @@ private fun rememberPermissionState(
         nativeText("Capture photos and clips from this phone"),
         Icons.Default.CameraAlt,
         cameraGranted,
-        cameraPermissionRowStatusText(
+        deviceCapabilityRowStatusText(
           capabilityEnabled = cameraGranted,
-          androidCameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+          androidPermissionGranted = cameraPermissionGranted,
         ),
         ::requestCameraCapability,
       ),
-      PermissionRowModel(PermissionRowId.Location, nativeText("Location"), nativeText("Read this phone's location"), Icons.Default.LocationOn, locationGranted) {
-        request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+      PermissionRowModel(
+        PermissionRowId.Location,
+        nativeText("Location"),
+        nativeText("Read this phone's location"),
+        Icons.Default.LocationOn,
+        locationGranted,
+        deviceCapabilityRowStatusText(locationGranted, locationPermissionGranted),
+      ) {
+        val nextCapabilityEnabled = deviceCapabilityAfterRowTap(locationGranted, hasLocationPermission())
+        if (nextCapabilityEnabled != null) {
+          locationGranted = nextCapabilityEnabled
+        } else {
+          request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
       },
       if (photosAvailable) {
         PermissionRowModel(PermissionRowId.Photos, nativeText("Photos"), nativeText("Read recent photos and media"), Icons.Default.Image, photosGranted) {

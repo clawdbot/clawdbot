@@ -425,8 +425,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                 explicitSessionLabel ?? generatedTitle ?? worktreeTitle?.source ?? "",
               ),
               baseRef: requestedWorktreeBaseRef,
-              // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
-              // admin-only so this write-scoped path cannot execute gated repo scripts.
+              // Worktree Git always disables checkout/ref hooks; only the setup
+              // script executes repository code and therefore requires admin scope.
               runSetupScript: scopes.includes(ADMIN_SCOPE),
               ...(commitGuard ? { commitGuard } : {}),
             });

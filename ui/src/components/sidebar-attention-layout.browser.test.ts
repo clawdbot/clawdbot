@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
-import "../styles/sidebar-footer-update.css";
+import "../styles/sidebar-attention-floating.css";
 import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
 // Upgrade the real element: the floating layout once regressed because a base

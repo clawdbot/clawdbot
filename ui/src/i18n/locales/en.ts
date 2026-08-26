@@ -497,11 +497,9 @@ export const en: TranslationMap = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {
-      action: "Update",
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
-      dismissUntilRestartOrVersion: "Hide until next restart or update",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -1820,6 +1818,10 @@ export const en: TranslationMap = {
       dash: {
         label: "Dash",
         description: "Chocolate blueprint",
+      },
+      absolutely: {
+        label: "Absolutely",
+        description: "Clay on graphite",
       },
     },
     textSizes: {

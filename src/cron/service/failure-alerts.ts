@@ -19,7 +19,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
+import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
@@ -191,21 +191,6 @@ export function resolveFailureAlert(
   };
 }
 
-function enqueueFailureAlertFallback(state: CronServiceState, job: CronJob, text: string): void {
-  enqueueCronSystemEvent(state, text, {
-    agentId: job.agentId,
-    sessionKey: job.sessionKey,
-  });
-  if (job.wakeMode === "now") {
-    requestCronHeartbeat(state, {
-      intent: "immediate",
-      reason: `cron:${job.id}:failure-alert`,
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-    });
-  }
-}
-
 function markFailureNotificationRequested(job: CronJob): void {
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "unknown";
@@ -224,7 +209,7 @@ function transportFailureAlert(
   let pendingFallback = true;
   const fallback = (reachedRecipient = false) => {
     if (pendingFallback && !reachedRecipient) {
-      enqueueFailureAlertFallback(state, params.job, params.payload.text ?? "");
+      enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
     }
     pendingFallback = false;
   };

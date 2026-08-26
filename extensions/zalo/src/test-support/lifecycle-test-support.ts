@@ -5,7 +5,7 @@ import {
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-support.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type LifecycleMonitorSetupParams = {

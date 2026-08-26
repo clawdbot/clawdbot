@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
@@ -20,14 +21,25 @@ type WorktreeListEntry = {
   lockedReason?: string;
 };
 
-// Preserve the worktree-facing dependency contract while generic Git execution
-// remains owned by infra/git-exec.
+function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // Gateway-run Git must never execute repository hooks or filesystem monitors;
+  // the admin-gated setup script is the sole intentional repository-code path.
+  return {
+    ...(env ?? process.env),
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: os.devNull,
+    GIT_CONFIG_KEY_1: "core.fsmonitor",
+    GIT_CONFIG_VALUE_1: "false",
+  };
+}
+
 export async function runGit(
   cwd: string,
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
 ): Promise<GitResult> {
-  return await executeGitCommand(cwd, args, options);
+  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -39,11 +51,11 @@ export async function requireGit(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
 ): Promise<string> {
-  return await requireGitCommand(cwd, args, options);
+  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitCommandRaw(cwd, args);
+  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment() });
 }
 
 export async function requireGitBuffer(
@@ -51,7 +63,7 @@ export async function requireGitBuffer(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
 ): Promise<Buffer> {
-  return await requireGitCommandBuffer(cwd, args, options);
+  return await requireGitCommandBuffer(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {

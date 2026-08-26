@@ -1,6 +1,12 @@
 /** Manual cron wake helper for queueing system events into sessions. */
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import { resolveCronDeliverySessionKey } from "../session-target.js";
+import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
 export function enqueueCronSystemEvent(
@@ -16,6 +22,40 @@ export function requestCronHeartbeat(
   opts: Omit<HeartbeatWakeRequest, "source"> & { source?: HeartbeatWakeRequest["source"] },
 ) {
   state.deps.requestHeartbeat({ source: "cron", ...opts });
+}
+
+/** Keeps safety notices with their creator and limits failure routes to explicit origins. */
+export function enqueueCronNotification(
+  state: CronServiceState,
+  job: CronJob,
+  text: string,
+  kind: "auto-disabled" | "failure-alert",
+): void {
+  const sessionKey = kind === "failure-alert" ? resolveCronDeliverySessionKey(job) : job.sessionKey;
+  const agentId =
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId) ??
+    normalizeOptionalAgentId(state.deps.resolveDefaultAgentId?.()) ??
+    normalizeOptionalAgentId(state.deps.defaultAgentId);
+  const deliveryContext =
+    sessionKey || (kind === "auto-disabled" && agentId)
+      ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
+      : undefined;
+  enqueueCronSystemEvent(state, text, {
+    agentId,
+    sessionKey,
+    contextKey: `cron:${job.id}:${kind}`,
+    ...(deliveryContext ? { deliveryContext } : {}),
+  });
+  if (kind === "auto-disabled" || job.wakeMode === "now" || sessionKey) {
+    requestCronHeartbeat(state, {
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId,
+      sessionKey,
+    });
+  }
 }
 
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
