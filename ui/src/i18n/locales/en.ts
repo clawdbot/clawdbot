@@ -2584,7 +2584,7 @@ export const en: TranslationMap = {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how Crabbox provisions and retires a worker.",
+    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",
     editProfile: "Edit profile",
