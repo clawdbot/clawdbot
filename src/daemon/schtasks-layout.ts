@@ -225,7 +225,30 @@ export async function readScheduledTaskCommand(
         continue;
       }
       const lower = normalizeLowercaseStringOrEmpty(line);
-      if (line.startsWith("@echo") || lower.startsWith("rem ")) {
+      // Strip a leading `@` (cmd echo-suppression) so the same prefix checks
+      // match both `@cmd` and `cmd` lines. Required because launcher writers
+      // use `@` on console-setup lines (`@echo off`, `@chcp …`, `@rem …`) and
+      // the decoder's marker-stripping branch doesn't always run for them.
+      const cmd = lower.startsWith("@") ? lower.slice(1) : lower;
+      if (cmd.startsWith("echo")) {
+        continue;
+      }
+      if (cmd.startsWith("rem ")) {
+        continue;
+      }
+      // Skip console-setup helpers (`chcp` / `title` / `color`) so the
+      // parser doesn't mistake them for the launcher's executable. Required
+      // because `encodeWindowsLauncherScript` prepends `@chcp <codePage> >nul`
+      // for non-ASCII Windows code pages; the corresponding
+      // `chcp <codePage> >nul` line must not be treated as the gateway
+      // command. See #108774.
+      if (cmd.startsWith("chcp ")) {
+        continue;
+      }
+      if (cmd.startsWith("title ")) {
+        continue;
+      }
+      if (cmd.startsWith("color ")) {
         continue;
       }
       if (lower.startsWith("set ")) {

@@ -453,4 +453,98 @@ describe("readScheduledTaskCommand", () => {
       },
     );
   });
+
+  it("skips raw `chcp` line in legacy UTF-8 scripts (#108774 follow-up)", async () => {
+    // `encodeWindowsLauncherScript`'s decoder strips the `@chcp` preamble on
+    // read, so production is covered. This test guards the case where a
+    // launcher script was written without going through that pipeline —
+    // older releases (≤ 2026.7.1-2), hand-edited scripts, or third-party
+    // tools that emit raw `chcp 65001 >nul` for cmd.exe UTF-8 compatibility.
+    // Without the skip-`chcp` parser rule, `readScheduledTaskCommand`
+    // mistakes the `chcp` line for the executable and `gateway status`
+    // reports "Service command does not include the gateway subcommand".
+    await withScheduledTaskScript(
+      {
+        // ASCII content + scriptEncoding:"utf8" → file written as plain UTF-8,
+        // no preamble added by `encodeWindowsLauncherScript`. We hand-author
+        // the `chcp` line to simulate a legacy generator.
+        scriptLines: [
+          "@echo off",
+          "chcp 65001 >nul",
+          "rem OpenClaw Gateway (legacy)",
+          "set OPENCLAW_GATEWAY_PORT=18789",
+          "node C:\\Users\\test\\.openclaw\\dist\\index.js gateway --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual([
+          "node",
+          "C:\\Users\\test\\.openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ]);
+      },
+    );
+  });
+
+  it("skips `title` and `color` console helpers when scanning for the executable", async () => {
+    // `title` / `color` are commonly used to set the console window title
+    // and color scheme. They live between `@echo off` and the executable
+    // and the parser must skip them, the same way it skips
+    // `set` / `cd /d` / `rem`.
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "title OpenClaw Gateway",
+          "color 0A",
+          "rem OpenClaw Gateway",
+          "set OPENCLAW_GATEWAY_PORT=18789",
+          "node gateway.js --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual(["node", "gateway.js", "--port", "18789"]);
+      },
+    );
+  });
+
+  it("skips @chcp preamble when the encoding marker points to an unknown charset", async () => {
+    // Real-world shape: an `encodeWindowsLauncherScript` output buffer starts
+    // with `@chcp <n> >nul\r\n@rem openclaw-launcher-encoding=<encoding>\r\n`.
+    // When the encoding marker is something iconv doesn't recognize (hand-
+    // edited file, third-party generator, or a future openclaw build whose
+    // encoding name drifts), `decodeWindowsLauncherScript` falls through to
+    // its UTF-8 default — and the `@chcp` preamble stays in the content the
+    // parser iterates. Without the parser-skip patch, the parser mistakes
+    // `@chcp` for the executable and `gateway status` reports
+    // "Service command does not include the gateway subcommand".
+    await withScheduledTaskScript(
+      {
+        // UTF-8 buffer that mimics a real encoded-launcher file. The marker
+        // encoding "definitely-not-a-real-encoding" makes `iconv.encodingExists`
+        // return false in the decoder, forcing the UTF-8 fallback path.
+        scriptLines: [
+          "@chcp 936 >nul",
+          "@rem openclaw-launcher-encoding=definitely-not-a-real-encoding",
+          "rem OpenClaw Gateway (marker-decoder-fallback)",
+          "set OPENCLAW_GATEWAY_PORT=18789",
+          "node C:\\Users\\test\\.openclaw\\dist\\index.js gateway --port 18789",
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.programArguments).toEqual([
+          "node",
+          "C:\\Users\\test\\.openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ]);
+      },
+    );
+  });
 });
