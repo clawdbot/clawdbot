@@ -135,4 +135,20 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
       expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
     }
   });
+
+  it("strips a malformed reply prefix from the final block reply", () => {
+    const { emit, onBlockReply } = createBlockReplyHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
+    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
+    emitAssistantTextEnd({ emit });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = replyPayloadAt(onBlockReply, 0);
+    expect(payload.text).toBe("Visible reply");
+    expect(payload.replyToCurrent).toBeUndefined();
+    expect(payload.replyToTag).toBeUndefined();
+    expect(payload.text).not.toContain("[[reply_to");
+  });
 });
