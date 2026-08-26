@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -79,16 +82,11 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 };
 
 const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
-  let text = raw ?? "";
-
-  const replyParsed = parseInlineDirectives(text, {
+  const replyParsed = parseInlineDirectives(raw ?? "", {
     stripAudioTag: true,
     stripReplyTags: true,
   });
-
-  if (replyParsed.hasReplyTag || replyParsed.hasAudioTag) {
-    text = replyParsed.text;
-  }
+  let text = stripInlineDirectiveTagsForDelivery(replyParsed.text).text;
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent =

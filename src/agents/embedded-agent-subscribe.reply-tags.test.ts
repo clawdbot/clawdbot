@@ -154,8 +154,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = replyPayloadAt(onBlockReply, 0);
     expect(payload.text).toBe("Visible reply");
-    expect(payload.replyToCurrent).toBeUndefined();
-    expect(payload.replyToTag).toBeUndefined();
+    expect(payload.replyToCurrent).toBeFalsy();
+    expect(payload.replyToTag).toBeFalsy();
     expect(payload.text).not.toContain("[[reply_to");
   });
 });
