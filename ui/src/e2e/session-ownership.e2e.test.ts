@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -22,6 +22,18 @@ const suite = createControlUiE2eSuite({
 });
 
 let page: Page | undefined;
+
+async function selectMenuValue(menu: Locator, value: string) {
+  await menu.evaluate((element, selectedValue) => {
+    element.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selectedValue } },
+      }),
+    );
+  }, value);
+}
+
 function sessionsList(owners: [string, string], withAvatars = false) {
   const ownerFacet = [
     {
@@ -317,14 +329,7 @@ suite.define(() => {
     const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(currentPage, "00-people-sort-available.png");
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
-    await ownerMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "grouping:person" } },
-        }),
-      ),
-    );
+    await selectMenuValue(ownerMenu, "grouping:person");
     await expectBrowser(
       currentPage.locator('[data-session-section="person:profile-ada"]'),
     ).toContainText("Ada research");
@@ -337,24 +342,10 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
-    await groupedMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "grouping:category" } },
-        }),
-      ),
-    );
+    await selectMenuValue(groupedMenu, "grouping:category");
 
     const sortableMenu = await openSidebarSortMenu(currentPage);
-    await sortableMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "sort:people" } },
-        }),
-      ),
-    );
+    await selectMenuValue(sortableMenu, "sort:people");
     const peopleMenu = await openSidebarSortMenu(currentPage);
     await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
       "aria-checked",
@@ -362,14 +353,7 @@ suite.define(() => {
     );
     await captureUiProof(currentPage, "01-people-sort-selected.png");
     await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await peopleMenu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "owner:profile-ada" } },
-        }),
-      ),
-    );
+    await selectMenuValue(peopleMenu, "owner:profile-ada");
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
@@ -459,14 +443,7 @@ suite.define(() => {
       sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
     });
     const menu = await openSidebarSortMenu(currentPage);
-    await menu.evaluate((element) =>
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: "involving-me" } },
-        }),
-      ),
-    );
+    await selectMenuValue(menu, "involving-me");
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);

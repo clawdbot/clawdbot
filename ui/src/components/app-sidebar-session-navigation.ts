@@ -718,11 +718,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       projected.unshift(navigationState.toSidebarSession(selectedFallback));
     }
-    const ownerFacet =
-      selected === loadedAgentId
-        ? this.sessionData.sessionsResult?.owners
-        : this.sessionData.sessionResultsByAgent[selected]?.owners;
-    return this.applySessionOwnerFilter(projected, ownerFacet);
+    return this.applySessionOwnerFilter(projected, this.selectedAgentSessionResult()?.owners);
   }
 
   private selectedAgentSessionResult(): SessionsListResult | null {
