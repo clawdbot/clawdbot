@@ -1230,9 +1230,12 @@ describe("state migrations", () => {
     try {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
-        database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
-      ).toEqual([{ name: "schema_meta" }, { name: "state_leases" }]);
+        database.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       database.close();
 
       const detected = await detectLegacyStateMigrations({
