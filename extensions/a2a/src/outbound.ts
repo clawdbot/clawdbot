@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import { resolveA2aChannelAccount } from "./accounts.js";
+
+const A2A_OUTBOUND_TIMEOUT_MS = 30_000;
 
 const A2aOutboundResponseSchema = z.object({
   error: z
@@ -64,15 +70,24 @@ export async function sendA2aChannelText(
       configuration: { returnImmediately: true },
     },
   };
-  const signal = AbortSignal.timeout(30_000);
+  const signal = AbortSignal.timeout(A2A_OUTBOUND_TIMEOUT_MS);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch(peer.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(request),
-      redirect: "error",
+    // Peer URLs are operator config, but they still leave the Gateway: the shared
+    // guard keeps that egress on the same SSRF policy as every other plugin call.
+    const { response } = await fetchWithSsrFGuard({
+      url: peer.url,
+      timeoutMs: A2A_OUTBOUND_TIMEOUT_MS,
       signal,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(peer.url),
+      auditContext: "a2a.outbound_send",
+      // A redirected A2A task could be delivered to an unintended agent.
+      maxRedirects: 0,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      },
     });
     if (!response.ok) {
       throw new Error(`outbound A2A request to peer ${peerName} failed (HTTP ${response.status})`);

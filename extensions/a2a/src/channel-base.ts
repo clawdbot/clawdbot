@@ -33,15 +33,52 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
     reload: { configPrefixes: ["channels.a2a"] },
     configSchema: a2aPluginConfigSchema,
     setupContract: defineChannelSetupContract({
-      fields: {},
-      adapter: {
-        applyAccountConfig: ({ cfg }) => ({
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            a2a: { ...resolveA2aChannelAccount({ cfg }).config, enabled: true },
+      // Setup must end with a usable channel: A2A stays unconfigured until at
+      // least one peer credential exists, so the wizard collects that pair.
+      fields: {
+        advertisedUrl: {
+          kind: "string",
+          cli: {
+            flags: "--advertised-url <url>",
+            description: "Public Gateway origin published in the A2A agent card",
           },
-        }),
+        },
+        peerName: {
+          kind: "string",
+          cli: { flags: "--peer-name <name>", description: "A2A peer identifier to authorize" },
+        },
+        peerToken: {
+          kind: "string",
+          sensitive: true,
+          cli: { flags: "--peer-token <token>", description: "Bearer token for the A2A peer" },
+        },
+      },
+      adapter: {
+        applyAccountConfig: ({ cfg, input }) => {
+          const setup = input as {
+            advertisedUrl?: string;
+            peerName?: string;
+            peerToken?: string;
+          };
+          const current = resolveA2aChannelAccount({ cfg }).config;
+          const peerName = setup.peerName?.trim();
+          const peerToken = setup.peerToken?.trim();
+          const advertisedUrl = setup.advertisedUrl?.trim();
+          return {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              a2a: {
+                ...current,
+                enabled: true,
+                ...(advertisedUrl ? { advertisedUrl } : {}),
+                ...(peerName && peerToken
+                  ? { peers: { ...current.peers, [peerName]: { token: peerToken } } }
+                  : {}),
+              },
+            },
+          };
+        },
       },
     }),
     config: {

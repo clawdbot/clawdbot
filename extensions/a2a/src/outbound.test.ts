@@ -20,6 +20,14 @@ function createA2aJsonResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
+/** Outbound A2A bodies are always serialized JSON strings; assert that before parsing. */
+function parseA2aRequestBody(body: BodyInit | null | undefined): Record<string, unknown> {
+  if (typeof body !== "string") {
+    throw new Error(`expected a serialized A2A request body, got ${typeof body}`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -49,14 +57,15 @@ describe("A2A outbound channel delivery", () => {
     expect(url).toBe("https://hermes.example/a2a/v1");
     expect(init).toMatchObject({
       method: "POST",
-      redirect: "error",
+      // The SSRF guard inspects redirects itself instead of delegating to fetch.
+      redirect: "manual",
       headers: {
         "content-type": "application/json",
         authorization: "Bearer outbound-token",
       },
       signal: expect.any(AbortSignal),
     });
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const body = parseA2aRequestBody(init?.body);
     expect(body).toEqual({
       jsonrpc: "2.0",
       id: expect.any(String),
@@ -99,7 +108,7 @@ describe("A2A outbound channel delivery", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const methods = fetchMock.mock.calls.map(([, init]) => {
-      const body = JSON.parse(String(init?.body)) as { method: string };
+      const body = parseA2aRequestBody(init?.body) as { method: string };
       return body.method;
     });
     expect(methods).toEqual(["SendMessage", "message/send"]);
@@ -149,7 +158,7 @@ describe("A2A outbound channel delivery", () => {
     });
 
     const result = await sendA2aChannelText({ cfg, to: "hermes", text: "hello" });
-    const request = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+    const request = parseA2aRequestBody(fetchMock.mock.calls[0]?.[1]?.body) as {
       params: { message: { messageId: string } };
     };
     expect(result.messageId).toBe(request.params.message.messageId);
@@ -181,5 +190,6 @@ describe("A2A outbound channel delivery", () => {
     await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
       "invalid A2A JSON-RPC response",
     );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

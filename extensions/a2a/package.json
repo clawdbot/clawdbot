@@ -28,7 +28,9 @@
     }
   },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "a2a",
@@ -37,7 +39,36 @@
       "docsPath": "/channels/a2a",
       "docsLabel": "a2a",
       "blurb": "Connect external agents through the A2A v1.0 protocol.",
-      "order": 75
+      "order": 75,
+      "setup": {
+        "fields": [
+          {
+            "key": "advertisedUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--advertised-url <url>",
+              "description": "Public Gateway origin published in the A2A agent card"
+            }
+          },
+          {
+            "key": "peerName",
+            "kind": "string",
+            "cli": {
+              "flags": "--peer-name <name>",
+              "description": "A2A peer identifier to authorize"
+            }
+          },
+          {
+            "key": "peerToken",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--peer-token <token>",
+              "description": "Bearer token for the A2A peer"
+            }
+          }
+        ]
+      }
     }
   }
 }

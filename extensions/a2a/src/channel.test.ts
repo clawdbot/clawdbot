@@ -6,6 +6,14 @@ import { a2aChannelPlugin } from "./channel.js";
 import { a2aPluginConfigSchema } from "./config-schema.js";
 import type { A2aCoreConfig } from "./types.js";
 
+/** Outbound A2A bodies are serialized JSON strings; assert that before parsing. */
+function parseA2aOutboundBody(body: BodyInit | null | undefined): Record<string, unknown> {
+  if (typeof body !== "string") {
+    throw new Error(`expected a serialized A2A request body, got ${typeof body}`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 const a2aManifest = JSON.parse(
   readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
 ) as {
@@ -159,9 +167,10 @@ describe("A2A channel message adapter", () => {
             expect(request).toMatchObject({
               headers: { authorization: "Bearer test-outbound-token" },
               method: "POST",
-              redirect: "error",
+              // The SSRF guard inspects redirects itself instead of delegating to fetch.
+              redirect: "manual",
             });
-            expect(JSON.parse(String(request?.body)) as unknown).toMatchObject({
+            expect(parseA2aOutboundBody(request?.body)).toMatchObject({
               jsonrpc: "2.0",
               method: "SendMessage",
               params: {

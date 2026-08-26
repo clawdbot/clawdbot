@@ -54,26 +54,26 @@ async function startHttpHarness(options?: {
   });
   const baseUrl = "http://gateway.example.test";
 
-  async function dispatchRequest(options: {
+  async function dispatchRequest(dispatch: {
     method: "GET" | "POST";
     endpoint: string;
     body?: string;
     token?: string | null;
   }) {
     const request = Readable.from(
-      options.body === undefined ? [] : [options.body],
+      dispatch.body === undefined ? [] : [dispatch.body],
     ) as IncomingMessage;
-    request.method = options.method;
-    request.url = options.endpoint;
+    request.method = dispatch.method;
+    request.url = dispatch.endpoint;
     request.headers = {
       host: "gateway.example.test",
-      ...(options.body === undefined
+      ...(dispatch.body === undefined
         ? {}
         : {
             "content-type": "application/json",
-            "content-length": String(Buffer.byteLength(options.body)),
+            "content-length": String(Buffer.byteLength(dispatch.body)),
           }),
-      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+      ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
     };
     Object.defineProperty(request, "socket", {
       value: { remoteAddress: "127.0.0.1" },
@@ -164,6 +164,7 @@ describe("A2A HTTP agent discovery", () => {
     for (const endpoint of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
       const response = await harness.get(endpoint);
       const card = (await response.json()) as {
+        capabilities: Record<string, unknown>;
         skills: Array<{ id: string; description: string }>;
       };
       expect(response.status).toBe(200);
