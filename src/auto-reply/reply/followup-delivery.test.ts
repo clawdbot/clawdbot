@@ -958,6 +958,45 @@ describe("deliverFollowupDecision", () => {
     }
   });
 
+  it("keeps a queued WebChat reply bound to its original source dispatcher", async () => {
+    const laterDispatcher = vi.fn(async (_payload: ReplyPayload) => {});
+    const sourceDispatcher = vi.fn(async () => {});
+    const turn = createTurn();
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.originatingTo = undefined;
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
+    deliveryState.followupRoute = { route: "dispatcher" };
+    try {
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "one" }, { text: "two" }] },
+        turn,
+        defaults: createDefaults(laterDispatcher),
+        runId: "source-run",
+        runFollowup: vi.fn(async () => {}),
+      });
+      expect(sourceDispatcher).toHaveBeenCalledWith({
+        kind: "queued-followup",
+        runId: "source-run",
+        originatingChannel: "webchat",
+        payloads: [{ text: "one" }, { text: "two" }],
+      });
+      turn.queued.queuedFollowupReplyDisposition = {
+        kind: "drop",
+        reason: "source-unavailable",
+      };
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
+        turn,
+        defaults: createDefaults(laterDispatcher),
+        runId: "dropped-run",
+        runFollowup: vi.fn(async () => {}),
+      });
+      expect(laterDispatcher).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
   it("allows the latest same-channel dispatcher to recover a route failure", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
