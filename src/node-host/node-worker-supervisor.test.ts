@@ -445,9 +445,13 @@ describe("node worker supervisor", () => {
       HOME: path.join(root, "worker-home"),
       LANG: "en_US.UTF-8",
       LC_TIME: "de_DE.UTF-8",
+      NODE_COMPILE_CACHE: path.join(root, "host-compile-cache"),
+      NODE_DISABLE_COMPILE_CACHE: "1",
       NODE_EXTRA_CA_CERTS: path.join(root, "private-ca.pem"),
       NODE_USE_SYSTEM_CA: "1",
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+      OPENCLAW_SERVICE_KIND: "node",
       OPENCLAW_SUPPLIED_SECRET: "supplied-openclaw-secret",
       NODE_OPTIONS: "--title=forbidden-worker-title",
       BASH_ENV: path.join(root, "forbidden-shell-init"),
@@ -486,8 +490,11 @@ describe("node worker supervisor", () => {
         expect(workerEnv).toMatchObject(expectedWorkerEnv);
         expect(workerEnv).not.toHaveProperty("AMBIENT_SECRET");
         expect(workerEnv).not.toHaveProperty("OPENCLAW_AMBIENT_SECRET");
+        expect(workerEnv).not.toHaveProperty("OPENCLAW_LAUNCHD_LABEL");
+        expect(workerEnv).not.toHaveProperty("OPENCLAW_SERVICE_KIND");
         expect(workerEnv).not.toHaveProperty("OPENCLAW_STATE_DIR");
         expect(workerEnv).not.toHaveProperty("OPENCLAW_SUPPLIED_SECRET");
+        expect(workerEnv).not.toHaveProperty("NODE_DISABLE_COMPILE_CACHE");
         expect(workerEnv).not.toHaveProperty("NODE_OPTIONS");
         expect(workerEnv).not.toHaveProperty("BASH_ENV");
         expect(workerEnv).not.toHaveProperty("DYLD_INSERT_LIBRARIES");
