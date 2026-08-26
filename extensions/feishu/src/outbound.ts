@@ -28,6 +28,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -50,7 +51,6 @@ import {
   resolveFeishuCardTemplate,
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
-import type { ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuCommentPresentationFallback,
