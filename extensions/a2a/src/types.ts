@@ -8,6 +8,7 @@ export type A2aPeerConfig = {
 
 export type A2aChannelConfig = {
   enabled?: boolean;
+  configWrites?: boolean;
   advertisedUrl?: string;
   replyTimeoutMs?: number;
   rateLimitPerMinute?: number;

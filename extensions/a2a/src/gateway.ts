@@ -56,6 +56,9 @@ export async function startA2aGatewayAccount(
 
     for (const routePath of a2aGatewayRoutePaths) {
       unregisterRoutes.push(
+        // A2A owns fixed global paths on a single account, so a duplicate
+        // registration means a stale or conflicting owner. Fail loudly instead
+        // of replacing a live handler (GHSA-RQP8-Q22P-5J9Q).
         registerPluginHttpRoute({
           path: routePath,
           auth: "plugin",
@@ -63,7 +66,6 @@ export async function startA2aGatewayAccount(
           pluginId: "a2a",
           source: "a2a-gateway",
           accountId: account.accountId,
-          replaceExisting: true,
           throwOnFailure: true,
           handler,
         }),

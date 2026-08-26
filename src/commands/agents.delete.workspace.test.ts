@@ -65,7 +65,10 @@ vi.mock("../gateway/call.js", async () => ({
   isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
 }));
 
-vi.mock("../infra/fs-safe.js", () => ({
+vi.mock("../infra/fs-safe.js", async (importActual) => ({
+  // Keep every real export: shared-worker lanes let a sibling importer reach
+  // fs-safe helpers this suite never calls, and a partial factory breaks them.
+  ...(await importActual<typeof import("../infra/fs-safe.js")>()),
   movePathToTrash: fsSafeMocks.movePathToTrash,
 }));
 

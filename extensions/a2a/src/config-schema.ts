@@ -18,6 +18,7 @@ const a2aPeerConfigSchema = z
 const a2aChannelConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     advertisedUrl: a2aHttpUrlSchema.optional(),
     replyTimeoutMs: z.number().int().min(5_000).max(600_000).optional(),
     rateLimitPerMinute: z.number().int().min(0).optional(),

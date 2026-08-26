@@ -55,6 +55,7 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
       },
       adapter: {
         applyAccountConfig: ({ cfg, input }) => {
+          // SAFETY: defineChannelSetupContract validates input against the field keys declared above.
           const setup = input as {
             advertisedUrl?: string;
             peerName?: string;
