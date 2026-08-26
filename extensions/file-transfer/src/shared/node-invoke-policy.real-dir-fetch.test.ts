@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "../node-host/dir-fetch.js";
@@ -12,13 +12,8 @@ vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
 }));
 
-const tmpRoots: string[] = [];
 const requireRecord = createRequireRecord("object", "label-not-object");
-
-afterEach(async () => {
-  await Promise.all(tmpRoots.map((tmpRoot) => fs.rm(tmpRoot, { recursive: true, force: true })));
-  tmpRoots.length = 0;
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createRealDirFetchContext(input: {
   approved: string;
@@ -69,10 +64,7 @@ function firstInvokeParams(
 
 describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch policy", () => {
   it("rejects a retargeted literal grant before archive preflight I/O", async () => {
-    const tmpRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "file-transfer-policy-")),
-    );
-    tmpRoots.push(tmpRoot);
+    const tmpRoot = tempDirs.make("file-transfer-policy-");
     const approved = path.join(tmpRoot, "approved");
     const replacement = path.join(tmpRoot, "replacement");
     const requested = path.join(tmpRoot, "current");
@@ -95,10 +87,7 @@ describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch polic
   });
 
   it("archives an unchanged literal target through the real node handler", async () => {
-    const tmpRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "file-transfer-policy-")),
-    );
-    tmpRoots.push(tmpRoot);
+    const tmpRoot = tempDirs.make("file-transfer-policy-");
     const approved = path.join(tmpRoot, "approved");
     const requested = path.join(tmpRoot, "current");
     await fs.mkdir(approved);

@@ -1,8 +1,10 @@
 // File Transfer tests cover dir list plugin behavior.
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createCanonicalDirListCommand } from "./dir-list-worker-command.js";
 import { handleDirList } from "./dir-list.js";
 
 let tmpRoot: string;
@@ -55,6 +57,63 @@ describe("handleDirList — fs errors", () => {
 });
 
 describe("handleDirList — happy path", () => {
+  it.runIf(process.platform === "linux")(
+    "keeps enumeration bound after the checked path is retargeted",
+    async () => {
+      const approved = path.join(tmpRoot, "approved");
+      const replacement = path.join(tmpRoot, "replacement");
+      const current = path.join(tmpRoot, "current");
+      await fs.mkdir(approved);
+      await fs.mkdir(replacement);
+      await fs.writeFile(path.join(approved, "approved.txt"), "approved");
+      await fs.writeFile(path.join(replacement, "secret.txt"), "secret");
+      await Promise.all(
+        Array.from({ length: 5000 }, (_, index) =>
+          fs.writeFile(path.join(approved, `f-${String(index).padStart(4, "0")}`), ""),
+        ),
+      );
+      await fs.symlink(approved, current);
+
+      const command = createCanonicalDirListCommand({
+        directoryPath: current,
+        expectedCanonicalPath: approved,
+        maxEntries: 5001,
+        offset: 0,
+      });
+      const child = spawn(command[0]!, command.slice(1), {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      const exit = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", resolve);
+      });
+
+      let observedBoundCwd = false;
+      for (let attempt = 0; attempt < 200 && child.exitCode === null; attempt += 1) {
+        const cwd = await fs.readlink(`/proc/${child.pid}/cwd`).catch(() => "");
+        if (cwd === approved) {
+          observedBoundCwd = true;
+          break;
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1);
+        });
+      }
+      expect(observedBoundCwd).toBe(true);
+      await fs.unlink(current);
+      await fs.symlink(replacement, current);
+
+      expect(await exit).toBe(0);
+      const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
+        entries: Array<{ name: string }>;
+      };
+      expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
+      expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
+    },
+  );
+
   it("binds the canonical target before listing entries", async () => {
     await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
 

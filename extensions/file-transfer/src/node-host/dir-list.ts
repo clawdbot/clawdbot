@@ -1,8 +1,8 @@
 // File Transfer plugin module implements dir list behavior.
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { root } from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import { listCanonicalDirectory } from "./dir-list-worker.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
@@ -122,24 +122,34 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     return directory;
   }
 
-  let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];
-  try {
-    const dirRoot = await root(canonical);
-    listedEntries = await dirRoot.list(".", { withFileTypes: true });
-  } catch (err) {
-    const code = classifyFsError(err);
+  const listing = await listCanonicalDirectory({
+    directoryPath: canonical,
+    expectedCanonicalPath: canonical,
+    maxEntries,
+    offset,
+  });
+  if (!listing.ok) {
+    if (listing.code === "CANONICAL_PATH_CHANGED") {
+      return {
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+        canonicalPath: canonical,
+      };
+    }
+    const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+    if (!currentDirectory.ok) {
+      return currentDirectory;
+    }
     return {
       ok: false,
-      code,
-      message: `list failed: ${String(err)}`,
+      code: "READ_ERROR",
+      message: "list failed",
       canonicalPath: canonical,
     };
   }
-
-  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
-
-  const total = listedEntries.length;
-  const page = listedEntries.slice(offset, offset + maxEntries);
+  const total = listing.total;
+  const page = listing.entries;
   const truncated = offset + maxEntries < total;
   const nextPageToken = truncated ? String(offset + maxEntries) : undefined;
 
