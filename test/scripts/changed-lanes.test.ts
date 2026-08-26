@@ -370,13 +370,13 @@ describe("scripts/changed-lanes", () => {
     const result = runRepoScript("scripts/check-changed.mjs", [
       "--dry-run",
       "--",
-      "extensions/lmstudio/src/api.ts",
+      "extensions/lmstudio/src/model-reasoning.ts",
     ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("[check:changed:dry-run] lanes=extensions, extensionTests");
     expect(result.stderr).toContain(
-      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/api.ts",
+      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/model-reasoning.ts",
     );
   });
 
@@ -835,7 +835,7 @@ describe("scripts/changed-lanes", () => {
       paths: [
         "extensions/lmstudio/src/embedding-provider.ts",
         "extensions/lmstudio/src/stream.ts",
-        "extensions/lmstudio/src/api.ts",
+        "extensions/lmstudio/src/model-reasoning.ts",
         "extensions/lmstudio/src/models.fetch.ts",
         "extensions/lmstudio/src/setup.ts",
         "extensions/lmstudio/src/defaults.ts",
@@ -1019,11 +1019,11 @@ describe("scripts/changed-lanes", () => {
     {
       name: "targets small extension lint diffs",
       create: createTargetedExtensionLintCommand,
-      targets: ["extensions/lmstudio/src/api.ts", "docs/help/testing.md"],
+      targets: ["extensions/lmstudio/src/model-reasoning.ts", "docs/help/testing.md"],
       expected: {
         name: "lint extension changed file",
         tsconfig: "config/tsconfig/oxlint.extensions.json",
-        path: "extensions/lmstudio/src/api.ts",
+        path: "extensions/lmstudio/src/model-reasoning.ts",
       },
     },
     {
@@ -1241,7 +1241,7 @@ describe("scripts/changed-lanes", () => {
     },
     {
       name: "routes extension production changes to extension prod and extension test lanes",
-      path: "extensions/lmstudio/src/api.ts",
+      path: "extensions/lmstudio/src/model-reasoning.ts",
       expected: {
         lanes: { extensions: true, extensionTests: true },
         includes: ["tsgo:extensions", "tsgo:extensions:test"],

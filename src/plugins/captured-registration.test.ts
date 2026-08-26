@@ -9,6 +9,7 @@ describe("captured plugin registration", () => {
     const captured = capturePluginRegistration({
       register(api) {
         api.registerCli(() => {}, {
+          commands: [" captured-machine ", "captured-machine", "captured-extra"],
           descriptors: [
             {
               name: "captured-machine",
@@ -21,6 +22,7 @@ describe("captured plugin registration", () => {
       },
     });
 
+    expect(captured.cliRegistrars[0]?.commands).toEqual(["captured-machine", "captured-extra"]);
     const descriptor = captured.cliRegistrars[0]?.descriptors[0];
     expect(descriptor?.machineOutput).toBe(machineOutput);
     expect(

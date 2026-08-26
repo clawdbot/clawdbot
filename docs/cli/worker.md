@@ -34,6 +34,17 @@ no longer current. Missing, duplicate, or unknown tool names also invalidate the
 envelope. Operators should start workers through the cloud worker
 orchestrator rather than invoke this entry point directly.
 
+If admission exhausts its 120-second retry budget, the terminal error includes
+the attempt count, Gateway host and port (or local socket path), and last failure.
+`connect failed` means the WebSocket did not open; check reachability and TLS.
+`no hello within deadline` means it opened but the Gateway did not complete worker
+admission. A retryable admission rejection retains its reason. These bounded,
+credential-redacted details appear in the node launch journal and turn error.
+
+Container launches revalidate the pinned daemon identity before creating each
+container. This check allows 30 seconds for a busy daemon; a timeout still fails
+the launch and names the command. A changed daemon identity remains a hard failure.
+
 ## Runtime boundary
 
 The process runs the normal embedded agent loop with a restricted backend:

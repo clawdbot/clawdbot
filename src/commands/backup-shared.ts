@@ -9,10 +9,13 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveActivatedPluginBackupInventory,
   type ActivatedPluginBackupInventory,
 } from "../plugins/manifest-backup-resources.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   createBackupResourceInventory,
@@ -26,6 +29,20 @@ import { resolveUpgradeConfigSnapshot } from "./doctor/shared/automatic-upgrade-
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
+
+export function recordBackupOutcomeBestEffort(
+  runtime: RuntimeEnv,
+  params: Parameters<typeof recordBackupRunOutcome>[0],
+): void {
+  try {
+    recordBackupRunOutcome(params);
+  } catch (error) {
+    const label = params.kind === "git" ? "Git backup" : "backup";
+    runtime.error(
+      `Warning: the ${label} outcome could not be recorded: ${formatErrorMessage(error)}`,
+    );
+  }
+}
 
 export function resolveRequiredBackupPath(
   value: string | undefined,

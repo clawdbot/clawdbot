@@ -112,6 +112,7 @@ export async function executeSkillCollectionReconcile(params: {
       agentIds: params.context?.agentIds,
       approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
       env: params.env,
+      ...(params.context?.assertCurrent ? { assertCurrent: params.context.assertCurrent } : {}),
     });
     if (params.context) {
       params.context.result = result;

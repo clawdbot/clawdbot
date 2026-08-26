@@ -41,6 +41,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
+import { releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
@@ -91,6 +92,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     },
     pending: this.pendingPanelToggleRequests,
     requestUpdate: () => this.requestUpdate(),
+    updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
   });
 
   private chatRouteReadyReported = false;
@@ -309,7 +311,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       const visible =
         state.sidebarLayout.open === true &&
         state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
-      state.updateSidebarLayout(
+      if (visible) {
+        releaseAttachmentWorkspaceOwner(state, slot);
+      }
+      this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
     };

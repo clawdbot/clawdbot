@@ -379,6 +379,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var space: String?
     public var updatedAt: Double?
     public var lastReadAt: Double?
+    public var markedUnreadAt: Double?
     public var lastInteractionAt: Double?
     public var lastActivityAt: Double?
     public var sessionId: String?
@@ -461,6 +462,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
         lastReadAt: Double? = nil,
+        markedUnreadAt: Double? = nil,
         lastInteractionAt: Double? = nil,
         lastActivityAt: Double? = nil,
         parentSessionKey: String? = nil,
@@ -510,6 +512,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.space = space
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
+        self.markedUnreadAt = markedUnreadAt
         self.lastInteractionAt = lastInteractionAt
         self.lastActivityAt = lastActivityAt
         self.sessionId = sessionId

@@ -181,6 +181,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:launch" }],
     } as SessionsListResult;
+    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("  launch code  ");
     const pending = page.runTranscriptSearch();
@@ -245,6 +246,7 @@ describe("sessions page lifecycle", () => {
       count: 2,
       sessions: [{ key: "agent:main:one" }, { key: "agent:writer:one" }],
     } as SessionsListResult;
+    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("needle");
     await page.runTranscriptSearch();
@@ -300,6 +302,25 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
+  it("uses the legacy-compatible Mark as read payload", async () => {
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key: "agent:main:main",
+      entry: { sessionId: "session-main" },
+    }));
+    const sessions = createSessions({ patch });
+    const page = await createPage(
+      createContext(createGateway({} as GatewayBrowserClient).gateway, sessions),
+    );
+
+    await expect(page.patchSession("agent:main:main", { unread: false })).resolves.toBe(
+      "completed",
+    );
+
+    expect(patch).toHaveBeenCalledWith("agent:main:main", { unread: false }, { agentId: "main" });
+  });
+
   it("shows a connection error in the checkpoints drawer while disconnected", async () => {
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
@@ -326,6 +347,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:stale" }],
     } as SessionsListResult;
+    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("old query");
     const pending = page.runTranscriptSearch();
@@ -369,6 +391,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:stale" }],
     } as SessionsListResult;
+    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
 
     page.updateTranscriptSearchQuery("needle");
     const pending = page.runTranscriptSearch();

@@ -1,5 +1,6 @@
 /** Tracks in-process cron executions so schedulers and wake paths avoid duplicate runs. */
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronPayload } from "./types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
@@ -12,6 +13,7 @@ const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
 
 export type CronActiveJobMarker = {
   jobId: string;
+  payloadKind?: CronPayload["kind"];
   generation: number;
   token: number;
   cancellation?:
@@ -88,7 +90,7 @@ function notifyCronJobInactive(marker: CronActiveJobMarker) {
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
 export function markCronJobActive(
   jobId: string,
-  opts?: { preserveAcrossGenerationAdvance?: boolean },
+  opts?: { payloadKind?: CronPayload["kind"]; preserveAcrossGenerationAdvance?: boolean },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
     return undefined;
@@ -98,6 +100,7 @@ export function markCronJobActive(
   state.nextToken += 1;
   const marker: CronActiveJobMarker = {
     jobId,
+    ...(opts?.payloadKind ? { payloadKind: opts.payloadKind } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
@@ -174,6 +177,23 @@ function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, rea
 export function requestActiveCronJobCancellation(jobId: string, reason: string): void {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {
+    requestCronActiveJobMarkerCancellation(marker, reason);
+  }
+}
+
+/** Revokes every active run admitted from one payload family. */
+export function requestActiveCronJobCancellationByPayloadKind(
+  payloadKind: CronPayload["kind"],
+  reason: string,
+): void {
+  const state = getCronActiveJobState();
+  for (const marker of state.activeJobs.values()) {
+    if (
+      marker.payloadKind !== payloadKind ||
+      !isMarkerActiveInGeneration(marker, state.generation)
+    ) {
+      continue;
+    }
     requestCronActiveJobMarkerCancellation(marker, reason);
   }
 }

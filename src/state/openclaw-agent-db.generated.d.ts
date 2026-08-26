@@ -147,6 +147,15 @@ export interface MemoryEmbeddingCache {
   updated_at: number;
 }
 
+export interface MemoryEntryOrigins {
+  agent_id: string;
+  entry_key: string;
+  observed_at: number;
+  origin_class: string;
+  session_id: string;
+  session_key: string | null;
+}
+
 export interface MemoryIndexChunkProvenance {
   chunk_id: string;
   observed_at: number;
@@ -192,6 +201,13 @@ export interface MemoryIndexSources {
 export interface MemoryIndexState {
   id: Generated<number>;
   revision: number;
+}
+
+export interface MemorySessionTombstones {
+  agent_id: string;
+  created_at: number;
+  reason: string;
+  session_id: string;
 }
 
 export interface MessageToolRunOutcomes {
@@ -490,12 +506,14 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_entry_origins: MemoryEntryOrigins;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;

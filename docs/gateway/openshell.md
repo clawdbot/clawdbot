@@ -126,6 +126,8 @@ canonical**:
 
 - Before `exec`, OpenClaw syncs the local workspace into the sandbox.
 - After `exec`, OpenClaw syncs the remote workspace back to local.
+- Concurrent operations sharing the same workspace wait for the current
+  upload, command, and download to finish before starting their own sync.
 - File tools go through the sandbox bridge, but local stays source of truth
   between turns.
 
@@ -147,6 +149,8 @@ Tradeoff: upload + download cost on every exec turn.
   back to local.
 - Prompt-time media reads still work (file/media tools read through the
   sandbox bridge).
+- Outbound images and other attachments can use paths under the configured
+  remote workspace, such as `/sandbox/chart.png`.
 
 Best for long-running agents and CI: lower per-turn overhead, and host-local
 edits cannot silently clobber remote state.
@@ -224,6 +228,12 @@ and restart the Gateway.
 Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
 `agents.defaults.sandbox` like any backend. See
 [Sandboxing](/gateway/sandboxing) for the full matrix.
+
+To pass non-secret environment values into sandboxed commands, use the existing
+`agents.defaults.sandbox.docker.env` setting; the OpenShell backend also
+applies those values during command execution. OpenShell does not currently
+inject them into sandbox creation or background services. Keep credentials in
+OpenShell providers or another dedicated secret-delivery mechanism.
 
 ## Examples
 
@@ -344,6 +354,11 @@ remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
 environment since local stays canonical.
 
+Sandbox CLI commands activate the configured backend's owning plugin before
+looking up runtime status or deleting a sandbox. Unrelated plugins are not
+loaded for these operations, and browser-only commands remain independent of
+the OpenShell backend.
+
 OpenClaw keeps a registered sandbox's shipped legacy runtime name after an
 upgrade so its remote workspace remains addressable. Recreating that scope
 deletes the legacy runtime; the next use creates the current 19-character
@@ -397,6 +412,7 @@ settings to this backend.
 Custom images used with the OpenClaw filesystem bridge must provide:
 
 - `/bin/sh`
+- `sleep` for the persistent sandbox main process on current OpenShell releases
 - `python3` or `python` for pinned write, edit, rename, and remove operations
 - GNU-compatible `stat` and `find`
 - standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
@@ -492,6 +508,9 @@ openclaw logs --follow
   remote files are canonical and are not synchronized back to the host. Use
   `mirror` mode when host-visible changes are required. Recreating a remote
   sandbox destroys its remote-only files.
+- **An image or attachment cannot be sent:** Use a path under the configured
+  `remoteWorkspaceDir`, such as `/sandbox/report.png`, rather than assuming
+  every backend uses Docker's `/workspace` directory.
 - **Recreate or prune cannot delete a sandbox:** Restore access to the original
   OpenShell gateway and workspace, confirm the sandbox still exists with
   `openshell --workspace <workspace-name> sandbox get <sandbox-name>`, and retry

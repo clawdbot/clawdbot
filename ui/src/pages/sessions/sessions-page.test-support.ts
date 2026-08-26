@@ -53,7 +53,7 @@ export type TestSessionsPage = HTMLElement & {
   ) => void;
   patchSession: (
     key: string,
-    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;

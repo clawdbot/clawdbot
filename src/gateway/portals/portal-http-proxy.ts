@@ -6,7 +6,7 @@ import type {
   ServerResponse,
 } from "node:http";
 import { request as requestHttp } from "node:http";
-import net, { type Socket } from "node:net";
+import net from "node:net";
 import type { Duplex } from "node:stream";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
@@ -36,9 +36,19 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
+export type PortalTarget =
+  | { kind: "local"; port: number }
+  | {
+      kind: "worker";
+      environmentId: string;
+      ownerEpoch: number;
+      remotePort: number;
+      connect: () => Promise<Duplex>;
+    };
+
 type PortalProxyTarget = {
   listenPort: number;
-  targetPort: number;
+  target: PortalTarget;
   token: string;
   cookieNamespace: string;
 };
@@ -195,11 +205,24 @@ function respondPortalUnauthorized(req: IncomingMessage, res: ServerResponse): v
   htmlResponse(res, 401, html, req.method === "HEAD");
 }
 
-function respondPortalWaiting(req: IncomingMessage, res: ServerResponse, targetPort: number): void {
-  const html =
+function portalWaitingHtml(targetPort: number): string {
+  return (
     '<!doctype html><meta charset=utf-8><meta http-equiv="refresh" content="2">' +
-    `<title>Waiting for app</title><p>Waiting for the app on port ${targetPort}…</p>`;
-  htmlResponse(res, 502, html, req.method === "HEAD");
+    `<title>Waiting for app</title><p>Waiting for the app on port ${targetPort}…</p>`
+  );
+}
+
+function respondPortalWaiting(req: IncomingMessage, res: ServerResponse, targetPort: number): void {
+  htmlResponse(res, 502, portalWaitingHtml(targetPort), req.method === "HEAD");
+}
+
+async function connectPortalTarget(target: PortalTarget): Promise<Duplex> {
+  if (target.kind === "worker") {
+    return await target.connect();
+  }
+  // Dial "localhost", not a fixed loopback literal: Node >=17 dev servers (Vite,
+  // Next.js) often bind ::1 only, and family autoselection reaches either stack.
+  return net.connect({ host: "localhost", autoSelectFamily: true, port: target.port });
 }
 
 function connectionHeaderTokens(headers: IncomingHttpHeaders): Set<string> {
@@ -245,7 +268,7 @@ function proxyHeaders(headers: IncomingHttpHeaders, cookieNamespace?: string): O
   return result;
 }
 
-/** Proxies one authorized portal request only to the loopback target. */
+/** Proxies one authorized portal request to its local or worker target. */
 export function handlePortalProxyRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -264,44 +287,60 @@ export function handlePortalProxyRequest(params: {
 
   const headers = proxyHeaders(req.headers, target.cookieNamespace);
   const originalHost = req.headers.host;
-  headers.host = `localhost:${target.targetPort}`;
+  const targetPort = target.target.kind === "local" ? target.target.port : target.target.remotePort;
+  headers.host = `localhost:${targetPort}`;
   headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
   headers["x-forwarded-proto"] = tls ? "https" : "http";
   if (originalHost) {
     headers["x-forwarded-host"] = originalHost;
   }
-  // Dial "localhost", not a fixed loopback literal: Node >=17 dev servers (Vite,
-  // Next.js) often bind ::1 only, and family autoselection reaches either stack.
-  const proxyReq = requestHttp({
-    hostname: "localhost",
-    createConnection: () =>
-      net.connect({ host: "localhost", autoSelectFamily: true, port: target.targetPort }),
-    port: target.targetPort,
-    method: req.method,
-    path: authorization.requestPath,
-    headers,
-  });
-  proxyReq.once("response", (proxyRes) => {
-    for (const [name, value] of Object.entries(proxyHeaders(proxyRes.headers))) {
-      if (value !== undefined) {
-        setProxyResponseHeader(res, name, value, target.cookieNamespace);
+  void connectPortalTarget(target.target).then(
+    (targetSocket) => {
+      if (req.aborted || res.destroyed) {
+        targetSocket.destroy();
+        return;
       }
-    }
-    // Overwrite, never default: a target answering with `unsafe-url` would otherwise
-    // send the token-bearing portal URL to every third-party origin it references.
-    res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
-    res.statusCode = proxyRes.statusCode ?? 502;
-    proxyRes.pipe(res);
-  });
-  proxyReq.once("error", () => {
-    if (!res.headersSent) {
-      respondPortalWaiting(req, res, target.targetPort);
-    } else {
-      res.destroy();
-    }
-  });
-  req.once("aborted", () => proxyReq.destroy());
-  req.pipe(proxyReq);
+      const proxyReq = requestHttp({
+        hostname: "localhost",
+        createConnection: () => targetSocket,
+        port: targetPort,
+        method: req.method,
+        path: authorization.requestPath,
+        headers,
+      });
+      proxyReq.once("response", (proxyRes) => {
+        for (const [name, value] of Object.entries(proxyHeaders(proxyRes.headers))) {
+          if (value !== undefined) {
+            setProxyResponseHeader(res, name, value, target.cookieNamespace);
+          }
+        }
+        // Overwrite, never default: a target answering with `unsafe-url` would otherwise
+        // send the token-bearing portal URL to every third-party origin it references.
+        res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
+        res.statusCode = proxyRes.statusCode ?? 502;
+        proxyRes.pipe(res);
+      });
+      proxyReq.once("error", () => {
+        if (!res.headersSent) {
+          respondPortalWaiting(req, res, targetPort);
+        } else {
+          res.destroy();
+        }
+      });
+      proxyReq.once("close", () => {
+        if (target.target.kind === "worker" && !res.headersSent && !res.writableEnded) {
+          respondPortalWaiting(req, res, targetPort);
+        }
+      });
+      req.once("aborted", () => proxyReq.destroy());
+      req.pipe(proxyReq);
+    },
+    () => {
+      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+        respondPortalWaiting(req, res, targetPort);
+      }
+    },
+  );
 }
 
 function websocketHeaders(
@@ -350,10 +389,20 @@ function rejectPortalUpgrade(socket: Duplex): void {
   );
 }
 
+function respondUpgradeWaiting(socket: Duplex, targetPort: number): void {
+  const html = portalWaitingHtml(targetPort);
+  socket.end(
+    "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html; charset=utf-8\r\n" +
+      `Cache-Control: no-store\r\nReferrer-Policy: ${PORTAL_REFERRER_POLICY}\r\n` +
+      `Content-Length: ${Buffer.byteLength(html)}\r\nConnection: close\r\n\r\n${html}`,
+  );
+}
+
 function forwardWebSocketResponse(
-  targetSocket: Socket,
+  targetSocket: Duplex,
   browserSocket: Duplex,
   cookieNamespace: string,
+  onResponse: () => void,
 ): void {
   let pending = Buffer.alloc(0);
   const onData = (chunk: Buffer) => {
@@ -377,6 +426,7 @@ function forwardWebSocketResponse(
       const rewritten = rewriteTargetCookie(line.slice(separator + 1).trimStart(), cookieNamespace);
       return rewritten ? [`${line.slice(0, separator)}: ${rewritten}`] : [];
     });
+    onResponse();
     browserSocket.write(`${rewrittenLines.join("\r\n")}\r\n\r\n`);
     const remainder = pending.subarray(headerEnd + 4);
     if (remainder.length > 0) {
@@ -387,7 +437,7 @@ function forwardWebSocketResponse(
   targetSocket.on("data", onData);
 }
 
-/** Splices an authorized portal WebSocket upgrade into the loopback target. */
+/** Splices an authorized portal WebSocket upgrade into its local or worker target. */
 export function handlePortalProxyUpgrade(params: {
   req: IncomingMessage;
   socket: Duplex;
@@ -402,33 +452,62 @@ export function handlePortalProxyUpgrade(params: {
     return;
   }
 
-  // Same localhost/dual-stack contract as the HTTP path above.
-  const targetSocket: Socket = net.connect({
-    host: "localhost",
-    autoSelectFamily: true,
-    port: target.targetPort,
-  });
+  const targetPort = target.target.kind === "local" ? target.target.port : target.target.remotePort;
   upgradedSockets.add(socket);
-  upgradedSockets.add(targetSocket);
-  const release = (stream: Duplex) => upgradedSockets.delete(stream);
-  socket.once("close", () => {
-    release(socket);
-    targetSocket.destroy();
-  });
-  targetSocket.once("close", () => {
-    release(targetSocket);
-    socket.destroy();
-  });
-  socket.once("error", () => targetSocket.destroy());
-  targetSocket.once("error", () => socket.destroy());
-  targetSocket.once("connect", () => {
-    forwardWebSocketResponse(targetSocket, socket, target.cookieNamespace);
-    targetSocket.write(
-      websocketHeaders(req, target.targetPort, target.cookieNamespace, authorization.requestPath),
-    );
-    if (head.length > 0) {
-      targetSocket.write(head);
-    }
-    socket.pipe(targetSocket);
-  });
+  socket.once("close", () => upgradedSockets.delete(socket));
+  void connectPortalTarget(target.target).then(
+    (targetSocket) => {
+      if (socket.destroyed) {
+        targetSocket.destroy();
+        return;
+      }
+      upgradedSockets.add(targetSocket);
+      let responseStarted = false;
+      let waitingResponseSent = false;
+      const closeUpgrade = () => {
+        if (target.target.kind === "worker" && !responseStarted && !socket.destroyed) {
+          if (!waitingResponseSent) {
+            waitingResponseSent = true;
+            respondUpgradeWaiting(socket, targetPort);
+          }
+          return;
+        }
+        socket.destroy();
+      };
+      socket.once("close", () => targetSocket.destroy());
+      targetSocket.once("close", () => {
+        upgradedSockets.delete(targetSocket);
+        closeUpgrade();
+      });
+      targetSocket.once("end", closeUpgrade);
+      socket.once("error", () => targetSocket.destroy());
+      targetSocket.once("error", closeUpgrade);
+      const spliceUpgrade = () => {
+        forwardWebSocketResponse(targetSocket, socket, target.cookieNamespace, () => {
+          responseStarted = true;
+        });
+        targetSocket.write(
+          websocketHeaders(req, targetPort, target.cookieNamespace, authorization.requestPath),
+        );
+        if (head.length > 0) {
+          targetSocket.write(head);
+        }
+        socket.pipe(targetSocket);
+      };
+      if (target.target.kind === "worker") {
+        spliceUpgrade();
+      } else {
+        targetSocket.once("connect", spliceUpgrade);
+      }
+    },
+    () => {
+      if (!socket.destroyed) {
+        if (target.target.kind === "worker") {
+          respondUpgradeWaiting(socket, targetPort);
+        } else {
+          socket.destroy();
+        }
+      }
+    },
+  );
 }

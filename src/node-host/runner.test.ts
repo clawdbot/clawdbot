@@ -754,6 +754,14 @@ describe("runNodeHost", () => {
       });
     });
 
+    const negotiatedWorkerHost = {
+      enabled: true,
+      capacity: { total: 2, available: 2 },
+      bundlePrewarm: 1,
+      bundleRetention: 1,
+      bundleStatus: 1,
+      portalStream: 1,
+    };
     options?.onHelloOk?.({
       protocol: 4,
       features: {
@@ -762,19 +770,14 @@ describe("runNodeHost", () => {
         capabilities: [
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         ],
       },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: { total: 2, available: 2 },
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
+        workerHost: negotiatedWorkerHost,
       });
     });
 
@@ -784,11 +787,8 @@ describe("runNodeHost", () => {
         expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
           workerHost: {
-            enabled: true,
+            ...negotiatedWorkerHost,
             capacity: { total: 2, available },
-            bundlePrewarm: 1,
-            bundleRetention: 1,
-            bundleStatus: 1,
           },
         });
       });

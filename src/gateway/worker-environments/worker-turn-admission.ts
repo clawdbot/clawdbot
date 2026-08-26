@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -179,6 +180,7 @@ export async function claimWorkerTurn(params: {
   identity: ReturnType<typeof resolvePlacementIdentity>;
   placement: ActiveWorkerPlacement;
   runId: string;
+  isCancellationRequested: (claim: WorkerSessionTurnClaim) => boolean;
   signal?: AbortSignal;
 }): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim }> {
   const claim = () =>
@@ -198,7 +200,8 @@ export async function claimWorkerTurn(params: {
     if (!(error instanceof ActiveTurnClaimError)) {
       throw error;
     }
-    const activeClaim = params.placements.get(params.identity.sessionId)?.turnClaim;
+    const activePlacement = params.placements.get(params.identity.sessionId);
+    const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
@@ -211,12 +214,17 @@ export async function claimWorkerTurn(params: {
           pending.claimId === activeClaim.claimId &&
           pending.runId === activeClaim.runId,
       );
-    if (!resultIsReconciling) {
+    const cancelledClaim = activePlacement && projectWorkerSessionTurnClaim(activePlacement);
+    if (
+      !resultIsReconciling &&
+      !(cancelledClaim && params.isCancellationRequested(cancelledClaim))
+    ) {
       const refreshed = params.placements.get(params.identity.sessionId);
       if (
         refreshed?.state !== "active" ||
         refreshed.environmentId !== params.placement.environmentId ||
         refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
+        refreshed.generation !== params.placement.generation ||
         refreshed.turnClaim
       ) {
         throw error;
@@ -239,7 +247,8 @@ export async function claimWorkerTurn(params: {
   if (
     refreshed?.state !== "active" ||
     refreshed.environmentId !== params.placement.environmentId ||
-    refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch
+    refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
+    refreshed.generation !== params.placement.generation
   ) {
     throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
   }

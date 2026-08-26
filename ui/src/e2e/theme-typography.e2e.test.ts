@@ -132,6 +132,54 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    {
+      body: "Atkinson Hyperlegible Next",
+      chat: "Atkinson Hyperlegible Next",
+      families: ["Atkinson Hyperlegible Next"],
+      sheet: "/fonts/beacon.css",
+      theme: "beacon",
+    },
+    {
+      body: "JetBrains Mono",
+      chat: "JetBrains Mono",
+      families: ["JetBrains Mono"],
+      sheet: "/fonts/phosphor.css",
+      theme: "phosphor",
+    },
+  ])("paints $theme chrome and chat prose in its own faces", async (spec) => {
+    if (captureUiProof) {
+      await mkdir(proofDirectory, { recursive: true });
+    }
+    const { fontRequests, gateway, page } = await openThemedChat(spec.theme, "dark");
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await renderAssistantProse(gateway, page);
+
+    const report = await page.evaluate(async () => {
+      await document.fonts.ready;
+      const chats = document.querySelectorAll(".chat-text");
+      const chat = chats[chats.length - 1];
+      const primary = (value: string) =>
+        (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
+      return {
+        chatFontFamily: chat ? primary(getComputedStyle(chat).fontFamily) : null,
+        bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
+        linkHref: document.getElementById("openclaw-theme-fonts")?.getAttribute("href") ?? null,
+        loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
+      };
+    });
+
+    expect(report.linkHref).toBe(spec.sheet);
+    expect(report.bodyFontFamily).toBe(spec.body);
+    expect(report.chatFontFamily).toBe(spec.chat);
+    expect(new Set(report.loaded)).toEqual(new Set(spec.families));
+    expect(fontRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
+
+    if (captureUiProof) {
+      await page.screenshot({ path: path.join(proofDirectory, `${spec.theme}-chat-dark.png`) });
+    }
+  });
+
   it("resolves the font stylesheet against a configured mount path", async () => {
     // A gateway mounted at a base path serves the bundle below that prefix, so
     // root-absolute font URLs 404 there and the theme silently falls back to

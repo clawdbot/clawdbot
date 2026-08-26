@@ -1,8 +1,9 @@
 // Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
@@ -25,6 +26,7 @@ import {
   createAllowlistProviderGroupPolicyWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
@@ -34,14 +36,24 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  buildProbeChannelStatusSummary,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { PluginRuntime } from "../runtime-api.js";
+import type {
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelPlugin,
+  ClawdbotConfig,
+  PluginRuntime,
+} from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
   listEnabledFeishuAccounts,
@@ -52,19 +64,6 @@ import {
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
-import type {
-  ChannelMessageActionName,
-  ChannelMeta,
-  ChannelPlugin,
-  ClawdbotConfig,
-} from "./channel-runtime-api.js";
-import {
-  buildProbeChannelStatusSummary,
-  createActionGate,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-} from "./channel-runtime-api.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
@@ -81,11 +80,13 @@ import {
   listFeishuDirectoryPeers,
 } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
+  resolveFeishuReplyMode,
   type FeishuOutboundSendMedia,
 } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -114,274 +115,100 @@ import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
-// Path-shaped attachment param aliases the message-tool schema declares. A
-// direct Gateway `message.action send` may arrive with any of these instead of
-// the canonical `media` field the Feishu handler reads; collect them so an
-// attachment intent is promoted to a single canonical mediaUrl instead of being
-// silently dropped on the text-only success branch (issue #112244).
-const FEISHU_SEND_MEDIA_SOURCE_PARAM_KEYS = [
-  "media",
-  "mediaUrl",
-  "path",
-  "filePath",
-  "fileUrl",
-  "image",
-] as const;
+function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
+  const sourceKeys = ["media", "mediaUrl", "path", "filePath", "fileUrl", "image"];
+  const candidates: string[] = [];
+  let unsupportedPayload = false;
+  let unsupportedFile = false;
+  let malformed = false;
 
-const FEISHU_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS = [
-  "media",
-  "mediaUrl",
-  "path",
-  "filePath",
-  "fileUrl",
-  "url",
-  "image",
-] as const;
-
-// Converts a camelCase param key to its snake_case spelling (e.g. filePath ->
-// file_path, mediaUrl -> media_url). The Gateway action contract resolves both
-// spellings before a message action reaches a channel, so a Feishu send may
-// arrive with either; the resolver honors both to avoid silently dropping an
-// attachment alias that uses the snake_case spelling (issue #112244).
-function toFeishuSnakeCaseKey(key: string): string {
-  return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
-}
-
-// Reads a raw param value, preferring the canonical (camelCase) key and
-// falling back to its snake_case spelling when the canonical key is absent.
-function readFeishuParam(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toFeishuSnakeCaseKey(key);
-  return snakeKey === key || !Object.hasOwn(params, snakeKey) ? undefined : params[snakeKey];
-}
-
-function readFeishuStringParam(params: Record<string, unknown>, key: string): string | undefined {
-  const raw = readFeishuParam(params, key);
-  const value = typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
-  return value ?? undefined;
-}
-
-function readFeishuStringArrayParam(params: Record<string, unknown>, key: string): string[] {
-  const raw = readFeishuParam(params, key);
-  // A single string is accepted in place of an array so a caller that wrote
-  // `mediaUrls: "/tmp/a.png"` instead of `["/tmp/a.png"]` is not silently
-  // dropped on the text-only success branch.
-  if (Array.isArray(raw)) {
-    const normalized: string[] = [];
-    for (const entry of raw) {
-      const trimmed = typeof entry === "string" ? normalizeOptionalString(entry) : undefined;
-      if (trimmed) {
-        normalized.push(trimmed);
-      }
+  const read = (record: Record<string, unknown>, key: string): unknown => {
+    if (Object.hasOwn(record, key)) {
+      return record[key];
     }
-    return normalized;
-  }
-  const single = typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
-  return single ? [single] : [];
-}
+    const snakeKey = key
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase();
+    return snakeKey !== key && Object.hasOwn(record, snakeKey) ? record[snakeKey] : undefined;
+  };
 
-// Detects a declared media source field whose value is present but malformed
-// (not a string for scalar sources; not a string or array for `mediaUrls`; or
-// an array containing a non-string entry). A present malformed value expresses
-// attachment intent the Feishu send path cannot represent, so it must fail
-// visibly instead of being treated as absent and falling through to a
-// text-only success branch that recreates the silent-drop bug of #112244.
-// A blank string ("", "  ") is a string and therefore not malformed.
-function readFeishuParamPresence(
-  params: Record<string, unknown>,
-  key: string,
-  kind: "scalar" | "stringOrArray",
-): "absent" | "present" | "malformed" {
-  const raw = readFeishuParam(params, key);
-  if (raw === undefined) {
-    return "absent";
-  }
-  if (kind === "stringOrArray") {
-    if (Array.isArray(raw)) {
-      return raw.some((entry) => typeof entry !== "string") ? "malformed" : "present";
-    }
-    return typeof raw === "string" ? "present" : "malformed";
-  }
-  return typeof raw === "string" ? "present" : "malformed";
-}
-
-// Detects an unsupported attachment-intent key (`file`/`buffer`/`base64`) whose
-// value is present. A non-blank string is the original unsupported-intent
-// signal; a present NON-string value (e.g. `file: {}`, `buffer: 42`) is a
-// malformed intent the resolver cannot promote either. The non-string case used
-// to be silently skipped — `readFeishuStringParam` returns undefined for
-// objects, so `Boolean(...)` was false, leaving no candidate and falling through
-// to a text-only `ok:true`, recreating the silent-drop this PR removes (issue
-// #112244, ClawSweeper P1). A blank string ("", "  ") stays ignored, preserving
-// the blank-alias ignore behavior.
-function hasFeishuUnsupportedIntentValue(params: Record<string, unknown>, key: string): boolean {
-  const raw = readFeishuParam(params, key);
-  if (raw === undefined) {
-    return false;
-  }
-  if (typeof raw === "string") {
-    return Boolean(normalizeOptionalString(raw));
-  }
-  return true;
-}
-
-type FeishuSendAttachmentMedia = {
-  mediaUrl: string | undefined;
-  /** Collected non-blank media source values across all aliases. */
-  mediaUrls: string[];
-  /** A buffer/base64 payload (top-level or nested in attachments[]) that the
-   * Feishu send path cannot represent; rejected instead of silent text fallback. */
-  hasUnsupportedAttachmentPayload: boolean;
-  /** An attachment-intent key (e.g. `file`) the Feishu send path does not map
-   * to a media source string; a non-blank value is rejected instead of silent
-   * text fallback (issue #112244). */
-  hasUnsupportedAttachmentIntent: boolean;
-  /** A declared media source field whose value is present but malformed (e.g.
-   * `media: {}` or `mediaUrls: [{}]`); rejected instead of being treated as
-   * absent and falling through to a text-only success branch (issue #112244). */
-  hasMalformedAttachmentIntent: boolean;
-};
-
-function collectFeishuSendAttachmentMedia(
-  params: Record<string, unknown>,
-): FeishuSendAttachmentMedia {
-  const candidates: Array<string | undefined> = FEISHU_SEND_MEDIA_SOURCE_PARAM_KEYS.map((key) =>
-    readFeishuStringParam(params, key),
-  );
-  candidates.push(...readFeishuStringArrayParam(params, "mediaUrls"));
-  // A blank buffer/base64 ("", "  ") is not an unsupported payload intent and
-  // must not trigger rejection; only a non-blank value counts. A present
-  // non-string value (e.g. `buffer: {}`) is a malformed payload intent that
-  // must also be rejected instead of silently skipped (issue #112244, ClawSweeper P1).
-  let hasUnsupportedAttachmentPayload =
-    hasFeishuUnsupportedIntentValue(params, "buffer") ||
-    hasFeishuUnsupportedIntentValue(params, "base64");
-  // A non-blank `file` is the linked issue's reproduction input; it is not a
-  // media source the Feishu send path maps, so it is treated as an unsupported
-  // attachment intent rather than dropped on the text-only success branch. A
-  // present non-string value (e.g. `file: {}`) is the same class of malformed
-  // intent and is rejected too (issue #112244, ClawSweeper P1).
-  let hasUnsupportedAttachmentIntent = hasFeishuUnsupportedIntentValue(params, "file");
-  // A declared media source whose value is present but malformed (non-string
-  // for scalar sources; non-string/non-array or array-with-non-string-entry for
-  // `mediaUrls`) is an attachment-intent signal the Feishu send path cannot
-  // satisfy, so it is rejected rather than silently treated as absent and
-  // dropped on the text-only success branch (issue #112244). A blank string is
-  // a string and therefore not malformed, preserving the blank-alias ignore.
-  let hasMalformedAttachmentIntent = false;
-  for (const key of FEISHU_SEND_MEDIA_SOURCE_PARAM_KEYS) {
-    if (readFeishuParamPresence(params, key, "scalar") === "malformed") {
-      hasMalformedAttachmentIntent = true;
-    }
-  }
-  if (readFeishuParamPresence(params, "mediaUrls", "stringOrArray") === "malformed") {
-    hasMalformedAttachmentIntent = true;
-  }
-  // A declared `attachments` field that is not an array (e.g. an object
-  // container like `{ media: "/tmp/a" }`) expresses attachment intent the
-  // Feishu send path cannot promote — the nested media source is not a
-  // top-level alias and the array resolver below never runs. Treating it as
-  // absent recreates the silent text-only `ok:true` success this PR removes,
-  // so it is rejected before the text branch (issue #112244, ClawSweeper P1).
-  if (params.attachments !== undefined && !Array.isArray(params.attachments)) {
-    hasMalformedAttachmentIntent = true;
-  }
-  if (Array.isArray(params.attachments)) {
-    for (const attachment of params.attachments) {
-      // A non-record array entry (e.g. `null`, a number, or a string) is a
-      // declared attachment intent the resolver cannot promote to a media
-      // source; skipping it silently would leave no candidate and fall through
-      // to a text-only `ok:true` — the exact drop this PR removes. Reject it
-      // before the text branch instead (issue #112244, ClawSweeper P1).
-      if (!isRecord(attachment)) {
-        hasMalformedAttachmentIntent = true;
+  const inspect = (record: Record<string, unknown>, nested = false): void => {
+    const keys = nested ? [...sourceKeys.slice(0, -1), "url", "image"] : sourceKeys;
+    for (const key of keys) {
+      const value = read(record, key);
+      if (value === undefined) {
         continue;
       }
-      for (const key of FEISHU_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS) {
-        candidates.push(readFeishuStringParam(attachment, key));
+      if (typeof value !== "string") {
+        malformed = true;
+        continue;
       }
-      // Collect valid nested `mediaUrls` entries too, mirroring the top-level
-      // handling: without this, `{ attachments: [{ mediaUrls: ["/tmp/a.png"] }] }`
-      // would pass the malformed check but produce no candidate and silently
-      // fall through to a text-only `ok:true` — the exact drop this PR removes
-      // (issue #112244, ClawSweeper P1).
-      candidates.push(...readFeishuStringArrayParam(attachment, "mediaUrls"));
-      // Each structured attachment is scanned for unsupported payloads too, so
-      // `attachments: [{ buffer: ... }]` fails visibly instead of producing no
-      // media candidate and silently falling through to a text-only send. A
-      // present non-string value (e.g. `attachments: [{ file: {} }]`) is a
-      // malformed intent rejected the same way (issue #112244, ClawSweeper P1).
-      hasUnsupportedAttachmentPayload ||=
-        hasFeishuUnsupportedIntentValue(attachment, "buffer") ||
-        hasFeishuUnsupportedIntentValue(attachment, "base64");
-      hasUnsupportedAttachmentIntent ||= hasFeishuUnsupportedIntentValue(attachment, "file");
-      for (const key of FEISHU_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS) {
-        if (readFeishuParamPresence(attachment, key, "scalar") === "malformed") {
-          hasMalformedAttachmentIntent = true;
+      const normalized = normalizeOptionalString(value);
+      if (normalized) {
+        candidates.push(normalized);
+      }
+    }
+
+    const multiple = read(record, "mediaUrls");
+    if (multiple !== undefined) {
+      for (const value of Array.isArray(multiple) ? multiple : [multiple]) {
+        if (typeof value !== "string") {
+          malformed = true;
+          continue;
+        }
+        const normalized = normalizeOptionalString(value);
+        if (normalized) {
+          candidates.push(normalized);
         }
       }
-      if (readFeishuParamPresence(attachment, "mediaUrls", "stringOrArray") === "malformed") {
-        hasMalformedAttachmentIntent = true;
+    }
+
+    for (const key of ["buffer", "base64"]) {
+      const value = read(record, key);
+      unsupportedPayload ||=
+        value !== undefined &&
+        (typeof value !== "string" || Boolean(normalizeOptionalString(value)));
+    }
+    const file = read(record, "file");
+    unsupportedFile ||=
+      file !== undefined && (typeof file !== "string" || Boolean(normalizeOptionalString(file)));
+  };
+
+  inspect(params);
+  const attachments = params.attachments;
+  if (attachments !== undefined && !Array.isArray(attachments)) {
+    malformed = true;
+  } else if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      if (!isRecord(attachment)) {
+        malformed = true;
+      } else {
+        inspect(attachment, true);
       }
     }
   }
-  const seen = new Set<string>();
-  const mediaUrls: string[] = [];
-  for (const candidate of candidates) {
-    if (!candidate || seen.has(candidate)) {
-      continue;
-    }
-    seen.add(candidate);
-    mediaUrls.push(candidate);
-  }
-  return {
-    mediaUrl: mediaUrls[0],
-    mediaUrls,
-    hasUnsupportedAttachmentPayload,
-    hasUnsupportedAttachmentIntent,
-    hasMalformedAttachmentIntent,
-  };
-}
 
-// Feishu delivers one media item per message. A send declaring more than one
-// attachment is rejected rather than silently delivering only the first, and
-// buffer/base64 payloads (top-level or nested in attachments[]) are rejected
-// because the Feishu send path loads media from a media source string
-// (path/URL) via the outbound adapter, not from an in-memory buffer. A
-// non-blank `file` attachment-intent key is rejected the same way because the
-// shared action contract deliberately excludes `file` from supported media
-// sources; a present malformed media source value (e.g. `media: {}` or
-// `mediaUrls: [{}]`) is rejected because the resolver cannot promote it to a
-// mediaUrl and treating it as absent would recreate the silent text-only
-// success branch. Failing visibly here matches the issue's expected behavior
-// instead of returning ok:true on a text-only send. Mirrors the Mattermost
-// send-attachment resolver shape.
-function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
-  const attachmentMedia = collectFeishuSendAttachmentMedia(params);
-  if (attachmentMedia.hasUnsupportedAttachmentPayload) {
+  if (unsupportedPayload) {
     throw new Error(
       "Feishu send supports media attachments through media, mediaUrl, path, filePath, fileUrl, image, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
     );
   }
-  if (attachmentMedia.hasMalformedAttachmentIntent) {
+  if (malformed) {
     throw new Error(
       "Feishu send supports media attachments through media, mediaUrl, path, filePath, fileUrl, image, mediaUrls, or attachments[] with one of those fields; a present malformed media source value is not supported — use a string path/URL (or a string array for mediaUrls) instead.",
     );
   }
-  if (attachmentMedia.hasUnsupportedAttachmentIntent) {
+  if (unsupportedFile) {
     throw new Error(
       "Feishu send supports media attachments through media, mediaUrl, path, filePath, fileUrl, image, mediaUrls, or attachments[] with one of those fields; the `file` attachment-intent parameter is not supported — use one of the supported media sources instead.",
     );
   }
-  if (attachmentMedia.mediaUrls.length > 1) {
+  const urls = [...new Set(candidates)];
+  if (urls.length > 1) {
     throw new Error("Feishu send supports a single media attachment.");
   }
-  return attachmentMedia.mediaUrl;
+  return urls[0];
 }
 
 function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
@@ -635,13 +462,12 @@ function describeFeishuMessageTool({
     "channel-info",
     "channel-list",
   ]);
-  if (
-    accountId
-      ? enabledAccounts.some((account) => isFeishuReactionsActionEnabled({ cfg, account }))
-      : areAnyFeishuReactionActionsEnabled(cfg)
-  ) {
+  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
     actions.add("react");
     actions.add("reactions");
+  }
+  if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "sticker"))) {
+    actions.add("sticker");
   }
   return {
     actions: Array.from(actions),
@@ -662,30 +488,14 @@ const feishuConfigAdapter = createHybridChannelConfigAdapter<
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
 });
 
-function isFeishuReactionsActionEnabled(params: {
-  cfg: ClawdbotConfig;
-  account: ResolvedFeishuAccount;
-}): boolean {
-  if (!params.account.enabled || !params.account.configured) {
+function isFeishuActionEnabled(
+  account: ResolvedFeishuAccount,
+  action: "reactions" | "sticker",
+): boolean {
+  if (!account.enabled || !account.configured) {
     return false;
   }
-  const gate = createActionGate(
-    (params.account.config.actions ??
-      (params.cfg.channels?.feishu as { actions?: unknown } | undefined)?.actions) as Record<
-      string,
-      boolean | undefined
-    >,
-  );
-  return gate("reactions");
-}
-
-function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
-  for (const account of listEnabledFeishuAccounts(cfg)) {
-    if (isFeishuReactionsActionEnabled({ cfg, account })) {
-      return true;
-    }
-  }
-  return false;
+  return createActionGate(account.config.actions)(action, action === "reactions");
 }
 
 function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
@@ -703,32 +513,55 @@ type FeishuActionReplyAnchor = {
 
 type FeishuSendActionContext = Pick<
   ChannelMessageActionContext,
-  "action" | "params" | "sessionKey" | "toolContext"
+  "action" | "params" | "sessionKey" | "toolContext" | "requesterAccountId" | "reply"
 >;
 
-function resolveFeishuTopicAutoThreadAnchor(ctx: FeishuSendActionContext): string | undefined {
-  if (ctx.action !== "send") {
-    return undefined;
-  }
-  if (!isFeishuGroupTopicSessionKey(ctx.sessionKey)) {
+function resolveFeishuTopicAutoThreadAnchor(
+  ctx: FeishuSendActionContext,
+  accountId: string,
+): string | undefined {
+  const currentTarget =
+    ctx.toolContext?.currentMessagingTarget ?? ctx.toolContext?.currentChannelId;
+  const target = resolveFeishuActionTarget(ctx);
+  // A reply API addresses only the message ID: inheriting it across targets
+  // would send into the source topic while reporting the requested destination.
+  if (
+    !isFeishuGroupTopicSessionKey(ctx.sessionKey) ||
+    ctx.params.topLevel === true ||
+    ctx.params.threadId === null ||
+    (ctx.requesterAccountId && ctx.requesterAccountId !== accountId) ||
+    (ctx.toolContext?.currentChannelProvider &&
+      ctx.toolContext.currentChannelProvider !== "feishu") ||
+    !currentTarget ||
+    !target ||
+    normalizeFeishuTarget(currentTarget) !== normalizeFeishuTarget(target)
+  ) {
     return undefined;
   }
   const inbound = ctx.toolContext?.currentMessageId;
   return typeof inbound === "string" && inbound.length > 0 ? inbound : undefined;
 }
 
-function buildFeishuSendReplyAnchor(ctx: FeishuSendActionContext): FeishuActionReplyAnchor {
+function buildFeishuSendReplyAnchor(
+  ctx: FeishuSendActionContext,
+  accountId: string,
+): FeishuActionReplyAnchor {
   if (ctx.action === "thread-reply") {
     return {
       replyToMessageId: resolveFeishuMessageId(ctx.params),
       replyInThread: true,
     };
   }
-  const autoThreadId = resolveFeishuTopicAutoThreadAnchor(ctx);
-  return {
-    replyToMessageId: autoThreadId,
-    replyInThread: autoThreadId !== undefined,
-  };
+  const threadId =
+    readFirstString(ctx.params, ["threadId"]) ?? resolveFeishuTopicAutoThreadAnchor(ctx, accountId);
+  // Core also writes implicit reply IDs into params; they must not override
+  // native topic delivery. Only an explicit reply can choose normal reply mode.
+  const replyToId = ctx.reply
+    ? ctx.reply.source === "implicit" && threadId
+      ? undefined
+      : ctx.reply.replyToId
+    : readFirstString(ctx.params, ["replyTo", "reply_to"]);
+  return resolveFeishuReplyMode({ replyToId, threadId });
 }
 
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
@@ -1245,10 +1078,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
-        messageToolHints: () => [
+        messageToolHints: ({ cfg, accountId }) => [
           "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
           "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
           "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+          ...(describeFeishuMessageTool({
+            cfg,
+            accountId: accountId ?? undefined,
+          }).actions?.includes("sticker")
+            ? [
+                "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker search and upload are not supported.",
+              ]
+            : []),
         ],
       },
       groups: {
@@ -1327,16 +1168,50 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           });
           if (
             (ctx.action === "react" || ctx.action === "reactions") &&
-            !isFeishuReactionsActionEnabled({ cfg: ctx.cfg, account })
+            !isFeishuActionEnabled(account, "reactions")
           ) {
             throw new Error("Feishu reactions are disabled via actions.reactions.");
+          }
+          if (ctx.action === "sticker") {
+            if (!isFeishuActionEnabled(account, "sticker")) {
+              throw new Error(
+                "Feishu stickers are disabled; enable actions.sticker for a configured account.",
+              );
+            }
+            const to = resolveFeishuActionTarget(ctx);
+            if (!to) {
+              throw new Error("Feishu sticker requires a target (to).");
+            }
+            const fileKey = normalizeFeishuExternalKey(
+              readFirstString(ctx.params, ["fileId"]) ??
+                (Array.isArray(ctx.params.stickerId) ? ctx.params.stickerId[0] : undefined),
+            );
+            if (!fileKey) {
+              throw new Error(
+                "Feishu sticker requires fileId (or first stickerId): use the file_key of a sticker this bot previously received.",
+              );
+            }
+            const anchor = buildFeishuSendReplyAnchor(ctx, account.accountId);
+            const runtime = await loadFeishuChannelRuntime();
+            const result = await runtime.sendStickerFeishu({
+              cfg: ctx.cfg,
+              to,
+              fileKey,
+              accountId: ctx.accountId ?? undefined,
+              replyToMessageId: anchor.replyToMessageId,
+              replyInThread: anchor.replyInThread,
+            });
+            return jsonActionResult({ ok: true, channel: "feishu", action: "sticker", ...result });
           }
           if (ctx.action === "send" || ctx.action === "thread-reply") {
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
-            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(ctx);
+            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(
+              ctx,
+              account.accountId,
+            );
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }

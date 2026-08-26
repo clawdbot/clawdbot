@@ -1503,6 +1503,47 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
+  it("discards a delayed local BTW result from the previous same-key session incarnation", () => {
+    const { state, btw, noteLocalBtwRunId, handleBtwEvent, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        localMode: true,
+        state: { activeChatRunId: null, currentSessionId: "private-session" },
+      });
+    noteLocalBtwRunId("private-btw-run");
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+      sessionId: "replacement-session",
+      updatedAt: Date.now(),
+    });
+    handleBtwEvent({
+      kind: "btw",
+      runId: "private-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what was discussed?",
+      text: "answer from the previous session",
+    });
+
+    expect(state.currentSessionId).toBe("replacement-session");
+    expect(btw.showResult).not.toHaveBeenCalled();
+
+    noteLocalBtwRunId("replacement-btw-run");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "replacement-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "answer for the replacement session",
+    });
+
+    expect(btw.showResult).toHaveBeenCalledExactlyOnceWith({
+      question: "what changed?",
+      text: "answer for the replacement session",
+      isError: undefined,
+    });
+  });
+
   it("clears stale streaming for a local BTW empty final without hiding the result", () => {
     const {
       state,
@@ -2723,6 +2764,73 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith(`run error: ${backendError}`);
   });
 
+  it.each(["error", "final"] as const)(
+    "accepts an owned local %s event before its submit is acknowledged",
+    (terminalState) => {
+      const { state, chatLog, handleAgentEvent, handleChatEvent, noteLocalRunId } =
+        createHandlersHarness({
+          localMode: true,
+          state: { activeChatRunId: null, sessionInfo: { modelProvider: "xai" } },
+        });
+
+      handleAgentEvent({
+        runId: "completed-run",
+        sessionKey: state.currentSessionKey,
+        data: { phase: "start" },
+      });
+      handleChatEvent(makeFinalChatEvent(state, "completed-run"));
+      state.pendingSubmit = sendingSubmit("next-local-run");
+      noteLocalRunId("next-local-run");
+
+      handleChatEvent({
+        runId: "next-local-run",
+        state: terminalState,
+        ...(terminalState === "error"
+          ? { errorMessage: "monthly spending limit" }
+          : { message: { content: [{ type: "text", text: "early local reply" }] } }),
+      });
+
+      expect(state.pendingSubmit).toBeNull();
+      if (terminalState === "error") {
+        expect(chatLog.addSystem).toHaveBeenCalledWith("run error: monthly spending limit");
+      } else {
+        expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+          "early local reply",
+          "next-local-run",
+        );
+      }
+    },
+  );
+
+  it.each([
+    { label: "unowned local", localMode: true, owned: false, sessionKey: "agent:main:main" },
+    { label: "remote", localMode: false, owned: true, sessionKey: "agent:main:main" },
+    { label: "foreign session", localMode: true, owned: true, sessionKey: "agent:main:other" },
+  ])("rejects an unsequenced $label provisional event", ({ localMode, owned, sessionKey }) => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent, noteLocalRunId } =
+      createHandlersHarness({ localMode, state: { activeChatRunId: null } });
+    handleAgentEvent({
+      runId: "completed-run",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+    handleChatEvent(makeFinalChatEvent(state, "completed-run"));
+    state.pendingSubmit = sendingSubmit("untrusted-run");
+    if (owned) {
+      noteLocalRunId("untrusted-run");
+    }
+
+    handleChatEvent({
+      runId: "untrusted-run",
+      sessionKey,
+      state: "error",
+      errorMessage: "foreign private diagnostic",
+    });
+
+    expect(state.pendingSubmit).toEqual(sendingSubmit("untrusted-run"));
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run error: foreign private diagnostic");
+  });
+
   it("surfaces a late provider error without replaying a completed assistant reply", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-source-reply" },
@@ -3327,8 +3435,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(tui.requestRender).not.toHaveBeenCalled();
     });
 
-    it("does not let an older transcript snapshot replace newer session metadata", () => {
-      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+    it.each([
+      { name: "older timestamp", updatedAt: 100 },
+      { name: "equal timestamp", updatedAt: 200 },
+      { name: "missing timestamp", updatedAt: undefined },
+    ])("rejects a retired session snapshot with a $name", ({ updatedAt }) => {
+      const { state, chatLog, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: {
           activeChatRunId: null,
           currentSessionId: "session-current",
@@ -3338,12 +3450,19 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
       handleSessionMessageEvent({
         sessionId: "session-stale",
-        updatedAt: 100,
+        ...(updatedAt === undefined ? {} : { updatedAt }),
+        message: {
+          role: "user",
+          content: "private previous-session prompt",
+          __openclaw: { id: "previous-session-message", seq: 1 },
+        },
       });
 
       expect(state.currentSessionId).toBe("session-current");
       expect(state.sessionInfo.updatedAt).toBe(200);
-      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(chatLog.addLiveUser).not.toHaveBeenCalled();
+      expect(state.sessionProjection?.entries ?? []).toHaveLength(0);
+      expect(loadHistory).not.toHaveBeenCalled();
     });
 
     it("reloads a global session only for its selected agent", () => {

@@ -67,6 +67,7 @@ type PackageManifestLifecycle = {
 type PackageOptions = RunOptions & {
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
+  normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -640,12 +641,18 @@ export async function prepareBundledAiRuntimePackage(
     ((tarballPath: string, destination: string) =>
       // Source-ref validation runs this trusted harness outside the candidate's dependency tree.
       // Keep extraction on the system tar contract so only the candidate checkout needs install.
-      run("tar", ["-xzf", tarballPath, "-C", destination, "--strip-components=1"], destination, {
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      }));
+      // Use an archive basename so GNU tar cannot treat a Windows drive as a remote host.
+      run(
+        "tar",
+        ["-xzf", path.basename(tarballPath), "-C", destination, "--strip-components=1"],
+        path.dirname(tarballPath),
+        {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        },
+      ));
   const prepareManifest = packageOptions.prepareManifest ?? (async () => false);
   const restoreManifest = packageOptions.restoreManifest ?? (async () => false);
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
@@ -813,6 +820,65 @@ export async function prepareBundledAiRuntimePackage(
   } catch (error) {
     await cleanup();
     throw error;
+  }
+}
+
+async function normalizeOpenClawTarballModes(tarballPath: string) {
+  // npm/pnpm pack copy on-disk modes into the tarball (node-tar's portable
+  // mode-fix never adds read bits), so a restrictive-umask build host ships
+  // owner-only 0600/0700 entries that leave a root-installed CLI unreadable
+  // for non-root users under system tar and mode-preserving installers.
+  // Rewrite every entry to 0644/0755 the way a umask-022 host would have
+  // packed it, keeping executable bits. Stays on the system tar contract like
+  // the bundled AI runtime extraction above.
+  const timeoutMs = resolveTimeoutMs(
+    "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+    DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+  );
+  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
+  try {
+    await run(
+      "tar",
+      ["-xzf", path.basename(tarballPath), "-C", stageDir],
+      path.dirname(tarballPath),
+      { timeoutMs },
+    );
+    let stagedFileCount = 0;
+    const normalizeStagedModes = async (dir: string): Promise<void> => {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await fs.chmod(entryPath, 0o755);
+          await normalizeStagedModes(entryPath);
+        } else if (entry.isFile()) {
+          // Umask masking on extraction only clears group/other bits, so the
+          // owner exec bit still says whether the packed entry was executable.
+          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          await fs.chmod(entryPath, executable ? 0o755 : 0o644);
+          stagedFileCount += 1;
+        }
+      }
+    };
+    await normalizeStagedModes(stageDir);
+    if (stagedFileCount === 0) {
+      throw new Error(`packed OpenClaw tarball has no file entries: ${tarballPath}`);
+    }
+    const stageRootEntries = await fs.readdir(stageDir);
+    const normalizedPath = `${tarballPath}.modes-tmp`;
+    await fs.rm(normalizedPath, { force: true });
+    await run(
+      "tar",
+      ["-czf", path.basename(normalizedPath), "-C", stageDir, ...stageRootEntries],
+      path.dirname(normalizedPath),
+      {
+        // macOS bsdtar must not add AppleDouble (._*) sidecar entries.
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        timeoutMs,
+      },
+    );
+    await fs.rename(normalizedPath, tarballPath);
+  } finally {
+    await fs.rm(stageDir, { force: true, recursive: true });
   }
 }
 
@@ -1002,6 +1068,7 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
+    await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
     await writePackJson(packOutput, tarball, packageOptions.packJsonPath, sourcePath);
     return tarball;
   } catch (error) {

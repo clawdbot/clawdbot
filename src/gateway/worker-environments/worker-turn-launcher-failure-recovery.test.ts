@@ -556,14 +556,16 @@ describe("worker turn launcher failure recovery", () => {
     expect(teardownStates).toEqual([]);
   });
 
-  it("keeps redacted process failure details on a valid UTF-16 boundary", async () => {
+  it("preserves the admission diagnosis with bounded redacted process failure details", async () => {
     seedActivePlacement();
     const secret = "$SUPERSECRET123";
-    const redactedPrefix = "DISCORD_BOT_TOKEN=*** ";
+    const diagnosis =
+      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out; ";
+    const redactedPrefix = `${diagnosis}DISCORD_BOT_TOKEN=*** `;
     const padding = "a".repeat(399 - redactedPrefix.length);
     const retained = `${redactedPrefix}${padding}`;
     const emoji = String.fromCodePoint(0x1f600);
-    const stderr = `DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
+    const stderr = `${diagnosis}DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {

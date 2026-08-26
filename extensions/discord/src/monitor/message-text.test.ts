@@ -7,12 +7,12 @@ import {
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Message } from "../internal/discord.js";
 
-let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
-let resolveDiscordMessageHistoryText: typeof import("./message-utils.js").resolveDiscordMessageHistoryText;
+let resolveDiscordMessageText: typeof import("./message-text.js").resolveDiscordMessageText;
+let resolveDiscordMessageHistoryText: typeof import("./message-text.js").resolveDiscordMessageHistoryText;
 
 beforeAll(async () => {
   ({ resolveDiscordMessageHistoryText, resolveDiscordMessageText } =
-    await import("./message-utils.js"));
+    await import("./message-text.js"));
 });
 
 function asMessage(payload: Record<string, unknown>): Message {

@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
+  fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
@@ -98,7 +99,7 @@ function isNonemptyTelegramCallbackValue(value: unknown): value is string {
 }
 
 function isBoundedTelegramCallbackData(value: unknown): value is string {
-  return isNonemptyTelegramCallbackValue(value) && Buffer.byteLength(value, "utf8") <= 64;
+  return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
 }
 
 function canReconcileTelegramLegacyLane(params: {
@@ -248,9 +249,10 @@ function canReconcileTelegramLegacyLane(params: {
 
 export type TelegramIngressDrainLifecycle = Omit<
   ChannelIngressMonitorLifecycle,
-  "admission" | "onFailed"
+  "admission" | "onFailed" | "onCancelled"
 > & {
   onFailed: (error: unknown) => void | Promise<void>;
+  onCancelled: () => void | Promise<void>;
 };
 
 type TelegramIngressDrainDispatch = (
@@ -339,8 +341,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ),
     },
     deliver: async (update, lifecycle) => {
-      // The monitor always supplies onFailed; the optional public field preserves
-      // structural compatibility for channel lifecycles that never use deferred failure.
+      // The monitor supplies both callbacks; optional public fields preserve
+      // structural compatibility for channel lifecycles that do not need them.
       const telegramLifecycle = lifecycle as TelegramIngressDrainLifecycle;
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
@@ -378,6 +380,20 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           const removeAbortListener = () => {
             telegramLifecycle.abortSignal.removeEventListener("abort", onAbort);
           };
+          const settleAfterOwnerAbort = async (error?: unknown) => {
+            // A lost owner did not finish a delivery attempt. Preserve only the
+            // rollback failure for which replay is unsafe after a dispatch key
+            // committed but could not be removed.
+            if (
+              error !== undefined &&
+              resolveTelegramIngressNonRetryableFailure(error)?.reason ===
+                "dispatch-dedupe-rollback-failed"
+            ) {
+              await telegramLifecycle.onFailed(error);
+              return;
+            }
+            await telegramLifecycle.onCancelled();
+          };
           // Two-arg then: the rejection arm must observe only a participant.task
           // rejection. Chaining it as .catch would also swallow onFailed/onAdopted
           // settlement errors and re-drive them through onFailed with an
@@ -387,22 +403,24 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
             .then(
               async (terminal) => {
                 removeAbortListener();
-                if (terminal.kind === "failed-retryable") {
-                  await telegramLifecycle.onFailed(terminal.error);
+                if (abortedWhilePending) {
+                  await settleAfterOwnerAbort(
+                    terminal.kind === "failed-retryable" ? terminal.error : undefined,
+                  );
                   return;
                 }
-                if (abortedWhilePending) {
-                  await telegramLifecycle.onFailed(
-                    telegramLifecycle.abortSignal.reason instanceof Error
-                      ? telegramLifecycle.abortSignal.reason
-                      : new Error("ingress-aborted"),
-                  );
+                if (terminal.kind === "failed-retryable") {
+                  await telegramLifecycle.onFailed(terminal.error);
                   return;
                 }
                 await lifecycle.onAdopted();
               },
               async (error: unknown) => {
                 removeAbortListener();
+                if (abortedWhilePending) {
+                  await settleAfterOwnerAbort(error);
+                  return;
+                }
                 await telegramLifecycle.onFailed(
                   error instanceof Error ? error : new Error(String(error)),
                 );

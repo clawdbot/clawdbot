@@ -25,6 +25,7 @@ describe("session ingestion", () => {
     });
 
     expect(source?.scope).toBe("main:foo.jsonl");
+    expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId: "foo.jsonl" });
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {

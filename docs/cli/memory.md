@@ -1,15 +1,17 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
+summary: "CLI reference for `openclaw memory` (status/index/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
   - You want to promote recalled short-term memory into `MEMORY.md`
+  - You need to delete provenance-tracked memories derived from specific sessions or participants
 title: "Memory"
 ---
 
 # `openclaw memory`
 
-Manage semantic memory indexing, search, and promotion into `MEMORY.md`.
+Manage semantic memory indexing, search, promotion into `MEMORY.md`, and
+provenance-based deletion.
 Provided by the bundled `memory-core` plugin, available when
 `plugins.slots.memory` selects `memory-core` (the default). Other memory
 plugins expose their own CLI namespaces.
@@ -54,6 +56,13 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
+Internal dreaming-narrative, cron, and heartbeat session transcripts are
+excluded from indexing, including retained compressed narrative archives whose
+original sessions are no longer active. Sessions previously selected by
+`memory forget` also remain excluded. `--force` removes stale index records for
+both groups without reindexing their retained transcripts. Ordinary retained,
+reset, and deleted user-session archives remain eligible until explicitly
+targeted.
 
 ## `memory search`
 
@@ -72,6 +81,79 @@ warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields describing how to rebuild the
 index. Treat an empty `results` array as authoritative only when `stale` is
 absent.
+
+## `memory forget`
+
+Delete provenance-tracked durable memory entries derived from selected
+sessions, together with their indexed and short-term copies. The concepts
+behind this command — recorded lineage, admission policy, and the deletion
+guarantees and boundaries — are explained in
+[Memory provenance and deletion](/concepts/memory-provenance). Select sessions
+by ID or session key, their external-content hook source, or a participant's
+actor ID:
+
+```bash
+openclaw memory forget --session <id-or-key> [--session <id-or-key> ...]
+openclaw memory forget --hook-source gmail [--since 2026-01-01]
+openclaw memory forget --participant <actor-id> [--agent <id>] [--dry-run] [--json]
+```
+
+`--session`, `--hook-source`, and `--participant` are repeatable. At least one
+selector is required. `--agent` selects one agent and otherwise defaults to the
+default agent. Explicit session IDs and keys match both live sessions and
+retained archived sessions. An unknown explicit value is still treated as an
+exact session ID, purged where matching artifacts exist, and durably excluded
+from future memory ingestion. The report identifies each selected session as
+`live`, `archived`, or `unresolved`. Hook-source and participant selectors only
+match sessions whose corresponding metadata still exists; archived sessions do
+not retain those facts, so select them by ID or key instead. `--since <date>`
+filters live sessions by their creation time and archived sessions by their
+archive creation time; unresolved explicit IDs have no timestamp and remain
+selected.
+
+Run with `--dry-run` before deleting. It computes the same complete report as
+the real purge without changing memory files, SQLite indexes, plugin state, or
+durable deletion records. `--json` prints that report as machine-readable JSON.
+
+A purge removes matching pipeline-promoted entries, session-corpus lines,
+selected-session transcript index chunks, full-text and vector index records,
+embedding-cache entries, short-term recall, seen-hash scopes, dreaming rewrite
+backups, and recorded origins. It also clears stale index records for internal
+dreaming-narrative, cron, or heartbeat sessions. An entry derived from both
+selected and unselected sessions is deleted whole and reported as a
+mixed-lineage entry; dreaming can regenerate supported facts from surviving
+sessions later. Entries without recorded origins remain searchable and are not
+deleted by an unrelated selector; the report lists them as untargetable.
+
+A real purge records each selected session as forgotten in the agent's SQLite
+database. Future dreaming sweeps record that session as excluded with reason
+`forgotten`; `memory session-backfill` and transcript indexing, including
+`memory index --force`, also reject it. Repeating the purge is safe and does
+not undo this exclusion.
+
+Dream diaries and other workspace memory files can quote source-session corpus
+lines without retaining a session reference. The purge removes any whole line
+containing an exact purged corpus-line snippet from files such as
+`memory/dreaming/**/*.md` and `DREAMS.md`, as well as matching dreaming
+backups. `artifacts.memoryLines` reports the number of these additional removed
+memory-file lines. Model-paraphrased prose that does not contain the exact
+source text cannot be attributed reliably and is not removed automatically.
+
+Direct agent edits to memory files are tracked at the file level, not per
+entry. When such a write happened during a selected session, `curatedWrites`
+lists its `relativePath` and `observedAt` without modifying the file. Evidence
+comes from native write-observer records and the selected sessions' live or
+archived transcripts, including writes performed by external agent harnesses.
+Review those files separately: a freeform edit cannot be attributed to
+individual lines safely enough for automatic deletion.
+
+<Warning>
+`memory forget` removes selected-session transcript chunks from the memory
+index and permanently prevents their memory-pipeline readmission, but does not
+delete the original source session transcripts. The report identifies the
+selected sessions so you can remove transcript data separately through its
+owning session-management workflow when required.
+</Warning>
 
 ## `memory promote`
 
@@ -177,7 +259,10 @@ tracked message hashes and per-run caps as live session ingestion, so repeated
 canonical store are eligible; tool output, web or non-owner input, and turns
 without trustworthy owner provenance are excluded. Foreign archive files have
 no authenticated owner-provenance contract, so their embedded ownership fields
-remain untrusted and cannot be staged.
+remain untrusted and cannot be staged. Sessions previously purged with
+[`memory forget`](/cli/memory#memory-forget) remain durably excluded, including
+when their original transcripts still exist or their tracked hashes were
+cleared.
 
 `--apply` drains the selected history to completion in one invocation while
 keeping each bounded batch in its own transaction. Human and JSON output report
@@ -193,7 +278,8 @@ commands use the same grounded-only staging class and diary markers. Run
 `session-backfill --rollback` only when you intend to clear both commands'
 grounded backfill artifacts from that workspace. Rollback also removes the
 tracked hashes added by session backfill and rewinds the affected transcript
-cursors, so the same candidates can be previewed and applied again.
+cursors, so surviving eligible candidates can be previewed and applied again.
+Rollback does not remove forgotten-session records or readmit purged sessions.
 
 ## Dreaming
 

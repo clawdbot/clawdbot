@@ -74,6 +74,7 @@ type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" 
 type WorkerPlacementReclaimBarrier = (
   params: WorkerPlacementReclaimRequest & {
     authorize?: WorkerPlacementAuthorization;
+    beforeDrain?: WorkerPlacementAuthorization;
     begin: () => WorkerDrainingDispatchPlacement;
     reclaim: (
       localPath: string,
@@ -336,10 +337,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     request: WorkerPlacementReclaimRequest,
     moveIntent?: WorkerPlacementMoveIntent,
     authorize?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementAuthorization,
   ): Promise<WorkerReclaimPlacement> =>
     await options.runReclaimBarrier({
       ...request,
       authorize,
+      beforeDrain,
       begin: () => {
         const current = placements.get(request.sessionId);
         if ((current?.state !== "active" && current?.state !== "draining") || current.turnClaim) {
@@ -617,7 +620,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaim = async (
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementAuthorization,
   ): Promise<WorkerReclaimPlacement> => {
+    beforeDrain?.();
     const current = placements.get(request.sessionId);
     if (current?.state === "reclaimed") {
       return current;
@@ -663,7 +668,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           },
         });
       }
-      return await reclaimOnce(request, undefined, authorize);
+      return await reclaimOnce(request, undefined, authorize, beforeDrain);
     })().catch((error: unknown) => {
       // Another teardown path can win after this call has crossed its durable completion fence.
       // Report the committed terminal state instead of leaking a stale tunnel error to callers.

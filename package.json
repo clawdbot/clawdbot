@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 11,
+      "state": 12,
       "agent": 17
     }
   },
@@ -63,6 +63,8 @@
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
+    "!dist/plugin-sdk/channel-ingress-test-runtime.js",
+    "!dist/plugin-sdk/channel-ingress-test-runtime.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
     "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",

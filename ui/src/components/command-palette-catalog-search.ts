@@ -32,6 +32,7 @@ type CommandPaletteCatalogItem = {
   icon: IconName;
   category: CommandPaletteCatalogCategory;
   routeId: RouteId;
+  agentId?: string;
   description?: string;
   searchText?: string;
 };
@@ -215,6 +216,7 @@ export function toCommandPaletteItems(
     icon: item.icon,
     category: item.category,
     action: `nav:${item.routeId}`,
+    agentId: item.agentId,
     description: item.description,
     searchText: item.searchText,
   }));
@@ -298,6 +300,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       icon: "bot" as const,
       category: "agents" as const,
       routeId: "agents" as const,
+      agentId: agent.id,
       description: agent.id,
       searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
         .filter(Boolean)

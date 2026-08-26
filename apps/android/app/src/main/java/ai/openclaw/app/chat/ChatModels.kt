@@ -316,6 +316,8 @@ data class ChatSessionEntry(
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val markedUnreadAt: Long? = null,
+  val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -350,6 +352,10 @@ data class ChatSessionEntry(
   val outputTokens: Long? = null,
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
+)
+
+data class ChatSessionUnreadExpectation(
+  val markedUnreadAt: Long?,
 )
 
 data class ChatSessionAgentStatus(

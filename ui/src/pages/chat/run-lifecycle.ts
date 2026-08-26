@@ -30,7 +30,7 @@ import {
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
-const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";
@@ -69,7 +69,7 @@ type RunLifecycleHost = Omit<
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">>;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };

@@ -1605,7 +1605,6 @@
  "ui/src/pages/chat/components/chat-message-attachments.ts",
  "ui/src/pages/chat/components/chat-message-bubble.ts",
  "ui/src/pages/chat/components/chat-message-confirmation.ts",
- "ui/src/pages/chat/components/chat-message-document-preview.ts",
  "ui/src/pages/chat/components/chat-message-group.ts",
  "ui/src/pages/chat/components/chat-message-image-open.ts",
  "ui/src/pages/chat/components/chat-message-images.ts",

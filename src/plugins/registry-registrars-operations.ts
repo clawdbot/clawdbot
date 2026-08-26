@@ -163,12 +163,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .filter(
         (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
-    const commands = [
-      ...(opts?.commands ?? []),
-      ...descriptors.map((descriptor) => descriptor.name),
-    ]
-      .map((command) => normalizeCommandRoot(command, "command"))
-      .filter((command): command is string => command !== null);
+    const commands = normalizeUniqueStringEntries(
+      [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
+        .map((command) => normalizeCommandRoot(command, "command"))
+        .filter((command): command is string => command !== null),
+    );
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",

@@ -8,8 +8,13 @@ import type {
   PortalOpenResult,
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
-import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
+import {
+  handlePortalProxyRequest,
+  handlePortalProxyUpgrade,
+  type PortalTarget,
+} from "./portal-http-proxy.js";
 
 const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
 
@@ -18,7 +23,8 @@ type PortalEntry = {
   title: string;
   description?: string;
   path?: string;
-  targetPort: number;
+  origin?: string;
+  target: PortalTarget;
   token: string;
   cookieNamespace: string;
   listenPort: number;
@@ -29,19 +35,30 @@ type PortalRuntimeEntry = {
   portal: PortalEntry;
   servers: HttpServer[];
   upgradedSockets: Set<Duplex>;
+  onClose?: () => Promise<void> | void;
 };
 
 type GatewayPortalOpenParams = {
   targetPort: number;
+  target?: PortalTarget;
+  /** Revalidated inside the serialized operation; reuse must not mutate a live portal for a caller whose authority lapsed. */
+  assertCurrent?: () => void;
+  onClose?: () => Promise<void> | void;
+  origin?: string;
   title?: string;
   description?: string;
   path?: string;
 };
 
 export type GatewayPortalService = {
-  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
+  /** `created` is false when an already-registered portal was reused; its target and onClose are unchanged. */
+  open: (
+    params: GatewayPortalOpenParams,
+  ) => Promise<{ portal: PortalOpenResult; created: boolean }>;
   list: () => PortalSummary[];
-  close: (id: string) => Promise<void>;
+  listWorkerPortals: (environmentId: string, ownerEpoch: number) => PortalSummary[];
+  close: (id: string, assertCurrent?: () => void) => Promise<void>;
+  closeWorkerPortals: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   closeAll: () => Promise<void>;
 };
 
@@ -98,13 +115,14 @@ export function createGatewayPortalService(params: {
     return {
       id: portal.id,
       title: portal.title,
-      port: portal.targetPort,
+      port: portal.target.kind === "local" ? portal.target.port : portal.target.remotePort,
       listenPort: portal.listenPort,
       tokenQuery,
       url: openableUrl.toString(),
       publicUrl,
       ...(portal.path ? { path: portal.path } : {}),
       ...(portal.description ? { description: portal.description } : {}),
+      ...(portal.origin ? { origin: portal.origin } : {}),
       createdAtMs: portal.createdAtMs,
     };
   };
@@ -139,15 +157,27 @@ export function createGatewayPortalService(params: {
     }
     runtime.upgradedSockets.clear();
     await closeServers(runtime.servers);
+    await runtime.onClose?.();
   };
+
+  const summarizeEntries = (selected: Iterable<PortalRuntimeEntry>): PortalSummary[] =>
+    Array.from(selected, ({ portal }) => summarize(portal)).toSorted(
+      (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
+    );
 
   return {
     open: async (input) => {
-      const id = `p${input.targetPort}`;
+      const target: PortalTarget = input.target ?? { kind: "local", port: input.targetPort };
+      const targetPort = target.kind === "local" ? target.port : target.remotePort;
+      const id =
+        target.kind === "local"
+          ? `p${targetPort}`
+          : `p${targetPort}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
       return await serialize(id, async () => {
         if (closed) {
           throw new Error("portals unavailable");
         }
+        input.assertCurrent?.();
         const existing = entries.get(id);
         if (existing) {
           existing.portal.title = input.title?.trim() || existing.portal.title;
@@ -157,7 +187,10 @@ export function createGatewayPortalService(params: {
           if (input.path !== undefined) {
             existing.portal.path = input.path;
           }
-          return summarize(existing.portal);
+          if (input.origin !== undefined) {
+            existing.portal.origin = input.origin;
+          }
+          return { portal: summarize(existing.portal), created: false };
         }
         if (params.httpBindHosts.length === 0) {
           throw new Error("Gateway listener must start before opening a portal");
@@ -165,10 +198,11 @@ export function createGatewayPortalService(params: {
 
         const portal: PortalEntry = {
           id,
-          title: input.title?.trim() || `Port ${input.targetPort}`,
+          title: input.title?.trim() || `Port ${targetPort}`,
           ...(input.description ? { description: input.description } : {}),
           ...(input.path ? { path: input.path } : {}),
-          targetPort: input.targetPort,
+          ...(input.origin ? { origin: input.origin } : {}),
+          target,
           token: randomBytes(32).toString("hex"),
           cookieNamespace: randomBytes(16).toString("hex"),
           listenPort: 0,
@@ -211,7 +245,7 @@ export function createGatewayPortalService(params: {
             if (!address || typeof address === "string") {
               throw new Error("Portal listener failed to resolve its port");
             }
-            if (address.port !== portal.targetPort) {
+            if (target.kind === "worker" || address.port !== targetPort) {
               portal.listenPort = address.port;
               break;
             }
@@ -219,9 +253,7 @@ export function createGatewayPortalService(params: {
             await closeServers([primaryServer]);
           }
           if (portal.listenPort === 0) {
-            throw new Error(
-              `Portal listener repeatedly allocated target port ${portal.targetPort}`,
-            );
+            throw new Error(`Portal listener repeatedly allocated target port ${targetPort}`);
           }
           for (const [index, host] of params.httpBindHosts.entries()) {
             if (index === 0) {
@@ -243,20 +275,46 @@ export function createGatewayPortalService(params: {
         } catch (error) {
           removeServers(params.httpServers, servers);
           await closeServers(servers);
+          await input.onClose?.();
           throw error;
         }
-        entries.set(id, { portal, servers, upgradedSockets });
-        return summarize(portal);
+        entries.set(id, {
+          portal,
+          servers,
+          upgradedSockets,
+          ...(input.onClose ? { onClose: input.onClose } : {}),
+        });
+        return { portal: summarize(portal), created: true };
       });
     },
-    list: () =>
-      [...entries.values()]
-        .map(({ portal }) => summarize(portal))
-        .toSorted(
-          (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
+    list: () => summarizeEntries(entries.values()),
+    listWorkerPortals: (environmentId, ownerEpoch) =>
+      summarizeEntries(
+        [...entries.values()].filter(
+          ({ portal }) =>
+            portal.target.kind === "worker" &&
+            portal.target.environmentId === environmentId &&
+            portal.target.ownerEpoch === ownerEpoch,
         ),
-    close: async (id) => {
-      await serialize(id, () => closeEntry(id));
+      ),
+    close: async (id, assertCurrent) => {
+      await serialize(id, () => {
+        assertCurrent?.();
+        return closeEntry(id);
+      });
+    },
+    closeWorkerPortals: async (environmentId, ownerEpoch) => {
+      const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
+      // Include in-flight opens so teardown fences a listener still awaiting its bind.
+      const ids = [...new Set([...entries.keys(), ...operations.keys()])].filter((id) => {
+        const separator = id.indexOf(environmentSuffix);
+        return (
+          separator >= 0 &&
+          (ownerEpoch === undefined ||
+            id.slice(separator + environmentSuffix.length) === String(ownerEpoch))
+        );
+      });
+      await Promise.all(ids.map((id) => serialize(id, () => closeEntry(id))));
     },
     closeAll: async () => {
       closed = true;

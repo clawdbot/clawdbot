@@ -361,6 +361,13 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
   };
 }
 
+// Null source confirms inheritance; omission on a lifecycle event preserves selection.
+const NULLABLE_SESSION_ROW_FIELDS = new Set<string>([
+  "updatedAt",
+  "activeLeafEntryId",
+  "modelOverrideSource",
+]);
+
 export function reconcileSessionChanged(
   result: SessionsListResult | null,
   payload: unknown,
@@ -371,6 +378,28 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const { event, source, key, reason } = parsed;
+  const {
+    agentId: _agentId,
+    clientRunId: _clientRunId,
+    compacted: _compacted,
+    key: _key,
+    phase: _phase,
+    reason: _reason,
+    runId: _runId,
+    session: _session,
+    sessionKey: _sessionKey,
+    ts: _ts,
+    ...rowFields
+  } = source;
+  // Ownerless raw global and projection-free legacy aliases only invalidate the
+  // canonical roster; optimistic merging could apply a retired private owner's
+  // lifecycle event to whichever agent is currently selected.
+  if (
+    !parsed.agentId &&
+    (isUiGlobalSessionKey(key) || (!parseAgentSessionKey(key) && !Object.keys(rowFields).length))
+  ) {
+    return { applied: false, key, agentId: null, result };
+  }
   if (reason === "delete" && !result) {
     return {
       applied: true,
@@ -409,19 +438,6 @@ export function reconcileSessionChanged(
       deletedKey: existing.key,
     };
   }
-  const {
-    agentId: _agentId,
-    clientRunId: _clientRunId,
-    compacted: _compacted,
-    key: _key,
-    phase: _phase,
-    reason: _reason,
-    runId: _runId,
-    session: _session,
-    sessionKey: _sessionKey,
-    ts: _ts,
-    ...rowFields
-  } = source;
   // The gateway wire folds cron/spawn-child into "direct" before projection
   // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
   const kind =
@@ -474,10 +490,10 @@ export function reconcileSessionChanged(
   // typed optional-not-null, so every null tombstone deletes — a hand-kept
   // field list here drifts as new tombstoned fields ship (it already had:
   // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
-  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
-  // legitimately nullable row fields and keep their explicit handling.
+  // goal leaked null). Only the fields below are legitimately nullable in the
+  // schema, where null is the value itself rather than a clear instruction.
   for (const [field, value] of Object.entries(rowFields)) {
-    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+    if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       delete row[field as keyof GatewaySessionRow];
     }
   }

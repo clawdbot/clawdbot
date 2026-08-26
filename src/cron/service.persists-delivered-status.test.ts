@@ -24,6 +24,7 @@ import {
 } from "./service.test-harness.js";
 import { abortActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import type { CronServiceDeps } from "./service/state.js";
+import type { CronDeliveryTrace } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -136,6 +137,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   status?: "ok" | "error";
   delivered?: boolean;
+  delivery?: CronDeliveryTrace;
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
@@ -166,6 +168,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
       ...(params.error === undefined ? {} : { error: params.error }),
       ...(params.deliveryError === undefined ? {} : { deliveryError: params.deliveryError }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.delivery === undefined ? {} : { delivery: params.delivery }),
     })),
     sendCronWebhook: params.sendCronWebhook,
     onEvent: (evt) => {
@@ -244,6 +247,7 @@ async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   status?: "ok" | "error";
   delivered?: boolean;
+  delivery?: CronDeliveryTrace;
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
@@ -253,6 +257,7 @@ async function runIsolatedJobAndReadState(params: {
     delivered?: boolean;
     deliveryStatus?: string;
     deliveryError?: string;
+    completionStatus?: string;
     failureNotificationDelivery?: {
       delivered?: boolean;
       status: string;
@@ -266,6 +271,7 @@ async function runIsolatedJobAndReadState(params: {
     storePath: store.storePath,
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.deliveryError !== undefined ? { deliveryError: params.deliveryError } : {}),
     ...(params.sendCronWebhook !== undefined ? { sendCronWebhook: params.sendCronWebhook } : {}),
@@ -750,6 +756,33 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
     expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
     expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+  });
+
+  it("preserves verified primary delivery when the isolated run later fails", async () => {
+    let capturedEvent: { completionStatus?: string; deliveryError?: string } | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("verified-primary-before-error"),
+      status: "error",
+      delivered: true,
+      delivery: {
+        delivered: true,
+        resolved: { ok: true, channel: "forum", to: "123" },
+        messageToolSentTo: [{ channel: "forum", to: "123" }],
+      },
+      error: "provider failed after verified delivery",
+      onFinished: (event) => (capturedEvent = event),
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.consecutiveErrors).toBeGreaterThan(0);
+    expect(updated?.state.lastDelivered).toBe(true);
+    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(capturedEvent).toMatchObject({
+      completionStatus: "failed",
+      delivered: true,
+      deliveryStatus: "delivered",
+    });
+    expect(updated?.state.lastDeliveryError ?? capturedEvent?.deliveryError).toBeUndefined();
   });
 
   it("does not infer scheduler alert delivery from a failed run result", async () => {

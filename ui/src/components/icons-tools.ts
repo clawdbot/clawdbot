@@ -116,6 +116,9 @@ export const toolIcons = {
   ),
   volume2: strokeIcon(svg` <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />`),
+  volumeX: strokeIcon(svg` <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <path d="m22 9-6 6" />
+    <path d="m16 9 6 6" />`),
   bookmark: strokeIcon(svg`<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />`),
   plus: strokeIcon(svg`<path d="M5 12h14M12 5v14" />`),
   gitBranch: strokeIcon(svg` <circle cx="6" cy="5" r="2" />
@@ -241,9 +244,6 @@ export const toolIcons = {
       d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20"
     />`,
   ),
-  moreHorizontal: strokeIcon(svg` <circle cx="12" cy="12" r="1.5" />
-    <circle cx="6" cy="12" r="1.5" />
-    <circle cx="18" cy="12" r="1.5" />`),
   arrowUpDown: strokeIcon(svg`<path d="M21 16l-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" />`),
   panelRightOpen: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
     <path d="M15 3v18M10 10l-3 2 3 2" />`),

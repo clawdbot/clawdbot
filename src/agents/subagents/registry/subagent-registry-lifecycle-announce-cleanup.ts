@@ -609,6 +609,8 @@ export const startSubagentAnnounceCleanupFlow = (
         params.persist(runId);
       }
     },
+    // Idle completion has no ambient request scope. Missing entry ownership
+    // fails closed instead of widening authority to another live Gateway.
     resolveGatewayContext: getGatewayContextResolver(entry),
   };
   runDetachedCleanupAttempt(context, {

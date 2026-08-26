@@ -25,6 +25,8 @@ import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./princi
 import type { AgentTurnIo } from "./types.js";
 
 type InternalAgentTurnFacadeOptions = {
+  // Authorization can await; the lifecycle owner must still be current before dispatch.
+  assertContextCurrent?: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   getContext: () => GatewayRequestOptions["context"];
   getMethodRegistry?: () => GatewayMethodRegistry;
@@ -74,6 +76,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     if (validationError) {
       return { ok: false, error: validationError };
     }
+    options.assertContextCurrent?.();
     let acceptance: GatewayMethodDispatchResponse | undefined;
     let final: GatewayMethodDispatchResponse | undefined;
     let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -147,12 +150,10 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
           principal,
           registerToolEventRecipient: context.registerToolEventRecipient,
         });
-        await createAgentTurnService({ context, isWebchatConnect }).startTurn({
-          preflight,
-          principal,
-          io,
-          onRunObserved,
-        });
+        await createAgentTurnService(
+          { context, isWebchatConnect },
+          options.assertContextCurrent,
+        ).startTurn({ preflight, principal, io, onRunObserved });
       },
       {
         context,
@@ -236,6 +237,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     if (validationError) {
       return throwEnvelopeRejection(method, validationError);
     }
+    options.assertContextCurrent?.();
     const result = runWithGatewayRequestEnvelope(
       method,
       options.client,

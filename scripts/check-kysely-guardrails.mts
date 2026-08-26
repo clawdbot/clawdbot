@@ -66,6 +66,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/openclaw-state-db-schema-repair.ts",
+    "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",
@@ -139,7 +140,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
     "src/tasks/task-registry.store.sqlite.ts",
-    "src/tui/tui-last-session.ts",
   ],
 };
 

@@ -115,6 +115,12 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "12.5px",
   },
   {
+    circular: "20px",
+    markup: '<div class="agent-chat__input"><div class="slash-menu">Menu</div></div>',
+    selector: ".agent-chat__input .slash-menu",
+    superelliptical: "25px",
+  },
+  {
     circular: "6px",
     markup: "",
     selector: ".slash-menu-item",

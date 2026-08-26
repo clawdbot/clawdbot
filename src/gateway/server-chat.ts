@@ -672,6 +672,8 @@ export function createAgentEventHandler({
       evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? currentRunContext?.projectSessionLifecycle ?? true;
+    const projectSessionMessages =
+      evt.projectSessionMessages ?? currentRunContext?.projectSessionMessages ?? true;
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -715,9 +717,10 @@ export function createAgentEventHandler({
       !suppressRestartRecoveryProjection &&
       sessionKey &&
       (isControlUiVisible ||
-        deliverySessionKeys.some(
-          (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
-        ))
+        (projectSessionMessages &&
+          deliverySessionKeys.some(
+            (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
+          )))
     ) {
       if (!isAborted) {
         // peek() (chatLink) and this shift() run in one synchronous frame, so
@@ -1296,6 +1299,8 @@ export function createAgentEventHandler({
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
+    const projectSessionMessages =
+      evt.projectSessionMessages ?? runContext?.projectSessionMessages ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
     const restartRecoverySessionKey = RESTART_RECOVERY_LIFECYCLE_PHASES.has(lifecyclePhase ?? "")
       ? (eventSessionKey ?? sessionKey)
@@ -1347,11 +1352,12 @@ export function createAgentEventHandler({
           ...eventForClients,
           ...(isHeartbeat !== undefined && { isHeartbeat }),
         };
-    const hasSessionMessageSubscribers = sessionKey
-      ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
-          (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
-        )
-      : false;
+    const hasSessionMessageSubscribers =
+      projectSessionMessages && sessionKey
+        ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
+            (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
+          )
+        : false;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
@@ -1413,6 +1419,7 @@ export function createAgentEventHandler({
       !isAborted &&
       ((isToolEvent && !suppressHeartbeatToolEvents) ||
         isItemEvent ||
+        evt.stream === "run_status" ||
         evt.stream === "notice" ||
         typeof evt.data?.reviewId === "string" ||
         evt.data?.phase === "started" ||
@@ -1503,7 +1510,12 @@ export function createAgentEventHandler({
           },
         );
       }
-      if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
+      if (
+        !isControlUiVisible &&
+        sessionKey &&
+        hasSessionMessageSubscribers &&
+        !suppressHeartbeatToolEvents
+      ) {
         sendAgentPayload(
           sessionKey,
           { ...agentPayload, ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId) },

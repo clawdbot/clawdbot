@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -88,6 +89,113 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
+  it("preserves configured query parameters on real direct embedding requests", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
+      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha") {
+        response.writeHead(404).end("wrong embedding endpoint");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ embedding: [3, 5] }] }));
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const { provider } = await createOpenAiEmbeddingProvider({
+        config: {},
+        provider: "openai",
+        model: "text-embedding-3-small",
+        fallback: "none",
+        remote: {
+          baseUrl: `http://127.0.0.1:${port}/tenant/v1/?api-version=2024-10-21&tenant=alpha#local`,
+          apiKey: "openai-loopback-key",
+        },
+      });
+
+      await expect(provider.embedQuery("hello")).resolves.toEqual([3, 5]);
+      expect(received).toEqual([
+        {
+          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha",
+          authorization: "Bearer openai-loopback-key",
+        },
+      ]);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("preserves configured query parameters through real batch upload, create, status, and output", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      const url = request.url ?? "";
+      received.push({ url, authorization: request.headers.authorization });
+      const parsed = new URL(url, "http://localhost");
+      if (parsed.search !== "?api-version=2024-10-21&tenant=alpha") {
+        response.writeHead(404).end("missing embedding tenant query");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      if (parsed.pathname === "/tenant/v1/files") {
+        response.end(JSON.stringify({ id: "input-0" }));
+      } else if (parsed.pathname === "/tenant/v1/batches") {
+        response.end(JSON.stringify({ id: "batch-0", status: "in_progress" }));
+      } else if (parsed.pathname === "/tenant/v1/batches/batch-0") {
+        response.end(
+          JSON.stringify({ id: "batch-0", status: "completed", output_file_id: "output-0" }),
+        );
+      } else if (parsed.pathname === "/tenant/v1/files/output-0/content") {
+        response.end(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [3, 5] }] } },
+          }),
+        );
+      } else {
+        response.end(JSON.stringify({ error: "unexpected embedding path" }));
+      }
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const result = await runOpenAiEmbeddingBatches({
+        openAi: {
+          baseUrl: `http://127.0.0.1:${port}/tenant/v1/?api-version=2024-10-21&tenant=alpha#local`,
+          headers: { Authorization: "Bearer openai-loopback-key" },
+          model: "text-embedding-3-small",
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+        },
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: { model: "text-embedding-3-small", input: "hello" },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 10_000,
+      });
+
+      expect(result).toEqual(new Map([["0", [3, 5]]]));
+      expect(received.map(({ url }) => url)).toEqual([
+        "/tenant/v1/files?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/batches?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/batches/batch-0?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/files/output-0/content?api-version=2024-10-21&tenant=alpha",
+      ]);
+      expect(
+        received.every(({ authorization }) => authorization === "Bearer openai-loopback-key"),
+      ).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it.each([
     {
       name: "pending status",

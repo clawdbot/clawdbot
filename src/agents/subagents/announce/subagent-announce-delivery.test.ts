@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -1996,6 +1997,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       runId: "descendant-wake-run",
     });
+    const resolveGatewayContext: GatewayContextResolver = () => undefined;
     const replaceSubagentRunAfterSteer = vi.fn(async () => true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
@@ -2011,6 +2013,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       isChildSessionEffectsAllowed: () => true,
       hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
         typeof entry === "object" && entry !== null,
+      resolveGatewayContext,
       deps: {
         callGateway: createGatewayMock(),
         dispatchGatewayMethodInProcess,
@@ -2020,6 +2023,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(woke).toBe(true);
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      resolveGatewayContext,
+    });
     expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "nested-parent-run",

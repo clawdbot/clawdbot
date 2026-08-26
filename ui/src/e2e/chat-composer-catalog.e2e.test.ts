@@ -93,11 +93,14 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
-      // The advertised default is configured but unavailable, so its row stays
-      // visible and disabled while the usable model remains selectable.
+      // The advertised default stays visible as a setup action while the usable
+      // model remains selectable.
       const unavailableDefault = composer.locator('[data-chat-model-default="true"]');
       await expect.poll(() => unavailableDefault.count()).toBe(1);
-      await expect.poll(() => unavailableDefault.getAttribute("disabled")).not.toBeNull();
+      await expect.poll(() => unavailableDefault.getAttribute("disabled")).toBeNull();
+      await expect
+        .poll(() => unavailableDefault.getAttribute("data-chat-model-setup"))
+        .toBe("true");
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     });
   });
@@ -162,7 +165,11 @@ suite.define(() => {
       await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
       await expect
         .poll(() =>
-          options.evaluateAll((rows) => rows.every((row) => row.hasAttribute("disabled"))),
+          options.evaluateAll(
+            (rows) =>
+              rows.every((row) => !row.hasAttribute("disabled")) &&
+              rows.every((row) => row.getAttribute("data-chat-model-setup") === "true"),
+          ),
         )
         .toBe(true);
       await expect
@@ -178,7 +185,7 @@ suite.define(() => {
           path: `${artifactDir}/auth-cold-model-picker.png`,
         });
       }
-      await composer.locator('[data-chat-model-setup="true"]').click();
+      await options.first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     });
   });
@@ -405,9 +412,7 @@ suite.define(() => {
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setOnline(false);
-      await expect
-        .poll(() => pickerTrigger.locator(".chat-controls__inline-select-label").textContent())
-        .toContain("Offline");
+      await expect.poll(() => pickerTrigger.getAttribute("aria-disabled")).toBe("true");
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: startupCount });
       await expect
@@ -507,4 +512,35 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([
+    [1280, 900, "desktop"],
+    [390, 844, "mobile"],
+  ] as const)(
+    "restores the native composer placeholder after a whitespace-only %s draft",
+    async (width, height, label) => {
+      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await textarea.fill("   ");
+        await textarea.blur();
+
+        await expect.poll(() => textarea.inputValue()).toBe("");
+        await expect
+          .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
+          .toBe(true);
+        await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await page.locator(".agent-chat__composer-shell").screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/placeholder-${label}.png`,
+          });
+        }
+      });
+    },
+  );
 });

@@ -228,6 +228,7 @@ async function handleInternalSourceReplySendAction(
     dryRun,
     mediaPolicy: resolveAttachmentMediaPolicy({
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
       mediaAccess: input.mediaAccess,
       mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
     }),
@@ -262,6 +263,7 @@ async function handleInternalSourceReplySendAction(
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
@@ -423,6 +425,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
@@ -464,6 +467,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaAccess,
   });
   const gateway = input.gateway;

@@ -10,18 +10,18 @@ enum MacNodeChannelState: Equatable, Sendable {
     case idle
     /// The channel connected. A non-nil reason means the node-host worker is
     /// unavailable and only native capabilities are advertised.
-    case connected(workerUnavailableReason: String?)
+    case connected(workerUnavailableReason: String?, diagnostic: String? = nil)
     /// The last connect attempt failed; the coordinator keeps retrying.
-    case unavailable(reason: String)
+    case unavailable(reason: String, diagnostic: String? = nil)
 
-    var operatorStatusLine: (label: String, isDegraded: Bool)? {
+    var operatorStatusLine: (label: String, diagnostic: String?, isDegraded: Bool)? {
         switch self {
-        case .idle, .connected(workerUnavailableReason: nil):
+        case .idle, .connected(workerUnavailableReason: nil, diagnostic: _):
             nil
-        case let .connected(workerUnavailableReason: .some(reason)):
-            ("Mac node degraded — \(Self.condense(reason))", true)
-        case let .unavailable(reason):
-            ("Mac node unavailable — \(Self.condense(reason))", false)
+        case let .connected(workerUnavailableReason: .some(reason), diagnostic: diagnostic):
+            ("Mac node degraded — \(Self.condense(reason))", Self.excerpt(diagnostic), true)
+        case let .unavailable(reason, diagnostic):
+            ("Mac node unavailable — \(Self.condense(reason))", Self.excerpt(diagnostic), false)
         }
     }
 
@@ -33,6 +33,35 @@ enum MacNodeChannelState: Equatable, Sendable {
             .first
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? reason
         return firstLine.count > 220 ? firstLine.prefix(220) + "…" : firstLine
+    }
+
+    /// Preserve complete stderr lines whenever possible so truncation cannot
+    /// turn a useful CLI diagnostic into another clipped headline fragment.
+    private static func excerpt(_ diagnostic: String?) -> String? {
+        guard let diagnostic = diagnostic?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+            return nil
+        }
+        let lines = diagnostic.split(separator: "\n", omittingEmptySubsequences: false)
+        let needsEllipsis = diagnostic.count > 360 || lines.count > 4
+        let maximumLength = needsEllipsis ? 359 : 360
+        var retainedLines: [Substring] = []
+        var retainedLength = 0
+
+        for line in lines.prefix(4) {
+            let length = retainedLength + (retainedLines.isEmpty ? 0 : 1) + line.count
+            guard length <= maximumLength else { break }
+            retainedLines.append(line)
+            retainedLength = length
+        }
+
+        if retainedLines.isEmpty {
+            let prefix = diagnostic.prefix(maximumLength)
+            let boundary = prefix.lastIndex(where: \.isWhitespace) ?? prefix.endIndex
+            return "\(prefix[..<boundary])…"
+        }
+
+        let excerpt = retainedLines.joined(separator: "\n")
+        return retainedLines.count == lines.count ? excerpt : "\(excerpt)…"
     }
 }
 

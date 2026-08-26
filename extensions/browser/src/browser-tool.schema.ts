@@ -65,7 +65,7 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
 const TAB_REFERENCE_DESCRIPTION =
-  "Tab reference. Prefer suggestedTargetId, tabId, or label from tabs output; raw CDP targetId and unique raw prefixes remain supported for compatibility.";
+  "Prefer suggestedTargetId/tabId/label; raw CDP targetId or unique prefix works.";
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -136,7 +136,11 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     submit: Type.Optional(Type.Boolean()),
     slowly: Type.Optional(Type.Boolean()),
     // press
-    key: Type.Optional(Type.String()),
+    key: Type.Optional(
+      Type.String({
+        description: "Escape, Enter, Control+Shift+T; aliases Esc, Return, Del, Ctrl, Cmd.",
+      }),
+    ),
     delayMs: optionalNonNegativeIntegerSchema(),
     // drag
     startRef: Type.Optional(Type.String()),

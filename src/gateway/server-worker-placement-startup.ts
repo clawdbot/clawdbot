@@ -33,6 +33,7 @@ import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/pla
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./worker-environments/placement-dispatch-startup.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -85,6 +86,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
   }) => Promise<void>;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
+  info?: (message: string) => void;
   warn: (message: string) => void;
 };
 
@@ -440,6 +442,17 @@ export function createGatewayWorkerPlacementRuntime(
     reconcileActive: (environmentId?: string) =>
       publishPlacementChanges(() => rawDispatchService.reconcileActive(environmentId)),
   };
+  const placementIdleSweep = createWorkerPlacementIdleSweep({
+    placements: params.placements,
+    environments: params.environments,
+    dispatch: rawDispatchService,
+    getConfig: getRuntimeConfig,
+    info: params.info ?? params.warn,
+    warn: params.warn,
+    isPlacementOperationInFlight: (sessionId) =>
+      rawDispatchService.isPlacementOperationInFlight(sessionId),
+    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+  });
   const sessionRetirement = createPlacementSessionRetirement({
     placements: params.placements,
     environments: params.environments,
@@ -474,6 +487,7 @@ export function createGatewayWorkerPlacementRuntime(
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
+    const placementIdleSuspend: { current: Promise<void> | undefined } = { current: undefined };
     let stopped = false;
     const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
       placements: params.placements,
@@ -539,7 +553,21 @@ export function createGatewayWorkerPlacementRuntime(
       return trackOperation(diskSpaceSweep, diskSpace.sweep(), "Worker disk-space sweep failed");
     };
     const sweepActivePlacements = (): void => {
-      void reconcileActivePlacements();
+      const reconciliation = reconcileActivePlacements();
+      void reconciliation.then(
+        () => {
+          if (stopped || placementIdleSuspend.current) {
+            return;
+          }
+          // Reclaim owns an exclusive placement fence and must run after reconciliation releases it.
+          void trackOperation(
+            placementIdleSuspend,
+            publishPlacementChanges(() => placementIdleSweep.sweep()),
+            "Worker placement auto-suspend sweep failed",
+          );
+        },
+        () => undefined,
+      );
       // Session-lifetime sampling covers idle placements independently of provider health.
       void sweepDiskSpace();
     };
@@ -573,9 +601,11 @@ export function createGatewayWorkerPlacementRuntime(
         }
         const currentStop = (async () => {
           await Promise.allSettled(
-            [placementReconcile.current, diskSpaceSweep.current].filter(
-              (operation): operation is Promise<void> => operation !== undefined,
-            ),
+            [
+              placementReconcile.current,
+              diskSpaceSweep.current,
+              placementIdleSuspend.current,
+            ].filter((operation): operation is Promise<void> => operation !== undefined),
           );
           await nodeWorkspaceRetention.stop();
           await params.environments.stop();

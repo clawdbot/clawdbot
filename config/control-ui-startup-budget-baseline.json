@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340901,
-  "reason": "refresh after cumulative current-main UI fixes exhausted the startup tolerance",
+  "startupJsGzipBytes": 341333,
+  "reason": "Tide, Beacon, and Phosphor themes: theme-name wiring, three appearance options, locale strings, and two font stylesheet mappings",
   "updatedAt": "2026-08-26"
 }

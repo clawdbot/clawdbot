@@ -1,9 +1,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
-  type PortalCloseParams,
-  type PortalOpenParams,
   type PortalSummary,
   validatePortalCloseParams,
   validatePortalListParams,
@@ -11,17 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-
-function invalidParams(method: string, errors: unknown, respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${method} params: ${formatValidationErrors(errors as never)}`,
-    ),
-  );
-}
+import { defineValidatedGatewayMethod } from "./validation.js";
 
 function requirePortalService(
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
@@ -40,82 +27,87 @@ function redactPortalSummary(summary: PortalSummary): PortalSummary {
 }
 
 export const portalHandlers: GatewayRequestHandlers = {
-  "portal.list": ({ params, respond, context, client }) => {
-    if (!validatePortalListParams(params)) {
-      invalidParams("portal.list", validatePortalListParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const portals = service.list();
-    respond(
-      true,
-      {
-        portals:
-          scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
-            ? portals
-            : portals.map(redactPortalSummary),
-      },
-      undefined,
-    );
-  },
-  "portal.open": async ({ params, respond, context }) => {
-    if (!validatePortalOpenParams(params)) {
-      invalidParams("portal.open", validatePortalOpenParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    try {
-      const request = params as PortalOpenParams;
-      const portal = await service.open({
-        targetPort: request.port,
-        ...(request.title !== undefined ? { title: request.title } : {}),
-        ...(request.description !== undefined ? { description: request.description } : {}),
-        ...(request.path !== undefined ? { path: request.path } : {}),
-      });
-      context.broadcast(
-        "portal.changed",
-        { portals: service.list().map(redactPortalSummary) },
-        { dropIfSlow: true },
-      );
-      respond(true, portal, undefined);
-    } catch (error) {
+  "portal.list": defineValidatedGatewayMethod(
+    "portal.list",
+    validatePortalListParams,
+    ({ respond, context, client }) => {
+      const service = requirePortalService(context, respond);
+      if (!service) {
+        return;
+      }
+      const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+      const portals = service.list();
       respond(
-        false,
+        true,
+        {
+          portals:
+            scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
+              ? portals
+              : portals.map(redactPortalSummary),
+        },
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
       );
-    }
-  },
-  "portal.close": async ({ params, respond, context }) => {
-    if (!validatePortalCloseParams(params)) {
-      invalidParams("portal.close", validatePortalCloseParams.errors, respond);
-      return;
-    }
-    const service = requirePortalService(context, respond);
-    if (!service) {
-      return;
-    }
-    try {
-      await service.close((params as PortalCloseParams).id);
-      context.broadcast(
-        "portal.changed",
-        { portals: service.list().map(redactPortalSummary) },
-        { dropIfSlow: true },
-      );
-      respond(true, { closed: true }, undefined);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
-      );
-    }
-  },
+    },
+  ),
+  "portal.open": defineValidatedGatewayMethod(
+    "portal.open",
+    validatePortalOpenParams,
+    async ({ params: request, respond, context }) => {
+      const service = requirePortalService(context, respond);
+      if (!service) {
+        return;
+      }
+      try {
+        const opened = await service.open({
+          targetPort: request.port,
+          ...(request.title !== undefined ? { title: request.title } : {}),
+          ...(request.description !== undefined ? { description: request.description } : {}),
+          ...(request.path !== undefined ? { path: request.path } : {}),
+        });
+        context.broadcast(
+          "portal.changed",
+          { portals: service.list().map(redactPortalSummary) },
+          { dropIfSlow: true },
+        );
+        respond(true, opened.portal, undefined);
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    },
+  ),
+  "portal.close": defineValidatedGatewayMethod(
+    "portal.close",
+    validatePortalCloseParams,
+    async ({ params, respond, context }) => {
+      const service = requirePortalService(context, respond);
+      if (!service) {
+        return;
+      }
+      try {
+        await service.close(params.id);
+        context.broadcast(
+          "portal.changed",
+          { portals: service.list().map(redactPortalSummary) },
+          { dropIfSlow: true },
+        );
+        respond(true, { closed: true }, undefined);
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    },
+  ),
 };

@@ -43,10 +43,12 @@ import {
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import {
   buildQaSuiteSummaryJson,
+  shouldLogQaSuiteProgress,
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,
   type QaSuiteSummaryJson,
+  writeQaSuiteProgress,
 } from "./suite.js";
 import * as dockerBatch from "./test-file-scenario-docker-batch.js";
 import {
@@ -412,6 +414,7 @@ async function resolveSuiteExecutionPlan(
     testFileScenariosByKind,
   };
 }
+
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
   runParams: QaSuiteRunParams | undefined;
@@ -427,6 +430,9 @@ async function runQaTestFileSuiteFromRuntime(params: {
     evidenceMode: runParams?.evidenceMode,
     ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
     ...(runParams?.failFast ? { failFast: true } : {}),
+    ...(shouldLogQaSuiteProgress()
+      ? { progress: (message: string) => writeQaSuiteProgress(true, message) }
+      : {}),
     repoRoot,
     outputDir,
     providerMode,

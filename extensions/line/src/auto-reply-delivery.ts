@@ -12,7 +12,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { FlexContainer } from "./flex-templates.js";
+import type { FlexContainer } from "./flex-templates/types.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -371,6 +371,10 @@ export async function deliverLineAutoReply(params: {
     if (canRetryTextOnly) {
       // HTTPFetchError 400 is an actual LINE response: that request was rejected
       // atomically. Retry its text/actions plus the tail that was never attempted.
+      const lastRetryMessage = retryMessages.at(-1);
+      if (quickRepliesNeedCarrier && lastRetryMessage && !lastRetryMessage.quickReply) {
+        lastRetryMessage.quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+      }
       try {
         await sendLineMessages(retryMessages, false);
       } catch {
