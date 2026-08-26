@@ -214,12 +214,13 @@ function createReceiverEventWithBody(body: Record<string, unknown>): ReceiverEve
 function attachIngress(
   queue: ChannelIngressQueue<SlackIngressPayload>,
   processEvent: (event: ReceiverEvent) => Promise<void>,
+  options: { adoptionStallTimeoutMs?: number } = {},
 ) {
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue,
     pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
+    adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? 5_000,
   });
   const harness = createReceiverHarness();
   ingress.wrapReceiver(harness.receiver).init({ processEvent } as App);
@@ -440,26 +441,21 @@ describe("Slack durable ingress", () => {
         }
         await lifecycle?.onAdopted();
       });
-      const ingress = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
+      const { ingress, receive } = attachIngress(queue, processEvent, {
         adoptionStallTimeoutMs: 80,
       });
-      const harness = createReceiverHarness();
-      ingress.wrapReceiver(harness.receiver).init({ processEvent } as App);
       ingress.start();
 
       try {
-        await harness.receive(createReceiverEvent("Ev-session-watchdog-first"));
-        await harness.receive(createReceiverEvent("Ev-session-watchdog-second"));
+        await receive(createReceiverEvent("Ev-session-watchdog-first"));
+        await receive(createReceiverEvent("Ev-session-watchdog-second"));
         await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2));
         expect(starts).toEqual(["Ev-session-watchdog-first"]);
 
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 120);
         });
-        await harness.receive(createReceiverEvent("Ev-session-watchdog-third"));
+        await receive(createReceiverEvent("Ev-session-watchdog-third"));
         await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(3));
         expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
           "Ev-session-watchdog-first",
