@@ -703,7 +703,13 @@ describe("modelsAuthLoginCommand", () => {
         run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
         auth: [
           { id: "oauth", label: "OAuth", kind: "oauth", run: runOauthAuth },
-          { id: "device-code", label: "Device code", kind: "device_code", run: runDeviceCodeAuth },
+          {
+            id: "device-code",
+            label: "Device code",
+            kind: "device_code",
+            headless: true,
+            run: runDeviceCodeAuth,
+          },
         ],
       }),
     ]);
@@ -737,7 +743,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthLoginCommand({ provider: "openai", method: "device-code" }, runtime),
-    ).rejects.toThrow("resolved provider auth method is device-code");
+    ).rejects.toThrow("explicitly supports headless execution");
 
     expect(runDeviceCodeNamedOauth).not.toHaveBeenCalled();
   });

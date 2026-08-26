@@ -1035,9 +1035,9 @@ export async function runModelsAuthLoginFlowCore(
     );
   }
 
-  if (!process.stdin.isTTY && chosenMethod.kind !== "device_code") {
+  if (!process.stdin.isTTY && chosenMethod.headless !== true) {
     throw new Error(
-      `models auth login requires an interactive TTY unless the resolved provider auth method is device-code. In automation, use ${formatCliCommand("openclaw models auth login --provider openai --method device-code")} for provider device-code auth, or ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
+      `models auth login requires an interactive TTY unless the resolved provider auth method explicitly supports headless execution. In automation, use a provider method documented as headless-safe, or ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
 

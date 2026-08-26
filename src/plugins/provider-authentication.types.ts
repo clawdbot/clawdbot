@@ -162,6 +162,8 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /** True only when the provider guarantees that run() never needs terminal input. */
+  headless?: boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
