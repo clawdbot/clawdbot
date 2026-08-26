@@ -50,6 +50,7 @@ export { routeSubagentContinuationReturn } from "./subagent-announce.continuatio
 type OriginDelegateFlowStatus = NonNullable<
   ReturnType<typeof findContinuationDelegateFlowByOriginRun>
 >["status"];
+type ChildContinuationDrainResult = Awaited<ReturnType<typeof dispatchToolDelegates>>;
 
 async function rejectCrossSessionTargeting(params: {
   crossSessionTargeting: "disabled" | "enabled";
@@ -90,9 +91,9 @@ async function drainChildContinuationQueue(params: {
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
   chainStateOverride?: ContinuationChainState;
-}) {
+}): Promise<ChildContinuationDrainResult | undefined> {
   if (params.cfg.agents?.defaults?.continuation?.enabled !== true) {
-    return;
+    return undefined;
   }
   try {
     const childEntry = loadSessionEntryByKey(params.childSessionKey);
