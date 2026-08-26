@@ -81,6 +81,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     sandboxExecEnvironment: undefined,
     executionDisconnectError: undefined,
   };
+  const trajectoryTerminalState: { trajectoryTerminal: CodexTrajectorySessionEnded | null } = {
+    trajectoryTerminal: null,
+  };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
@@ -90,7 +93,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
-    trajectoryTerminal: null as CodexTrajectorySessionEnded | null,
+    ...trajectoryTerminalState,
     nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
