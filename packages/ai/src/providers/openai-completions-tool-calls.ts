@@ -19,6 +19,51 @@ type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
   onConfirmedToolCall?: (block: TBlock, contentIndex: number) => void;
 };
 
+/** Keep encrypted provider reasoning attached to the first matching tool call. */
+export function createOpenAIEncryptedToolCallReasoningTracker<
+  TBlock extends { thoughtSignature?: string },
+>() {
+  const firstBlocks = new Map<string, TBlock>();
+  const pendingDetails = new Map<string, string>();
+  return {
+    rememberToolCall(id: string, block: TBlock) {
+      if (!id || firstBlocks.has(id)) {
+        return;
+      }
+      firstBlocks.set(id, block);
+      const pendingDetail = pendingDetails.get(id);
+      if (pendingDetail) {
+        block.thoughtSignature = pendingDetail;
+        pendingDetails.delete(id);
+      }
+    },
+    consumeDetails(details: unknown) {
+      if (!Array.isArray(details)) {
+        return;
+      }
+      for (const detail of details) {
+        if (
+          !isRecord(detail) ||
+          detail.type !== "reasoning.encrypted" ||
+          typeof detail.id !== "string" ||
+          detail.id.length === 0 ||
+          typeof detail.data !== "string" ||
+          detail.data.length === 0
+        ) {
+          continue;
+        }
+        const serializedDetail = JSON.stringify(detail);
+        const matchingBlock = firstBlocks.get(detail.id);
+        if (matchingBlock) {
+          matchingBlock.thoughtSignature = serializedDetail;
+        } else {
+          pendingDetails.set(detail.id, serializedDetail);
+        }
+      }
+    },
+  };
+}
+
 /** Normalize the SDK's legacy single-function lane into its modern tool-call shape. */
 export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   delta: ChatCompletionChunk.Choice.Delta,
