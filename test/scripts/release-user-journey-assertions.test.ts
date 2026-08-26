@@ -1,10 +1,12 @@
 // Release User Journey Assertions tests cover release user journey assertions script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import {
   runReleaseUserJourneyAssertion,
   waitForClickClackSocket,
@@ -13,6 +15,7 @@ import { withEnvAsync } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
+const CLICKCLACK_FIXTURE_SCRIPT = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -46,10 +49,10 @@ function runAssertion(
   });
 }
 
-async function waitUntil(matches: () => boolean, label: string): Promise<void> {
+async function waitUntil(matches: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 1000) {
-    if (matches()) {
+    if (await matches()) {
       return;
     }
     await new Promise((resolve) => {
@@ -57,6 +60,37 @@ async function waitUntil(matches: () => boolean, label: string): Promise<void> {
     });
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+async function reserveTcpPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+  child.kill("SIGTERM");
+  await once(child, "exit");
+}
+
+async function openClickClackSocket(port: number, token: string): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/realtime/ws`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  await once(socket, "open");
+  return socket;
+}
+
+async function closeClickClackSocket(socket: WebSocket): Promise<void> {
+  socket.terminate();
+  await once(socket, "close");
 }
 
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
@@ -323,32 +357,64 @@ describe("release user journey assertions", () => {
     }
   });
 
-  it("accepts ready ClickClack fixture state", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
-    const home = path.join(root, "home");
-    let requestCount = 0;
-    const server = await startTcpFixtureServer((socket) => {
-      requestCount += 1;
-      const body = JSON.stringify({ socketCount: requestCount });
-      socket.end(
-        `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-      );
+  it("waits for a new ClickClack websocket generation across reconnect", async () => {
+    const root = tempDirs.make("openclaw-release-user-assertions-");
+    const statePath = path.join(root, "clickclack.json");
+    const port = await reserveTcpPort();
+    const token = "clickclack-test-token";
+    const fixture = spawn(process.execPath, [CLICKCLACK_FIXTURE_SCRIPT], {
+      env: {
+        ...process.env,
+        CLICKCLACK_FIXTURE_PORT: String(port),
+        CLICKCLACK_FIXTURE_STATE: statePath,
+        CLICKCLACK_FIXTURE_TOKEN: token,
+      },
+      stdio: "ignore",
     });
+    let socket: WebSocket | undefined;
 
     try {
-      await expect(
-        withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
-          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
-            `http://127.0.0.1:${server.port}`,
-            "1",
-            "2",
-          ]),
+      await waitUntil(
+        async () =>
+          fetch(`http://127.0.0.1:${port}/health`)
+            .then((response) => response.ok)
+            .catch(() => false),
+        "ClickClack fixture startup",
+      );
+
+      socket = await openClickClackSocket(port, token);
+      await waitForClickClackSocket({
+        baseUrl: `http://127.0.0.1:${port}`,
+        pollIntervalMs: 20,
+        timeoutMs: 1000,
+      });
+      await closeClickClackSocket(socket);
+      socket = undefined;
+      await waitUntil(async () => {
+        const state = JSON.parse(
+          await fetch(`http://127.0.0.1:${port}/fixture/state`).then((response) => response.text()),
+        );
+        return state.socketCount === 0 && state.socketGeneration === 1;
+      }, "first ClickClack socket close");
+
+      const secondGeneration = waitForClickClackSocket({
+        baseUrl: `http://127.0.0.1:${port}`,
+        minimumSocketGeneration: 2,
+        pollIntervalMs: 20,
+        timeoutMs: 1000,
+      });
+      socket = await openClickClackSocket(port, token);
+      await expect(secondGeneration).resolves.toBeUndefined();
+      expect(
+        JSON.parse(
+          await fetch(`http://127.0.0.1:${port}/fixture/state`).then((response) => response.text()),
         ),
-      ).resolves.toBeUndefined();
-      expect(requestCount).toBe(2);
+      ).toMatchObject({ socketCount: 1, socketGeneration: 2 });
     } finally {
-      await server.stop();
-      rmSync(root, { force: true, recursive: true });
+      if (socket) {
+        await closeClickClackSocket(socket);
+      }
+      await stopChild(fixture);
     }
   });
 
@@ -396,7 +462,7 @@ describe("release user journey assertions", () => {
             timeoutMs: 150,
           }),
         ),
-      ).rejects.toThrow("Timed out waiting for 1 ClickClack websocket connection");
+      ).rejects.toThrow("Timed out waiting for ClickClack websocket generation 1");
       expect(Date.now() - startedAt).toBeLessThan(750);
     } finally {
       await server.stop();

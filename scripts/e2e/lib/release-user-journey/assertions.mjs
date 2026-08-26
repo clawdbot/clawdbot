@@ -328,22 +328,22 @@ async function waitClickClackSocket() {
     30,
     "ClickClack websocket timeout seconds",
   );
-  const minimumSocketCount = readPositiveInt(
+  const minimumSocketGeneration = readPositiveInt(
     process.argv[5],
     1,
-    "ClickClack minimum websocket count",
+    "ClickClack minimum websocket generation",
   );
   await waitForClickClackSocket({
     baseUrl,
     timeoutMs: timeoutSeconds * 1000,
-    minimumSocketCount,
+    minimumSocketGeneration,
   });
 }
 
 export async function waitForClickClackSocket({
   baseUrl,
   timeoutMs,
-  minimumSocketCount = 1,
+  minimumSocketGeneration = 1,
   pollIntervalMs = 250,
 }) {
   const deadline = Date.now() + timeoutMs;
@@ -361,7 +361,7 @@ export async function waitForClickClackSocket({
       },
     ).catch(() => undefined);
     if (state) {
-      if (Number(state.socketCount ?? 0) >= minimumSocketCount) {
+      if (Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
         return;
       }
     }
@@ -370,7 +370,7 @@ export async function waitForClickClackSocket({
     });
   }
   throw new Error(
-    `Timed out waiting for ${minimumSocketCount} ClickClack websocket connection(s) at ${baseUrl}`,
+    `Timed out waiting for ClickClack websocket generation ${minimumSocketGeneration} at ${baseUrl}`,
   );
 }
 
