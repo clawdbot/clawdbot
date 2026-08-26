@@ -604,7 +604,7 @@ describe("finalizeSetupWizard", () => {
       local: true,
       deliver: false,
       message: undefined,
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -669,6 +669,8 @@ describe("finalizeSetupWizard", () => {
     const tuiOptions = runTui.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(tuiOptions).not.toHaveProperty("url");
     expect(tuiOptions).not.toHaveProperty("token");
+    expect(tuiOptions).toMatchObject({ initialMessageTimeoutMs: 300_000 });
+    expect(tuiOptions).not.toHaveProperty("timeoutMs");
   });
 
   it.each([
@@ -867,7 +869,7 @@ describe("finalizeSetupWizard", () => {
       local: true,
       deliver: false,
       message: "Wake up, my friend!",
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -1026,7 +1028,7 @@ describe("finalizeSetupWizard", () => {
       local: true,
       deliver: false,
       message: undefined,
-      timeoutMs: 300_000,
+      initialMessageTimeoutMs: 300_000,
     });
   });
 
@@ -1073,7 +1075,7 @@ describe("finalizeSetupWizard", () => {
         local: true,
         deliver: false,
         message: "醒醒，我的朋友！",
-        timeoutMs: 300_000,
+        initialMessageTimeoutMs: 300_000,
       });
     } finally {
       if (previousLocale === undefined) {
@@ -2013,9 +2015,10 @@ describe("finalizeSetupWizard", () => {
           },
           deliver: false,
           message: undefined,
-          timeoutMs: 300_000,
+          initialMessageTimeoutMs: 300_000,
         }),
       );
+      expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
       expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
       expect(cancelProcessExitAfterTuiReturn).toHaveBeenCalledWith(setupCleanupExitTimer);
       expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledTimes(2);

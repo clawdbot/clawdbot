@@ -49,6 +49,10 @@ import {
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
+// Google-owned SDK resource spellings identify the same model; other publishers do not.
+const GOOGLE_MODEL_RESOURCE_PREFIX =
+  /^(?:(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\/|google\/|models\/)/u;
+
 type GoogleThinkingLevel = `${ThinkingLevel}`;
 
 type GoogleToolChoice = "auto" | "none" | "any";
@@ -801,6 +805,14 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
+    const responseModel = chunk.modelVersion?.trim();
+    if (
+      responseModel &&
+      params.model.id.replace(GOOGLE_MODEL_RESOURCE_PREFIX, "") !==
+        responseModel.replace(GOOGLE_MODEL_RESOURCE_PREFIX, "")
+    ) {
+      params.output.responseModel ||= responseModel;
+    }
     if (chunk.usageMetadata) {
       for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
         const value = chunk.usageMetadata[field];

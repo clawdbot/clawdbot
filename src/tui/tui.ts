@@ -1858,7 +1858,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage);
+        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
         if (!ownsConnection()) {
           return;
         }

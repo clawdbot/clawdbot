@@ -21,7 +21,7 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
@@ -329,7 +329,7 @@ function dispatchDetachedCronNotification(params: {
   logger: CronLogger;
   deliver: () => Promise<void>;
 }): void {
-  void runWithGatewayIndependentRootWorkAdmission(params.deliver).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(params.deliver).catch((err: unknown) => {
     params.logger.warn(
       { jobId: params.jobId, err: formatErrorMessage(err) },
       "cron: detached notification delivery failed",
@@ -339,7 +339,7 @@ function dispatchDetachedCronNotification(params: {
 
 /** Transports a scheduler-authorized cron failure alert. */
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
-  await runWithGatewayIndependentRootWorkAdmission(async () => {
+  await runWithGatewayIndependentRootWorkContinuation(async () => {
     await sendGatewayCronFailureAlertUnderAdmission(params);
   });
 }

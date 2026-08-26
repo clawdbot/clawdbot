@@ -484,13 +484,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       }
       if (
         !isGatewayRestartDraining() &&
-        getGatewaySuspendAdmissionPhase() === "prepared" &&
+        (getGatewaySuspendAdmissionPhase() === "draining" ||
+          getGatewaySuspendAdmissionPhase() === "prepared") &&
         isPreparedControlConnect(data)
       ) {
-        // Refuse-only suspension fences work, not control-plane visibility. Only
-        // operator connects are admitted while prepared, and they can only reach
-        // suspend-control methods after handshake; node and worker connects would
-        // attach presence/registry state, so they stay refused.
+        // Suspension fences work, not authenticated owner recovery. Operators
+        // can reconnect throughout the held lease; node and worker connects
+        // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }

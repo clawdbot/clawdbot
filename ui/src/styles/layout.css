@@ -12,7 +12,6 @@
   --shell-chrome-controls-gap: 4px;
   --shell-native-titlebar-controls-inset: 92px;
   --shell-native-titlebar-controls-width: 156px;
-  --shell-native-titlebar-safe-area-left: 246px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
      Optional controls contribute only while they are actually mounted. */
   --shell-controls-width: 104px;

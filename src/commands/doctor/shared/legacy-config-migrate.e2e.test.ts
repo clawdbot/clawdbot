@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
@@ -41,6 +42,80 @@ describe("legacy config migration end to end", () => {
   it("keeps agents.defaults.tts outside the schema", () => {
     expect(validateConfigObjectRaw({ agents: { defaults: { tts: {} } } }).ok).toBe(false);
   });
+
+  it.each([
+    {
+      name: "defaults-only QMD session indexing",
+      canonical: undefined,
+      defaults: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory", "sessions"],
+      expectedPaths: ["/defaults-existing", "/defaults-qmd"],
+    },
+    {
+      name: "explicit canonical privacy and indexing policy",
+      canonical: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        experimental: { sessionMemory: false },
+        sources: ["memory"],
+        extraPaths: ["/canonical"],
+      },
+      defaults: {
+        provider: "openai",
+        rememberAcrossConversations: true,
+        experimental: { sessionMemory: true },
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory"],
+      expectedPaths: ["/canonical", "/defaults-qmd"],
+    },
+  ])(
+    "migrates $name into validated effective memory settings",
+    ({ canonical, defaults, expectedSources, expectedPaths }) => {
+      const result = migrateLegacyConfig({
+        ...(canonical ? { memory: { search: canonical } } : {}),
+        session: { dmScope: "per-peer" },
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            memory: {
+              search: {
+                ...defaults,
+                qmd: {
+                  sessions: { enabled: true },
+                  extraCollections: [{ path: "/defaults-qmd" }],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.partiallyValid).toBeUndefined();
+      expect(result.config).not.toHaveProperty("agents.defaults.memory");
+      const validation = validateConfigObjectRaw(result.config);
+      expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(
+        true,
+      );
+      if (!validation.ok) {
+        return;
+      }
+      const resolved = resolveMemorySearchConfig(validation.config, "main");
+      expect(resolved).toMatchObject({
+        provider: "none",
+        rememberAcrossConversations: false,
+        sources: expectedSources,
+        searchSources: expectedSources,
+        extraPaths: expectedPaths,
+      });
+      expect(validation.config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
+      expect(migrateLegacyConfig(validation.config)).toEqual({ config: null, changes: [] });
+    },
+  );
 
   it("canonicalizes a multi-family legacy config and is idempotent", () => {
     const result = migrateLegacyConfig({

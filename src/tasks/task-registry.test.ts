@@ -7,6 +7,11 @@ import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
+  getGatewaySuspendStatus,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
+import {
   requestHeartbeat,
   setHeartbeatWakeHandler,
   type HeartbeatWakeRequest,
@@ -25,6 +30,8 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
@@ -2927,6 +2934,88 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-held-delivery"), {
         deliveryStatus: "delivered",
       });
+    });
+  });
+
+  it("drains an admitted task through terminal delivery without admitting unrelated work", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      let releaseSend = () => {};
+      hoisted.sendMessageMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSend = () =>
+              resolve({ channel: "notifychat", to: "notifychat:123", via: "direct" });
+          }),
+      );
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        runId: "run-draining-terminal-delivery",
+        task: "Finish delivery behind the suspension fence",
+        deliveryStatus: "pending",
+        startedAt: Date.now(),
+      });
+      let finishTask = () => {};
+      const taskRun = runWithGatewayIndependentRootWorkAdmission(async () => {
+        await new Promise<void>((resolve) => {
+          finishTask = resolve;
+        });
+        finalizeTaskRecordByRunId({
+          runId: task.runId!,
+          runtime: "acp",
+          status: "succeeded",
+          endedAt: Date.now(),
+        });
+      });
+
+      const suspension = prepareGatewaySuspend({
+        requestId: "task-terminal-drain",
+        terminalPolicy: "preserve",
+        drain: true,
+        pauseScheduling: () => {},
+        resumeScheduling: () => {},
+      });
+      expect(suspension.status).toBe("draining");
+      if (suspension.status !== "draining") {
+        throw new Error("expected an active task to keep suspension draining");
+      }
+
+      try {
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        finishTask();
+        await taskRun;
+        await waitForFast(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: "pending",
+        });
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+        expect(getGatewaySuspendStatus(suspension.suspensionId)).toEqual(
+          expect.objectContaining({
+            status: "draining",
+            blockers: expect.arrayContaining([
+              expect.objectContaining({ kind: "root-request", count: 1 }),
+            ]),
+          }),
+        );
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        releaseSend();
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        });
+        expect(getGatewaySuspendStatus(suspension.suspensionId)).toEqual({
+          status: "ready",
+          expiresAtMs: suspension.expiresAtMs,
+        });
+      } finally {
+        releaseSend();
+        finishTask();
+        resumeGatewaySuspend(suspension.suspensionId);
+        await taskRun;
+      }
     });
   });
 
