@@ -252,7 +252,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ).value
       : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
-  const interruptedStatus = renderChatRunStatusIndicator(composerRunStatus);
+  const interruptedStatus = props.runError
+    ? nothing
+    : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
   const compactionStatus = renderCompactionIndicator(props.compactionStatus);
   const progressCard = props.progressCard

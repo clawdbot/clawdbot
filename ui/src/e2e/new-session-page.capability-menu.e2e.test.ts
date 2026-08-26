@@ -84,7 +84,7 @@ suite.define(() => {
             (text) => text.replace(/\s+/g, " ").trim(),
           ),
         )
-        .toEqual(["3 session overrides"]);
+        .toEqual(["3 overrides"]);
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
 
