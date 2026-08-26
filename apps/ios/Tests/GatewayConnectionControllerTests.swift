@@ -552,12 +552,14 @@ private func waitUntil(
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
 
         appModel.clearGatewayConnectionProblem()
 
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
 
         appModel.clearOperatorGatewayConnectionProblemIfCurrent()
 
@@ -567,6 +569,7 @@ private func waitUntil(
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayStatusText == "Connected")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .connected)
     }
 
     @Test @MainActor func `retained gateway problem clears only when explicit target changes`() throws {

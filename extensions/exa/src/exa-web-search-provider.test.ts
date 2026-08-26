@@ -281,6 +281,25 @@ describe("exa web search provider", () => {
     });
   });
 
+  it.each([
+    { name: "a non-string value", query: { value: 123 } },
+    {
+      name: "a throwing getter",
+      query: {
+        get() {
+          throw new Error("Unrelated inherited contents option was accessed");
+        },
+      },
+    },
+  ])("ignores inherited text query with $name", ({ query }) => {
+    const prototype = Object.defineProperty({}, "query", query);
+    const text = Object.assign(Object.create(prototype), { maxCharacters: 1 });
+
+    expect(testing.parseExaContents({ text })).toEqual({
+      value: { text: { maxCharacters: 1 } },
+    });
+  });
+
   it("rejects invalid Exa contents objects", () => {
     expect(
       testing.parseExaContents({

@@ -60,7 +60,7 @@ async function captureUiProof(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("uses one canonical scrollbar profile and keeps selection in chat and inputs", async () => {
+  it("keeps canonical scrollbars without horizontal model-picker overflow and preserves selection", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
@@ -82,7 +82,12 @@ suite.define(() => {
             },
           ],
           models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            {
+              contextWindow: 1_000_000,
+              id: "gpt-5.6-sol-openclaw",
+              name: "openai/gpt-5.6-sol-openclaw",
+              provider: "openai",
+            },
             ...Array.from({ length: 24 }, (_value, index) => ({
               id: `scroll-model-${index + 1}`,
               name: `Scroll Model ${index + 1}`,
@@ -111,6 +116,8 @@ suite.define(() => {
             sidebarSelection: getComputedStyle(sidebar).userSelect,
             sidebarScrollbar: getComputedStyle(sessions, "::-webkit-scrollbar").width,
             modelPickerScrollbar: getComputedStyle(modelPicker, "::-webkit-scrollbar").width,
+            modelPickerOverflowX: getComputedStyle(modelPicker).overflowX,
+            modelPickerHorizontalOverflow: modelPicker.scrollWidth - modelPicker.clientWidth,
           };
         });
         // One canonical width everywhere: the sidebar no longer overrides
@@ -123,6 +130,8 @@ suite.define(() => {
           sidebarSelection: "none",
           sidebarScrollbar: "12px",
           modelPickerScrollbar: "12px",
+          modelPickerOverflowX: "hidden",
+          modelPickerHorizontalOverflow: 0,
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");

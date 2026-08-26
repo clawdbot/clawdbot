@@ -26,10 +26,7 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
-import {
-  resolveConfiguredMediaMaxBytes,
-  resolveGeneratedMediaMaxBytes,
-} from "../../media/configured-max-bytes.js";
+import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
@@ -70,6 +67,7 @@ import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
+  hasExplicitMediaModel,
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
@@ -79,11 +77,7 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import {
-  coerceToolModelConfig,
-  hasToolModelConfig,
-  type ToolModelConfig,
-} from "./model-config.helpers.js";
+import type { ToolModelConfig } from "./model-config.helpers.js";
 import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
@@ -227,6 +221,7 @@ function resolveImageGenerationModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  modelOverride?: string;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
@@ -234,6 +229,7 @@ function resolveImageGenerationModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
+    modelOverride: params.modelOverride,
     providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
 }
@@ -242,10 +238,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageGenerateToolTestApi")] = {
     resolveImageGenerationModelConfigForTool,
   };
-}
-
-function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.image));
 }
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
@@ -530,7 +522,7 @@ type ImageGenerateSandboxConfig = {
 
 async function loadReferenceImages(params: {
   imageInputs: string[];
-  maxBytes?: number;
+  maxBytes: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
@@ -839,20 +831,17 @@ export function createImageGenerateTool(options?: {
       }
 
       const model = readToolStringParam(params, "model");
-      const configuredImageGenerationModelConfig = coerceToolModelConfig(
-        cfg.agents?.defaults?.mediaModels?.image,
-      );
-      const imageGenerationModelConfig =
-        resolveImageGenerationModelConfigForTool({
-          cfg,
-          workspaceDir: options?.workspaceDir,
-          agentDir: options?.agentDir,
-          authStore: options?.authProfileStore,
-        }) ?? (model ? { ...configuredImageGenerationModelConfig, primary: model } : null);
+      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+        cfg,
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
+        modelOverride: model,
+      });
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
-      const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
+      const explicitModelConfig = hasExplicitMediaModel(cfg.agents?.defaults?.mediaModels?.image);
       const effectiveCfg =
         applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -944,10 +933,10 @@ export function createImageGenerateTool(options?: {
         resolution: explicitResolution,
         explicitResolution: Boolean(explicitResolution),
       });
-      const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
+      const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        maxBytes: configuredMediaMaxBytes,
+        maxBytes: referenceMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,

@@ -11,10 +11,10 @@ import {
 } from "./github-publication-availability.js";
 import { createGitHubPublicationCoordinatorMethods } from "./github-publication-coordinator-methods.js";
 import {
-  captureGitHubPublicationWorkspaceSnapshot,
   executeGitHubPublication,
   matchesGitHubPublicationIdentityRow,
 } from "./github-publication-executor.js";
+import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
   deferGitHubPublicationRequests as deferRequests,

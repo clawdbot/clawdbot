@@ -366,7 +366,7 @@ Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles four things:
+A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles five things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -380,6 +380,9 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
+  </Step>
+  <Step title="Task Flow retention">
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 

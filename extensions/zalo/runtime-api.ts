@@ -61,11 +61,11 @@ export {
   type SecretInput,
   sendPayloadWithChunkedTextAndMedia,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  setZaloRuntime,
   waitForAbortSignal,
   warnMissingProviderGroupPolicyFallbackOnce,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   withResolvedWebhookRequestPipeline,
   type WizardPrompter,
-} from "./src/runtime-api.js";
+} from "./src/runtime-support.js";
+export { setZaloRuntime } from "./src/runtime.js";

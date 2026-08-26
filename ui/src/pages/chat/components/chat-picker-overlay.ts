@@ -6,6 +6,7 @@ const MOBILE_COMPOSER_OVERLAY_QUERY =
 const pointerOpenedDropdowns = new WeakSet<HTMLElement>();
 const POINTER_RESTORED_FOCUS_ATTRIBUTE = "data-chat-pointer-restored-focus";
 const POINTER_OPENED_PICKER_ATTRIBUTE = "data-chat-pointer-opened-picker";
+const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
 
 let composerPickerDismissalInstalled = false;
 
@@ -43,11 +44,39 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
+function restoreEscapeFocus(picker: HTMLElement): void {
+  const trigger = pickerTrigger(picker);
+  if (!trigger || getComputedStyle(trigger).display !== "none") {
+    trigger?.focus({ preventScroll: true });
+    return;
+  }
+  const focusScope = picker.closest("openclaw-chat-pane") ?? picker.closest("openclaw-app");
+  // Closing can replace the composer subtree; resolve the visible trigger only
+  // after the retained pane has rendered the replacement controls.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const target = (focusScope ?? document).querySelector<HTMLElement>(
+        ".chat-controls__model-settings .chat-controls__model-picker > summary",
+      );
+      target?.focus({ preventScroll: true });
+    }),
+  );
+}
+
 function dismissChatComposerPickersOutside(event: PointerEvent): void {
   const path = event.composedPath();
   for (const picker of openChatComposerPickers()) {
     if (!path.includes(picker)) {
       closeComposerPicker(picker);
+    }
+  }
+  for (const menu of document.querySelectorAll<HTMLElement>(
+    ".agent-chat__input > :is(.slash-menu, .skill-menu)",
+  )) {
+    if (!path.includes(menu)) {
+      menu
+        .closest(".agent-chat__input")
+        ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
     }
   }
 }
@@ -57,27 +86,34 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
     return;
   }
   const pickers = openChatComposerPickers();
-  if (pickers.length === 0) {
+  const invocationComposer = document
+    .querySelector<HTMLElement>(".agent-chat__input > :is(.slash-menu, .skill-menu)")
+    ?.closest<HTMLElement>(".agent-chat__input");
+  if (pickers.length === 0 && !invocationComposer) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   const lastPicker = pickers.at(-1);
-  if (!lastPicker) {
-    return;
-  }
-  const trigger = pickerTrigger(lastPicker);
   pickers.forEach(closeComposerPicker);
-  trigger?.focus({ preventScroll: true });
+  invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+  invocationComposer
+    ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+    ?.focus({ preventScroll: true });
+  if (lastPicker) {
+    restoreEscapeFocus(lastPicker);
+  }
 }
 
-function ensureChatComposerPickerDismissal(): void {
+export function ensureChatComposerPickerDismissal(): void {
   if (composerPickerDismissalInstalled || typeof document === "undefined") {
     return;
   }
   composerPickerDismissalInstalled = true;
   document.addEventListener("pointerdown", dismissChatComposerPickersOutside, true);
-  document.addEventListener("keydown", dismissChatComposerPickersOnEscape, true);
+  // Window capture observes the open picker before component Escape handlers
+  // mutate details.open and erase the return-focus owner.
+  window.addEventListener("keydown", dismissChatComposerPickersOnEscape, true);
   document.addEventListener(
     "keydown",
     (event) => {

@@ -570,6 +570,7 @@ export async function mountSidebar(
     sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
+    import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
     sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
   ]);

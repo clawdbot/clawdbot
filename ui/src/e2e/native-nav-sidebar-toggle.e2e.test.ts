@@ -128,11 +128,13 @@ suite.define(() => {
           canGoBack: false,
           canGoForward: false,
         };
-        const stamp = () =>
+        const stamp = () => {
           document.documentElement.classList.add(
             "openclaw-native-macos",
             "openclaw-native-web-chrome",
           );
+          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+        };
         if (document.documentElement) {
           stamp();
         } else {
@@ -280,6 +282,31 @@ suite.define(() => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
+    await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+    const toolbarBox = await toolbar.boundingBox();
+    const attentionBox = await page.locator(".sidebar-attention--floating").boundingBox();
+    expect(toolbarBox).not.toBeNull();
+    expect(attentionBox).not.toBeNull();
+    expect(attentionBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeGreaterThanOrEqual(4);
+    const topLeftControls = page.locator(
+      ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
+    );
+    const centerlines = await topLeftControls.evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return box.top + box.height / 2;
+      }),
+    );
+    for (const centerline of centerlines.slice(1)) {
+      expect(centerline).toBeCloseTo(centerlines[0]!, 1);
+    }
+    if (railProofDir) {
+      await mkdir(railProofDir, { recursive: true });
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(railProofDir, "native-web-top-left-controls.png"),
+      });
+    }
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");

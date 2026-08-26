@@ -29,6 +29,8 @@ const CONTAINER_IMAGE = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:2
 const CONTAINER_GATEWAY_HOST =
   process.env.OPENCLAW_DOCKER_NODE_WORKER_GATEWAY_HOST ?? "host.docker.internal";
 const SESSION_KEY = "agent:qa:node-worker-container-wire";
+const INITIAL_MARKER = "NODE_WORKER_CONTAINER_UI_START_OK";
+const INITIAL_PROMPT = `Reply with only this exact marker: ${INITIAL_MARKER}`;
 const EXEC_MARKER = "NODE_WORKER_CONTAINER_YOLO_OK";
 const EXEC_FILE = "node-worker-container-yolo.txt";
 const EXEC_COMMAND = `test -f /.dockerenv && printf ${EXEC_MARKER} > ${EXEC_FILE} && sleep 1`;
@@ -49,8 +51,18 @@ type ControlUiProof = {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  requests: Array<{
+    method: string;
+    params?: {
+      key?: string;
+      agentId?: string;
+      deviceId?: string;
+      message?: string;
+      idempotencyKey?: string;
+    };
+  }>;
   fullAccessPatch: {
-    arm(): void;
+    arm(sessionKey: string): void;
     held: Promise<void>;
     prematureChatSend: Promise<"premature-chat-send">;
     release(): void;
@@ -138,7 +150,9 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
     { gatewayUrl: gateway.wsUrl, token: gateway.token },
   );
   let patchArmed = false;
+  let patchSessionKey: string | undefined;
   let releaseHeldPatch: (() => void) | undefined;
+  const requests: ControlUiProof["requests"] = [];
   let notifyPatchHeld: () => void;
   let notifyPrematureChatSend: () => void;
   const patchHeld = new Promise<void>((resolve) => {
@@ -152,13 +166,27 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
     socket.onMessage((message) => {
       const request = JSON.parse(message.toString()) as {
         method?: string;
-        params?: { key?: string; permissionMode?: string };
+        params?: {
+          key?: string;
+          agentId?: string;
+          deviceId?: string;
+          message?: string;
+          idempotencyKey?: string;
+          permissionMode?: string;
+        };
       };
+      if (
+        request.method === "sessions.create" ||
+        request.method === "sessions.dispatch" ||
+        request.method === "sessions.send"
+      ) {
+        requests.push({ method: request.method, params: request.params });
+      }
       if (
         patchArmed &&
         request.method === "sessions.patch" &&
-        request.params?.key === SESSION_KEY &&
-        request.params.permissionMode === "full"
+        request.params?.key === patchSessionKey &&
+        request.params?.permissionMode === "full"
       ) {
         patchArmed = false;
         releaseHeldPatch = () => {
@@ -179,8 +207,10 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
     browser,
     context,
     page: await context.newPage(),
+    requests,
     fullAccessPatch: {
-      arm: () => {
+      arm: (sessionKey) => {
+        patchSessionKey = sessionKey;
         patchArmed = true;
       },
       held: patchHeld,
@@ -211,6 +241,8 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
       let controlUiProof: ControlUiProof | undefined;
       let browserRunId: string | undefined;
       let launchId: string | undefined;
+      let inspectLaunchedContainer = !CONTROL_UI_PROOF_ENABLED;
+      let sessionKey = SESSION_KEY;
 
       try {
         expect(engine.id).toBe("docker");
@@ -235,7 +267,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
               const payload = event.payload as
                 | { runId?: unknown; sessionKey?: unknown }
                 | undefined;
-              if (payload?.sessionKey === SESSION_KEY && typeof payload.runId === "string") {
+              if (payload?.sessionKey === sessionKey && typeof payload.runId === "string") {
                 browserRunId = payload.runId;
               }
             }
@@ -266,12 +298,13 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
               return;
             }
             launchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
-            if (launchId) {
+            if (launchId && inspectLaunchedContainer) {
               observedContainer = observeWorkerContainer(launchId);
             }
           },
         });
 
+        let remoteWorkspaceDir: string | undefined;
         if (CONTROL_UI_PROOF_ENABLED) {
           controlUiProof = await startControlUiProof(gateway);
           await controlUiProof.page.goto(`${gateway.baseUrl}/new`);
@@ -289,37 +322,108 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
             .poll(() => where.getAttribute("data-device-id"))
             .toBe(workerNode.identity.deviceId);
           await captureControlUiProof(controlUiProof, "02-remote-device-selected");
+          await controlUiProof.page.locator(".new-session-page__message").fill(INITIAL_PROMPT);
+          await controlUiProof.page.getByRole("button", { name: "Start session" }).click();
+          await vi.waitFor(
+            () => {
+              expect(controlUiProof!.requests.map((request) => request.method)).toEqual([
+                "sessions.create",
+                "sessions.dispatch",
+                "sessions.send",
+              ]);
+            },
+            { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+          );
+          const [created, dispatched, sent] = controlUiProof.requests;
+          expect(created?.params).toMatchObject({ agentId: "qa" });
+          expect(dispatched?.params).toMatchObject({
+            agentId: "qa",
+            deviceId: workerNode.identity.deviceId,
+          });
+          expect(dispatched?.params?.key).toMatch(/^agent:qa:/u);
+          sessionKey = dispatched!.params!.key!;
+          expect(sent?.params).toMatchObject({
+            key: sessionKey,
+            agentId: "qa",
+            message: INITIAL_PROMPT,
+          });
+          const initialRunId = sent?.params?.idempotencyKey;
+          expect(initialRunId).toBeTruthy();
+          await vi.waitFor(() => expect(launchId).toBeTruthy(), {
+            timeout: PROOF_TIMEOUT_MS,
+            interval: 100,
+          });
+          await expect(
+            operator.request<{ status?: string }>(
+              "agent.wait",
+              { runId: initialRunId, timeoutMs: PROOF_TIMEOUT_MS },
+              { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+            ),
+          ).resolves.toMatchObject({ status: "ok" });
+          const firstLaunchId = launchId;
+          expect(firstLaunchId).toBeTruthy();
+          await workerNode.waitForWorkersIdle();
+          await expect(
+            dockerOutput([
+              "ps",
+              "--all",
+              "--filter",
+              `label=openclaw.node-worker.launch=${Buffer.from(firstLaunchId!).toString("base64url")}`,
+              "--format",
+              "{{.ID}}",
+            ]),
+          ).resolves.toBe("");
+          const initialHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
+            sessionKey,
+            limit: 20,
+          });
+          expect(
+            initialHistory.messages?.some(
+              (message) =>
+                (message as { role?: unknown }).role === "assistant" &&
+                wireMessageText(message).includes(INITIAL_MARKER),
+            ),
+          ).toBe(true);
+          const described = (await gateway.call("sessions.describe", { key: sessionKey })) as {
+            session?: { placement?: { state?: string; remoteWorkspaceDir?: string } };
+          };
+          expect(described.session?.placement).toMatchObject({ state: "active" });
+          remoteWorkspaceDir = described.session?.placement?.remoteWorkspaceDir;
+          launchId = undefined;
+          observedContainer = undefined;
+          browserRunId = undefined;
+          inspectLaunchedContainer = true;
+        } else {
+          await operator.request("sessions.create", {
+            key: sessionKey,
+            agentId: "qa",
+            worktree: true,
+            worktreeName: "node-worker-container-wire",
+            worktreeBaseRef: "main",
+            cwd: published.source,
+            permissionMode: "full",
+          });
+          const dispatched = (await gateway.call(
+            "sessions.dispatch",
+            { key: sessionKey, deviceId: workerNode.identity.deviceId },
+            { timeoutMs: PROOF_TIMEOUT_MS },
+          )) as { placement?: { state?: string; remoteWorkspaceDir?: string } };
+          expect(dispatched.placement).toMatchObject({ state: "active" });
+          remoteWorkspaceDir = dispatched.placement?.remoteWorkspaceDir;
         }
-
-        await operator.request("sessions.create", {
-          key: SESSION_KEY,
-          agentId: "qa",
-          worktree: true,
-          worktreeName: "node-worker-container-wire",
-          worktreeBaseRef: "main",
-          cwd: published.source,
-          permissionMode: controlUiProof ? "workspace" : "full",
-        });
-        const dispatched = (await gateway.call(
-          "sessions.dispatch",
-          { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
-          { timeoutMs: PROOF_TIMEOUT_MS },
-        )) as { placement?: { state?: string; remoteWorkspaceDir?: string } };
-        expect(dispatched.placement).toMatchObject({ state: "active" });
-        const remoteWorkspaceDir = dispatched.placement?.remoteWorkspaceDir;
         expect(remoteWorkspaceDir).toBeTruthy();
 
         if (controlUiProof) {
           const sessionPath = buildControlUiSessionPath({
             namespace: "chat",
-            sessionKey: SESSION_KEY,
+            sessionKey,
             fallbackAgentId: "qa",
           });
           await controlUiProof.page.goto(`${gateway.baseUrl}${sessionPath}`);
           const permission = controlUiProof.page.locator('[data-chat-permission-select="true"]');
           await permission.waitFor({ state: "visible", timeout: 60_000 });
           await controlUiProof.page.locator(".agent-chat__composer-combobox textarea").fill(PROMPT);
-          controlUiProof.fullAccessPatch.arm();
+          controlUiProof.fullAccessPatch.arm(sessionKey);
           await permission.click();
           await controlUiProof.page.locator('[data-chat-permission-option="full"]').click();
           await controlUiProof.fullAccessPatch.held;
@@ -344,7 +448,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
               const history = await activeOperator.request<{ messages?: unknown[] }>(
                 "chat.history",
                 {
-                  sessionKey: SESSION_KEY,
+                  sessionKey,
                   limit: 20,
                 },
               );
@@ -383,7 +487,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
           const runId = `node-worker-container-yolo-${Date.now()}`;
           await expect(
             operator.request("chat.send", {
-              sessionKey: SESSION_KEY,
+              sessionKey,
               message: PROMPT,
               deliver: false,
               idempotencyKey: runId,
@@ -421,7 +525,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
           EXEC_MARKER,
         );
 
-        const described = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
+        const described = (await gateway.call("sessions.describe", { key: sessionKey })) as {
           session?: { execCwd?: string; spawnedCwd?: string };
         };
         const gatewayWorkspaceDir = described.session?.execCwd ?? described.session?.spawnedCwd;
@@ -430,7 +534,7 @@ describe.runIf(CONTAINER_WIRE_ENABLED)("node worker real Docker wire", () => {
           EXEC_MARKER,
         );
         const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
-          sessionKey: SESSION_KEY,
+          sessionKey,
           limit: 20,
         });
         expect(

@@ -133,13 +133,15 @@ If you already manage Node yourself:
   <Tab title="bun">
     ```bash
     bun add -g --trust openclaw@latest
-    openclaw onboard --install-daemon
+    bun run --bun openclaw onboard --install-daemon --daemon-runtime bun
     ```
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    can install the global package, but the resulting `openclaw` executable
-    requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    remains the primary runtime, so the plain `openclaw` executable keeps its
+    Node shebang. `bun run --bun` forces the Bun runtime, while
+    `--daemon-runtime bun` installs the managed Gateway under Bun.
     </Note>
 
   </Tab>

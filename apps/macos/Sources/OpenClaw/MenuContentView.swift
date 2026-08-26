@@ -17,6 +17,7 @@ struct MenuContent: View {
     private let dashboardManager = DashboardManager.shared
     private let activityStore = WorkActivityStore.shared
     private let nodesStore = NodesStore.shared
+    private let nodeChannelStatus = MacNodeChannelStatusStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @State private var availableMics: [AudioInputDevice] = []
@@ -49,9 +50,6 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
-                    if let macNodeStatus = self.macNodeStatus {
-                        self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
-                    }
                     if self.pairingPrompter.pendingCount > 0 {
                         self.pairingStatusLine(
                             label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))")
@@ -65,6 +63,15 @@ struct MenuContent: View {
                 }
             }
             .disabled(self.state.connectionMode == .unconfigured)
+            // The native-menu extra style flattens multi-view Toggle labels to
+            // their first Text, so status sublines inside the label above never
+            // render. Node-channel state must be a top-level menu view to stay
+            // operator-visible (same pattern as the exec-approval error lines).
+            if let macNodeStatus = self.macNodeStatus {
+                Text(macNodeStatus.label)
+                    .font(.caption)
+                    .foregroundStyle(macNodeStatus.color)
+            }
 
             Divider()
             Toggle(isOn: self.heartbeatsBinding) {
@@ -365,6 +372,12 @@ struct MenuContent: View {
     private var macNodeStatus: (label: String, color: Color)? {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
+
+        // The coordinator records why the node channel is down at the connect
+        // boundary; prefer that recorded fact over inferring from node listings.
+        if let line = self.nodeChannelStatus.state.operatorStatusLine {
+            return (line.label, line.isDegraded ? .orange : .red)
+        }
 
         let deviceId: String
         switch self.nodesStore.localNodeIdentityState {

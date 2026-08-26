@@ -13,9 +13,15 @@ describe("external plugin local dist build", () => {
     const packageDirs = listExternalPluginLocalDistPackageDirs();
     const excludedPluginIds = collectRootPackageExcludedExtensionDirs();
 
-    expect(packageDirs).toHaveLength(61);
+    expect(packageDirs).toHaveLength(63);
     expect(packageDirs).toEqual(
-      expect.arrayContaining(["extensions/slack", "extensions/sms", "extensions/mxc"]),
+      expect.arrayContaining([
+        "extensions/diffs",
+        "extensions/diffs-language-pack",
+        "extensions/slack",
+        "extensions/sms",
+        "extensions/mxc",
+      ]),
     );
     expect(packageDirs).not.toContain("extensions/whatsapp");
     expect(

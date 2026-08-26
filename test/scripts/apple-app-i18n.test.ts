@@ -222,6 +222,22 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
+    const coveredMacosEntries = [
+      { kind: "ui-call-concatenated", source: "Call concatenated" },
+      {
+        kind: "ui-localized-call-concatenated",
+        source:
+          "Older generated approvals are inactive because they were not tied to a working directory. Manual rules are unchanged.",
+      },
+      { kind: "ui-modifier-concatenated", source: "Modifier concatenated" },
+      { kind: "ui-modifier-multiline", source: "Modifier multiline" },
+      { kind: "ui-named-argument-concatenated", source: "Named argument concatenated" },
+    ].map(({ kind, source }, index) => ({
+      id: `native.apple.concatenated.${index}`,
+      source,
+      surface: "apple",
+      sites: [{ kind, path: "apps/macos/Sources/OpenClaw/Example.swift" }],
+    }));
     const inventory = {
       version: 2,
       entries: [
@@ -243,6 +259,7 @@ describe("Apple app i18n catalogs", () => {
             { kind: "ui-call", path: "outside/Example.swift" },
           ],
         },
+        ...coveredMacosEntries,
       ],
     };
     const existing = {
@@ -278,6 +295,10 @@ describe("Apple app i18n catalogs", () => {
     });
     expect(ios.catalog.strings?.["Do not catalog"]).toBeUndefined();
     expect(macos.catalog.strings?.["Connect now"]).toBeDefined();
+    expect(Object.keys(macos.catalog.strings ?? {})).toEqual(
+      expect.arrayContaining(coveredMacosEntries.map((entry) => entry.source)),
+    );
+    expect(macos.catalog.strings?.["Do not catalog"]).toBeUndefined();
     expect(ios.contradictions).toEqual([]);
   });
 

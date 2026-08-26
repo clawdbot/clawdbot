@@ -3,6 +3,11 @@ import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceSyncRequest, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
+import {
+  resolveWorkerWorkspaceGitAuthor,
+  validateWorkspaceSyncRequest,
+  workspaceSyncError,
+} from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -160,6 +165,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
       request: WorkerWorkspaceSyncRequest,
       expectedManifestRef: string,
     ): Promise<OriginSyncOutcome> {
+      validateWorkspaceSyncRequest(request);
       const inspection = await inspectEligibleOrigin(request.localPath);
       if (inspection.kind === "fallback") {
         return inspection;
@@ -223,6 +229,31 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         kind: "synced",
         result: { mode: "git", remoteWorkspaceDir: checkedOut.workspaceDir, manifestRef },
       };
+    },
+    async finalizeSync(
+      request: WorkerWorkspaceSyncRequest,
+      result: WorkerWorkspaceSyncResult,
+    ): Promise<WorkerWorkspaceSyncResult> {
+      if (result.mode === "plain") {
+        return result;
+      }
+      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
+        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+      );
+      const git = ["git", "-C", result.remoteWorkspaceDir, "config", "--local"];
+      for (const [key, value] of Object.entries(author)) {
+        if (!value) {
+          continue;
+        }
+        const configured = await exec({
+          argv: [...git, `user.${key}`, value],
+          transportRetry: "never",
+        });
+        if (!succeeded(configured)) {
+          throw workspaceSyncError(configured);
+        }
+      }
+      return result;
     },
   };
 }

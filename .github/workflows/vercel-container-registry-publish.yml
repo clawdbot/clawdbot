@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Release mirroring is advisory; approved recovery must fail visibly.
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory == true }}
     permissions:
       contents: read
     steps:

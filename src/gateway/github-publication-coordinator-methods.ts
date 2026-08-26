@@ -12,10 +12,8 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import {
-  captureGitHubPublicationWorkspaceSnapshot,
-  matchesGitHubPublicationIdentityRow,
-} from "./github-publication-executor.js";
+import { matchesGitHubPublicationIdentityRow } from "./github-publication-executor.js";
+import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,

@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
-import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-executor.js";
-import { assertSafeGitPublicationWorkspace } from "./github-publication-git-transport.js";
+import {
+  assertSafeGitPublicationWorkspace,
+  captureGitHubPublicationWorkspaceSnapshot,
+} from "./github-publication-git-transport.js";
 
 let root: string;
 
@@ -48,7 +50,7 @@ describe("GitHub publication Git hooks", () => {
     const hooks = path.join(root, "git-hooks");
     const sentinel = path.join(root, ".hook-ran");
     await fs.mkdir(hooks);
-    for (const hook of ["reference-transaction", "pre-push"]) {
+    for (const hook of ["reference-transaction", "pre-push", "post-index-change"]) {
       await fs.writeFile(path.join(hooks, hook), `#!/bin/sh\nprintf hook > '${sentinel}'\n`, {
         mode: 0o755,
       });
@@ -63,6 +65,28 @@ describe("GitHub publication Git hooks", () => {
       workspaceTree: expect.stringMatching(/^[a-f0-9]{40}$/u),
     });
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("captures a repository whose recursive tree listing exceeds the default output cap", async () => {
+    // ~2000 long-pathed files push `git ls-tree -r` past the executor's 256KB
+    // default; the attribute scan must use its own listing bound (regression:
+    // real repositories failed capture as "attributes could not be verified").
+    const segment = "a".repeat(60);
+    for (let dir = 0; dir < 40; dir += 1) {
+      const dirPath = path.join(root, `${segment}-${dir}`);
+      await fs.mkdir(dirPath);
+      await Promise.all(
+        Array.from({ length: 50 }, (_, file) =>
+          fs.writeFile(path.join(dirPath, `${segment}-${file}.txt`), "x\n"),
+        ),
+      );
+    }
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "large tree");
+
+    await expect(captureGitHubPublicationWorkspaceSnapshot({ cwd: root })).resolves.toMatchObject({
+      workspaceTree: expect.stringMatching(/^[a-f0-9]{40}$/u),
+    });
   });
 
   it.each(["replace refs", "grafts"])("rejects Git replacement metadata from %s", async (kind) => {
