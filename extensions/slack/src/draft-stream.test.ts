@@ -197,8 +197,10 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("333.444");
   });
 
-  it("drops a posted preview detached by forceNewMessage", async () => {
-    const { stream, remove } = createDraftStreamHarness();
+  it("retries a failed detached preview cleanup on the next drain", async () => {
+    const remove = vi.fn<DraftRemoveFn>(async () => {});
+    remove.mockRejectedValueOnce(new Error("cleanup failed"));
+    const { stream } = createDraftStreamHarness({ remove });
 
     stream.update("working");
     await stream.flush();
@@ -206,8 +208,8 @@ describe("createSlackDraftStream", () => {
     await stream.dropDetachedMessages();
     await stream.dropDetachedMessages();
 
-    expect(remove).toHaveBeenCalledOnce();
-    expect(remove).toHaveBeenCalledWith("C123", "111.222", {
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenLastCalledWith("C123", "111.222", {
       token: "xoxb-test",
       accountId: undefined,
     });
@@ -701,19 +703,18 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it("clear warns when cleanup fails", async () => {
-    const remove = vi.fn<DraftRemoveFn>(async () => {
-      throw new Error("cleanup failed");
-    });
+  it("retries a failed active preview cleanup on the next clear", async () => {
+    const remove = vi.fn<DraftRemoveFn>(async () => {});
+    remove.mockRejectedValueOnce(new Error("cleanup failed"));
     const warn = vi.fn<DraftWarnFn>();
     const { stream } = createDraftStreamHarness({ remove, warn });
 
     stream.update("hello");
     await stream.flush();
     await stream.clear();
+    await stream.clear();
 
+    expect(remove).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith("slack stream preview cleanup failed: cleanup failed");
-    expect(stream.messageId()).toBeUndefined();
-    expect(stream.channelId()).toBeUndefined();
   });
 });
