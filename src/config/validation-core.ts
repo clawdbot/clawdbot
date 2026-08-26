@@ -10,7 +10,7 @@ import {
   resolveAmbientOwnerAgentId,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -328,20 +328,28 @@ function collectSandboxContainerEnvIssues(
   const authoredAgents = isRecord(sourceRaw) ? listAgentEntriesWithSource(sourceRaw) : agents;
   const authoredById = new Map(authoredAgents.map((agent) => [agent.entry.id, agent]));
 
+  const defaultSandbox = config.agents?.defaults?.sandbox;
   const effectiveAgents = agents.length > 0 ? agents : [undefined];
   for (const agent of effectiveAgents) {
-    const resolved = resolveSandboxConfigForAgent(config, agent?.entry.id);
-    if ((resolved.backend !== "docker" && resolved.backend !== "podman") || !resolved.docker.env) {
+    const agentSandbox = agent?.entry.sandbox;
+    const scope = resolveSandboxScope({ scope: agentSandbox?.scope ?? defaultSandbox?.scope });
+    const backend = agentSandbox?.backend?.trim() || defaultSandbox?.backend?.trim() || "docker";
+    if (backend !== "docker" && backend !== "podman") {
       continue;
     }
+    const env = resolveSandboxDockerEnv({
+      scope,
+      globalEnv: defaultSandbox?.docker?.env,
+      agentEnv: agentSandbox?.docker?.env,
+    });
     const authoredAgent = agent ? (authoredById.get(agent.entry.id) ?? agent) : undefined;
-    for (const [key, value] of Object.entries(resolved.docker.env)) {
+    for (const [key, value] of Object.entries(env)) {
       const reason = getContainerEnvFileEntryIssue(key, value);
       if (!reason) {
         continue;
       }
       const agentOwnsValue =
-        resolved.scope !== "shared" &&
+        scope !== "shared" &&
         authoredAgent !== undefined &&
         Object.hasOwn(authoredAgent.entry.sandbox?.docker?.env ?? {}, key);
       const pathSegments =
@@ -356,7 +364,7 @@ function collectSandboxContainerEnvIssues(
         continue;
       }
       seen.add(issueIdentity);
-      const backend = resolved.backend === "podman" ? "Podman" : "Docker";
+      const backendName = backend === "podman" ? "Podman" : "Docker";
       const remediation =
         reason === "invalid-name"
           ? `Rename key ${JSON.stringify(key)} to use letters, digits, and underscores without a leading digit.`
@@ -366,7 +374,7 @@ function collectSandboxContainerEnvIssues(
           {
             path: issuePath,
             message:
-              `${backend} sandbox backend requires portable environment names and single-line, non-NUL values because the secure env-file transport is line-delimited. ` +
+              `${backendName} sandbox backend requires portable environment names and single-line, non-NUL values because the secure env-file transport is line-delimited. ` +
               `${remediation} SSH/OpenShell backends may keep multiline values. Run openclaw doctor to report the invalid path; manual remediation is required.`,
           },
           pathSegments,
