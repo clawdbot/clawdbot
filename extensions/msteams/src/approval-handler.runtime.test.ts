@@ -18,11 +18,13 @@ import {
 
 const sendAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
 const editAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
+const sendMessageMSTeams = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", async () => ({
   ...(await vi.importActual<typeof import("./send.js")>("./send.js")),
   sendAdaptiveCardMSTeams,
   editAdaptiveCardMSTeams,
+  sendMessageMSTeams,
 }));
 
 const { msTeamsApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
@@ -225,6 +227,30 @@ describe("msTeamsApprovalNativeRuntime", () => {
       });
       expect(prepared?.target.to).toBe(testCase.expected);
     }
+  });
+
+  it("sends a visible text fallback when card delivery fails", async () => {
+    const { view, request, pendingPayload, plannedTarget } = await createPendingScenario();
+    sendMessageMSTeams.mockResolvedValue({
+      messageId: "fallback-1",
+      conversationId: "19:channel@thread.tacv2",
+    });
+
+    msTeamsApprovalNativeRuntime.observe?.onDeliveryError?.({
+      cfg,
+      accountId: "default",
+      error: new Error("card send failed"),
+      plannedTarget,
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+    });
+
+    await vi.waitFor(() => expect(sendMessageMSTeams).toHaveBeenCalledTimes(1));
+    const fallback = sendMessageMSTeams.mock.calls[0]?.[0];
+    expect(fallback?.to).toBe("msteams:conversation:19:channel@thread.tacv2");
+    expect(fallback?.text).toContain("/approve exec-approval-1 <allow-once|deny>");
   });
 
   it("delivers and binds pending cards, then replaces resolved cards without actions", async () => {

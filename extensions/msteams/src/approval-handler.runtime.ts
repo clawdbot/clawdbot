@@ -18,7 +18,7 @@ import {
 } from "./approval-native.js";
 import { extractMSTeamsConversationMessageId } from "./inbound.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
-import { editAdaptiveCardMSTeams, sendAdaptiveCardMSTeams } from "./send.js";
+import { editAdaptiveCardMSTeams, sendAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
 import { inferMSTeamsTargetChatType } from "./session-route.js";
 
 const log = createSubsystemLogger("msteams/approvals");
@@ -129,8 +129,21 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       unregisterMSTeamsApprovalCardBindings(entry.actionTokens.map(({ token }) => token)),
   },
   observe: {
-    onDeliveryError: ({ error, request }) => {
+    onDeliveryError: ({ cfg, error, plannedTarget, request, approvalKind, pendingPayload }) => {
       log.error(`msteams approvals: failed to deliver request ${request.id}: ${String(error)}`);
+      // The active native route suppressed the local text prompt, so a failed
+      // card send must still surface a visible approval path (#130040 tracks
+      // the shared-boundary fix); losing both prompts is a silent failure.
+      const decisions = pendingPayload.allowedDecisions.join("|");
+      void sendMessageMSTeams({
+        cfg,
+        to: plannedTarget.target.to,
+        text: `⚠️ Could not deliver the ${approvalKind} approval card for ${request.id}. Reply "/approve ${request.id} <${decisions}>" to resolve it.`,
+      }).catch((fallbackError: unknown) => {
+        log.error(
+          `msteams approvals: fallback prompt for ${request.id} also failed: ${String(fallbackError)}`,
+        );
+      });
     },
   },
 });
