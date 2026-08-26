@@ -20,6 +20,7 @@ import {
 } from "./agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -184,6 +185,39 @@ describe("generic tool action decision receipts", () => {
       operation: entry.operation,
     });
     expect(JSON.stringify(works)).not.toMatch(/arbitrary|owner_declared|renamed/u);
+  });
+
+  it("records a Gateway-shaped tool assembled without its first hook wrapper", async () => {
+    const source = createOpenClawTools({
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    }).find((tool) => tool.name === "sessions_list");
+    if (!source) {
+      throw new Error("missing Gateway-shaped sessions_list tool");
+    }
+    const works: ExecutionDecisionWork[] = [];
+    const tool = wrapToolWithBeforeToolCallHook(
+      copyAgentToolMetadata(source, {
+        ...source,
+        execute: vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "SECRET_GATEWAY_RESULT" }],
+          details: { path: "/private/gateway-result" },
+        }),
+      }),
+    );
+
+    await admittedRun({
+      works,
+      run: () => tool.execute("gateway-call", { path: "/private/gateway-input" }),
+    });
+
+    expect(works).toHaveLength(1);
+    expect(works[0]?.receipt).toMatchObject({
+      action: { family: "tool", operation: "openclaw" },
+      decision: { outcome: "allowed", reasonCode: "generic_action_attributed" },
+      enforcement: { coverageState: "attribution-only" },
+    });
+    expect(JSON.stringify(works)).not.toMatch(/sessions_list|SECRET_GATEWAY|private\/gateway/u);
   });
 
   it("keeps an execution failure separate from its prior generic decision", async () => {
