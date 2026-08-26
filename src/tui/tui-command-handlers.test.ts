@@ -161,6 +161,8 @@ function createHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
+  const addPendingSystem = vi.fn();
+  const dismissPendingSystem = vi.fn();
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -228,6 +230,8 @@ function createHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
+      addPendingSystem,
+      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -282,6 +286,8 @@ function createHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
+    addPendingSystem,
+    dismissPendingSystem,
     clearTools,
     reserveAssistantSlot,
     requestRender,
@@ -2849,6 +2855,45 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
+  it("dismisses the 'loading models...' notice once the model picker opens", async () => {
+    const listModels = vi
+      .fn()
+      .mockResolvedValue([{ provider: "openrouter", id: "openrouter/auto" }]);
+    const { handleCommand, openOverlay, addPendingSystem, dismissPendingSystem } = createHarness({
+      listModels,
+    });
+
+    await handleCommand("/model");
+
+    expect(addPendingSystem).toHaveBeenCalledWith("model-selector", "loading models...");
+    expect(dismissPendingSystem).toHaveBeenCalledWith("model-selector");
+    expect(openOverlay).toHaveBeenCalledOnce();
+  });
+
+  it("clears the 'loading models...' notice when the model list is empty or fails", async () => {
+    const emptyHarness = createHarness({
+      listModels: vi.fn().mockResolvedValue([]),
+    });
+    await emptyHarness.handleCommand("/models");
+    expect(emptyHarness.addPendingSystem).toHaveBeenCalledWith(
+      "model-selector",
+      "loading models...",
+    );
+    expect(emptyHarness.dismissPendingSystem).toHaveBeenCalledWith("model-selector");
+    expect(emptyHarness.addSystem).toHaveBeenCalledWith("no models available");
+
+    const failingHarness = createHarness({
+      listModels: vi.fn().mockRejectedValue(new Error("catalog exploded")),
+    });
+    await failingHarness.handleCommand("/models");
+    expect(failingHarness.addPendingSystem).toHaveBeenCalledWith(
+      "model-selector",
+      "loading models...",
+    );
+    expect(failingHarness.dismissPendingSystem).not.toHaveBeenCalled();
+    expect(failingHarness.addSystem).toHaveBeenCalledWith("model list failed: catalog exploded");
+  });
+
   it.each(["codex", "openclaw"])(
     "forwards model/runtime transactions through the server directive path for %s",
     async (runtime) => {
@@ -2940,21 +2985,24 @@ describe("tui command handlers", () => {
       },
     );
     const listModels = vi.fn(() => listModelsPromise);
-    const { handleCommand, addSystem, openOverlay, requestRender } = createHarness({ listModels });
+    const { handleCommand, addPendingSystem, dismissPendingSystem, openOverlay, requestRender } =
+      createHarness({ listModels });
 
     const pending = handleCommand("/models");
     await Promise.resolve();
 
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(addSystem).toHaveBeenCalledWith("loading models...");
+    expect(addPendingSystem).toHaveBeenCalledWith("model-selector", "loading models...");
+    expect(dismissPendingSystem).not.toHaveBeenCalled();
     expect(openOverlay).not.toHaveBeenCalled();
-    const feedbackOrder = addSystem.mock.invocationCallOrder[0] ?? 0;
+    const feedbackOrder = addPendingSystem.mock.invocationCallOrder[0] ?? 0;
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
 
     resolveModels([{ provider: "openrouter", id: "openrouter/auto" }]);
     await pending;
 
+    expect(dismissPendingSystem).toHaveBeenCalledWith("model-selector");
     expect(openOverlay).toHaveBeenCalledTimes(1);
   });
 
@@ -2966,14 +3014,15 @@ describe("tui command handlers", () => {
     });
 
     const pending = harness.handleCommand("/models");
-    expect(harness.addSystem).toHaveBeenCalledWith("loading models...");
-    harness.addSystem.mockClear();
+    expect(harness.addPendingSystem).toHaveBeenCalledWith("model-selector", "loading models...");
+    harness.addPendingSystem.mockClear();
     harness.state.currentSessionKey = "agent:main:second";
     deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
     await pending;
 
     expect(harness.openOverlay).not.toHaveBeenCalled();
     expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.dismissPendingSystem).not.toHaveBeenCalled();
   });
 
   it.each([

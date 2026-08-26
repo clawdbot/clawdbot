@@ -348,13 +348,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openModelSelector = async () => {
     const request = beginPickerRequest();
     const selection = captureSessionSelection();
+    const pendingRunId = "model-selector";
     try {
-      chatLog.addSystem("loading models...");
+      chatLog.addPendingSystem(pendingRunId, "loading models...");
       tui.requestRender();
       const models = await client.listModels({ agentId: selection.agentId });
       if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
+      chatLog.dismissPendingSystem(pendingRunId);
       if (models.length === 0) {
         chatLog.addSystem("no models available");
         tui.requestRender();
