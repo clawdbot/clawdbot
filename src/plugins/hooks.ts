@@ -31,6 +31,7 @@ import {
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
+  PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
@@ -54,9 +55,11 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
+  PluginHookBeforeCompactionEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginAgentTurnPrepareEvent,
@@ -64,14 +67,22 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookGatewayContext,
+  PluginHookGatewayStartEvent,
   PluginHookMessageContext,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
+  PluginHookMessageSentEvent,
   PluginHookName,
   PluginHookRegistration,
+  PluginHookSessionContext,
+  PluginHookSessionStartEvent,
   PluginHookSubagentContext,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
+  PluginHookSubagentEndedEvent,
+  PluginHookSubagentProgressEvent,
+  PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -1189,6 +1200,26 @@ export function createHookRunner(
     );
   }
 
+  /**
+   * Run before_compaction hook.
+   */
+  async function runBeforeCompaction(
+    event: PluginHookBeforeCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("before_compaction", event, ctx);
+  }
+
+  /**
+   * Run after_compaction hook.
+   */
+  async function runAfterCompaction(
+    event: PluginHookAfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("after_compaction", event, ctx);
+  }
+
   // =========================================================================
   // Message Hooks
   // =========================================================================
@@ -1727,9 +1758,12 @@ export function createHookRunner(
     runLlmOutput: bindVoidHook("llm_output"),
     runBeforeAgentFinalize,
     runAgentEnd,
-    runBeforeCompaction: bindVoidHook("before_compaction"),
-    runAfterCompaction: bindVoidHook("after_compaction"),
-    runBeforeReset: bindVoidHook("before_reset"),
+    runBeforeCompaction,
+    runAfterCompaction,
+    runBeforeReset: async (
+      event: PluginHookBeforeResetEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("before_reset", event, ctx),
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
@@ -1742,7 +1776,10 @@ export function createHookRunner(
     runReplyDispatch,
     runReplyPayloadSending,
     runMessageSending,
-    runMessageSent: bindVoidHook("message_sent"),
+    runMessageSent: async (
+      event: PluginHookMessageSentEvent,
+      ctx: PluginHookMessageContext,
+    ): Promise<void> => runVoidHook("message_sent", event, ctx),
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
@@ -1750,14 +1787,29 @@ export function createHookRunner(
     // Message write hooks
     runBeforeMessageWrite,
     // Session hooks
-    runSessionStart: bindVoidHook("session_start"),
+    runSessionStart: async (
+      event: PluginHookSessionStartEvent,
+      ctx: PluginHookSessionContext,
+    ): Promise<void> => runVoidHook("session_start", event, ctx),
     runSessionEnd: bindVoidHook("session_end"),
     runSubagentDeliveryTarget,
-    runSubagentSpawned: bindVoidHook("subagent_spawned"),
-    runSubagentProgress: bindVoidHook("subagent_progress"),
-    runSubagentEnded: bindVoidHook("subagent_ended"),
+    runSubagentSpawned: async (
+      event: PluginHookSubagentSpawnedEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_spawned", event, ctx),
+    runSubagentProgress: async (
+      event: PluginHookSubagentProgressEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_progress", event, ctx),
+    runSubagentEnded: async (
+      event: PluginHookSubagentEndedEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_ended", event, ctx),
     // Gateway hooks
-    runGatewayStart: bindVoidHook("gateway_start"),
+    runGatewayStart: async (
+      event: PluginHookGatewayStartEvent,
+      ctx: PluginHookGatewayContext,
+    ): Promise<void> => runVoidHook("gateway_start", event, ctx),
     runGatewayStop: bindVoidHook("gateway_stop"),
     runHeartbeatPromptContribution,
     runCronReconciled: bindVoidHook("cron_reconciled"),
