@@ -7,6 +7,7 @@ import {
   nativeHookRelayTesting,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
@@ -265,6 +266,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
+    const mockRunAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
     const params = createLoopRelayParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
     params.agentAccountId = "operations";
@@ -329,6 +331,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    const agentEndContext = mockRunAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    expect(agentEndContext?.foregroundPromptContext).toBeDefined();
+    expect(agentEndContext?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });

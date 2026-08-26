@@ -1,4 +1,3 @@
-import type { ChatType } from "../../channels/chat-type.js";
 /**
  * Agent-end side effect runner.
  *
@@ -23,18 +22,6 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
     modelContextWindowTokens?: number;
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
-    messageChannel?: string | null;
-    chatType?: ChatType;
-    agentAccountId?: string | null;
-    groupId?: string | null;
-    groupChannel?: string | null;
-    groupSpace?: string | null;
-    memberRoleIds?: readonly string[];
-    spawnedBy?: string | null;
-    senderName?: string | null;
-    senderUsername?: string | null;
-    senderE164?: string | null;
-    senderIsOwner?: boolean;
     foregroundPromptContext?: EmbeddedForegroundPromptContext;
   };
 };
