@@ -106,24 +106,28 @@ describe("sendDiscordComponentMessage", () => {
     resetClassicMocks();
   });
 
-  it("delivers stringified components through the real REST transport boundary", async () => {
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
-    postMock.mockResolvedValueOnce({ id: "msg-stringified", channel_id: "chan-1" });
-    const raw = JSON.stringify({
-      blocks: [{ type: "text", text: "stringified transport proof" }],
-    });
-    const spec = coerceDiscordComponentParam(raw);
+  it("delivers stringified components through a real REST transport boundary", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const raw = JSON.stringify({
+        blocks: [{ type: "text", text: "stringified transport proof" }],
+      });
+      const spec = coerceDiscordComponentParam(raw);
 
-    await sendDiscordComponentMessage("channel:chan-1", spec as never, {
-      cfg: DISCORD_TEST_CFG,
-      rest,
-      token: "proof-token",
-    });
+      await sendDiscordComponentMessage("channel:chan-1", spec as never, {
+        cfg: DISCORD_TEST_CFG,
+        rest: loopback.rest,
+        token: "proof-token",
+      });
 
-    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
-    expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-    expect(body.components).toEqual([{ type: 10, content: "stringified transport proof" }]);
+      const post = loopback.requests.find((request) => request.method === "POST");
+      expect(post).toBeDefined();
+      const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
+      expect(body.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(body.components).toEqual([{ type: 10, content: "stringified transport proof" }]);
+    } finally {
+      await loopback.close();
+    }
   });
   it("passes allowed mentions through component sends", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
