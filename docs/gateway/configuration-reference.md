@@ -1302,6 +1302,7 @@ Default-off Gateway-owned substitution for shared-store `secret` entries used by
   secrets: {
     egressProxy: {
       enabled: false,
+      allowedHosts: ["api.example.com"],
       bypassHosts: ["pinned-api.example.com"],
     },
   },
@@ -1309,6 +1310,7 @@ Default-off Gateway-owned substitution for shared-store `secret` entries used by
 ```
 
 - `enabled`: starts the loopback proxy and ephemeral CA at Gateway startup. Default: `false`. Changing it requires a Gateway restart.
+- `allowedHosts`: optional exact-hostname traffic allowlist for proxy requests and CONNECT tunnels. When present, only listed hosts, hosts bound to a registered secret, and `bypassHosts` are reachable. An empty array permits only bound or bypassed hosts. Changing it requires a Gateway restart.
 - `bypassHosts`: optional exact-hostname list for authenticated blind CONNECT tunnels used by certificate-pinned clients. Sentinels are not substituted on bypassed hosts and fail vendor authentication without exposing plaintext.
 
 See [Secret egress proxy](/gateway/secrets#secret-egress-proxy) for subprocess environment wiring, authentication, fail-closed behavior, and limitations.

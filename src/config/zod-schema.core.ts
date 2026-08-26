@@ -209,6 +209,7 @@ export const SecretsConfigSchema = z
     egressProxy: z
       .object({
         enabled: z.boolean().optional(),
+        allowedHosts: z.array(z.string().trim().min(1)).max(256).optional(),
         bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
       })
       .strict()

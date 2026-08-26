@@ -26,6 +26,7 @@ describe("config secret refs schema", () => {
       secrets: {
         egressProxy: {
           enabled: true,
+          allowedHosts: ["api.example.com"],
           bypassHosts: ["pinned.example.com"],
         },
         providers: {
@@ -65,14 +66,15 @@ describe("config secret refs schema", () => {
     if (result.ok) {
       expect(result.config.secrets?.egressProxy).toEqual({
         enabled: true,
+        allowedHosts: ["api.example.com"],
         bypassHosts: ["pinned.example.com"],
       });
     }
   });
 
-  it("rejects empty secret egress bypass hosts", () => {
+  it.each(["allowedHosts", "bypassHosts"])("rejects empty secret egress %s entries", (field) => {
     const result = validateConfigObjectRaw({
-      secrets: { egressProxy: { enabled: false, bypassHosts: [""] } },
+      secrets: { egressProxy: { enabled: false, [field]: [""] } },
     });
 
     expect(result.ok).toBe(false);

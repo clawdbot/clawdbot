@@ -284,6 +284,7 @@ function createUpstreamRequestOptions(params: {
 /** Starts one authenticated, loopback-only substitution proxy. */
 export async function startSecretEgressProxyServer(params: {
   caDir: string;
+  allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
 }): Promise<SecretEgressProxyHandle> {
@@ -295,11 +296,28 @@ export async function startSecretEgressProxyServer(params: {
     ca: [...rootCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
+  const allowedHosts =
+    params.allowedHosts === undefined
+      ? undefined
+      : new Set(params.allowedHosts.map(normalizeHostname));
   const tokens = new Map<string, RegisteredRun>();
   const sockets = new Set<Socket>();
   const tlsServers = new Map<string, Promise<HttpsServer>>();
 
   const audit = (event: SecretEgressProxyAuditEvent) => params.onAudit(event);
+  const hostAllowed = (host: string, registered: RegisteredRun): boolean => {
+    if (allowedHosts === undefined || allowedHosts.has(host) || bypassHosts.has(host)) {
+      return true;
+    }
+    for (const binding of registered.sentinelBindings.values()) {
+      if (binding.allowedHosts.has(host)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hostNotAllowedBody = (host: string): string =>
+    `Host "${host}" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host ${host}, then restart the Gateway.\n`;
   const authorize = (
     headers: IncomingHttpHeaders,
   ): RegisteredRun | Exclude<SecretEgressRefusalReason, "destination-not-allowed"> => {
@@ -335,6 +353,12 @@ export async function startSecretEgressProxyServer(params: {
         reason: "non-https-request",
       });
       sendHttpRefusal(forward.response);
+      forward.request.resume();
+      return;
+    }
+    if (!hostAllowed(host, forward.registered)) {
+      audit({ kind: "refused", host, substituted: false, reason: "host-not-allowed" });
+      sendHttpRefusal(forward.response, 403, hostNotAllowedBody(host));
       forward.request.resume();
       return;
     }
@@ -533,6 +557,19 @@ export async function startSecretEgressProxyServer(params: {
         sockets.add(upstream);
         upstream.once("close", () => sockets.delete(upstream));
         upstream.once("error", () => clientSocket.destroy());
+        return;
+      }
+      if (!hostAllowed(target.hostname, authorization)) {
+        const body = hostNotAllowedBody(target.hostname);
+        audit({
+          kind: "refused",
+          host: target.hostname,
+          substituted: false,
+          reason: "host-not-allowed",
+        });
+        clientSocket.end(
+          `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
+        );
         return;
       }
       try {

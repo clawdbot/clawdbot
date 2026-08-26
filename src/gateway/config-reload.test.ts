@@ -380,6 +380,7 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "secrets.egressProxy.enabled",
+    "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
