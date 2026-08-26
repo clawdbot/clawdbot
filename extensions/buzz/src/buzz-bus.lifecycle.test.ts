@@ -6,12 +6,12 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("nostr-tools", async (importOriginal) => {
-  const { mockBuzzRelay } = await import("./buzz-bus.test-mocks.js");
-  return mockBuzzRelay(await importOriginal<typeof import("nostr-tools")>());
+  const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
+  return { ...(await importOriginal<typeof import("nostr-tools")>()), ...mockBuzzRelay() };
 });
 
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { relayMocks } from "./buzz-bus.test-mocks.js";
+import { relayMocks } from "./buzz-bus.test-helpers.js";
 import { handleBuzzInbound } from "./inbound.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,

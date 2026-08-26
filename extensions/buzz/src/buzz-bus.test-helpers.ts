@@ -27,9 +27,8 @@ export const relayMocks = {
   }>,
 };
 
-export function mockBuzzRelay(actual: typeof import("nostr-tools")) {
+export function mockBuzzRelay() {
   return {
-    ...actual,
     Relay: class {
       onauth?: (template: unknown) => Promise<unknown>;
       idleSince: number | undefined;
