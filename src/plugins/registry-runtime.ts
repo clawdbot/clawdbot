@@ -975,7 +975,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           ) => {
             if (
               !channelOwnerRecord ||
-              (channelOwnerRecord.origin !== "bundled" &&
+              // Community channels may admit guests; trusted provenance is required only for owner elevation.
+              (params.senderIsOwner === true &&
+                channelOwnerRecord.origin !== "bundled" &&
                 channelOwnerRecord.trustedOfficialInstall !== true) ||
               pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
               !activePluginRuntimeRecords.has(channelOwnerRecord) ||

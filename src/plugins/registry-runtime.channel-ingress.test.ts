@@ -154,11 +154,18 @@ describe("bundled channel ingress runtime ownership", () => {
     const foreignApi = registryBuilder.createApi(foreign, { config: {} as OpenClawConfig });
     const untrustedApi = registryBuilder.createApi(untrusted, { config: {} as OpenClawConfig });
     registryBuilder.registry.plugins.push(owner, foreign, untrusted);
-    registryBuilder.registry.channels.push({
-      pluginId: "discord",
-      plugin: { id: "discord" },
-      source: owner.source,
-    } as never);
+    registryBuilder.registry.channels.push(
+      {
+        pluginId: "discord",
+        plugin: { id: "discord" },
+        source: owner.source,
+      } as never,
+      {
+        pluginId: "impostor",
+        plugin: { id: "community" },
+        source: untrusted.source,
+      } as never,
+    );
     markPluginRegistryActive(registryBuilder.registry);
     const options = {
       message: "owner turn",
@@ -174,15 +181,23 @@ describe("bundled channel ingress runtime ownership", () => {
     await expect(
       foreignApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
     ).rejects.toThrow('Plugin "foreign" cannot admit authenticated owner authority');
+    const guestOptions = { ...options, messageChannel: "community", senderIsOwner: false };
+    const retainedGuest = untrustedApi.runtime.agent.runCommandFromIngress;
+    await expect(retainedGuest(guestOptions, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenLastCalledWith(guestOptions, commandRuntime);
     await expect(
-      untrustedApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
+      retainedGuest({ ...guestOptions, senderIsOwner: true }, commandRuntime),
     ).rejects.toThrow('Plugin "impostor" cannot admit authenticated owner authority');
 
     registryBuilder.rollbackPluginGlobalSideEffects(owner.id, owner);
     await expect(retained(options, commandRuntime)).rejects.toThrow(
       'Plugin "discord" cannot admit authenticated owner authority',
     );
-    expect(command).toHaveBeenCalledOnce();
+    registryBuilder.rollbackPluginGlobalSideEffects(untrusted.id, untrusted);
+    await expect(retainedGuest(guestOptions, commandRuntime)).rejects.toThrow(
+      'Plugin "impostor" cannot admit authenticated owner authority',
+    );
+    expect(command).toHaveBeenCalledTimes(2);
   });
 
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
