@@ -18,7 +18,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 type OpenClawAgentReadOnlyDatabase = {
   agentId: string;
@@ -59,7 +59,7 @@ function findOpenAgentDatabase(
 export function withOpenClawAgentDatabaseReadOnly<T>(
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
-  behavior: { throwOnMissingTable?: boolean } = {},
+  behavior: { throwOnMissingTable?: boolean; allowExtension?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -67,6 +67,9 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     // Read-only misses must not create process-lifetime handles; only creation and
     // write paths may materialize the process-held incognito database.
     const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
+    if (database && behavior.allowExtension) {
+      throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
+    }
     return database
       ? { found: true, value: operation(database) }
       : { found: false, reason: "database-missing" };
@@ -75,7 +78,9 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   // opening and closing a connection per call made reads scale with row count.
   // An in-flight transaction is skipped so callers never observe uncommitted
   // rows that a fresh read-only connection could not have seen.
-  const opened = findOpenAgentDatabase({ ...options, agentId });
+  const opened = behavior.allowExtension
+    ? undefined
+    : findOpenAgentDatabase({ ...options, agentId });
   if (opened && !opened.db.isTransaction) {
     // A newer build can migrate this file while the handle stays open, so the
     // forward-compatibility gate still runs before any reused read.
@@ -92,7 +97,10 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const db = openNodeSqliteDatabase(pathname, {
+    readOnly: true,
+    ...(behavior.allowExtension ? { allowExtension: true } : {}),
+  });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);

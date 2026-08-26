@@ -6,6 +6,7 @@ read_when:
   - You want to configure memory search providers or embedding models
   - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
+  - You need to exclude specific session sources from memory-pipeline ingestion
 ---
 
 This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
@@ -477,6 +478,16 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Active transcripts live in the agent's SQLite database, while retained transcript artifacts can live on disk. Treat access to both as part of the same trust boundary.
 </Warning>
 
+Internal dreaming-narrative, cron, and heartbeat session transcripts are not
+indexed, including retained compressed narrative archives whose live session
+metadata is gone. They may quote fragments from user conversations but are not
+searchable memory sources. Sessions purged with
+[`openclaw memory forget`](/cli/memory#memory-forget) are also durably excluded,
+even though their source transcripts remain in the session store. A forced
+reindex removes stale transcript records without readmitting either group.
+Ordinary user-session transcripts, including retained, reset, and
+deleted-session archives, remain eligible until explicitly targeted.
+
 <Note>
 The [session-memory hook](/automation/hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
@@ -558,6 +569,67 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | `auto` (default) | Include `Source: <path#line>` when useful              |
 | `on`             | Always include the source footer                       |
 | `off`            | Omit the footer; the path remains available internally |
+
+---
+
+## Memory admission policy
+
+Configure deterministic session exclusions under
+`plugins.entries.memory-core.config.memoryPolicy.excludeSessions`. Excluded
+sessions never enter the dreaming corpus, so the memory pipeline cannot turn
+them into promotion candidates or consolidated entries. For the policy story
+behind these keys — what admission and deletion guarantee and where their
+boundaries are — see
+[Memory provenance and deletion](/concepts/memory-provenance).
+
+| Key                          | Type       | Default | Matches                                   |
+| ---------------------------- | ---------- | ------- | ----------------------------------------- |
+| `hookExternalContentSources` | `string[]` | `[]`    | External-content hook sources, like Gmail |
+| `channels`                   | `string[]` | `[]`    | Session channel identifiers               |
+| `chatTypes`                  | `string[]` | `[]`    | `"direct"`, `"group"`, or `"channel"`     |
+
+Every setting is optional. Empty or omitted arrays preserve the existing
+admission behavior. A session matching any configured exclusion is recorded as
+excluded rather than silently ignored. Sessions previously purged by
+[`openclaw memory forget`](/cli/memory#memory-forget) are also excluded
+regardless of these settings; their recorded exclusion reason is `forgotten`.
+This durable per-agent exclusion prevents later dreaming sweeps, session
+backfills, and transcript reindexing from restoring the purged memory.
+
+<Warning>
+This is an ingestion boundary, not a file-write restriction. An agent running
+inside an excluded session can still edit `MEMORY.md`, `USER.md`, or another
+memory file directly during its turn. Such freeform edits do not gain
+entry-level lineage and are not removed automatically by `memory forget`;
+matching observed file writes appear in its `curatedWrites` report instead.
+</Warning>
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: {
+          memoryPolicy: {
+            excludeSessions: {
+              hookExternalContentSources: ["gmail"],
+              channels: ["email"],
+              chatTypes: ["group"],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The policy alone prevents future ingestion; it does not erase memories already
+derived from those sources. To preview and remove existing entries and their
+derived artifacts while durably excluding the selected sessions from future
+memory ingestion, session backfill, and transcript indexing, use
+[`openclaw memory forget`](/cli/memory#memory-forget). The source session
+transcripts themselves remain in the session store.
 
 ---
 

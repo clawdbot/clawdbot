@@ -145,11 +145,13 @@ Update trip-planning to also check seat maps before booking.
 ```
 
 If a skill used in the current turn proves wrong or incomplete, the agent reads
-the live skill and creates a targeted patch proposal. A runtime receipt limits
-this flow to skills used in that run. Autonomous mode `off` disables repair,
-`propose` leaves the patch pending until explicitly applied, and `auto` scans and
-applies it immediately. The repaired skill is loaded by new sessions; the
-running session keeps its original skill snapshot.
+the live skill and creates a targeted patch proposal. When the complete skill
+does not fit the selected model's read budget, the agent can prepare one unique
+exact span and review its bounded surrounding context before patching it. A
+runtime receipt limits this flow to skills used in that run. Autonomous mode
+`off` disables repair, `propose` leaves the patch pending until explicitly
+applied, and `auto` scans and applies it immediately. The repaired skill is
+loaded by new sessions; the running session keeps its original skill snapshot.
 
 Iterate on a pending proposal:
 
@@ -276,24 +278,29 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | read | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
+`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                                          | Notes                                                                |
-| -------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                        |
-| `skill_name`               | `read`, `patch`, `update`                                        | Existing skill name or key                                           |
-| `old_string`, `new_string` | `patch`                                                          | Exact current text and its replacement; read the skill first         |
-| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body      |
-| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `artifact_path`            | `inspect`                                                        | `PROPOSAL.md` or one listed support-file path                        |
-| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                   |
-| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                               |
-| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                          |
+| Parameter                  | Used by                                                          | Notes                                                                 |
+| -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise  |
+| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                         |
+| `skill_name`               | `read`, `prepare_patch`, `patch`, `update`                       | Existing skill name or key                                            |
+| `old_string`               | `prepare_patch`, `patch`                                         | Exact current text; prepare it when the complete skill cannot be read |
+| `new_string`               | `patch`                                                          | Replacement for the exact current text                                |
+| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body       |
+| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                          |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                     |
+| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                       |
+| `artifact_path`            | `inspect`                                                        | `PROPOSAL.md` or one listed support-file path                         |
+| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                    |
+| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                                |
+| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                              |
+| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                           |
+
+Only one prepared patch span may be active per skill. A second
+`prepare_patch` is rejected until a `patch` attempt consumes or invalidates the
+active authorization.
 
 `inspect` returns proposal metadata, a bounded artifact manifest, and one
 complete artifact when it fits the selected model's context budget. It selects
@@ -393,8 +400,9 @@ completed trajectory clears the evidence-gated proposal bar. The foreground mode
 to learn before it replies. The background reviewer preserves the foreground run as proposal
 provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
 mode, the capture pipeline applies every autonomous proposal only after the isolated run
-completes. Existing-skill changes require a complete read receipt and content-hash binding before
-they are eligible for that apply step. The review starts
+completes. The reviewer may read or prepare an exact span before its single mutation.
+Existing-skill changes require a complete read receipt or prepared exact-span authority, plus
+content-hash binding, before they are eligible for that apply step. The review starts
 only when the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.

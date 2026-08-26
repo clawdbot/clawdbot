@@ -1,6 +1,4 @@
-// Control UI E2E tests cover session ownership dormancy and owner filtering.
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
@@ -9,21 +7,19 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
+  captureSessionOwnerPageProof,
+  captureSessionOwnerProof,
+  captureUiProof,
+  captureUiProofEnabled,
+  openSidebarSortMenu,
   routeAvatarFixtures,
+  sessionOwnerProofArtifactDir,
+  uiProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
 });
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "drafts-ux");
-const sessionOwnerProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-owner-stack",
-);
 
 let page: Page | undefined;
 function sessionsList(owners: [string, string], withAvatars = false) {
@@ -143,38 +139,6 @@ function collaborativeSessionsList() {
     ],
     ts: 1,
   };
-}
-
-async function captureUiProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await targetPage.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
-}
-
-async function captureSessionOwnerProof(targetPage: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
-  await targetPage.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(sessionOwnerProofArtifactDir, fileName),
-  });
-}
-
-async function openSidebarSortMenu(targetPage: Page) {
-  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
-  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = targetPage.locator(".sidebar-session-sort-menu");
-  await menu.waitFor();
-  return menu;
 }
 
 suite.define(() => {
@@ -298,7 +262,20 @@ suite.define(() => {
   });
 
   it("shows permanent owner chips and filters existing custom groups", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
     const currentPage = await context.newPage();
     page = currentPage;
     await routeAvatarFixtures(context, currentPage, [
@@ -365,6 +342,7 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
+    await captureSessionOwnerProof(currentPage, "04-owner-filter-selected.png");
     expect(await currentPage.locator('[data-session-section="category:Research"]').count()).toBe(1);
     expect(await currentPage.locator('[data-session-section="category:Operations"]').count()).toBe(
       0,
@@ -394,6 +372,25 @@ suite.define(() => {
       "aria-checked",
       "true",
     );
+
+    await currentPage.reload();
+    // installMockGateway creates a new in-page request log for the reloaded
+    // document, so this wait and last-request assertion cannot reuse traffic
+    // from the pre-reload owner selection.
+    await gateway.waitForRequest("sessions.list");
+    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toMatchObject({ ownerId: "profile-ada" });
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    const reloadedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reloadedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerPageProof(currentPage, "05-owner-filter-restored-after-reload.png");
   });
 
   it("keeps unrelated active sessions out of the involving-me filter", async () => {

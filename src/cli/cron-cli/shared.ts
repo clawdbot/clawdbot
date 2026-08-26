@@ -170,12 +170,12 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 }
 
 function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
-  if (!job.enabled) {
-    return "disabled";
-  }
   const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
+  }
+  if (!job.enabled) {
+    return "disabled";
   }
   return typeof state.lastRunStatus === "string"
     ? state.lastRunStatus

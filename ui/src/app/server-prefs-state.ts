@@ -12,7 +12,16 @@ import {
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
-const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "absolutely", "custom"]);
+const THEMES: ReadonlySet<ThemeName> = new Set([
+  "claw",
+  "knot",
+  "dash",
+  "absolutely",
+  "tide",
+  "beacon",
+  "phosphor",
+  "custom",
+]);
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {

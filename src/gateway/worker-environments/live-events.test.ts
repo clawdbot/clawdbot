@@ -409,6 +409,7 @@ describe("worker live events", () => {
 
     expect(
       rx.rotateCredential({
+        ackedSeq: 2,
         credentialHash,
         environmentId: ID.environmentId,
         newProcessTurn: true,
@@ -421,6 +422,34 @@ describe("worker live events", () => {
     const nextProcess = { ...ID, credentialHash };
     ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
     expect(events.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+  });
+
+  it("rewinds cancelled preview ACKs before delivering the replacement turn terminal", () => {
+    ack(msg(1, "cancelled preview"));
+    ack(msg(2, "another cancelled preview", 1));
+    const credentialHash = "replacement-process-credential";
+    const runId = "replacement-worker-run";
+
+    expect(
+      rx.rotateCredential({
+        ackedSeq: 0,
+        credentialHash,
+        environmentId: ID.environmentId,
+        newProcessTurn: true,
+        previousCredentialHash: ID.credentialHash,
+        runEpoch: EPOCH,
+        sessionId: SID,
+      }),
+    ).toBe(true);
+
+    const replacement = { ...ID, credentialHash, runId };
+    ack(live(1, lifecycle({ phase: "start", startedAt: 300 }), runId), 1, replacement);
+    ack(
+      live(2, lifecycle({ phase: "finishing", startedAt: 300, endedAt: 400 }), runId),
+      2,
+      replacement,
+    );
+    expect(events.slice(-2).map((event) => event.data.phase)).toEqual(["start", "finishing"]);
   });
 
   it("ACKs before buffered failure", () => {
@@ -665,6 +694,7 @@ describe("worker live events", () => {
         ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
         expect(
           rx.rotateCredential({
+            ackedSeq: 2,
             credentialHash: "next-process-credential-hash",
             environmentId: ID.environmentId,
             newProcessTurn: true,

@@ -8199,6 +8199,22 @@ Update and merge these partial structured summaries.`,
     expect(outputText(recovered)).toBe(
       "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
     );
+
+    const reconciled = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "The previous Code Mode mutation may have partially applied. Do not repeat or finish any mutation. Use only the available read-only inspection tools to determine the authoritative current state, then report exactly what applied, what did not, what remains unknown, and what work is still required.",
+        ),
+        failedToolOutput,
+      ],
+    });
+    expect(outputText(reconciled)).toBe(
+      "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
+    );
   });
 });
 

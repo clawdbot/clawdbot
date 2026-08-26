@@ -54,12 +54,15 @@ import {
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
+import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
@@ -669,6 +672,24 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         }
         const admission = tryBeginGatewayRootWorkAdmission();
         if (!admission) {
+          const client = params.getClient();
+          const identity = client?.worker;
+          if (
+            client &&
+            getGatewaySuspendAdmissionPhase() === "draining" &&
+            !isGatewayRestartDraining() &&
+            identity?.turnClaim &&
+            !client.invalidated &&
+            params.service?.validateWorkerConnection(identity) === null
+          ) {
+            const continuation = runWorkerTurnAdmissionContinuation(identity, () =>
+              handleMessage(data, true),
+            );
+            if (continuation) {
+              await continuation;
+              return;
+            }
+          }
           await handleMessage(data, false);
           return;
         }

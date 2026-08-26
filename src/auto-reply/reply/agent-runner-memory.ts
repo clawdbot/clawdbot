@@ -1408,6 +1408,7 @@ export async function runMemoryFlushIfNeeded(params: {
         isControlUiVisible: false,
         projectSessionActive: false,
         projectSessionLifecycle: false,
+        projectSessionMessages: false,
       });
       flushRunRegistered = true;
     }

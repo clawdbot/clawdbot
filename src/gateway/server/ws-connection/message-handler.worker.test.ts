@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -22,13 +25,28 @@ import {
   type WorkerInferenceTerminalFrame,
   WORKER_INFERENCE_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createTestAdmittedRunContext } from "../../../agents/admitted-run-context.test-support.js";
+import type { SessionPlacementTurnParams } from "../../../agents/session-placement-admission.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
+import {
+  beginGatewayRestartSignalAdmission,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
+import { createWorkerSessionPlacementStore } from "../../worker-environments/placement-store.js";
+import { signalWorkerTurnClaimClosed } from "../../worker-environments/placement-turn-claim-events.js";
+import { prepareWorkerAgentRuntimeIdentity } from "../../worker-environments/worker-turn-payload.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { attachWorkerWsMessageHandler, type WorkerConnectionService } from "./worker-connection.js";
@@ -859,6 +877,89 @@ describe("dedicated worker websocket protocol", () => {
       expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
     );
     expect(harness.service.validateWorkerConnection).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { scenario: "an already-admitted unaudited worker", fence: "none", accepted: true },
+    { scenario: "a worker whose exact admitted run closed", fence: "run", accepted: false },
+    { scenario: "a worker whose exact placement closed", fence: "placement", accepted: false },
+    { scenario: "a worker during a restart signal", fence: "restart", accepted: false },
+  ] as const)("handles $scenario while suspension drains", async ({ fence, accepted }) => {
+    const claim = ATTACHED_IDENTITY.turnClaim;
+    if (!claim) {
+      throw new Error("expected attached worker turn claim");
+    }
+    const admittedRunContext = createTestAdmittedRunContext(claim.runId);
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(
+      admittedRunContext.operationalRunInstance,
+    );
+    const stateDir = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-suspension-"),
+    );
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    let placementActive = true;
+    vi.spyOn(placements, "validateTurnClaim").mockImplementation(
+      (current) => current === claim && placementActive,
+    );
+    const storePath = database.path;
+    const rootAdmission = tryBeginGatewayRootWorkAdmission();
+    if (!rootAdmission) {
+      throw new Error("expected parent worker turn root admission");
+    }
+    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+    let restartSignal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
+    try {
+      await rootAdmission.run(() =>
+        prepareWorkerAgentRuntimeIdentity({
+          agentId: "main",
+          placements,
+          runtimeInstanceId: ATTACHED_IDENTITY.environmentId,
+          sessionKey: "agent:main:worker-suspension",
+          turn: {
+            admittedRunContext,
+            runId: claim.runId,
+          } as SessionPlacementTurnParams,
+          turnClaim: claim,
+        }),
+      );
+      const harness = attachHarness({ identity: ATTACHED_IDENTITY });
+      await admit(harness);
+      suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.drain()).toBe(true);
+      if (fence === "run") {
+        releaseAgentRunDelegatedAuthority(delegatedAuthority);
+      } else if (fence === "placement") {
+        placementActive = false;
+        signalWorkerTurnClaimClosed(storePath, claim);
+      } else if (fence === "restart") {
+        restartSignal = beginGatewayRestartSignalAdmission();
+        expect(restartSignal).not.toBeNull();
+      }
+
+      harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+      if (accepted) {
+        await waitForWorkerProtocol(() =>
+          expect(harness.service.commitTranscript).toHaveBeenCalledOnce(),
+        );
+        expect(harness.close).not.toHaveBeenCalled();
+        expect(harness.responses[1]).toMatchObject({ ok: true });
+      } else {
+        await waitForWorkerProtocol(() =>
+          expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
+        );
+        expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+      }
+    } finally {
+      restartSignal?.rollback();
+      suspension?.release();
+      signalWorkerTurnClaimClosed(storePath, claim);
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+      rootAdmission.release();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects authenticated heartbeats while gateway admission is suspended", async () => {

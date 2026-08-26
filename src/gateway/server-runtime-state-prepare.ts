@@ -219,6 +219,7 @@ export async function prepareGatewayKernelState(params: {
               });
             },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
+            info: (message) => log.info(message),
             warn: (message) => log.warn(message),
             ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
           }),
