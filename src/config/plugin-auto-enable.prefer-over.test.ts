@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveChannelPreferOverIds,
@@ -68,6 +68,23 @@ describe("resolveChannelPreferOverIds", () => {
         env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
       }),
     ).toEqual(["clickclack-core"]);
+  });
+
+  // Codex review P2 on #128904: the catalog lookup canonicalises, but the owner gate that runs
+  // after it compared raw ids and fell back to `normalizeChatChannelId`, which returns null for a
+  // custom channel. An identity-less entry for `acmechat` whose owning manifest carries the
+  // supported mixed-case plugin id `AcmeChat` therefore matched the catalog and was then rejected
+  // by the gate, dropping `preferOver` silently and leaving ownership to claimant order.
+  it("keeps an identity-less catalog declaration for a mixed-case custom channel owner", () => {
+    const catalogPath = writeCatalog({ id: "acmechat", preferOver: ["acmechat-core"] });
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: { id: "AcmeChat", channels: ["AcmeChat"] } as unknown as PluginManifestRecord,
+        channelId: "acmechat",
+        env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
+      }),
+    ).toEqual(["acmechat-core"]);
   });
 
   // Codex review P2 on #123209: channel schema ownership now resolves preferences, and

@@ -147,17 +147,28 @@ function buildActivationMetadataHash(params: {
   const configuredChannels = [...new Set(params.configuredChannelIds)].toSorted((left, right) =>
     left.localeCompare(right),
   );
-  const enabledSourceChannels = Object.entries(
+  // Records an explicit `false` as well as an explicit `true`, because ownership reads `false` as
+  // disabling a bundled claimant. Unlike the plugin entries below, a channel whose `enabled` is
+  // absent or non-boolean is dropped rather than recorded as null: every reader collapses those to
+  // "not configured" (`hasMeaningfulChannelConfigShallow`), so hashing them like an absent entry is
+  // what keeps the key from moving on edits that move no activation input.
+  //
+  // Recording only the `true` entries left an explicit disable invisible on both
+  // sides of the key: `collectAutoEnableConfiguredChannelIds` treats a lone disable as unconfigured,
+  // so a load that differs from a cached one only by `channels.<id>.enabled: false` hashed the same
+  // and reused the first registry's cede map — leaving the disabled claimant owning a contested
+  // built-in channel it should have ceded.
+  const sourceChannelEnabledStates = Object.entries(
     (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
   )
-    .filter(([, value]) => {
+    .flatMap(([channelId, value]) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return false;
+        return [];
       }
-      return (value as { enabled?: unknown }).enabled === true;
+      const enabled = (value as { enabled?: unknown }).enabled;
+      return enabled === true || enabled === false ? [[channelId, enabled] as const] : [];
     })
-    .map(([channelId]) => channelId)
-    .toSorted((left, right) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
     .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
@@ -188,7 +199,7 @@ function buildActivationMetadataHash(params: {
         memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryStates,
         materialSourceEntries: materialSourceEntryIds,
-        enabledChannels: enabledSourceChannels,
+        channelEnabledStates: sourceChannelEnabledStates,
         configuredChannels,
         externalCatalogPaths: params.externalCatalogPaths,
         metadataLifecycleGeneration: params.metadataLifecycleGeneration,

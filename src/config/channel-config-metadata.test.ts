@@ -787,6 +787,67 @@ describe("replacements that ship no descriptor", () => {
   });
 });
 
+// Codex review P2 on #128904: the descriptor gate skipped only DISPLACED records, so an inactive
+// one still seeded the schema. When every narrowed claimant is disabled and a default-loaded
+// outside claimant serves the channel, the reasoning base holds only that winner, so the disabled
+// pair member is never marked displaced — its strict schema then described the channel to
+// validation and `config.schema` while a different plugin was actually serving it.
+describe("descriptors from inactive claimants", () => {
+  const disabled = () => ({
+    id: "zz-disabled",
+    origin: "global",
+    channels: ["zzgamma"],
+    channelConfigs: {
+      zzgamma: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { disabledToken: { type: "string" } },
+        },
+      },
+    },
+  });
+  // Serves the channel at runtime and ships no descriptor of its own, so the channel should stay
+  // permissive rather than adopt the disabled plugin's strict schema.
+  const outsideWinner = () => ({
+    id: "zz-outside",
+    origin: "global",
+    channels: ["zzgamma"],
+  });
+
+  it("does not seed the schema from a disabled claimant while an active one serves", () => {
+    const registry = {
+      plugins: [disabled(), outsideWinner()],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+    const policy = policyFor({ isPluginActive: (pluginId: string) => pluginId === "zz-outside" });
+
+    const entry = collectChannelSchemaMetadataWithOwnership(registry, policy).find(
+      (candidate) => candidate.id === "zzgamma",
+    );
+
+    expect(entry).toBeDefined();
+    expect(entry?.schemaPluginId).toBeUndefined();
+    expect(entry?.configSchema).toBeUndefined();
+  });
+
+  // The counterpart the gate must not break: with no active claimant at all nothing outranks the
+  // descriptor at runtime, so it still lands.
+  it("keeps the inactive claimant's schema when nothing is active", () => {
+    const registry = {
+      plugins: [disabled(), outsideWinner()],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+    const policy = policyFor({ isPluginActive: () => false });
+
+    const entry = collectChannelSchemaMetadataWithOwnership(registry, policy).find(
+      (candidate) => candidate.id === "zzgamma",
+    );
+
+    expect(entry?.schemaPluginId).toBe("zz-disabled");
+  });
+});
+
 // The descriptor walk read `channelConfigs` regardless of `record.channels`, even though the
 // manifest contract says `channels` declares ownership. While a channel is unconfigured no
 // candidate set exists, every claimant counts as active, and a closer-origin non-claimant won

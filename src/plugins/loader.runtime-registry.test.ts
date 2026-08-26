@@ -1,5 +1,6 @@
 // Verifies plugin loader runtime registry behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectAutoEnableConfiguredChannelIds } from "../config/channel-activation-candidates.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { isPluginExplicitlySelectedByAlias } from "../config/plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -213,6 +214,35 @@ describe("resolvePluginLoadCacheContext", () => {
 
     expect(resolvePluginLoadCacheContext({ config: materialConfig }).cacheKey).not.toBe(
       resolvePluginLoadCacheContext({ config: bareConfig }).cacheKey,
+    );
+  });
+
+  // Codex review P2 on #128904: the key recorded only `enabled: true` channels, while ownership
+  // reads `enabled: false` as disabling a bundled claimant. A lone disable is also not a
+  // "configured" channel, so it was invisible on both sides of the key and a load differing from a
+  // cached one only by that disable reused the first registry and its stale cede map.
+  it("separates the cache key when a channel is explicitly disabled", () => {
+    const disabledConfig = {
+      channels: { telegram: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const absentConfig = {} as unknown as OpenClawConfig;
+
+    // Fixture reachability through the production reader, asserted against a literal rather than
+    // against the other config: comparing the two calls to each other would hold vacuously if the
+    // reader ever returned `[]` unconditionally. The contrast case shows it does not, and that a
+    // disable alongside real config still leaves the channel configured -- which is the wider
+    // collision this key now separates.
+    expect(collectAutoEnableConfiguredChannelIds(disabledConfig, {})).toEqual([]);
+    expect(collectAutoEnableConfiguredChannelIds(absentConfig, {})).toEqual([]);
+    expect(
+      collectAutoEnableConfiguredChannelIds(
+        { channels: { telegram: { enabled: false, botToken: "zz" } } } as unknown as OpenClawConfig,
+        {},
+      ),
+    ).toEqual(["telegram"]);
+
+    expect(resolvePluginLoadCacheContext({ config: disabledConfig }).cacheKey).not.toBe(
+      resolvePluginLoadCacheContext({ config: absentConfig }).cacheKey,
     );
   });
 

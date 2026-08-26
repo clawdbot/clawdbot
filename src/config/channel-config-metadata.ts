@@ -773,7 +773,8 @@ export function collectChannelSchemaMetadataWithOwnership(
           continue;
         }
       } else if (
-        isDisplacedChannelOwner(displacedOwners, channelId, record.id) &&
+        (isDisplacedChannelOwner(displacedOwners, channelId, record.id) ||
+          !policy.isPluginActive(record.id, channelId)) &&
         claimantsByChannel
           .get(channelId)
           ?.some(
@@ -786,10 +787,15 @@ export function collectChannelSchemaMetadataWithOwnership(
         // used to install unconditionally. When the claimant that wins the channel ships no
         // descriptor of its own, that seeded the displaced fallback's strict schema for a channel
         // the loader cedes to the winner, and validation then rejected every key the winner
-        // accepts. A displaced claimant may not seed the schema while an active, non-displaced
-        // claimant exists to serve the channel; with no descriptor from that winner the channel
-        // correctly stays permissive. When every claimant is displaced or inactive nothing
-        // outranks this record at runtime, so its descriptor still lands.
+        // accepts. Neither a displaced claimant nor an inactive one may seed the schema while an
+        // active, non-displaced claimant exists to serve the channel; with no descriptor from that
+        // winner the channel correctly stays permissive. Inactive has to be its own condition:
+        // when every narrowed claimant is disabled and a default-loaded outside claimant serves
+        // the channel, the reasoning base holds only that winner, so a disabled pair member is
+        // never marked displaced and its strict schema would otherwise describe the channel to
+        // validation and `config.schema` instead of the plugin actually serving it. When every
+        // claimant is displaced or inactive nothing outranks this record at runtime, so its
+        // descriptor still lands.
         continue;
       }
       // Accepted tradeoff, recorded so it is a decision and not an oversight: a replacement that

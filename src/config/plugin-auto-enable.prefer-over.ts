@@ -184,7 +184,13 @@ function ownsChannelLevelDeclaration(
     // heuristic here would hand the declaration to whichever claimant is named like the channel.
     return false;
   }
-  return record.id === channelId || normalizeChatChannelId(record.id) === channelId;
+  // Canonicalise both sides. The catalog lookup above already matches on `normalizeOwnedChannelId`,
+  // so an identity-less entry for custom channel `acmechat` resolves against a manifest whose
+  // supported mixed-case plugin id is `AcmeChat` — and then failed here, because raw equality is
+  // case-sensitive and `normalizeChatChannelId` returns null for a custom id, making the null the
+  // comparison's left side. The declaration was dropped without a word and ownership fell back to
+  // claimant order.
+  return normalizeOwnedChannelId(record.id) === normalizeOwnedChannelId(channelId);
 }
 
 /**
