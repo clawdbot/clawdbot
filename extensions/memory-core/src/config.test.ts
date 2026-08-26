@@ -76,4 +76,51 @@ describe("memory-core manifest config schema", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("accepts dreaming.humanReadable for machine-only deployments", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-human-readable",
+      value: {
+        dreaming: {
+          enabled: true,
+          humanReadable: false,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a non-boolean dreaming.humanReadable", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-human-readable-invalid",
+      value: {
+        dreaming: {
+          humanReadable: "no",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("declares the runtime default for dreaming.humanReadable", () => {
+    // The schema-driven Control UI renders an unset boolean from `schema.default`
+    // and shows false when it is missing. Without this, an untouched install would
+    // display machine-only mode while the gateway still writes Dream Diary prose.
+    // `enabled` is asserted alongside it because both must read as the same
+    // default-on surface for an untouched configuration.
+    expect(manifest.configSchema).toMatchObject({
+      properties: {
+        dreaming: {
+          properties: {
+            enabled: { default: true },
+            humanReadable: { default: true },
+          },
+        },
+      },
+    });
+  });
 });

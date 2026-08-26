@@ -166,6 +166,31 @@ describe("dreaming markdown storage", () => {
     expect(dreamsContent).toContain("- Promoted: durable preference");
   });
 
+  it("skips the DREAMS.md summary but keeps the deep report when humanReadable is false", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const reportPath = await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Promoted: durable preference"],
+      humanReadable: false,
+      storage: {
+        mode: "separate",
+        separateReports: false,
+      },
+      nowMs: Date.parse("2026-04-05T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    // The machine artifact must survive machine-only mode unchanged.
+    const requiredReportPath = requireReportPath(reportPath);
+    const content = await fs.readFile(requiredReportPath, "utf-8");
+    expect(content).toContain("# Deep Sleep");
+    expect(content).toContain("- Promoted: durable preference");
+
+    // The human review surface must not be created at all.
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+  });
+
   it("writes the deep summary to DREAMS.md without a separate report in inline mode", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
 

@@ -68,6 +68,10 @@
           "frequency": {
             "type": "string"
           },
+          "humanReadable": {
+            "type": "boolean",
+            "default": true
+          },
           "model": {
             "type": "string"
           },

@@ -28,6 +28,44 @@ and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
 existing annotated entries byte-for-byte unless it explicitly merges or
 supersedes them.
 
+## Machine-only dreaming
+
+Some deployments consume memory purely as an automation artifact and never read
+the Dream Diary. Set `dreaming.humanReadable: false` to keep consolidation
+running while suppressing every human-readable write:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-core": {
+        "config": {
+          "dreaming": {
+            "enabled": true,
+            "humanReadable": false
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+| Output                                            | `humanReadable: false` |
+| ------------------------------------------------- | ---------------------- |
+| Light/REM/deep phases and their scheduling        | Runs                   |
+| `memory/.dreams/` machine state and phase signals | Written                |
+| `MEMORY.md` promotion and consolidation           | Runs                   |
+| `memory/dreaming/<phase>/YYYY-MM-DD.md` reports   | Written                |
+| Dream Diary narrative subagent                    | Skipped                |
+| Fallback diary entry when the subagent is absent  | Skipped                |
+| `## Deep Sleep` summary in `DREAMS.md`            | Skipped                |
+
+This is an output switch only. It does not disable a phase, change any ranking
+threshold, or alter what reaches `MEMORY.md` — phase reinforcement signals still
+feed deep ranking exactly as they do with the diary enabled. The narrative
+subagent is the main cost saved: machine-only mode makes no diary model call.
+
 ## Phase model
 
 Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep. These are internal implementation phases, not separate user-configured modes.
@@ -256,6 +294,9 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 </ParamField>
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.
+</ParamField>
+<ParamField path="humanReadable" type="boolean" default="true">
+  Set `false` for machine-only dreaming. See [Machine-only dreaming](#machine-only-dreaming).
 </ParamField>
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.

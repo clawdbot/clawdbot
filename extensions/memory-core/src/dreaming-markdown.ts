@@ -148,14 +148,21 @@ export async function writeDeepDreamingReport(params: {
   bodyLines: string[];
   nowMs?: number;
   timezone?: string;
+  /** False suppresses the DREAMS.md summary; the separate report still runs. */
+  humanReadable?: boolean;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const inlinePath = await updateDeepDreamsFile({
-    workspaceDir: params.workspaceDir,
-    bodyLines: params.bodyLines,
-  });
+  // DREAMS.md is the human review surface; the separate report below is the
+  // machine artifact, so machine-only mode skips only this write.
+  const inlinePath =
+    params.humanReadable === false
+      ? undefined
+      : await updateDeepDreamsFile({
+          workspaceDir: params.workspaceDir,
+          bodyLines: params.bodyLines,
+        });
   let reportPath: string | undefined;
   if (shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
@@ -166,7 +173,7 @@ export async function writeDeepDreamingReport(params: {
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: "deep",
     outcome: "completed",
-    inlinePath,
+    ...(inlinePath ? { inlinePath } : {}),
     ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
     storageMode: params.storage.mode,

@@ -574,6 +574,154 @@ describe("memory-core dreaming phases", () => {
     expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
   });
 
+  it("runs the light phase without any narrative call when humanReadable is false", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Move backups to S3 Glacier.",
+      "- Keep retention at 365 days.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                humanReadable: false,
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: { enabled: true, limit: 20, lookbackDays: 2 },
+                  rem: { enabled: false, limit: 0, lookbackDays: 2 },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagent = createMockNarrativeSubagent();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamingSweepPhases({
+      agentId: "main",
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+
+    // No diary model call, and no session created that would need cleanup.
+    expect(subagent.run).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+
+    // The machine artifacts of the phase must still be produced.
+    const dailyNote = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(dailyNote).toContain("## Light Sleep");
+    const phaseSignals = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date("2026-04-05T10:05:00.000Z").toISOString(),
+    );
+    expect(Object.keys(phaseSignals.entries).length).toBeGreaterThan(0);
+  });
+
+  it("does not re-signal the same light entries across two machine-only sweeps", async () => {
+    // Machine-only mode suppresses the Dream Diary, which is also the input to
+    // prioritizeLightEntriesByDiaryCoverage. Re-staging is nevertheless gated by
+    // machine state (phaseSignals.lightHits / lastLightAt via
+    // filterFreshLightDreamingEntries), so a second sweep with no new recall must
+    // not bump lightHits again and must not change what deep ranking sees.
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Move backups to S3 Glacier.",
+      "- Keep retention at 365 days.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                humanReadable: false,
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: { enabled: true, limit: 20, lookbackDays: 2 },
+                  rem: { enabled: false, limit: 0, lookbackDays: 2 },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagent = createMockNarrativeSubagent();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const runSweep = async (nowIso: string): Promise<void> => {
+      await runDreamingSweepPhases({
+        agentId: "main",
+        workspaceDir,
+        cfg: testConfig,
+        pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
+        logger,
+        subagent,
+        nowMs: Date.parse(nowIso),
+      });
+    };
+
+    const firstSweepIso = "2026-04-05T10:05:00.000Z";
+    const secondSweepIso = "2026-04-05T10:35:00.000Z";
+    await runSweep(firstSweepIso);
+    const afterFirst = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date(firstSweepIso).toISOString(),
+    );
+    const signalledKeys = Object.keys(afterFirst.entries);
+    expect(signalledKeys.length).toBeGreaterThan(0);
+
+    await runSweep(secondSweepIso);
+    const afterSecond = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date(secondSweepIso).toISOString(),
+    );
+
+    // The freshness filter must keep the second sweep from re-staging: same key
+    // set, same lightHits, same lastLightAt as the first sweep recorded.
+    expect(Object.keys(afterSecond.entries).toSorted()).toEqual(signalledKeys.toSorted());
+    for (const key of signalledKeys) {
+      const before = expectDefined(afterFirst.entries[key], `first-sweep signal for ${key}`);
+      const after = expectDefined(afterSecond.entries[key], `second-sweep signal for ${key}`);
+      expect(after.lightHits, `${key} keeps its light hit count`).toBe(before.lightHits);
+      expect(after.lastLightAt, `${key} keeps its light timestamp`).toBe(before.lastLightAt);
+    }
+    // Still no diary model call in either sweep.
+    expect(subagent.run).not.toHaveBeenCalled();
+  });
+
   it("suppresses cleanup warnings during request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
