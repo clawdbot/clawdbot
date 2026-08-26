@@ -3996,6 +3996,36 @@ jobs:
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
 
+      - name: Run focused Apple Watch operation simulator tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("Apple Watch"));
+              if (!simulator) {
+                console.error("No available Apple Watch simulator for operation lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawWatchApp \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=${simulator_id}" \
+            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
