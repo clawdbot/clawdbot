@@ -1,6 +1,6 @@
 import type { Static } from "typebox";
 import type { ApprovalScopeSchema } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import { sanitizeExecApprovalDisplayText } from "./exec-approval-command-display.js";
+import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.js";
 
 export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
 

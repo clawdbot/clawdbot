@@ -8,11 +8,11 @@ import type {
   ApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeApprovalScope } from "./approval-scope.js";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
-  resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+} from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
