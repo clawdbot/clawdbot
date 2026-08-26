@@ -72,7 +72,8 @@ Configure an explicit reader agent before enabling the plugin. Preserve existing
 Replace the channel placeholder, IMAP hostname, username, sender allowlist, and secret reference with your own values. The reader requires an available sandbox backend and an authenticated model. Unlike Gmail PubSub, this plugin does not require `hooks.enabled`, Google Cloud, Tailscale Funnel, or a public HTTP endpoint.
 
 ```bash
-openclaw agents list --bindings
+openclaw agents list
+openclaw agents bindings
 openclaw config validate
 openclaw models status --agent mail_reader --check --probe --probe-provider openai
 openclaw agent --agent mail_reader --message "Reply exactly MAIL_READER_OK" --json
