@@ -7,6 +7,7 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
@@ -88,6 +89,7 @@ export function createPluginApprovalHandlers(
         description: string;
         detail?: string | null;
         severity?: string | null;
+        scope?: ApprovalScope;
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
@@ -188,6 +190,7 @@ export function createPluginApprovalHandlers(
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
         detail:
           rawDetail === null
             ? null

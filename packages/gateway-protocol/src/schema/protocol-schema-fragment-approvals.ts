@@ -11,6 +11,7 @@ export const ApprovalProtocolSchemas = {
   ApprovalExpiredReason: approvals.ApprovalExpiredReasonSchema,
   ApprovalCancelledReason: approvals.ApprovalCancelledReasonSchema,
   PluginApprovalSeverity: approvals.PluginApprovalSeveritySchema,
+  ApprovalScope: approvals.ApprovalScopeSchema,
   ExecApprovalPresentation: approvals.ExecApprovalPresentationSchema,
   PluginApprovalPresentation: approvals.PluginApprovalPresentationSchema,
   SystemAgentApprovalPresentation: approvals.SystemAgentApprovalPresentationSchema,

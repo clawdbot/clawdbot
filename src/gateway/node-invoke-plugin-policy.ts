@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
+import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
@@ -145,6 +146,7 @@ function createApprovalRuntime(params: {
           sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
           256,
         ),
+        scope: input.scope ? sanitizeApprovalScope(input.scope) : null,
         severity: input.severity ?? "warning",
         ...(input.allowedDecisions === undefined
           ? {}

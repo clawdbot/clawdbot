@@ -313,7 +313,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +2: embedded foreground prompt context builder and its public context type.
-      4342,
+      // +1: typed owner-declared approval-scope contract for plugin-authored approvals.
+      4343,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -1,7 +1,7 @@
 import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
-import { ApprovalChannelReviewerSchema } from "./approvals.js";
+import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -29,6 +29,7 @@ export const PluginApprovalRequestParamsSchema = closedObject({
     }),
   ),
   severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
+  scope: Type.Optional(ApprovalScopeSchema),
   toolName: Type.Optional(Type.String()),
   toolCallId: Type.Optional(Type.String()),
   allowedDecisions: Type.Optional(
