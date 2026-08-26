@@ -8,6 +8,7 @@ import type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   OpenClawConfig,
+  ReplyToMode,
   BaseProbeResult,
 } from "./runtime-api.js";
 
@@ -33,6 +34,7 @@ export type IrcNickServConfig = {
 export type IrcAccountConfig = {
   name?: string;
   enabled?: boolean;
+  replyToMode?: ReplyToMode;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /**

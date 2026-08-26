@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
@@ -8,7 +6,6 @@ import { resolveGitCoauthorAttribution } from "../agents/git-coauthor-attributio
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
-import { runCommandBuffered } from "../process/exec.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   currentGitHubPublicationConfig,
@@ -32,12 +29,14 @@ import {
 } from "./github-publication-git-index.js";
 import {
   appendGitHubPublicationMessage,
-  assertGitHubPublicationTreeHasNoFilters,
   assertSafeGitPublicationWorkspace,
   assertGitHubPublicationBranchRef,
+  captureGitHubPublicationWorkspaceSnapshot,
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
   githubPublicationUpdateRefArgs,
+  requirePublicationCommand as requireCommand,
+  runPublicationCommand as runCommand,
 } from "./github-publication-git-transport.js";
 import {
   githubPublicationCreatePullRequestArgs,
@@ -68,37 +67,6 @@ export function matchesGitHubPublicationIdentityRow(
   );
 }
 
-async function runCommand(
-  argv: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
-) {
-  return await runCommandBuffered(argv, {
-    ...(options.cwd ? { cwd: options.cwd } : {}),
-    env: {
-      ...(options.env ?? process.env),
-      GIT_NO_REPLACE_OBJECTS: "1",
-      // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "core.hooksPath",
-      GIT_CONFIG_VALUE_0: os.devNull,
-    },
-    ...(options.input !== undefined ? { input: options.input } : {}),
-    timeoutMs: 60_000,
-    maxOutputBytes: 256 * 1024,
-  });
-}
-
-async function requireCommand(
-  argv: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
-): Promise<string> {
-  const result = await runCommand(argv, options);
-  if (result.code !== 0) {
-    throw new Error(`${argv[0]} command failed`);
-  }
-  return result.stdout.toString("utf8").trim();
-}
-
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -110,85 +78,6 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
     throw new Error(`${label} returned an invalid response`);
   }
   return parsed;
-}
-
-export async function captureGitHubPublicationWorkspaceSnapshot(params: {
-  cwd: string;
-  assertCurrent?: () => void;
-}): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
-  const step = async <T>(operation: () => Promise<T>): Promise<T> => {
-    params.assertCurrent?.();
-    const result = await operation();
-    params.assertCurrent?.();
-    return result;
-  };
-  await step(async () => await assertSafeGitPublicationWorkspace(params.cwd, runCommand));
-  const sourceHeadCommit = await step(
-    async () =>
-      await requireCommand(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
-        cwd: params.cwd,
-      }),
-  );
-  const sourceIndexTree = await step(
-    async () =>
-      await requireCommand(
-        ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-        { cwd: params.cwd },
-      ),
-  );
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
-  try {
-    const env: NodeJS.ProcessEnv = {
-      GIT_ATTR_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
-      GIT_INDEX_FILE: path.join(tempDir, "index"),
-    };
-    await step(async () => {
-      await requireCommand(
-        [
-          "git",
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "read-tree",
-          sourceHeadCommit,
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    await step(async () => {
-      await requireCommand(
-        [
-          "git",
-          "-c",
-          `core.attributesFile=${os.devNull}`,
-          "-c",
-          `core.hooksPath=${os.devNull}`,
-          "-c",
-          "core.fsmonitor=false",
-          "add",
-          "-A",
-        ],
-        { cwd: params.cwd, env },
-      );
-    });
-    const workspaceTree = await step(
-      async () =>
-        await requireCommand(
-          ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", "write-tree"],
-          { cwd: params.cwd, env },
-        ),
-    );
-    await step(
-      async () =>
-        await assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runCommand),
-    );
-    return { sourceHeadCommit, sourceIndexTree, workspaceTree };
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
 }
 
 export async function executeGitHubPublication(params: {

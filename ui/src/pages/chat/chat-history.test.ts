@@ -339,6 +339,46 @@ describe("rewindChatHistory", () => {
     expect(result).toBeNull();
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
   });
+
+  it("reconciles committed rewind history without overwriting a replacement draft", async () => {
+    let resolveRewind!: (result: { editorText?: string }) => void;
+    const rewind = new Promise<{ editorText?: string }>((resolve) => {
+      resolveRewind = resolve;
+    });
+    const canonical = { role: "assistant", content: "canonical history after rewind" };
+    const state = createState({ messages: [canonical] }) as TestState & {
+      handleChatDraftChange: ReturnType<typeof vi.fn>;
+      sessions: { rewind: ReturnType<typeof vi.fn> };
+    };
+    state.chatMessages = [{ role: "assistant", content: "stale replacement history" }];
+    state.handleChatDraftChange = vi.fn((next: string) => {
+      state.chatMessage = next;
+    });
+    state.sessions = {
+      rewind: vi.fn(() => rewind),
+      setModelOverride: vi.fn(),
+    };
+
+    const pending = rewindChatHistory(state as never, "user-entry");
+    state.connected = false;
+    state.connectionEpoch += 1;
+    state.connected = true;
+    state.connectionEpoch += 1;
+    state.chatMessage = "new connection draft";
+    state.chatAttachments = [
+      { id: "new", mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,bmV3" },
+    ];
+    resolveRewind({ editorText: "stale rewind draft" });
+
+    const result = await pending;
+    expect(state.chatMessage).toBe("new connection draft");
+    expect(state.chatAttachments).toEqual([
+      { id: "new", mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,bmV3" },
+    ]);
+    expect(state.chatMessages).toEqual([canonical]);
+    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
 });
 
 describe("switchChatHistoryBranch", () => {
@@ -486,6 +526,37 @@ describe("switchChatHistoryBranch", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([selected]);
+  });
+
+  it("reconciles a committed branch switch after a same-client reconnect", async () => {
+    let resolveSwitch!: () => void;
+    const switched = new Promise<object>((resolve) => {
+      resolveSwitch = () => resolve({});
+    });
+    const selected = { role: "assistant", content: "selected branch after reconnect" };
+    const state = createState({ messages: [selected] }) as TestState & {
+      sessions: {
+        listBranches: ReturnType<typeof vi.fn>;
+        switchBranch: ReturnType<typeof vi.fn>;
+      };
+    };
+    state.chatMessages = [{ role: "assistant", content: "stale branch after reconnect" }];
+    state.sessions = {
+      listBranches: vi.fn().mockResolvedValue([]),
+      switchBranch: vi.fn(() => switched),
+      setModelOverride: vi.fn(),
+    };
+
+    const pending = switchChatHistoryBranch(state as never, "stale-leaf");
+    state.connected = false;
+    state.connectionEpoch += 1;
+    state.connected = true;
+    state.connectionEpoch += 1;
+    resolveSwitch();
+
+    await expect(pending).resolves.toBe(false);
+    expect(state.chatMessages).toEqual([selected]);
+    expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
   });
 });
 

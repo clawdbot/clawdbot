@@ -216,7 +216,7 @@ suite.define(() => {
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
       await inlineEditor.fill("edited before send");
-      await page.locator(".chat-queue__edit-submit").click();
+      await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
 
       const lastGrip = page

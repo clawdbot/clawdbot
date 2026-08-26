@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -14,11 +14,9 @@ import {
   verifyGitBackupRef,
 } from "../snapshot/git-backup.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveRequiredBackupPath } from "./backup-shared.js";
+import { resolveBackupAgentRoot, resolveRequiredBackupPath } from "./backup-shared.js";
 
 type BackupGitCreateOptions = {
   repository?: string;
@@ -57,10 +55,13 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
-  let agents: string[] = [];
-  if (normalizedAgents.length > 0) {
+  let agents: Array<{ agentId: string; databasePath: string }> = [];
+  if (options.all || normalizedAgents.length > 0) {
     const config = getRuntimeConfig({ skipPluginValidation: true });
-    agents = normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
+    const agentIds = options.all
+      ? listAgentIds(config).toSorted()
+      : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
+    agents = await Promise.all(agentIds.map((agentId) => resolveBackupAgentRoot(config, agentId)));
   }
   const databases: Array<{
     path: string;
@@ -72,21 +73,15 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
       identity: { role: "global" },
     });
   }
-  // Registry rows can carry stale or foreign absolute paths (deleted agents,
-  // retired temp state dirs), so --all resolves each distinct agent id to its
-  // canonical database under the current state dir and skips absent files
-  // instead of aborting the whole scheduled run on one dead registration.
-  const allAgentIds = options.all
-    ? [...new Set(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId))].toSorted()
-    : agents;
-  for (const agentId of allAgentIds) {
-    const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId });
+  // Config owns both the current roster and each agent root; durable registry
+  // rows can retain stale paths after an agent moves or is removed.
+  for (const { agentId, databasePath } of agents) {
     let resolvedPath: string;
     try {
-      resolvedPath = await fs.realpath(canonicalPath);
+      resolvedPath = await fs.realpath(databasePath);
     } catch (error) {
       if (options.all && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        runtime.error(`Warning: skipping agent ${agentId}: no database at ${canonicalPath}`);
+        runtime.error(`Warning: skipping agent ${agentId}: no database at ${databasePath}`);
         continue;
       }
       throw error;

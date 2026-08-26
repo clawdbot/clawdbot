@@ -67,6 +67,15 @@ export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEv
   };
 };
 
+export type SessionTranscriptBoundedActiveContext = {
+  activeLeafEntryId: string | null;
+  boundaryCount: number;
+  events: TranscriptEvent[];
+  serializedBytes: number;
+  totalEvents: number;
+  truncated: boolean;
+};
+
 function parseMessageEventRow(row: {
   event_json: string;
   message_position: number | null;
@@ -147,6 +156,164 @@ export function readRecentSessionTranscriptActiveEvents(
     )
       .rows.toReversed()
       .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  });
+}
+
+/** Reads one byte-bounded active branch without materializing abandoned transcript history. */
+export function readSessionTranscriptBoundedActiveContextCore(
+  scope: SessionTranscriptReadScope,
+  options: { maxBytes: number; maxEvents: number },
+): SessionTranscriptBoundedActiveContext {
+  const maxBytes = normalizeVisibleMessageLimit(
+    options.maxBytes,
+    DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+    MAX_VISIBLE_MESSAGE_MAX_BYTES,
+    "maxBytes",
+  );
+  const maxEvents = normalizeVisibleMessageLimit(
+    options.maxEvents,
+    DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+    MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+    "maxEvents",
+  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const fence = resolveSqliteSessionTranscriptReadFence({
+      database: projection.database,
+      ...projection.resolved,
+    });
+    const header = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_events")
+        .select("event_json")
+        .where("session_id", "=", projection.resolved.sessionId)
+        .orderBy("seq", "asc")
+        .limit(1),
+    );
+    const headerBytes = header ? Buffer.byteLength(header.event_json, "utf8") + 1 : 0;
+    if (headerBytes > maxBytes) {
+      throw new RangeError("Session transcript header exceeds the active-context byte limit");
+    }
+    const metadata = executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select([
+          "active.active_position",
+          "active.event_seq",
+          /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
+          sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        ])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .$if(fence !== undefined, (query) =>
+          query.where("active.event_seq", "<", fence!.beforeRawSeq),
+        )
+        .orderBy("active.active_position", "desc")
+        .limit(maxEvents + 1),
+    ).rows;
+    const selectedSequences: number[] = [];
+    let serializedBytes = headerBytes;
+    for (const row of metadata) {
+      if (
+        selectedSequences.length >= maxEvents ||
+        serializedBytes + row.serialized_bytes > maxBytes
+      ) {
+        break;
+      }
+      selectedSequences.push(row.event_seq);
+      serializedBytes += row.serialized_bytes;
+    }
+    const selectedRows =
+      selectedSequences.length === 0
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            db
+              .selectFrom("transcript_events")
+              .select(["event_json", "seq"])
+              .where("session_id", "=", projection.resolved.sessionId)
+              .where("seq", "in", selectedSequences)
+              .orderBy("seq", "asc"),
+          ).rows;
+    const boundary = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select(["event.event_json", "identity.seq"])
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_type", "in", ["compaction", "reset"])
+        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq))
+        .orderBy("active.active_position", "desc")
+        .limit(1),
+    );
+    const boundaryCount = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .select((eb) => eb.fn.count<number>("identity.seq").as("boundary_count"))
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_type", "in", ["compaction", "reset"])
+        .$if(fence !== undefined, (query) => query.where("identity.seq", "<", fence!.beforeRawSeq)),
+    )?.boundary_count;
+    const events: TranscriptEvent[] = header ? [JSON.parse(header.event_json)] : [];
+    let injectedBoundary: { id?: unknown } | undefined;
+    let boundaryOmitted = false;
+    if (boundary && !selectedSequences.includes(boundary.seq)) {
+      const boundaryBytes = Buffer.byteLength(boundary.event_json, "utf8") + 1;
+      if (serializedBytes + boundaryBytes <= maxBytes) {
+        const event: TranscriptEvent = JSON.parse(boundary.event_json);
+        events.push(event);
+        if (event !== null && typeof event === "object" && "id" in event) {
+          injectedBoundary = event;
+        }
+        serializedBytes += boundaryBytes;
+      } else {
+        boundaryOmitted = true;
+      }
+    }
+    for (const [index, row] of selectedRows.entries()) {
+      const event: TranscriptEvent = JSON.parse(row.event_json);
+      if (
+        index === 0 &&
+        typeof injectedBoundary?.id === "string" &&
+        event !== null &&
+        typeof event === "object" &&
+        "parentId" in event &&
+        event.parentId !== injectedBoundary.id
+      ) {
+        Object.assign(event, { parentId: injectedBoundary.id });
+      }
+      events.push(event);
+    }
+    return {
+      activeLeafEntryId: projection.state.leafEventId,
+      boundaryCount: boundaryCount ?? 0,
+      events,
+      serializedBytes,
+      totalEvents: projection.state.activeEventCount,
+      truncated: boundaryOmitted || metadata.length > selectedSequences.length,
+    };
   });
 }
 

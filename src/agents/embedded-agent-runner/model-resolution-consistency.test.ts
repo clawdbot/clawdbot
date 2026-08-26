@@ -6,14 +6,6 @@ import {
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 
-// Self-defense against isolate:false shard composition: sibling test files
-// mock this module with incomplete factories, and a leaked mock strips the
-// real withPluginMetadataSnapshotScope this file needs. A file-local
-// identity mock always wins and restores the actual module.
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-}));
-
 const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
 const resolveHookModelSelectionMock = vi.hoisted(() =>

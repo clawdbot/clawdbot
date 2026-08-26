@@ -1,6 +1,6 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -97,13 +97,32 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
 const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
 
+type ChatHistoryLoadRequest = {
+  sessionKey: string;
+  requestAgentId: string | undefined;
+  startup: boolean;
+};
+
+export type ChatHistoryLoadState =
+  | { phase: "idle" }
+  | ({ phase: "pending-connection" } & ChatHistoryLoadRequest)
+  | ({
+      phase: "in-flight";
+      client: GatewayBrowserClient;
+      connectionEpoch: number;
+      key: string;
+      promise: Promise<ChatHistoryResult | undefined>;
+    } & ChatHistoryLoadRequest)
+  | { phase: "committed"; key: string }
+  | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
+
 type ChatHistoryPaneRequests = {
   historyVersion: number;
   branchVersion: number;
   subscriptionGeneration: number;
   subscriptionError?: string;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
-  inFlightHistory?: InFlightChatHistoryRequest;
+  historyLoad: ChatHistoryLoadState;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
@@ -116,10 +135,47 @@ function getChatHistoryPaneRequests(owner: object): ChatHistoryPaneRequests {
       branchVersion: 0,
       subscriptionGeneration: 0,
       pendingSubscriptionReleases: new Set(),
+      historyLoad: { phase: "idle" },
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState {
+  const requests = getChatHistoryPaneRequests(state);
+  const load = requests.historyLoad;
+  if (load.phase === "idle") {
+    return load;
+  }
+  const requestAgentId = isUiSelectedGlobalSessionKey(state, state.sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const current =
+    load.phase === "committed"
+      ? load.key === `${state.sessionKey}\u0000${requestAgentId ?? ""}`
+      : load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
+  if (!current) {
+    requests.historyLoad = { phase: "idle" };
+    state.chatLoading = false;
+  } else if (
+    load.phase === "in-flight" &&
+    (!state.connected ||
+      load.client !== state.client ||
+      load.connectionEpoch !== state.connectionEpoch)
+  ) {
+    // Reconnect can finish before stale work settles, so transfer its intent
+    // before the connected transition decides whether to reissue history.
+    requests.historyLoad = {
+      phase: "pending-connection",
+      sessionKey: load.sessionKey,
+      requestAgentId: load.requestAgentId,
+      startup: load.startup,
+    };
+    state.chatLoading = true;
+    state.requestUpdate?.();
+  }
+  return requests.historyLoad;
 }
 
 export function retireChatBranchRequests(state: ChatState): void {
@@ -176,7 +232,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
-  requests.inFlightHistory = undefined;
+  requests.historyLoad = { phase: "idle" };
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit
@@ -906,13 +962,6 @@ export async function syncSelectedSessionMessageSubscription(
   }
 }
 
-type InFlightChatHistoryRequest = {
-  client: NonNullable<ChatState["client"]>;
-  connectionEpoch: number;
-  key: string;
-  promise: Promise<ChatHistoryResult | undefined>;
-};
-
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
   startup?: boolean;
@@ -1372,6 +1421,12 @@ export async function rewindChatHistory(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = () =>
+    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
+  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   try {
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
     const editorText = result.editorText ?? "";
@@ -1381,16 +1436,18 @@ export async function rewindChatHistory(
         agentId: agentParams.agentId,
       });
     }
-    persistChatComposerState(state, sessionKey, {
-      agentId: agentParams.agentId,
-      draft: editorText,
-    });
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (connectionIsCurrent()) {
+      persistChatComposerState(state, sessionKey, {
+        agentId: agentParams.agentId,
+        draft: editorText,
+      });
+    }
+    if (!viewMatches()) {
       return null;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (!viewIsCurrent()) {
       return null;
     }
     // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
@@ -1402,8 +1459,10 @@ export async function rewindChatHistory(
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
-    setChatError(state, formatUiError(error));
-    scheduleChatScroll(state);
+    if (viewIsCurrent()) {
+      setChatError(state, formatUiError(error));
+      scheduleChatScroll(state);
+    }
     return null;
   }
 }
@@ -1417,6 +1476,12 @@ export async function switchChatHistoryBranch(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = () =>
+    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
+  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   try {
     await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
     if (state.chatMessagesBySession) {
@@ -1425,15 +1490,17 @@ export async function switchChatHistoryBranch(
         agentId: agentParams.agentId,
       });
     }
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (!viewMatches()) {
       return false;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    return visibleSessionMatches(state, sessionKey, agentParams.agentId);
+    return viewIsCurrent();
   } catch (error) {
-    setChatError(state, formatUiError(error));
-    scheduleChatScroll(state);
+    if (viewIsCurrent()) {
+      setChatError(state, formatUiError(error));
+      scheduleChatScroll(state);
+    }
     return false;
   }
 }
@@ -1487,14 +1554,19 @@ export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ChatHistoryResult | undefined> {
-  if (!state.client || !state.connected) {
-    return undefined;
-  }
   const sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const method = opts.startup === true ? "chat.startup" : "chat.history";
+  const startup = opts.startup === true;
+  const requests = getChatHistoryPaneRequests(state);
+  if (!state.client || !state.connected) {
+    requests.historyLoad = { phase: "pending-connection", sessionKey, requestAgentId, startup };
+    state.chatLoading = true;
+    state.requestUpdate?.();
+    return undefined;
+  }
+  const method = startup ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const deltaCursor = state.chatMessagesBySession
@@ -1505,12 +1577,12 @@ export async function loadChatHistory(
     : undefined;
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}\u0000${requestModeKey}`;
-  const requests = getChatHistoryPaneRequests(state);
-  const inFlight = requests.inFlightHistory;
+  const inFlight = requests.historyLoad;
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
-    inFlight?.key === requestKey &&
+    inFlight.phase === "in-flight" &&
+    inFlight.key === requestKey &&
     inFlight.client === client &&
     inFlight.connectionEpoch === connectionEpoch
   ) {
@@ -1531,18 +1603,70 @@ export async function loadChatHistory(
     requestAgentId,
     method,
     deltaCursor,
-  ).finally(() => {
-    if (requests.inFlightHistory?.promise === promise) {
-      requests.inFlightHistory = undefined;
+  ).then((result) => {
+    const current = requests.historyLoad;
+    if (current.phase === "in-flight" && current.promise === promise) {
+      if (result) {
+        requests.historyLoad = {
+          phase: "committed",
+          key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
+        };
+      } else if (
+        state.sessionKey === sessionKey &&
+        (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
+          resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
+        (!state.connected ||
+          current.client !== state.client ||
+          current.connectionEpoch !== state.connectionEpoch)
+      ) {
+        requests.historyLoad = {
+          phase: "pending-connection",
+          sessionKey,
+          requestAgentId,
+          startup,
+        };
+        state.chatLoading = true;
+      } else {
+        requests.historyLoad = { phase: "idle" };
+        state.chatLoading = false;
+      }
+      state.requestUpdate?.();
     }
+    return result;
   });
-  requests.inFlightHistory = {
+  requests.historyLoad = {
+    phase: "in-flight",
     client,
     connectionEpoch,
     key: requestKey,
     promise,
+    sessionKey,
+    requestAgentId,
+    startup,
   };
   return promise;
+}
+
+export function resumePendingChatHistoryLoad(
+  state: ChatState,
+): Promise<ChatHistoryResult | undefined> | undefined {
+  const load = getChatHistoryLoadState(state);
+  if (load.phase === "pending-connection" || (load.phase === "failed" && load.retryable)) {
+    return loadChatHistory(state, { startup: load.startup, deferBranches: true });
+  }
+  return undefined;
+}
+
+export function retryChatHistoryLoad(
+  state: ChatState,
+): Promise<ChatHistoryResult | undefined> | undefined {
+  const load = getChatHistoryLoadState(state);
+  if (load.phase !== "failed") {
+    return undefined;
+  }
+  const retry = loadChatHistory(state, { startup: load.startup });
+  state.requestUpdate?.();
+  return retry;
 }
 
 export async function loadOlderChatHistoryPage(
@@ -1918,14 +2042,23 @@ async function loadChatHistoryUncached(
       requestAgentId,
       previousRunId,
     });
-    if (isMissingOperatorReadScopeError(err)) {
+    const missingReadScope = isMissingOperatorReadScopeError(err);
+    if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
-      setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
-    } else {
-      setChatError(state, formatUiError(err));
     }
+    getChatHistoryPaneRequests(state).historyLoad = {
+      phase: "failed",
+      sessionKey,
+      requestAgentId,
+      startup: method === "chat.startup",
+      message: missingReadScope
+        ? formatMissingOperatorReadScopeMessage("existing chat history")
+        : formatUiError(err),
+      retryable: err instanceof GatewayRequestError && err.retryable,
+    };
+    state.requestUpdate?.();
   } finally {
     if (ownsChatHistoryRequest(state, ownership)) {
       state.chatLoading = false;

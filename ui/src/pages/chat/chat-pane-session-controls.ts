@@ -174,7 +174,7 @@ export function renderChatPaneComposerControls(params: {
           state.connectionEpoch === connectionEpoch &&
           scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
         try {
-          state.chatError = null;
+          state.chatError = state.lastError = null;
           const patched = await patchChatSessionSettings(
             state,
             sessionKey,
@@ -203,7 +203,7 @@ export function renderChatPaneComposerControls(params: {
           if (!ownsSelection()) {
             return;
           }
-          state.chatError = t("chat.permissionControls.updateFailed", {
+          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
           state.requestUpdate?.();

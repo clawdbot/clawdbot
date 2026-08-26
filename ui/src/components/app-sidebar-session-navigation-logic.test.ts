@@ -286,6 +286,11 @@ describe("sidebar navigation lineage ownership", () => {
     { name: "exact", rootKey: child.key, cachedKey: child.key },
     { name: "equivalent", rootKey: child.key.toUpperCase(), cachedKey: child.key },
     { name: "main alias", rootKey: "main", cachedKey: "agent:main:main" },
+    {
+      name: "case-preserving Matrix alias",
+      rootKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org",
+      cachedKey: "agent:ops:matrix:channel:!Room:Example.Org",
+    },
   ])(
     "keeps the canonical root authoritative over an $name cached child key",
     async ({ rootKey, cachedKey }) => {
@@ -332,6 +337,18 @@ describe("sidebar navigation lineage ownership", () => {
       expect(request).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps case-sensitive Matrix and Signal session identifiers distinct", () => {
+    const keys = [
+      "agent:ops:matrix:channel:!Room:Example.Org",
+      "agent:ops:matrix:channel:!room:example.org",
+      "agent:ops:signal:group:AbC123=",
+      "agent:ops:signal:group:abc123=",
+    ];
+    const rows = keys.map((key) => ({ ...child, key }));
+
+    expect([...collectKnownSessionRows(rows, {}).keys()]).toEqual(keys);
+  });
 
   it("projects a known child exactly once under its explicit navigation parent", () => {
     const projected = projectSessionTree({

@@ -534,11 +534,12 @@ export function collectKnownSidebarSessionGroups(
   rows: readonly GatewaySessionRow[],
 ): string[] {
   const catalogSet = new Set(catalog);
-  const discovered = rows
-    .map((row) => normalizeOptionalString(row.category))
-    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
-    .toSorted((a, b) => a.localeCompare(b));
-  return [...catalog, ...new Set(discovered)];
+  const discovered = new Set(
+    rows
+      .map((row) => normalizeOptionalString(row.category))
+      .filter((name): name is string => typeof name === "string" && !catalogSet.has(name)),
+  );
+  return [...catalog, ...[...discovered].toSorted((a, b) => a.localeCompare(b))];
 }
 
 /** Depth-first search across a projected session tree, including descendants.
