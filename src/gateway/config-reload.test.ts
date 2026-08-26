@@ -437,6 +437,19 @@ describe("buildGatewayReloadPlan", () => {
     });
   });
 
+  it("hot reloads Skill Workshop autonomous mode changes", () => {
+    const path = "skills.workshop.autonomous.mode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+      noopPaths: [],
+      reconcileSkillReviewJobs: true,
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
   it.each([
     { path: "agents.entries", restartHeartbeat: true },
     { path: "agents.ownership", restartHeartbeat: false },

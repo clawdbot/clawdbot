@@ -69,6 +69,7 @@ export type ChatPageHost = ChatHost &
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
+    chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
     modelAuthStatusResult: ModelAuthStatusResult | null;

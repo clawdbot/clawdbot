@@ -38,8 +38,7 @@ import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
 function selectSetupModelId(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
-  const healthy = discovery.models.filter((model) => !model.failed);
-  const candidates = healthy.length > 0 ? healthy : discovery.models;
+  const candidates = discovery.models.filter((model) => !model.failed);
   const ready = candidates.filter(
     (model) => model.status === "loaded" || model.status === "sleeping",
   );
@@ -224,28 +223,33 @@ async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
   }
 }
 
-async function discoverForSetup(params: {
-  config: OpenClawConfig;
-  baseUrl: string;
-  env?: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-}): Promise<LlamaServerDiscoveryResult> {
-  const providerConfig = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const headers = await resolveLlamaServerProviderHeaders({
-    config: params.config,
-    env: params.env,
-    headers: providerConfig?.headers,
-  });
-  const resolvedApiKey = !hasLlamaServerAuthorizationHeader(headers)
-    ? await resolveLlamaServerRuntimeApiKey({ config: params.config })
-    : undefined;
-  return await discoverLlamaServer({
-    baseUrl: params.baseUrl,
-    apiKey: resolvedApiKey,
-    headers,
-    signal: params.signal,
-    cacheTtlMs: 0,
-  });
+async function discoverForSetup(
+  ctx: ProviderAppGuidedSetupContext,
+): Promise<Extract<LlamaServerDiscoveryResult, { kind: "success" }> | null> {
+  const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (provider?.localService) {
+    return null;
+  }
+  try {
+    const headers = await resolveLlamaServerProviderHeaders({
+      config: ctx.config,
+      env: ctx.env,
+      headers: provider?.headers,
+    });
+    const apiKey = !hasLlamaServerAuthorizationHeader(headers)
+      ? await resolveLlamaServerRuntimeApiKey({ config: ctx.config })
+      : undefined;
+    const discovery = await discoverLlamaServer({
+      baseUrl: provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
+      apiKey,
+      headers,
+      signal: ctx.signal,
+      cacheTtlMs: 0,
+    });
+    return discovery.kind === "success" ? discovery : null;
+  } catch {
+    return null;
+  }
 }
 
 async function discoverWithAccess(params: {
@@ -267,23 +271,8 @@ async function discoverWithAccess(params: {
 export async function detectLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext,
 ): Promise<{ modelRef: string; detail?: string } | null> {
-  const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (provider?.localService) {
-    return null;
-  }
-  const baseUrl = provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN;
-  let discovery: LlamaServerDiscoveryResult;
-  try {
-    discovery = await discoverForSetup({
-      config: ctx.config,
-      baseUrl,
-      env: ctx.env,
-      signal: ctx.signal,
-    });
-  } catch {
-    return null;
-  }
-  if (discovery.kind !== "success") {
+  const discovery = await discoverForSetup(ctx);
+  if (!discovery) {
     return null;
   }
   const modelId = selectSetupModelId(discovery);
@@ -300,22 +289,8 @@ export async function detectLlamaServerSetup(
 export async function prepareLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext & { modelRef: string },
 ): Promise<ProviderAuthResult | null> {
-  const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (provider?.localService) {
-    return null;
-  }
-  let discovery: LlamaServerDiscoveryResult;
-  try {
-    discovery = await discoverForSetup({
-      config: ctx.config,
-      baseUrl: provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
-      env: ctx.env,
-      signal: ctx.signal,
-    });
-  } catch {
-    return null;
-  }
-  if (discovery.kind !== "success") {
+  const discovery = await discoverForSetup(ctx);
+  if (!discovery) {
     return null;
   }
   const prefix = `${LLAMA_CPP_PROVIDER_ID}/`;

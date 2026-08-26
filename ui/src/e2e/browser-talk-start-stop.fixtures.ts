@@ -19,6 +19,7 @@ export function videoTalkCatalog(activeProvider: "google" | "openai") {
   return {
     realtime: {
       activeProvider,
+      ready: true,
       providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
     },
   };

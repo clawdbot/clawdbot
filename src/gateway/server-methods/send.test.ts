@@ -1341,7 +1341,6 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
       await maintenance.stopMediaCleanup();
-      maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
   });
@@ -1394,7 +1393,6 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
       await maintenance.stopMediaCleanup();
-      maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
   });

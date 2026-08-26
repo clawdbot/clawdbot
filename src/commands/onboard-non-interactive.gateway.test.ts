@@ -112,6 +112,21 @@ describe("logNonInteractiveOnboardingFailure", () => {
         commands: ["doctor --fix"],
       },
       {
+        detail: "Cannot find package 'typebox' imported from /app/plugin.mjs",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "ERR_MODULE_NOT_FOUND",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          lastGatewayError: "Cannot find package '@openclaw/example' imported from /app/plugin.mjs",
+        },
+        commands: ["doctor --fix"],
+      },
+      {
         detail: "connect ECONNREFUSED",
         diagnostics: {
           service: {

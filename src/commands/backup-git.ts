@@ -13,10 +13,13 @@ import {
   restoreGitBackupRef,
   verifyGitBackupRef,
 } from "../snapshot/git-backup.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveBackupAgentRoot, resolveRequiredBackupPath } from "./backup-shared.js";
+import {
+  recordBackupOutcomeBestEffort,
+  resolveBackupAgentRoot,
+  resolveRequiredBackupPath,
+} from "./backup-shared.js";
 
 type BackupGitCreateOptions = {
   repository?: string;
@@ -107,32 +110,6 @@ function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
     : { role: "agent", agentId: normalizeAgentId(agent) };
 }
 
-function recordGitOutcomeBestEffort(
-  runtime: RuntimeEnv,
-  params: {
-    repositoryPath: string;
-    status: "ok" | "failed";
-    target?: string;
-    error?: string;
-    pushFailed?: true;
-  },
-): void {
-  try {
-    recordBackupRunOutcome({
-      kind: "git",
-      archivePath: params.repositoryPath,
-      status: params.status,
-      target: params.target,
-      error: params.error,
-      pushFailed: params.pushFailed,
-    });
-  } catch (error) {
-    runtime.error(
-      `Warning: the Git backup outcome could not be recorded: ${formatErrorMessage(error)}`,
-    );
-  }
-}
-
 export async function backupGitInitCommand(
   runtime: RuntimeEnv,
   options: { repository?: string; remote?: string; json?: boolean },
@@ -166,8 +143,9 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     });
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
-    recordGitOutcomeBestEffort(runtime, {
-      repositoryPath,
+    recordBackupOutcomeBestEffort(runtime, {
+      kind: "git",
+      archivePath: repositoryPath,
       status: "ok",
       target: result.commit,
       error: result.pushWarning,
@@ -185,8 +163,9 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     }
     return result;
   } catch (error) {
-    recordGitOutcomeBestEffort(runtime, {
-      repositoryPath,
+    recordBackupOutcomeBestEffort(runtime, {
+      kind: "git",
+      archivePath: repositoryPath,
       status: "failed",
       error: formatErrorMessage(error),
     });

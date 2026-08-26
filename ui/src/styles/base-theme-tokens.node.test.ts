@@ -73,4 +73,21 @@ describe("Control UI base theme tokens", () => {
 
     expect(violations).toEqual([]);
   });
+
+  it("routes every Web Awesome switch through the shared accent", () => {
+    const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+    const localOverrides = collectFiles(stylesDir, [".css"])
+      .filter((filePath) => !filePath.endsWith("base.css"))
+      .filter((filePath) =>
+        /[^{}]*wa-switch[^{}]*\{[^}]*--wa-form-control-activated-color:/su.test(
+          fs.readFileSync(filePath, "utf8"),
+        ),
+      )
+      .map((filePath) => path.relative(stylesDir, filePath));
+
+    expect(baseCss).toMatch(
+      /wa-switch\s*\{[^}]*--wa-form-control-activated-color:\s*var\(--accent\);[^}]*\}/su,
+    );
+    expect(localOverrides).toEqual([]);
+  });
 });

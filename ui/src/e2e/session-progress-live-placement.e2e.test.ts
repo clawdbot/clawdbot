@@ -100,7 +100,7 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        const expectVisibleLastActivity = async (placement: "composer" | "dock" | "rail") => {
+        const expectVisibleLastActivity = async (placement: "composer" | "rail") => {
           const card = visiblePane.locator(`[data-progress-card-placement="${placement}"]`);
           const timestamp = card.locator("time");
           await expect
@@ -122,34 +122,12 @@ suite.define(() => {
             cardBounds.x + cardBounds.width,
           );
         };
-        // Wide enough for the composer gutter to hold the card: it docks beside
-        // the composer instead of stacking inside it.
         await page.setViewportSize({ height: 900, width: 1600 });
-        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
-        await expect.poll(() => dock.count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
-          .toBe(0);
-        await expect
-          .poll(async () => {
-            const dockBounds = await dock.boundingBox();
-            const composerBounds = await visiblePane
-              .locator(".agent-chat__composer-shell")
-              .boundingBox();
-            const threadBounds = await visiblePane.locator(".chat-thread").boundingBox();
-            if (!dockBounds || !composerBounds || !threadBounds) {
-              return false;
-            }
-            // Clear of the centered composer, and anchored to the top of the
-            // conversation rather than floating above the composer.
-            return (
-              dockBounds.x >= composerBounds.x + composerBounds.width &&
-              dockBounds.y < threadBounds.y + threadBounds.height / 2
-            );
-          })
-          .toBe(true);
-        await expectVisibleLastActivity("dock");
-        await captureProof(page, "dock-beside-composer.png");
+          .toBe(1);
+        await expectVisibleLastActivity("composer");
+        await captureProof(page, "composer-attached-wide.png");
 
         await page.setViewportSize({ height: 900, width: 1280 });
         await openChatSidePanelType(page, "Side chat");
@@ -192,81 +170,7 @@ suite.define(() => {
     );
   });
 
-  it("stacks the docked card under a suggestion tray instead of letting it be covered", async () => {
-    const sessionKey = "agent:main:progress-stacked";
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1600 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "progressCard.get",
-            "taskSuggestions.list",
-            "taskSuggestions.accept",
-            "taskSuggestions.dismiss",
-          ],
-          methodResponses: {
-            "progressCard.get": {
-              card: {
-                revision: 1,
-                sessionKey,
-                steps: [
-                  { step: "Inspect", status: "completed" },
-                  { step: "Implement", status: "in_progress" },
-                ],
-                updatedAt: 1,
-              },
-            },
-            "taskSuggestions.list": {
-              suggestions: [
-                {
-                  id: "task_stacked",
-                  title: "Follow-up worth keeping",
-                  prompt: "Inspect the related implementation and tests.",
-                  tldr: "This tray must not cover the progress card.",
-                  cwd: "/projects/example",
-                  sessionKey: "main",
-                  agentId: "main",
-                  createdAt: 1,
-                },
-              ],
-            },
-            "sessions.list": chatSessionListResponse([
-              { key: sessionKey, kind: "direct", label: "Stacked progress", updatedAt: 1 },
-            ]),
-          },
-          sessionKey,
-        });
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        const tray = visiblePane.locator(".task-suggestions");
-        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
-        await tray.waitFor({ state: "visible", timeout: 10_000 });
-        await expect.poll(() => dock.count()).toBe(1);
-        await expect
-          .poll(async () => {
-            const trayBounds = await tray.boundingBox();
-            const dockBounds = await dock.boundingBox();
-            if (!trayBounds || !dockBounds) {
-              return false;
-            }
-            // The card sits fully below the tray, not underneath it.
-            return dockBounds.y >= trayBounds.y + trayBounds.height;
-          })
-          .toBe(true);
-        await captureProof(page, "stacked-under-tray.png");
-      },
-    );
-  });
-
-  it("centers the completed marker and dismisses the card across disclosure and reload", async () => {
+  it("presents completed disclosure states and dismisses the card across reload", async () => {
     const sessionKey = "agent:main:progress-complete";
     const plan = [
       { step: "Inspected owner", status: "completed" },
@@ -334,7 +238,12 @@ suite.define(() => {
           };
           await expectMarkerCentered();
           await card.locator("summary").click();
-          await expectMarkerCentered();
+          await expect
+            .poll(() => card.locator(".session-progress-card__summary-title").isVisible())
+            .toBe(true);
+          await expect
+            .poll(() => card.locator(".session-progress-card__current-marker").isVisible())
+            .toBe(false);
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
           await gateway.setMethodResponse("progressCard.put", {

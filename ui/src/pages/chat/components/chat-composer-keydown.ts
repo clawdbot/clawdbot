@@ -1,12 +1,12 @@
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
+import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
-  handleSkillMenuKeydown,
-  handleSkillTokenKeydown,
-  type SkillMenuHost,
-} from "./chat-composer-skill-menu.ts";
-import { handleSlashMenuKeydown, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
+  handleInlineSlashArgKeydown,
+  handleSlashMenuKeydown,
+  type SlashMenuHost,
+} from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
@@ -47,11 +47,14 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (handleSkillTokenKeydown(event)) {
+    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
       return;
     }
 
-    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
+    if (
+      props.connected &&
+      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+    ) {
       return;
     }
 

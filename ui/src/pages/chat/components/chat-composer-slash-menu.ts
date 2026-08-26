@@ -1,12 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   SLASH_COMMANDS,
+  executesInlineImmediately,
+  findInlineSlashCompletion,
   getSlashCommandCategoryLabel,
   getSlashCommandCompletions,
   getSlashCommandDescription,
+  type InlineSlashCompletion,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -15,14 +19,24 @@ import {
   scrollActiveMenuOptionIntoView,
   syncComposerMenuScroll,
 } from "./chat-composer-dom.ts";
+import {
+  beginInlineFreeformSlashArguments,
+  commitInlineSlashSelection,
+  findDirectInlineSlashArgumentInvocation,
+  hasActiveInlineSlashArgumentPrefix,
+  removeInlineSlashSelection,
+} from "./chat-composer-inline-slash.ts";
+import { getSlashArgOptionId, getSlashCommandOptionId } from "./chat-composer-slash-menu-dom.ts";
 
 export type SlashMenuState = {
+  slashCommandDispatchConnected: boolean;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
-  slashMenuMode: "command" | "args";
+  slashMenuMode: "command" | "args" | "freeform-args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
+  slashMenuCompletion: InlineSlashCompletion | null;
   slashCommandRefreshPending: boolean;
 };
 
@@ -30,20 +44,25 @@ export type SlashMenuHost = {
   paneId: string;
   getDraft: () => string;
   commitDraft: (next: string) => void;
+  getTextarea: () => HTMLTextAreaElement | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
+  canRunInlineCommand: () => boolean;
+  runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
 };
 
 export function createSlashMenuState(): SlashMenuState {
   return {
+    slashCommandDispatchConnected: false,
     slashMenuOpen: false,
     slashMenuItems: [],
     slashMenuIndex: 0,
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
+    slashMenuCompletion: null,
     slashCommandRefreshPending: false,
   };
 }
@@ -54,6 +73,7 @@ export function resetSlashMenuState(state: SlashMenuState): void {
   state.slashMenuCommand = null;
   state.slashMenuArgItems = [];
   state.slashMenuItems = [];
+  state.slashMenuCompletion = null;
 }
 
 function hasVisibleSlashMenuState(state: SlashMenuState): boolean {
@@ -92,7 +112,15 @@ function requestSlashCommandRefresh(
     .finally(() => {
       state.slashCommandRefreshPending = false;
       const nextValue = host.getDraft();
-      if (!nextValue.startsWith("/")) {
+      if (state.slashMenuMode === "freeform-args" && state.slashMenuCompletion?.inline) {
+        updateSlashMenu(nextValue, state, host, requestUpdate, { skipSlashIntent: true });
+        return;
+      }
+      if (state.slashMenuMode === "args" && state.slashMenuCompletion?.inline) {
+        return;
+      }
+      const caret = host.getTextarea()?.selectionStart ?? nextValue.length;
+      if (!findInlineSlashCompletion(nextValue, caret)) {
         closeSlashMenuIfNeeded(state, requestUpdate);
         return;
       }
@@ -107,6 +135,21 @@ export function updateSlashMenu(
   requestUpdate: () => void,
   opts: { skipSlashIntent?: boolean } = {},
 ): void {
+  if (
+    state.slashMenuMode === "freeform-args" &&
+    state.slashMenuCompletion?.inline &&
+    state.slashMenuCommand
+  ) {
+    const caret = host.getTextarea()?.selectionStart ?? value.length;
+    const completion = state.slashMenuCompletion;
+    if (hasActiveInlineSlashArgumentPrefix(value, caret, completion, state.slashMenuCommand.name)) {
+      state.slashMenuCompletion.end = caret;
+      requestUpdate();
+      return;
+    }
+    resetSlashMenuState(state);
+  }
+
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
     if (!opts.skipSlashIntent) {
@@ -133,6 +176,7 @@ export function updateSlashMenu(
         state.slashMenuOpen = true;
         state.slashMenuIndex = 0;
         state.slashMenuItems = [];
+        state.slashMenuCompletion = null;
         requestUpdate();
         return;
       }
@@ -141,28 +185,67 @@ export function updateSlashMenu(
     return;
   }
 
-  const match = value.match(/^\/(\S*)$/);
-  if (match) {
-    if (!opts.skipSlashIntent) {
-      requestSlashCommandRefresh(state, host, requestUpdate);
-    }
-    const items = getSlashCommandCompletions(match[1] ?? "", { showAll: true }).filter(
-      (command) => host.commandFilter?.(command) ?? true,
-    );
-    state.slashMenuItems = [
-      ...items.filter((command) => command.source !== "skill"),
-      ...items.filter((command) => command.source === "skill"),
-    ];
-    state.slashMenuOpen = items.length > 0;
-    state.slashMenuIndex = 0;
-    state.slashMenuMode = "command";
-    state.slashMenuCommand = null;
-    state.slashMenuArgItems = [];
-  } else {
+  const caret = host.getTextarea()?.selectionStart ?? value.length;
+  const completion = findInlineSlashCompletion(value, caret);
+  if (!completion) {
     closeSlashMenuIfNeeded(state, requestUpdate);
     return;
   }
+  if (!opts.skipSlashIntent) {
+    requestSlashCommandRefresh(state, host, requestUpdate);
+  }
+  const items = getSlashCommandCompletions(completion.query, {
+    showAll: true,
+    inlineOnly: completion.inline,
+    allowImmediateInlineCommands: host.canRunInlineCommand() && !completion.skillOnly,
+  }).filter((command) => host.commandFilter?.(command) ?? true);
+  state.slashMenuCompletion = completion;
+  state.slashMenuItems = [
+    ...items.filter((command) => command.source !== "skill"),
+    ...items.filter((command) => command.source === "skill"),
+  ];
+  state.slashMenuOpen = items.length > 0;
+  state.slashMenuIndex = 0;
+  state.slashMenuMode = "command";
+  state.slashMenuCommand = null;
+  state.slashMenuArgItems = [];
   requestUpdate();
+}
+
+function beginInlineSlashArguments(
+  cmd: SlashCommandDef,
+  state: SlashMenuState,
+  host: SlashMenuHost,
+  requestUpdate: () => void,
+): boolean {
+  if (
+    !state.slashMenuCompletion?.inline ||
+    cmd.source === "skill" ||
+    !cmd.args ||
+    !host.canRunInlineCommand() ||
+    !host.runInlineCommand
+  ) {
+    return false;
+  }
+  state.slashMenuCommand = cmd;
+  state.slashMenuIndex = 0;
+  state.slashMenuItems = [];
+  const argOptions = host.resolveArgOptions(cmd);
+  if (argOptions.length > 0) {
+    state.slashMenuMode = "args";
+    state.slashMenuArgItems = argOptions;
+    state.slashMenuOpen = true;
+    requestUpdate();
+    return true;
+  }
+  if (!beginInlineFreeformSlashArguments(cmd.name, state, host)) {
+    return false;
+  }
+  state.slashMenuMode = "freeform-args";
+  state.slashMenuArgItems = [];
+  state.slashMenuOpen = false;
+  requestUpdate();
+  return true;
 }
 
 function selectSlashCommand(
@@ -170,7 +253,32 @@ function selectSlashCommand(
   state: SlashMenuState,
   host: SlashMenuHost,
   requestUpdate: () => void,
-) {
+): void {
+  if (cmd.source !== "skill" && !host.canRunInlineCommand() && state.slashMenuCompletion?.inline) {
+    return;
+  }
+  const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
+  if (beginInlineSlashArguments(cmd, state, host, requestUpdate)) {
+    return;
+  }
+  if (
+    state.slashMenuCompletion?.inline &&
+    executesInlineImmediately(cmd) &&
+    host.canRunInlineCommand() &&
+    host.runInlineCommand &&
+    removeInlineSlashSelection(state, host)
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
+    host.runInlineCommand(`/${cmd.name}`);
+    return;
+  }
+  if (commitInlineSlashSelection(inlineReplacement, state, host)) {
+    resetSlashMenuState(state);
+    requestUpdate();
+    return;
+  }
+
   const argOptions = host.resolveArgOptions(cmd);
   if (argOptions.length > 0) {
     host.commitDraft(`/${cmd.name} `);
@@ -183,7 +291,6 @@ function selectSlashCommand(
     requestUpdate();
     return;
   }
-
   if (cmd.executeLocal && !cmd.args) {
     resetSlashMenuState(state);
     host.commitDraft(`/${cmd.name}`);
@@ -199,7 +306,16 @@ function tabCompleteSlashCommand(
   state: SlashMenuState,
   host: SlashMenuHost,
   requestUpdate: () => void,
-) {
+): void {
+  const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
+  if (beginInlineSlashArguments(cmd, state, host, requestUpdate)) {
+    return;
+  }
+  if (commitInlineSlashSelection(inlineReplacement, state, host)) {
+    resetSlashMenuState(state);
+    requestUpdate();
+    return;
+  }
   const argOptions = host.resolveArgOptions(cmd);
   if (argOptions.length > 0) {
     host.commitDraft(`/${cmd.name} `);
@@ -223,14 +339,119 @@ function selectSlashArg(
   host: SlashMenuHost,
   requestUpdate: () => void,
   run: boolean,
-) {
-  const cmdName = state.slashMenuCommand?.name ?? "";
+): void {
+  const command = state.slashMenuCommand;
+  if (command?.source !== "skill" && !host.canRunInlineCommand()) {
+    return;
+  }
+  const cmdName = command?.name ?? "";
+  if (
+    run &&
+    state.slashMenuCompletion?.inline &&
+    command &&
+    executesInlineImmediately(command) &&
+    host.canRunInlineCommand() &&
+    host.runInlineCommand &&
+    removeInlineSlashSelection(state, host)
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
+    host.runInlineCommand(`/${cmdName} ${arg}`);
+    return;
+  }
+  if (
+    state.slashMenuCompletion?.inline &&
+    (!run || !command || !executesInlineImmediately(command)) &&
+    commitInlineSlashSelection(`/${cmdName} ${arg}`, state, host)
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
+    return;
+  }
   resetSlashMenuState(state);
   host.commitDraft(`/${cmdName} ${arg}`);
   if (run) {
     host.runCommand();
   }
   requestUpdate();
+}
+
+function submitInlineSlashArgument(
+  state: SlashMenuState,
+  host: SlashMenuHost,
+  requestUpdate: () => void,
+): boolean {
+  const command = state.slashMenuCommand;
+  const completion = state.slashMenuCompletion;
+  if (
+    state.slashMenuMode !== "freeform-args" ||
+    !completion?.inline ||
+    !command ||
+    !executesInlineImmediately(command) ||
+    !host.canRunInlineCommand() ||
+    !host.runInlineCommand
+  ) {
+    return false;
+  }
+  const current = host.getTextarea()?.value ?? host.getDraft();
+  const argumentStart = completion.argumentStart ?? completion.start + `/${command.name} `.length;
+  const args = current.slice(argumentStart, completion.end).trim();
+  if (!removeInlineSlashSelection(state, host)) {
+    return false;
+  }
+  resetSlashMenuState(state);
+  requestUpdate();
+  host.runInlineCommand(`/${command.name}${args ? ` ${args}` : ""}`);
+  return true;
+}
+
+function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
+  if (!host.canRunInlineCommand() || !host.runInlineCommand) {
+    return false;
+  }
+  const current = host.getTextarea()?.value ?? host.getDraft();
+  const caret = host.getTextarea()?.selectionStart ?? current.length;
+  const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
+  if (!invocation) {
+    return false;
+  }
+  state.slashMenuMode = "freeform-args";
+  state.slashMenuCommand = invocation.command;
+  state.slashMenuCompletion = invocation.completion;
+  return true;
+}
+
+export function handleInlineSlashArgKeydown(
+  event: KeyboardEvent,
+  state: SlashMenuState,
+  host: SlashMenuHost,
+  requestUpdate: () => void,
+  sendShortcut: ChatSendShortcut,
+): boolean {
+  if (event.key === "Escape") {
+    if (state.slashMenuMode !== "freeform-args" || !state.slashMenuCompletion?.inline) {
+      return false;
+    }
+    event.preventDefault();
+    resetSlashMenuState(state);
+    requestUpdate();
+    return true;
+  }
+  const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+  if (event.key !== "Enter" || event.shiftKey || !sendShortcutMatches) {
+    return false;
+  }
+  if (
+    (state.slashMenuMode !== "freeform-args" || !state.slashMenuCompletion?.inline) &&
+    !beginDirectInlineSlashArgument(state, host)
+  ) {
+    return false;
+  }
+  if (!state.slashMenuCommand || !executesInlineImmediately(state.slashMenuCommand)) {
+    return false;
+  }
+  event.preventDefault();
+  return submitInlineSlashArgument(state, host, requestUpdate);
 }
 
 export function handleSlashMenuKeydown(
@@ -282,27 +503,8 @@ export function handleSlashMenuKeydown(
   return true;
 }
 
-function slashOptionIdSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "") || "item"
-  );
-}
-
 function syncComposerMenuScrollEvent(event: Event): void {
   syncComposerMenuScroll(event.currentTarget instanceof Element ? event.currentTarget : undefined);
-}
-function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
-  return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
-}
-
-function getSlashArgOptionId(paneId: string, commandName: string, arg: string): string {
-  return paneDomId(
-    paneId,
-    `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
-  );
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {

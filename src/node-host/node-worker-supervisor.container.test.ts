@@ -617,6 +617,47 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
+  it("cancels a claimed container launch when its invocation aborts during creation", async () => {
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
+    const fixture = containerFixture({
+      capacity: 1,
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+    });
+    const input = testWorkerLaunchInput(fixture.workspaceDir, "container-creation-abort", "wait");
+    const createMarker = path.join(fixture.engineRoot, "hold-create");
+    const store = new NodeWorkerLaunchStore({ env: fixture.env });
+    const controller = new AbortController();
+    fs.writeFileSync(createMarker, "hold");
+
+    try {
+      const launch = fixture.supervisor.launch(input, endpoint, controller.signal);
+      await vi.waitFor(
+        () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
+        { timeout: 5_000 },
+      );
+      const container = fixture.events().find((event) => event.argv[0] === "create")?.container;
+      if (!container) {
+        throw new Error("expected a claimed container under creation");
+      }
+      expect(store.get(input.launchId)?.state).toBe("pending");
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+
+      controller.abort(new Error("invoke cancelled"));
+      fs.unlinkSync(createMarker);
+      await launch.catch(() => undefined);
+
+      expect(store.get(input.launchId)).toMatchObject({ state: "cancelled" });
+      expect(fixture.exists(container.id)).toBe(false);
+      expect(fs.existsSync(path.join(fixture.workspaceDir, "worker-started"))).toBe(false);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
+    } finally {
+      if (fs.existsSync(createMarker)) {
+        fs.unlinkSync(createMarker);
+      }
+      await fixture.supervisor.close();
+    }
+  });
+
   it.each([
     ["cancel", "cancelled"],
     ["close", "interrupted"],

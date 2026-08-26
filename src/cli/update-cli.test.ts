@@ -1517,7 +1517,7 @@ describe("update-cli", () => {
       delete process.env[key];
     }
     restartHealthTestControl.snapshot = undefined;
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     serviceEnabled.mockResolvedValue(true);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);

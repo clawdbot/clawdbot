@@ -965,15 +965,15 @@ suite.define(() => {
         (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
       ),
     ).toBe(true);
-    const read = await gateway.waitForRequest("sessions.catalog.read");
-    expect(read.params).toMatchObject({
+    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
       agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
     });
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks");
+    await composer.fill("continue with the final checks /status");
+    expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
     await gateway.setMethodResponse("sessions.list", {
       count: 1,
       defaults: {
@@ -1007,7 +1007,7 @@ suite.define(() => {
     const sent = await gateway.waitForRequest("chat.send");
     expect(sent.params).toMatchObject({
       sessionKey: "agent:main:adopted-codex",
-      message: "continue with the final checks",
+      message: "continue with the final checks /status",
     });
     await expect
       .poll(() => new URL(page.url()).pathname)

@@ -56,15 +56,15 @@ function modeLabel(mode: SessionPermissionMode | null | undefined): string {
 function modeIcon(mode: SessionPermissionMode | null): unknown {
   switch (mode) {
     case "read-only":
-      return icons.lock;
+      return icons.shieldEllipsis;
     case "guarded":
-      return icons.shieldCheck;
+      return icons.shieldLock;
     case "workspace":
-      return icons.folder;
+      return icons.shieldCog;
     case "full":
-      return icons.shieldX;
+      return icons.shieldAlert;
     default:
-      return icons.shieldQuestion;
+      return icons.shieldCheck;
   }
 }
 
@@ -163,13 +163,13 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
               </span>
             </span>
             <span slot="details" class="chat-controls__permission-option-state" aria-hidden="true">
-              ${selected
+              ${selected || locked
                 ? nothing
                 : html`<span class="chat-controls__permission-shortcut">${index + 1}</span>`}
               ${locked
                 ? html`<span class="chat-controls__permission-lock">${icons.lock}</span>`
                 : nothing}
-              ${selected
+              ${selected && !locked
                 ? html`<span class="chat-controls__inline-select-check">${icons.check}</span>`
                 : nothing}
             </span>

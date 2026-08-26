@@ -30,7 +30,7 @@ import {
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
-const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";

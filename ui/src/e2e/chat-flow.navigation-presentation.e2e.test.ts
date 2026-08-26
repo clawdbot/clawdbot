@@ -586,7 +586,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const trigger = page.locator("summary.context-ring");
       await trigger.waitFor({ timeout: 10_000 });
-      expect((await trigger.textContent())?.trim()).toBe("~95%");
+      expect((await trigger.textContent())?.trim()).toBe("");
       expect(await trigger.getAttribute("aria-label")).toBe(
         "Session context usage: ~190k of 200k (~95%)",
       );

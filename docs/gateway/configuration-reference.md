@@ -507,9 +507,10 @@ See [Plugins](/tools/plugin).
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
   `responsebody`, PDF export, download interception, or batch actions.
-- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; set
-  `cdpUrl` explicitly only for remote CDP profiles or existing-session endpoint
-  attach.
+- Local managed `openclaw` profiles get a `cdpPort` allocated from the managed
+  range when OpenClaw creates the profile. A profile you declare by hand must
+  set `cdpPort` itself, or `cdpUrl` for a remote CDP endpoint; the schema
+  rejects an `openclaw` or `clawd` profile that sets neither.
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.

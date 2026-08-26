@@ -14,22 +14,16 @@ import {
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
 
-export type ChatProgressCardPlacement = "composer" | "dock" | "rail";
-
-/* Narrowest gutter that still clears the composer: the dock is a fixed
- * --chat-progress-dock-width (250px) inside .chat-gutter-stack, which holds it
- * 14px off the pane edge and a --space-3 gap clear of the composer. */
-const PROGRESS_CARD_DOCK_MIN_GUTTER_PX = 280;
+export type ChatProgressCardPlacement = "composer" | "rail";
 
 /** Picks the single live progress-card placement for one chat pane. */
 function chatProgressCardPlacement(params: {
   companionRailVisible: boolean;
-  composerGutter: number;
 }): ChatProgressCardPlacement {
   if (params.companionRailVisible) {
     return "rail";
   }
-  return params.composerGutter >= PROGRESS_CARD_DOCK_MIN_GUTTER_PX ? "dock" : "composer";
+  return "composer";
 }
 
 export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
@@ -45,7 +39,6 @@ export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
   paneWidth: number;
-  composerGutter: number;
   presentationId: string;
   presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
@@ -102,7 +95,6 @@ export function createChatPaneRails(params: {
     companionRailVisible:
       params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
       isSidebarSlotVisible(sidebarLayout, "companion"),
-    composerGutter: params.composerGutter,
   });
   return {
     backgroundTasks,

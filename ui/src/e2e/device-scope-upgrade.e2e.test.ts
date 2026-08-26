@@ -44,6 +44,15 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function gatewayPhase(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+    };
+    return app.runtime?.context.gateway.snapshot.phase;
+  });
+}
+
 async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
@@ -134,7 +143,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   it("moves limited access into the Inbox and persists its dismissal", async () => {
     const desktopContext = await createContext();
     const desktop = await desktopContext.newPage();
-    await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
+    const gateway = await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
     await desktop.goto(`${server.baseUrl}activity`);
 
     expect(await desktop.locator(".scope-upgrade-status-trigger").count()).toBe(0);
@@ -150,6 +159,12 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
     await desktopPanel.getByRole("tab", { name: "System", exact: true }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access-dismissed.png");
+
+    await gateway.setOnline(false);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("reconnecting");
+    await gateway.setOnline(true);
+    await expect.poll(() => gatewayPhase(desktop)).toBe("connected");
+    await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
 
     await desktop.reload();
     await desktop.locator("openclaw-app-shell").waitFor();

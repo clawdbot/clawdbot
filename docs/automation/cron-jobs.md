@@ -173,6 +173,49 @@ openclaw automations add \
   --session isolated
 ```
 
+## Promoting a repeated job into an automation
+
+Most automations should start as work the agent already did. When you ask for
+substantially the same job several times, the agent offers to turn it into a
+schedule instead of only running it once more. Promotion is preferred over
+building a job from scratch because the proposal inherits a run you already
+read: you know what the output looks like before it starts arriving on a
+schedule.
+
+There is no repetition-detection engine and no new stored history. The agent
+recognizes the repeat from the conversation itself and checks
+`automations(action: "list")` for an existing job before proposing a new one,
+so a routine you already created is not duplicated. The prompting that drives
+this is gated on the automations tool, so agents without it never offer a
+routine they could not create.
+
+The confirmation restates the schedule and the task in plain words before
+anything is created, for example: "Every weekday at 07:00 Europe/Vienna, I
+summarize overnight updates and post them here." Confirm that sentence, not a
+cron expression.
+
+On confirmation the agent:
+
+1. Creates the job, with delivery defaulting to the channel and thread where you
+   asked.
+2. Immediately runs it once with `run` in `force` mode as a visible test,
+   delivered to that same thread, so you see real output well before the first
+   scheduled occurrence.
+3. Removes the job and tells you if that test fails.
+
+The job is created **enabled**, not disabled-pending-approval, and that is a
+deliberate safety choice. The scheduler supervises enabled jobs: a failing one
+raises a failure notification and is auto-disabled after repeated errors, with
+the reason recorded and the owner notified. Nothing supervises a disabled job.
+A job left disabled waiting for a confirmation that never arrives is invisible
+to every guard, hidden from the default `automations list`, and will never fire
+or explain itself — a silent non-outcome, which is a worse failure than a job
+that runs and visibly complains.
+
+Your confirmation still gates creation, so nothing is scheduled behind your
+back, and the test run is a real run with real delivery rather than a rendered
+preview: what you approve is exactly what the schedule will produce.
+
 ## Payloads
 
 Every job carries exactly one payload kind, chosen by flag:
@@ -184,7 +227,9 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `automations list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When automations are disabled, the monitor does not tick and no fallback heartbeat timer runs.
+System-owned payload kinds are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The `skillCollectionReview` kind creates one Skill Workshop review job per writable workspace. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
+
+Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. The Gateway converges these jobs at startup and after config reload. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
 
 ### Agent-turn options
 

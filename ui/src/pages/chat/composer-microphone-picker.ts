@@ -1,9 +1,13 @@
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
 } from "./realtime-talk-input.ts";
+
+export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
 /**
  * Device list behind a composer's microphone control, owned per composer.
@@ -21,6 +25,11 @@ export class ComposerMicrophonePicker {
   private issueValue: RealtimeTalkDeviceIssue | null = null;
   private deviceWatch: (() => void) | null = null;
   private discoveryRequest = 0;
+  private catalogClient: GatewayBrowserClient | null = null;
+  private catalogConnected = false;
+  private catalogRequest = 0;
+  private realtimeStatusValue: ComposerTalkCapabilityStatus = "unknown";
+  private dictationStatusValue: ComposerTalkCapabilityStatus = "unknown";
 
   constructor(private readonly requestUpdate: () => void) {}
 
@@ -40,6 +49,29 @@ export class ComposerMicrophonePicker {
     return this.issueValue;
   }
 
+  get realtimeStatus(): ComposerTalkCapabilityStatus {
+    return this.realtimeStatusValue;
+  }
+
+  get dictationStatus(): ComposerTalkCapabilityStatus {
+    return this.dictationStatusValue;
+  }
+
+  syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
+    if (client === this.catalogClient && connected === this.catalogConnected) {
+      return;
+    }
+    this.catalogClient = client;
+    this.catalogConnected = connected;
+    this.catalogRequest++;
+    if (!client || !connected) {
+      this.realtimeStatusValue = "unknown";
+      this.dictationStatusValue = "unknown";
+      return;
+    }
+    this.loadCatalog(false);
+  }
+
   readonly handleOpen = (): void => {
     if (this.openValue) {
       return;
@@ -47,6 +79,7 @@ export class ComposerMicrophonePicker {
     this.openValue = true;
     this.deviceWatch ??= observeRealtimeTalkDevices(this.discover);
     this.discover();
+    this.loadCatalog();
   };
 
   readonly handleClose = (): void => {
@@ -68,6 +101,11 @@ export class ComposerMicrophonePicker {
   dispose(): void {
     this.release();
     this.discoveryRequest++;
+    this.catalogRequest++;
+    this.catalogClient = null;
+    this.catalogConnected = false;
+    this.realtimeStatusValue = "unknown";
+    this.dictationStatusValue = "unknown";
     this.openValue = false;
     this.loadingValue = false;
   }
@@ -104,4 +142,46 @@ export class ComposerMicrophonePicker {
         this.requestUpdate();
       });
   };
+
+  private loadCatalog(notify = true): void {
+    const client = this.catalogClient;
+    if (!client || !this.catalogConnected) {
+      return;
+    }
+    const request = ++this.catalogRequest;
+    if (this.realtimeStatusValue === "unknown") {
+      this.realtimeStatusValue = "checking";
+    }
+    if (this.dictationStatusValue === "unknown") {
+      this.dictationStatusValue = "checking";
+    }
+    if (notify) {
+      this.requestUpdate();
+    }
+    void client
+      .request<TalkCatalogResult>("talk.catalog", {})
+      .then((catalog) => {
+        if (request !== this.catalogRequest) {
+          return;
+        }
+        this.realtimeStatusValue = catalog.realtime?.ready === true ? "ready" : "unavailable";
+        this.dictationStatusValue = catalog.transcription?.ready === true ? "ready" : "unavailable";
+      })
+      .catch(() => {
+        if (request !== this.catalogRequest) {
+          return;
+        }
+        if (this.realtimeStatusValue === "checking") {
+          this.realtimeStatusValue = "unknown";
+        }
+        if (this.dictationStatusValue === "checking") {
+          this.dictationStatusValue = "unknown";
+        }
+      })
+      .finally(() => {
+        if (request === this.catalogRequest) {
+          this.requestUpdate();
+        }
+      });
+  }
 }

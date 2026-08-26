@@ -1251,29 +1251,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.chat-turn-terminal-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: fit-content;
-  margin-top: 6px;
-  padding: 3px 8px;
-  color: var(--muted);
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  border-radius: var(--radius-full);
-  font-size: var(--control-ui-text-xs);
-}
-
-.chat-turn-terminal-status svg {
-  width: 12px;
-  height: 12px;
-}
-
-.chat-turn-terminal-status--interrupted {
-  display: flex;
-  margin-inline: auto;
-}
-
 .chat-reading-indicator svg {
   width: 18px;
   height: 18px;
@@ -2049,6 +2026,18 @@
   box-shadow:
     0 1px 2px rgb(0 0 0 / 8%),
     0 6px 18px rgb(0 0 0 / 10%);
+}
+
+/* The recap is a quiet postscript under the reply, not a floating status pill.
+   This follows the shared tasks-status rule so its surface geometry cannot win
+   later in the cascade. */
+.chat-tasks-status.chat-turn-recap {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .chat-tasks-status__claw {

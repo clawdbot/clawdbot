@@ -22,7 +22,6 @@ import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../components/markdown-session-links.ts";
 import type { PersonActivityRouting } from "../../components/person-activity-link.ts";
-import { renderSessionProgressCard } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -45,7 +44,8 @@ import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   type ChatPlacementStartupNoticeProps,
-  renderChatViewNotices,
+  renderChatComposerNotices,
+  renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
@@ -108,9 +108,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     waitingApproval?: boolean;
     compactionStatus?: CompactionStatus | null;
     fallbackStatus?: FallbackStatus | null;
-    /* One live placement per view: the pane picks it, so the composer bar and
-     * the right-gutter dock can never both render the same card. */
-    progressCard?: { card: ProgressCard; placement: "composer" | "dock" } | null;
+    progressCard?: ProgressCard | null;
     onDismissProgressCard?: (card: ProgressCard) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
     onGatewayQuestionChange?: () => void;
@@ -153,6 +151,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     offline?: boolean;
     gatewayClient?: GatewayBrowserClient | null;
     composerHoldToRecord?: boolean;
+    onComposerHoldToRecordChange?: (enabled: boolean) => void;
+    onOpenTalkSettings?: () => void;
+    onOpenDictationSettings?: () => void;
     suggestionComposer?: boolean;
     typingActors?: readonly { id: string; label: string; preview?: string }[];
     onTypingChange?: (typing: boolean, preview?: string) => void;
@@ -223,6 +224,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRequestUpdate?: () => void;
     onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     onSlashIntent?: () => void | Promise<void>;
+    onSlashCommand?: (command: string) => void;
     onSend: ChatComposerProps["onSend"];
     onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
@@ -231,7 +233,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onSwitchRealtimeCamera?: () => void;
     onDismissError?: () => void;
     onDismissRealtimeTalkError?: () => void;
-    onDictationError?: (message: string) => void;
     onAbort?: () => void;
     onQueueRemove: (id: string) => void;
     onQueueRetry?: (id: string) => void;
@@ -414,13 +415,20 @@ export function renderChat(props: ChatProps) {
     disabledReasonTone: props.disabledReasonTone,
     disabledBanner: props.disabledBanner,
     runError: props.runError,
+    anchoredNotices: renderChatComposerNotices({
+      runError: props.runError,
+      workspaceConflict: props.workspaceConflict,
+      onDismissWorkspaceConflict: props.onDismissWorkspaceConflict,
+      placementStartup: props.placementStartup,
+      onRetrySessionPlacementStartup: props.onRetrySessionPlacementStartup,
+    }),
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
     waitingApproval: props.waitingApproval,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
-    progressCard: props.progressCard?.placement === "composer" ? props.progressCard.card : null,
+    progressCard: props.progressCard,
     onDismissProgressCard: props.onDismissProgressCard,
     gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
@@ -456,6 +464,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkCameraError: props.realtimeTalkCameraError,
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
+    onComposerHoldToRecordChange: props.onComposerHoldToRecordChange,
+    onOpenTalkSettings: props.onOpenTalkSettings,
+    onOpenDictationSettings: props.onOpenDictationSettings,
     suggestionComposer: props.suggestionComposer,
     typingActors: props.typingActors,
     onTypingChange: props.onTypingChange,
@@ -466,13 +477,13 @@ export function renderChat(props: ChatProps) {
     onRequestUpdate: requestUpdate,
     onHistoryKeydown: props.onHistoryKeydown,
     onSlashIntent: props.onSlashIntent,
+    onSlashCommand: props.onSlashCommand,
     onSend: props.onSend,
     onCompact: props.suggestionComposer ? undefined : props.onCompact,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
-    onDictationError: props.onDictationError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
@@ -489,17 +500,10 @@ export function renderChat(props: ChatProps) {
     onOpenImage: openImmediateImage,
   });
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);
-  const dockedProgressCard =
-    props.progressCard?.placement === "dock"
-      ? renderSessionProgressCard(props.progressCard.card, "dock", props.onDismissProgressCard)
-      : nothing;
-  // One column owns the conversation's top-right gutter. Both members float over
-  // the transcript, so sharing a stack is what stops the wider suggestion tray
-  // from silently covering the progress card when they appear together.
   const gutterStack =
-    taskSuggestionTray === nothing && dockedProgressCard === nothing
+    taskSuggestionTray === nothing
       ? nothing
-      : html`<div class="chat-gutter-stack">${taskSuggestionTray}${dockedProgressCard}</div>`;
+      : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
       ? html`
@@ -614,10 +618,10 @@ export function renderChat(props: ChatProps) {
             <div class="chat-main">
               <div class="chat-main__conversation-column">
                 ${props.header ?? nothing}
-                ${renderChatViewNotices({
+                ${renderChatTopbarNotices({
                   ...props,
-                  error: props.error ?? props.runError?.summary ?? null,
-                  onDismissError: props.error != null ? props.onDismissError : undefined,
+                  error: props.error,
+                  onDismissError: props.onDismissError,
                 })}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">

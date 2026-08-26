@@ -212,10 +212,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const pill = page.locator(".agent-chat__session-overrides-pill");
+      const attachTrigger = page.getByRole("button", { name: "Add attachment" });
       await expect
-        .poll(async () => (await pill.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("4 session overrides");
+        .poll(() => attachTrigger.getAttribute("class"))
+        .toContain("agent-chat__input-btn--has-overrides");
 
       let composer = await openMenu(page);
       const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
@@ -232,6 +232,8 @@ suite.define(() => {
             expect.stringContaining("Manage plugins"),
           ]),
         );
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 overrides/ });
+      await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
       await skillsRoot.focus();
@@ -260,9 +262,13 @@ suite.define(() => {
         .poll(() => page.locator(".agent-chat__file-input").getAttribute("data-proxied"))
         .toBe("true");
 
-      await pill.getByRole("button", { name: "Clear session overrides" }).click();
+      composer = await openMenu(page);
+      const reopenedMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await reopenedMenu.locator('wa-dropdown-item[value="clear-overrides"]').click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual(null);
-      await expect.poll(() => pill.count()).toBe(0);
+      await expect
+        .poll(() => attachTrigger.getAttribute("class"))
+        .not.toContain("agent-chat__input-btn--has-overrides");
 
       composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
@@ -583,7 +589,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-      const clear = composer.getByRole("button", { name: "Clear session overrides" });
+      const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
       await expect.poll(() => clear.isDisabled()).toBe(true);
       await expect.poll(() => clear.getAttribute("title")).toContain("operator.admin access");
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);

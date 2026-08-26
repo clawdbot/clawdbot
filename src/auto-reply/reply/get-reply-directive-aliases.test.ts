@@ -20,12 +20,19 @@ const directiveApplyMocks = vi.hoisted(() => ({
 const textRoutingMocks = vi.hoisted(() => ({
   shouldHandle: vi.fn(),
 }));
+const skillCommandMocks = vi.hoisted(() => ({
+  listForWorkspace: vi.fn(),
+}));
 
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) => directiveApplyMocks.apply(...args),
 }));
 vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: (...args: unknown[]) => textRoutingMocks.shouldHandle(...args),
+}));
+vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
+  listSkillCommandsForWorkspace: (...args: unknown[]) =>
+    skillCommandMocks.listForWorkspace(...args),
 }));
 
 type DirectiveApplyParams = Parameters<
@@ -142,6 +149,7 @@ describe("reply directive aliases", () => {
     textRoutingMocks.shouldHandle.mockImplementation(
       (params: { cfg: OpenClawConfig }) => params.cfg.commands?.text !== false,
     );
+    skillCommandMocks.listForWorkspace.mockReturnValue([]);
     directiveApplyMocks.apply.mockImplementation(async (params: DirectiveApplyParams) => ({
       kind: "continue",
       directives: params.directives,
@@ -242,6 +250,92 @@ describe("reply directive aliases", () => {
       }),
     );
     expect(sessionEntry).toEqual(createSessionEntry());
+  });
+
+  it("keeps explicitly referenced skill payloads opaque to model directives", async () => {
+    const body = "Please use $office_hours to compare /model openai/gpt-5.6-luna with the default";
+    skillCommandMocks.listForWorkspace.mockReturnValue([
+      {
+        name: "office_hours",
+        skillName: "office-hours",
+        description: "Engineering office hours",
+        sourceFilePath: "/tmp/office-hours/SKILL.md",
+      },
+    ]);
+
+    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
+      body,
+      cfg: { commands: { text: true } } as OpenClawConfig,
+      surface: "webchat",
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toEqual(clearInlineDirectives(body));
+    expect(result.result.cleanedBody).toBe(body);
+    expect(result.result.skillCommands).toHaveLength(1);
+    expect(sessionCtx).toMatchObject({
+      agentText: body,
+      Body: body,
+      BodyForAgent: body,
+      BodyStripped: body,
+    });
+    expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directives: clearInlineDirectives(body),
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(sessionEntry).toEqual(createSessionEntry());
+  });
+
+  it("rejects invalid skill references before applying model directives", async () => {
+    const skillCommands = Array.from({ length: 9 }, (_, index) => ({
+      name: `skill_${index + 1}`,
+      skillName: `skill-${index + 1}`,
+      description: `Skill ${index + 1}`,
+    }));
+    const references = skillCommands.map((skill) => `$${skill.name}`).join(" ");
+    const body = `${references} /model openai/gpt-5.6-luna`;
+    skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
+
+    const { result, sessionEntry } = await resolveModelDirective({
+      body,
+      cfg: { commands: { text: true } } as OpenClawConfig,
+      surface: "webchat",
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: "Too many skill references. Use at most 8 skills in one message.",
+      },
+    });
+    expect(directiveApplyMocks.apply).not.toHaveBeenCalled();
+    expect(sessionEntry).toEqual(createSessionEntry());
+  });
+
+  it("still routes model directives after unknown skill references", async () => {
+    const body = "Please use $missing_skill then /model anthropic/claude-opus-4-6";
+
+    const { result } = await resolveModelDirective({
+      body,
+      cfg: { commands: { text: true } } as OpenClawConfig,
+      surface: "webchat",
+    });
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    expect(result.result.directives).toMatchObject({
+      hasModelDirective: true,
+      rawModelDirective: "anthropic/claude-opus-4-6",
+    });
+    expect(result.result.cleanedBody).toBe("Please use $missing_skill then");
   });
 
   it("keeps commands.text:false model syntax literal, including an empty agent projection", async () => {

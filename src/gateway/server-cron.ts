@@ -86,6 +86,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { runSkillCollectionReviewForAgent } from "../skills/workshop/collection-review.js";
 import {
   createCronExitWatchers,
   type CronExitResult,
@@ -108,6 +109,7 @@ import {
   sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   bumpSessionAutomationVersion,
@@ -870,6 +872,12 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
+    runSkillCollectionReview: ({ agentId, abortSignal }) =>
+      runSkillCollectionReviewForAgent({
+        config: getRuntimeConfig(),
+        agentId,
+        ...(abortSignal ? { abortSignal } : {}),
+      }),
     runIsolatedAgentJob: async ({
       job,
       message,
@@ -1539,12 +1547,17 @@ export function buildGatewayCronService(params: {
       if (epoch !== heartbeatReconcileEpoch) {
         return;
       }
-      const { ok } = await reconcileHeartbeatMonitorJobs({
+      const { ok: heartbeatOk } = await reconcileHeartbeatMonitorJobs({
         cron,
         cfg: cfgOverride ?? getRuntimeConfig(),
         logger: cronLogger,
       });
-      if (!ok && epoch === heartbeatReconcileEpoch) {
+      const { ok: skillReviewOk } = await reconcileSkillCollectionReviewJobs({
+        cron,
+        cfg: cfgOverride ?? getRuntimeConfig(),
+        logger: cronLogger,
+      });
+      if ((!heartbeatOk || !skillReviewOk) && epoch === heartbeatReconcileEpoch) {
         heartbeatRetryTimer = setTimeout(() => {
           heartbeatRetryTimer = undefined;
           void reconcileHeartbeatJobs(cfgOverride);

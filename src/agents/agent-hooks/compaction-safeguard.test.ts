@@ -2180,6 +2180,234 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
+  it("restores source identifiers omitted by an oversized generated summary", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    const generatedSummary = [
+      "## Decisions",
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("keeps real sections when a re-distilled identifier list outgrows the budget", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    // A model that hoards every identifier it has ever seen: the list alone is
+    // larger than the whole artifact budget while the real sections stay small.
+    const hoardedIdentifiers = Array.from(
+      { length: 400 },
+      (_, index) => `- /home/vac/clawd/tmp/session-artifacts/run-${index}/output.log`,
+    ).join("\n");
+    const generatedSummary = [
+      "## Decisions",
+      "Deployment stays paused until the backup is verified.",
+      "## Open TODOs",
+      "Verify the backup.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      hoardedIdentifiers,
+    ].join("\n");
+    expect(generatedSummary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(
+      "## Decisions\nDeployment stays paused until the backup is verified.",
+    );
+    expect(summary).toContain("## Open TODOs\nVerify the backup.");
+    expect(summary).toContain(`## Pending user asks\n${latestAsk}`);
+    expect(summary).toContain(identifier);
+    expect(summary).toContain("run-0/output.log");
+    expect(summary).not.toContain("run-399/output.log");
+    const identifiersSection = summary.slice(summary.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(
+      MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
+    );
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("keeps surplus budget out of the protected sections when trimming", () => {
+    const identifier = "/tmp/surplus-compaction-id.log";
+    const latestAsk = "preserve the pending deployment status";
+    // The re-distilled shape seen in production: every optional section is an
+    // empty heading, so all surplus would otherwise flow to the identifier list.
+    const body = [
+      "## Decisions",
+      "## Open TODOs",
+      "## Constraints/Rules",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      [identifier, ...Array.from({ length: 300 }, (_, i) => `- /tmp/run-${i}/out.log`)].join("\n"),
+    ].join("\n");
+    const maxChars = 4_000;
+    expect(body.length).toBeGreaterThan(maxChars);
+
+    const finalized = budgetCompactionSummary(body, "", maxChars, {
+      identifiers: [identifier],
+      latestAsk,
+      identifierPolicy: "strict",
+    });
+
+    const structural = (finalized as { structuralSummary: string }).structuralSummary;
+    expect(structural.length).toBeLessThanOrEqual(maxChars);
+    expect(structural).toContain("## Decisions");
+    expect(structural).toContain(identifier);
+    const identifiersSection = structural.slice(structural.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(maxChars * 0.25 + 100);
+  });
+
+  it("caps an identifier list that outgrew its share while the summary still fits", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    const hoardedIdentifiers = Array.from(
+      { length: 200 },
+      (_, index) => `- /home/vac/clawd/tmp/session-artifacts/run-${index}/output.log`,
+    ).join("\n");
+    const generatedSummary = [
+      "## Decisions",
+      "Deployment stays paused until the backup is verified.",
+      "## Open TODOs",
+      "Verify the backup.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      `${identifier}\n${hoardedIdentifiers}`,
+    ].join("\n");
+    expect(generatedSummary.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(
+      "## Decisions\nDeployment stays paused until the backup is verified.",
+    );
+    expect(summary).toContain(identifier);
+    expect(summary).not.toContain("run-199/output.log");
+    const identifiersSection = summary.slice(summary.indexOf("## Exact identifiers"));
+    expect(identifiersSection.length).toBeLessThanOrEqual(
+      MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
+    );
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("restores source identifiers omitted by a generated summary that fits the budget", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    const generatedSummary = [
+      "## Decisions",
+      "Deployment stays paused.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
+    expect(summary).not.toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
   it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";
@@ -3586,61 +3814,80 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
-  it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
+  it("summarizes only the prepared tool-only window when the context anchors it", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
+    mockSummarizeInStages.mockResolvedValue(summaryResult("tool window summary"));
 
     const now = Date.now();
+    // History behind a reset and a compaction boundary: the old fallback re-read
+    // all of it through getBranch() and summarized the whole session again.
     const sessionManager = {
       ...stubSessionManager(),
       getBranch: () => [
         {
-          type: "custom_message",
-          id: "custom-1",
+          type: "message",
+          id: "old-user",
           parentId: null,
           timestamp: new Date(now).toISOString(),
-          customType: "cron-request",
-          content: "prepare the daily report",
-          display: true,
+          message: { role: "user", content: "old request behind reset", timestamp: now },
         },
         {
           type: "message",
-          id: "assistant-1",
-          parentId: "custom-1",
+          id: "old-assistant",
+          parentId: "old-user",
           timestamp: new Date(now + 1).toISOString(),
           message: {
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            content: [{ type: "text", text: "old reply behind reset" }],
             timestamp: now + 1,
           },
         },
         {
-          type: "message",
-          id: "tool-1",
-          parentId: "assistant-1",
+          type: "reset",
+          id: "reset-1",
+          parentId: "old-assistant",
           timestamp: new Date(now + 2).toISOString(),
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "read",
-            content: [{ type: "text", text: "report source data" }],
-            timestamp: now + 2,
-          },
+          reason: "new",
+          firstKeptEntryId: "old-assistant",
+        },
+        {
+          type: "compaction",
+          id: "compaction-1",
+          parentId: "reset-1",
+          timestamp: new Date(now + 3).toISOString(),
+          summary: "## Decisions\nUser asked for the deploy status.",
+          firstKeptEntryId: "compaction-1",
+          tokensBefore: 90_000,
+          fromHook: true,
         },
       ],
     } as ExtensionContext["sessionManager"];
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
 
+    const toolOnlyWindow = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+        timestamp: now + 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "deploy green" }],
+        timestamp: now + 5,
+      },
+    ] as AgentMessage[];
     const mockEvent = {
       preparation: {
-        messagesToSummarize: [] as AgentMessage[],
+        messagesToSummarize: toolOnlyWindow,
         turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-5",
+        firstKeptEntryId: "entry-6",
         tokensBefore: 38085,
         fileOps: { read: [], edited: [], written: [] },
         settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
+        isSplitTurn: false,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -3652,182 +3899,74 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
 
     const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("branch summary");
-    expect(compaction.summary).not.toContain("No prior history.");
+    expect(compaction.summary).toContain("tool window summary");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
-    expect(
-      messages.some((message) => {
-        const record = requireRecord(message);
-        return (
-          record.role === "custom" &&
-          record.customType === "cron-request" &&
-          record.content === "prepare the daily report"
-        );
-      }),
-    ).toBe(true);
-    expect(
-      messages.some((message) => {
-        const record = requireRecord(message);
-        return record.role === "toolResult" && record.toolName === "read";
-      }),
-    ).toBe(true);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual([
+      "assistant",
+      "toolResult",
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("behind reset");
   });
 
-  it.each([
-    { assistantText: "bee reply", completed: true },
-    { assistantText: " \t\n ", completed: false },
-  ])(
-    "drops delegated branch turns only after meaningful terminal output ($completed)",
-    async ({ assistantText, completed }) => {
-      mockSummarizeInStages.mockReset();
-      mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
-
-      const now = Date.now();
-      const sessionManager = {
-        ...stubSessionManager(),
-        getBranch: () => [
-          {
-            type: "message",
-            id: "user-1",
-            parentId: null,
-            timestamp: new Date(now).toISOString(),
-            message: {
-              role: "user",
-              content: "say bee",
-              provenance: {
-                kind: "inter_session",
-                sourceSessionKey: "agent:pm",
-                sourceTool: "sessions_send",
-              },
-              timestamp: now,
-            },
-          },
-          {
-            type: "message",
-            id: "assistant-1",
-            parentId: "user-1",
-            timestamp: new Date(now + 1).toISOString(),
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: assistantText }],
-              timestamp: now + 1,
-            },
-          },
-        ],
-      } as ExtensionContext["sessionManager"];
-      const model = createAnthropicModelFixture();
-      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
-
-      const mockEvent = {
-        preparation: {
-          messagesToSummarize: [] as AgentMessage[],
-          turnPrefixMessages: [] as AgentMessage[],
-          firstKeptEntryId: "entry-7",
-          tokensBefore: 38085,
-          fileOps: { read: [], edited: [], written: [] },
-          settings: { reserveTokens: 4000 },
-          isSplitTurn: true,
-        },
-        customInstructions: "",
-        signal: new AbortController().signal,
-      };
-      const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
-        sessionManager,
-        event: mockEvent,
-        apiKey: "dummy",
-      });
-
-      const compaction = expectCompactionResult(result);
-      if (completed) {
-        expect(compaction.summary).toContain("No prior history.");
-        expect(mockSummarizeInStages).not.toHaveBeenCalled();
-        expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
-        return;
-      }
-      expect(compaction.summary).toContain("branch summary");
-      expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-      expect(getApiKeyAndHeadersMock).toHaveBeenCalledTimes(1);
-      const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
-      expect(
-        requireArray(summarizeCall.messages).map((message) => requireRecord(message).role),
-      ).toEqual(["user", "assistant"]);
-    },
-  );
-
-  it.each([
-    { toolName: "read", expectedRoles: ["user", "assistant", "toolResult"] },
-    { toolName: "functions.sessions_send", expectedRoles: ["user", "assistant"] },
-  ])("preserves unfinished inter-session work after a $toolName result", async (scenario) => {
+  it("recovers real conversation the preparation omitted from its boundary-scoped range", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("unfinished branch summary"));
+    mockSummarizeInStages.mockResolvedValue(summaryResult("range summary"));
 
     const now = Date.now();
+    const entry = (id: string, parentId: string | null, offset: number, message: AgentMessage) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(now + offset).toISOString(),
+      message: { ...message, timestamp: now + offset },
+    });
+    const omittedUser = { role: "user", content: "verify the deploy status now" } as AgentMessage;
+    const toolCallAssistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+    } as AgentMessage;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "exec",
+      content: [{ type: "text", text: "deploy green" }],
+    } as AgentMessage;
     const sessionManager = {
       ...stubSessionManager(),
       getBranch: () => [
+        entry("old-user", null, 0, {
+          role: "user",
+          content: "old request behind reset",
+        } as AgentMessage),
         {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "continue the delegated task",
-            provenance: {
-              kind: "inter_session",
-              sourceSessionKey: "agent:pm",
-              sourceTool: "sessions_send",
-            },
-            timestamp: now,
-          },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
+          type: "reset",
+          id: "reset-1",
+          parentId: "old-user",
           timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call-tool",
-                name: scenario.toolName,
-                arguments: {},
-              },
-            ],
-            timestamp: now + 1,
-          },
+          reason: "new",
+          firstKeptEntryId: "reset-1",
         },
-        {
-          type: "message",
-          id: "tool-1",
-          parentId: "assistant-1",
-          timestamp: new Date(now + 2).toISOString(),
-          message: {
-            role: "toolResult",
-            toolCallId: "call-tool",
-            toolName: scenario.toolName,
-            content: [{ type: "text", text: "partial evidence" }],
-            timestamp: now + 2,
-          },
-        },
+        entry("omitted-user", "reset-1", 2, omittedUser),
+        entry("assistant-1", "omitted-user", 3, toolCallAssistant),
+        entry("tool-1", "assistant-1", 4, toolResult),
+        entry("kept-user", "tool-1", 5, { role: "user", content: "and then?" } as AgentMessage),
       ],
     } as ExtensionContext["sessionManager"];
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
 
+    // The preparation covers everything before "kept-user" but lost the user turn.
     const mockEvent = {
       preparation: {
-        messagesToSummarize: [] as AgentMessage[],
+        messagesToSummarize: [toolCallAssistant, toolResult],
         turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-8",
+        firstKeptEntryId: "kept-user",
         tokensBefore: 38085,
         fileOps: { read: [], edited: [], written: [] },
         settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
+        isSplitTurn: false,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -3835,259 +3974,29 @@ describe("compaction-safeguard double-compaction guard", () => {
     const { result } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
-      apiKey: "dummy",
+      apiKey: "test-key",
     });
 
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("unfinished branch summary");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual(scenario.expectedRoles);
-  });
-
-  it("keeps source-session sends as inert status history", async () => {
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("completed send summary"));
-
-    const now = Date.now();
-    const sessionManager = {
-      ...stubSessionManager(),
-      getBranch: () => [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "ask the bee session to respond",
-            timestamp: now,
-          },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
-          timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call-1",
-                name: "functions.sessions_send",
-                arguments: { sessionKey: "agent:bee", message: "say bee" },
-              },
-              {
-                type: "toolCall",
-                id: "call-2",
-                name: "tools/sessions_send",
-                arguments: { sessionKey: "agent:wasp", message: "say wasp" },
-              },
-              {
-                type: "toolCall",
-                id: "call-3",
-                name: "sessions_send",
-                arguments: { sessionKey: "agent:ant", message: "say ant" },
-              },
-            ],
-            timestamp: now + 1,
-          },
-        },
-        {
-          type: "message",
-          id: "tool-1",
-          parentId: "assistant-1",
-          timestamp: new Date(now + 2).toISOString(),
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "functions.sessions_send",
-            content: [{ type: "text", text: '{"status":"ok","reply":"bee replied"}' }],
-            timestamp: now + 2,
-          },
-        },
-        {
-          type: "message",
-          id: "tool-3",
-          parentId: "tool-1",
-          timestamp: new Date(now + 3).toISOString(),
-          message: {
-            role: "toolResult",
-            toolCallId: "call-3",
-            toolName: "sessions_send",
-            content: [{ type: "text", text: '{"status":"error","error":"ant unavailable"}' }],
-            timestamp: now + 3,
-          },
-        },
-      ],
-    } as ExtensionContext["sessionManager"];
-    const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
-
-    const mockEvent = {
-      preparation: {
-        messagesToSummarize: [] as AgentMessage[],
-        turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-8",
-        tokensBefore: 38085,
-        fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
-    const { result } = await runCompactionScenario({
-      sessionManager,
-      event: mockEvent,
-      apiKey: "dummy",
-    });
-
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("completed send summary");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
-    expect(JSON.stringify(messages)).toContain("sessions_send result received");
-    expect(JSON.stringify(messages)).toContain("sessions_send result missing");
-    expect(JSON.stringify(messages)).toContain("bee replied");
-    expect(JSON.stringify(messages)).toContain("ant unavailable");
-    expect(JSON.stringify(messages)).toContain("agent:wasp");
-    expect(JSON.stringify(messages)).toContain("say wasp");
-    expect(JSON.stringify(messages)).not.toContain("sessions_send completed");
-    expect(JSON.stringify(messages)).not.toContain("functions.sessions_send");
-    expect(JSON.stringify(messages)).not.toContain("tools/sessions_send");
-  });
-
-  it("preserves completed historical inter-session turns outside the active tail", async () => {
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("historical branch summary"));
-
-    const now = Date.now();
-    const sessionManager = {
-      ...stubSessionManager(),
-      getBranch: () => [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "historical inter-session request",
-            provenance: {
-              kind: "inter_session",
-              sourceSessionKey: "agent:pm",
-              sourceTool: "sessions_send",
-            },
-            timestamp: now,
-          },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
-          timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "historical reply" }],
-            timestamp: now + 1,
-          },
-        },
-        {
-          type: "message",
-          id: "user-2",
-          parentId: "assistant-1",
-          timestamp: new Date(now + 2).toISOString(),
-          message: { role: "user", content: "later user request", timestamp: now + 2 },
-        },
-        {
-          type: "message",
-          id: "assistant-2",
-          parentId: "user-2",
-          timestamp: new Date(now + 3).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "later reply" }],
-            timestamp: now + 3,
-          },
-        },
-      ],
-    } as ExtensionContext["sessionManager"];
-    const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
-
-    const mockEvent = {
-      preparation: {
-        messagesToSummarize: [] as AgentMessage[],
-        turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-8",
-        tokensBefore: 38085,
-        fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
-    const { result } = await runCompactionScenario({
-      sessionManager,
-      event: mockEvent,
-      apiKey: "dummy",
-    });
-
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("historical branch summary");
+    expect(expectCompactionResult(result).summary).toContain("range summary");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
     expect(messages.map((message) => requireRecord(message).role)).toEqual([
       "user",
       "assistant",
-      "user",
-      "assistant",
+      "toolResult",
     ]);
-    expect(JSON.stringify(messages)).toContain("historical inter-session request");
-    expect(JSON.stringify(messages)).toContain("historical reply");
+    const serialized = JSON.stringify(messages);
+    expect(serialized).toContain("verify the deploy status now");
+    expect(serialized).not.toContain("behind reset");
+    expect(serialized).not.toContain("and then?");
   });
 
-  it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
+  it("writes the anti-loop boundary for a tool-only window when nothing anchors it", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary with visible turns"));
-
-    const now = Date.now();
-    const sessionManager = {
-      ...stubSessionManager(),
-      getBranch: () => [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "what is the deployment status?",
-            timestamp: now,
-          },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
-          timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "I will check the deploy." }],
-            timestamp: now + 1,
-          },
-        },
-      ],
-    } as ExtensionContext["sessionManager"];
+    const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+    setCompactionSafeguardRuntime(sessionManager, { model });
 
     const mockEvent = {
       preparation: {
@@ -4095,32 +4004,29 @@ describe("compaction-safeguard double-compaction guard", () => {
           {
             role: "toolResult",
             toolCallId: "call-1",
-            toolName: "status",
-            content: [{ type: "text", text: "deploy green" }],
-            timestamp: now + 2,
+            toolName: "exec",
+            content: [{ type: "text", text: "heartbeat probe ok" }],
+            timestamp: Date.now(),
           },
         ] as AgentMessage[],
         turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-6",
-        tokensBefore: 38085,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
         fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
       },
       customInstructions: "",
       signal: new AbortController().signal,
     };
-    const { result } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "test-key",
     });
 
     const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("branch summary with visible turns");
-    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
-    const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
+    expect(compaction.summary).toContain("No prior history.");
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
   it("continues when messages include real conversation content", async () => {

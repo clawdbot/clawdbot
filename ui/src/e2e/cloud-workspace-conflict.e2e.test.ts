@@ -187,16 +187,9 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
             composer.boundingBox(),
             notice.boundingBox(),
           ]);
-          return composerBox && noticeBox
-            ? {
-                center: Math.abs(
-                  composerBox.x + composerBox.width / 2 - (noticeBox.x + noticeBox.width / 2),
-                ),
-                inset: composerBox.width - noticeBox.width,
-              }
-            : null;
+          return composerBox && noticeBox ? Math.abs(composerBox.width - noticeBox.width) : null;
         })
-        .toEqual({ center: 0, inset: 28 });
+        .toBeLessThanOrEqual(1);
       await expect
         .poll(() =>
           title.evaluate((node) => ({

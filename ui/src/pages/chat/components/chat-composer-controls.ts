@@ -5,6 +5,7 @@ import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkDeviceIssue,
@@ -50,10 +51,15 @@ type MicrophonePickerProps = {
   voiceActive: boolean;
   issue: RealtimeTalkDeviceIssue | null;
   holdToDictate?: boolean;
+  showRealtimeCapability?: boolean;
+  realtimeStatus: ComposerTalkCapabilityStatus;
+  dictationStatus: ComposerTalkCapabilityStatus;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
   onHoldToDictateChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
 };
 
 /**
@@ -97,6 +103,26 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
   const unavailableIsFault =
     unavailable !== null && unavailable !== "none-found" && unavailable !== "list-unsupported";
   const label = t("chat.composer.microphoneInput");
+  const unavailableCapabilities = [
+    {
+      key: "realtime",
+      label: t("chat.composer.realtimeTalkCapability"),
+      status: props.realtimeStatus,
+      unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
+      onOpenSettings: props.onOpenTalkSettings,
+    },
+    {
+      key: "dictation",
+      label: t("chat.composer.dictationCapability"),
+      status: props.dictationStatus,
+      unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
+      onOpenSettings: props.onOpenDictationSettings,
+    },
+  ].filter(
+    (capability) =>
+      capability.status !== "ready" &&
+      (capability.key !== "realtime" || props.showRealtimeCapability !== false),
+  );
   return html`
     <wa-dropdown
       class="chat-talk-input-picker"
@@ -171,6 +197,56 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                 </div>`
               : nothing}
           `}
+      ${unavailableCapabilities.length > 0
+        ? html`
+            <div class="chat-talk-input-picker__capabilities">
+              ${unavailableCapabilities.map(
+                (capability) => html`
+                  <div
+                    class="chat-talk-input-picker__capability"
+                    data-chat-talk-capability=${capability.key}
+                    data-status=${capability.status}
+                    role="status"
+                  >
+                    <span class="chat-talk-input-picker__capability-copy">
+                      <strong>
+                        ${capability.status === "unavailable"
+                          ? html`<span
+                              class="chat-talk-input-picker__capability-alert"
+                              aria-hidden="true"
+                              >${icons.alertTriangle}</span
+                            >`
+                          : nothing}
+                        <span>${capability.label}</span>
+                      </strong>
+                      <span>
+                        ${capability.status === "checking"
+                          ? t("chat.composer.talkCapabilityChecking")
+                          : capability.status === "unknown"
+                            ? t("chat.composer.talkCapabilityUnknown")
+                            : capability.unavailableReason}
+                      </span>
+                    </span>
+                    ${capability.onOpenSettings
+                      ? html`
+                          <button
+                            type="button"
+                            class="chat-talk-input-picker__settings"
+                            @click=${(event: MouseEvent) => {
+                              event.stopPropagation();
+                              capability.onOpenSettings?.();
+                            }}
+                          >
+                            ${icons.settings}<span>${t("chat.composer.configureCapability")}</span>
+                          </button>
+                        `
+                      : nothing}
+                  </div>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
       ${props.onHoldToDictateChange
         ? html`
             <div class="chat-talk-input-picker__preference">
@@ -215,35 +291,47 @@ type ComposerVoiceButtonProps = {
    */
   idleLabel?: string;
   onDictationPointerDown?: (event: PointerEvent) => void;
+  onDirectDictationStart?: () => void;
   onToggleVoice?: () => void;
 };
 
 export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const active = props.dictation?.active === true;
+  const arming = props.dictation?.arming === true;
   const finalizing = props.dictation?.finalizing === true;
   const holding = props.dictation?.locksComposer === true;
-  const label = finalizing
-    ? t("chat.composer.dictationFinalizing")
-    : active
-      ? t("chat.composer.dictationStop")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
+  const startsDictationDirectly =
+    props.dictation !== undefined && props.onToggleVoice === undefined;
+  const label = active
+    ? t("chat.composer.dictationStopAndKeep")
+    : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
-    props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label;
+    props.dictation && !startsDictationDirectly && !(active || finalizing)
+      ? t("chat.composer.voiceGestureHint")
+      : label;
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
-    <span class="chat-talk-control">
+    <span class="chat-talk-control${holding ? " chat-talk-control--holding" : ""}">
       <openclaw-tooltip .content=${tooltip}>
         <button
           class=${active
-            ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`
-            : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
+            ? "chat-send-btn chat-send-btn--dictating"
+            : `chat-send-btn chat-send-btn--voice${props.dictation && !startsDictationDirectly ? " chat-send-btn--hold-enabled" : ""}${arming ? " chat-send-btn--dictation-arming" : ""}`}
           type="button"
           @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           @click=${(event: MouseEvent) => {
             if (active) {
-              // Stop keeps the words. Escape remains the explicit discard path.
-              void props.dictation?.finishActive();
+              event.preventDefault();
+              if (!finalizing) {
+                void props.dictation?.finishActive();
+              }
+              return;
+            }
+            if (startsDictationDirectly) {
+              event.preventDefault();
+              props.onDirectDictationStart?.();
+              props.dictation?.startDirect();
               return;
             }
             if (props.dictation) {
@@ -253,22 +341,83 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
             }
           }}
           @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
-          ?disabled=${finalizing ||
-          (!active && (!props.connected || props.sending || props.isBusy))}
+          ?disabled=${!active && (!props.connected || props.sending || props.isBusy)}
+          aria-disabled=${String(finalizing)}
           aria-label=${label}
         >
-          ${finalizing
-            ? icons.loader
-            : active
-              ? icons.stop
-              : html`
-                  ${icons.mic}
-                  <span class="agent-chat__control-label">${label}</span>
-                `}
+          ${active
+            ? icons.stop
+            : html`
+                ${icons.mic}
+                <span class="agent-chat__control-label">${label}</span>
+              `}
         </button>
       </openclaw-tooltip>
-      ${holding ? nothing : props.microphonePicker}
+      ${props.microphonePicker}
     </span>
+  `;
+}
+
+export function renderComposerDictationSendAction(
+  dictation: ComposerDictationController,
+  onSend: () => void,
+  onPointerDown?: (event: PointerEvent) => void,
+) {
+  if (!dictation.active) {
+    return nothing;
+  }
+  return html`
+    <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+      >${dictation.finalizing
+        ? t("chat.composer.dictationFinalizing")
+        : dictation.connecting
+          ? t("chat.composer.dictationConnecting")
+          : t("chat.composer.dictationListening")}</span
+    >
+    <openclaw-tooltip .content=${t("chat.runControls.send")}>
+      <button
+        class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+        type="button"
+        @pointerdown=${onPointerDown}
+        @click=${async () => {
+          if (dictation.finalizing) {
+            return;
+          }
+          await dictation.finishActive();
+          onSend();
+        }}
+        aria-disabled=${String(dictation.finalizing)}
+        aria-label=${t("chat.runControls.send")}
+      >
+        ${icons.arrowUp}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
+export function renderComposerDictationStatus(dictation?: ComposerDictationController) {
+  if (!dictation?.active) {
+    return nothing;
+  }
+  const listening = !dictation.connecting && !dictation.finalizing;
+  return html`
+    <div class="agent-chat__composer-status-stack">
+      <div
+        class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+      >
+        <span
+          class="agent-chat__dictation-phase${listening
+            ? " agent-chat__dictation-phase--listening"
+            : ""}"
+        >
+          ${dictation.connecting
+            ? t("chat.composer.dictationConnecting")
+            : dictation.finalizing
+              ? t("chat.composer.dictationFinalizing")
+              : t("chat.composer.dictationListening")}
+        </span>
+      </div>
+    </div>
   `;
 }
 
@@ -356,38 +505,12 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       </button>
     </openclaw-tooltip>
   `;
-  const dictationSendAction = props.dictation?.active
-    ? html`
-        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
-          >${props.dictation.finalizing
-            ? t("chat.composer.dictationFinalizing")
-            : props.dictation.connecting
-              ? t("chat.composer.dictationConnecting")
-              : t("chat.composer.dictationRecording", {
-                  elapsed: props.dictation.elapsed,
-                })}</span
-        >
-        <openclaw-tooltip .content=${t("chat.runControls.sendMessage")}>
-          <button
-            class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-send"
-            type="button"
-            @pointerdown=${props.onPrimaryActionPointerDown}
-            @click=${() => {
-              // Only the dictation session that actually committed text owns
-              // this send; an empty or stale finalization leaves the draft alone.
-              void props.dictation?.finishActive().then((committed) => {
-                if (committed) {
-                  props.onSend();
-                }
-              });
-            }}
-            ?disabled=${props.dictation.finalizing}
-            aria-label=${t("chat.runControls.sendMessage")}
-          >
-            ${icons.arrowUp}
-          </button>
-        </openclaw-tooltip>
-      `
+  const dictationSendAction = props.dictation
+    ? renderComposerDictationSendAction(
+        props.dictation,
+        () => props.onSend(),
+        props.onPrimaryActionPointerDown,
+      )
     : nothing;
   return html`
     ${props.voiceActive && props.onToggleVoice
