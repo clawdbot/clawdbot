@@ -531,7 +531,7 @@ function renderManagedImageActions(
       <button
         type="button"
         class="chat-image-action"
-        title=${t("chat.imageLightbox.openOriginal")}
+        title=${t("chat.imageLightbox.open", { title })}
         aria-label=${t("chat.imageLightbox.open", { title })}
         @click=${onOpen}
       >
