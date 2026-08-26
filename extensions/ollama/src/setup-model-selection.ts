@@ -7,6 +7,7 @@ import {
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isReasoningModelHeuristic,
+  mergeOllamaModelShowInfo,
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -164,7 +165,7 @@ export async function inspectOllamaModelsForSetup(
             signal,
             auditContext: "ollama-setup.tools-scan",
           });
-          return Object.assign({}, model, showInfo);
+          return mergeOllamaModelShowInfo(model, showInfo);
         } catch (error) {
           signal?.throwIfAborted();
           // A failed inspection must not inherit the optimistic tools default
@@ -172,7 +173,7 @@ export async function inspectOllamaModelsForSetup(
           // distinct from authoritative empty capabilities so name-based
           // reasoning detection still applies.
           inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
-          return Object.assign({}, model, { showInspectionFailed: true as const });
+          return mergeOllamaModelShowInfo(model, { showInspectionFailed: true });
         }
       }),
     );
