@@ -354,8 +354,10 @@ export class UrbitSSEClient {
       if (line.startsWith("id: ")) {
         eventId = parseUrbitSseEventId(line.slice(4));
       }
-      if (line.startsWith("data: ")) {
-        data = line.slice(6);
+      // The SSE spec makes the space after "data:" optional; accept both
+      // `data:{...}` and `data: {...}`, mirroring the gateway proxy stream.
+      if (line.startsWith("data:")) {
+        data = line.slice("data:".length).trim();
       }
     }
 

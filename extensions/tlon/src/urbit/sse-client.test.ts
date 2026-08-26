@@ -551,6 +551,26 @@ describe("UrbitSSEClient", () => {
       expect(mockUrbitFetch).not.toHaveBeenCalled();
     });
 
+    it("accepts data lines without a space after the colon", async () => {
+      // The SSE spec makes the space after "data:" optional; a server that
+      // emits `data:{...}` must not have its events silently dropped.
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValue({
+        response: { ok: true, status: 204 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+      const handler = vi.fn();
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      client.eventHandlers.set(1, { event: handler });
+
+      await expect(
+        client.processEvent('id: 20\ndata:{"id":1,"json":{"ok":true}}'),
+      ).resolves.toBeUndefined();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0]).toEqual({ ok: true });
+    });
+
     it("does not advance the ack watermark when the ack request fails", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValue({
