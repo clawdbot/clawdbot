@@ -121,6 +121,7 @@ struct OpenClawApp: App {
             MenuSessionsInjector.shared.install(into: item)
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             self.installStatusItemMouseHandler(for: item)
+            self.scheduleDebugMenuAutoOpenIfNeeded()
         }
         .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
@@ -197,6 +198,20 @@ struct OpenClawApp: App {
             }
         }
     }
+
+    #if DEBUG
+    /// Screenshot/demo helper: auto-present the status menu shortly after launch so
+    /// UI proof captures can target the menu window without global menu bar input.
+    @MainActor
+    private func scheduleDebugMenuAutoOpenIfNeeded() {
+        guard ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.isMenuPresented = true
+        }
+    }
+    #else
+    private func scheduleDebugMenuAutoOpenIfNeeded() {}
+    #endif
 
     private func applyStatusItemAppearance(paused _: Bool, sleeping _: Bool) {
         // Keep the status item actionable even when the Gateway is paused or disconnected.
