@@ -47,7 +47,9 @@ it("reports encoder initialization failures without producing queued audio", asy
   const stream = createDiscordOpusEncodeStream();
   const errors: Error[] = [];
   stream.on("error", (err) => errors.push(err));
-  const closed = new Promise<void>((resolve) => stream.once("close", resolve));
+  const closed = new Promise<void>((resolve) => {
+    stream.once("close", resolve);
+  });
   stream.end(Buffer.alloc(960 * 2 * 2));
   await closed;
 
