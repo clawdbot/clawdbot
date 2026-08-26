@@ -374,15 +374,14 @@ suite.define(() => {
     );
 
     await currentPage.reload();
+    // installMockGateway creates a new in-page request log for the reloaded
+    // document, so this wait and last-request assertion cannot reuse traffic
+    // from the pre-reload owner selection.
+    await gateway.waitForRequest("sessions.list");
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await expect
-      .poll(async () =>
-        (await gateway.getRequests("sessions.list")).some(
-          (request) =>
-            (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-        ),
-      )
-      .toBe(true);
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toMatchObject({ ownerId: "profile-ada" });
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);

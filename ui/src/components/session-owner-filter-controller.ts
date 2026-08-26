@@ -4,52 +4,48 @@ import type { ApplicationContext } from "../app/context.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
-  type SidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
 
-type SessionOwnerFilterControllerHost = ReactiveControllerHost;
-
 export class SessionOwnerFilterController implements ReactiveController {
-  private filter: SidebarSessionOwnerFilter = { kind: "all" };
+  ownerId: string | null = null;
+  involvingMe = false;
   private scope: string | null = null;
+  private ownerFacetResolved = false;
+  private ownerOptions: readonly { id: string }[] = [];
 
   constructor(
-    private readonly host: SessionOwnerFilterControllerHost,
+    private readonly host: ReactiveControllerHost,
     private readonly getContext: () => ApplicationContext<RouteId> | undefined,
   ) {
     host.addController(this);
   }
 
-  get ownerId(): string | null {
-    return this.filter.kind === "owner" ? this.filter.ownerId : null;
-  }
-
-  get involvingMe(): boolean {
-    return this.filter.kind === "involving-me";
-  }
-
-  get ownerActive(): boolean {
-    return this.filter.kind === "owner";
-  }
-
   hostUpdated(): void {
     this.restore();
+    if (
+      this.ownerFacetResolved &&
+      this.ownerId &&
+      !this.ownerOptions.some((owner) => owner.id === this.ownerId)
+    ) {
+      this.set(null);
+    }
+  }
+
+  observeOwnerFacet(resolved: boolean, options: readonly { id: string }[]): void {
+    this.ownerFacetResolved = resolved;
+    this.ownerOptions = options;
   }
 
   set(ownerId: string | null, involvingMe = false): void {
-    const normalizedOwnerId = ownerId?.trim() ?? "";
-    this.filter = involvingMe
-      ? { kind: "involving-me" }
-      : normalizedOwnerId
-        ? { kind: "owner", ownerId: normalizedOwnerId }
-        : { kind: "all" };
+    this.ownerId = involvingMe ? null : ownerId?.trim() || null;
+    this.involvingMe = involvingMe;
     const context = this.getContext();
     const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
     if (context && selfUserId) {
       storeSidebarSessionOwnerFilter(
         context.gateway.connection.gatewayUrl,
         selfUserId,
-        this.filter,
+        this.currentFilter(),
       );
     }
     this.host.requestUpdate();
@@ -69,15 +65,21 @@ export class SessionOwnerFilterController implements ReactiveController {
     }
     const previousScope = this.scope;
     this.scope = nextScope;
-    if (previousScope === null && this.filter.kind !== "all") {
-      storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, this.filter);
+    if (previousScope === null && (this.ownerId || this.involvingMe)) {
+      storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, this.currentFilter());
     } else {
-      this.filter = loadStoredSidebarSessionOwnerFilter(gatewayUrl, selfUserId);
+      const stored = loadStoredSidebarSessionOwnerFilter(gatewayUrl, selfUserId);
+      this.ownerId = stored.ownerId;
+      this.involvingMe = stored.involvingMe;
     }
     this.host.requestUpdate();
-    if (previousScope !== null || this.filter.kind !== "all") {
+    if (previousScope !== null || this.ownerId || this.involvingMe) {
       void this.applyRequest();
     }
+  }
+
+  private currentFilter() {
+    return { ownerId: this.ownerId, involvingMe: this.involvingMe };
   }
 
   private applyRequest(): Promise<void> {
@@ -85,8 +87,8 @@ export class SessionOwnerFilterController implements ReactiveController {
     if (!sessions) {
       return Promise.resolve();
     }
-    return this.filter.kind === "involving-me"
+    return this.involvingMe
       ? sessions.setInvolvingMeFilter(true)
-      : sessions.setOwnerFilter(this.filter.kind === "owner" ? this.filter.ownerId : null);
+      : sessions.setOwnerFilter(this.ownerId);
   }
 }

@@ -67,42 +67,70 @@ describe("sidebar session status preference", () => {
 describe("sidebar session owner preference", () => {
   it("isolates owner and involving-me filters by gateway and authenticated user", () => {
     storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-      kind: "owner",
       ownerId: "profile-bob",
+      involvingMe: false,
     });
     storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace", {
-      kind: "involving-me",
+      ownerId: null,
+      involvingMe: true,
     });
 
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      kind: "owner",
       ownerId: "profile-bob",
+      involvingMe: false,
     });
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace")).toEqual({
-      kind: "involving-me",
+      ownerId: null,
+      involvingMe: true,
     });
     expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
-      kind: "all",
+      ownerId: null,
+      involvingMe: false,
     });
   });
 
   it("removes all-owner filters and rejects malformed stored values", () => {
     storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-      kind: "owner",
       ownerId: "profile-bob",
+      involvingMe: false,
     });
     const key = localStorage.key(0);
     expect(key).not.toBeNull();
     localStorage.setItem(key ?? "", "owner:");
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      kind: "all",
+      ownerId: null,
+      involvingMe: false,
     });
 
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", { kind: "all" });
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: null,
+      involvingMe: false,
+    });
     expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      kind: "all",
+      ownerId: null,
+      involvingMe: false,
     });
     expect(localStorage.length).toBe(0);
+  });
+
+  it("keeps rendering when browser storage rejects access", () => {
+    localStorage.getItem = () => {
+      throw new Error("storage disabled");
+    };
+    localStorage.setItem = () => {
+      throw new Error("storage disabled");
+    };
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(() =>
+      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+        ownerId: null,
+        involvingMe: true,
+      }),
+    ).not.toThrow();
   });
 });
 

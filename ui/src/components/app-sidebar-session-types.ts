@@ -185,10 +185,10 @@ export type SidebarSessionGroupMenuState = {
 
 export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
-export type SidebarSessionOwnerFilter =
-  | { kind: "all" }
-  | { kind: "involving-me" }
-  | { kind: "owner"; ownerId: string };
+export type SidebarSessionOwnerFilter = {
+  ownerId: string | null;
+  involvingMe: boolean;
+};
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
 export function resolveSidebarSessionsScrollState(
@@ -300,19 +300,19 @@ export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
 ): SidebarSessionOwnerFilter {
-  const stored = getSafeLocalStorage()?.getItem(
-    sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
-  );
-  if (stored === "involving-me") {
-    return { kind: "involving-me" };
+  try {
+    const stored = getSafeLocalStorage()?.getItem(
+      sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
+    );
+    const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
+    return {
+      ownerId: stored === "involving-me" ? null : ownerId || null,
+      involvingMe: stored === "involving-me",
+    };
+  } catch {
+    // Privacy mode or a disabled store should not break sidebar rendering.
+    return { ownerId: null, involvingMe: false };
   }
-  if (stored?.startsWith("owner:")) {
-    const ownerId = stored.slice("owner:".length).trim();
-    if (ownerId) {
-      return { kind: "owner", ownerId };
-    }
-  }
-  return { kind: "all" };
 }
 
 export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
@@ -385,13 +385,22 @@ export function storeSidebarSessionOwnerFilter(
   selfUserId: string,
   filter: SidebarSessionOwnerFilter,
 ): void {
-  const storage = getSafeLocalStorage();
-  const key = sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId);
-  if (filter.kind === "all") {
-    storage?.removeItem(key);
-    return;
+  try {
+    const storage = getSafeLocalStorage();
+    const key = sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId);
+    const value = filter.involvingMe
+      ? "involving-me"
+      : filter.ownerId
+        ? `owner:${filter.ownerId}`
+        : null;
+    if (value === null) {
+      storage?.removeItem(key);
+    } else {
+      storage?.setItem(key, value);
+    }
+  } catch {
+    // Keep the in-memory filter when persistence is unavailable.
   }
-  storage?.setItem(key, filter.kind === "involving-me" ? filter.kind : `owner:${filter.ownerId}`);
 }
 
 /** People collapses to Created only where the gateway has authoritatively

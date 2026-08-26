@@ -153,7 +153,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];
   protected activeSessionOwnerId: string | null = null;
   get sessionOwnerFilterActive() {
-    return this.sessionOwnerFilter.ownerActive;
+    return this.sessionOwnerFilter.ownerId !== null;
   }
   sessionOwnershipVisible = false;
 
@@ -251,9 +251,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
-  setSessionOwnerFilter(ownerId: string | null, involvingMe = false): void {
+  setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) =>
     this.sessionOwnerFilter.set(ownerId, involvingMe);
-  }
 
   protected applySessionOwnerFilter(
     projected: SidebarRecentSession[],
@@ -265,6 +264,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       selectedOwnerId: this.sessionOwnerFilterId,
       self: this.context?.gateway.snapshot.selfUser,
     });
+    this.sessionOwnerFilter.observeOwnerFacet(ownerFacet !== undefined, result.ownerOptions);
     this.sessionOwnerOptions = result.ownerOptions;
     this.sessionOwnershipVisible = result.ownershipVisible;
     this.activeSessionOwnerId = result.activeOwnerId;
