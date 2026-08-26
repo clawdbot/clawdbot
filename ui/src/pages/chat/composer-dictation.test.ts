@@ -15,6 +15,8 @@ const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
 let request: ReturnType<typeof vi.fn>;
 let getUserMedia: ReturnType<typeof vi.fn>;
+let requestWakeLock: ReturnType<typeof vi.fn>;
+let releaseWakeLock: ReturnType<typeof vi.fn>;
 
 class MockAudioContext {
   readonly destination = {};
@@ -145,6 +147,14 @@ beforeEach(() => {
     configurable: true,
     value: { getUserMedia },
   });
+  releaseWakeLock = vi.fn(async () => undefined);
+  const wakeLock = new EventTarget() as WakeLockSentinel;
+  Object.defineProperty(wakeLock, "release", { value: releaseWakeLock });
+  requestWakeLock = vi.fn(async () => wakeLock);
+  Object.defineProperty(globalThis.navigator, "wakeLock", {
+    configurable: true,
+    value: { request: requestWakeLock },
+  });
   vi.stubGlobal("AudioContext", MockAudioContext);
 });
 
@@ -152,12 +162,24 @@ afterEach(() => {
   document.body.replaceChildren();
   listeners.clear();
   processors.length = 0;
+  Reflect.deleteProperty(globalThis.navigator, "wakeLock");
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe("ComposerDictationController", () => {
+  it("keeps the screen awake while dictation records", async () => {
+    const { controller, target } = createHarness();
+
+    await startHold(target);
+
+    expect(requestWakeLock).toHaveBeenCalledWith("screen");
+    document.dispatchEvent(pointer("pointercancel"));
+    await waitForFast(() => expect(releaseWakeLock).toHaveBeenCalledOnce());
+    controller.dispose();
+  });
+
   it("keeps a quick pointer gesture as the existing tap action", async () => {
     const { controller, onTap, target } = createHarness();
 

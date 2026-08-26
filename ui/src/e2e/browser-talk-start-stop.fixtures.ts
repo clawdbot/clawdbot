@@ -34,6 +34,8 @@ export async function installTalkBrowserFixtures(page: Page) {
     const state = {
       audioContextsClosed: 0,
       tracksStopped: 0,
+      wakeLocksReleased: 0,
+      wakeLocksRequested: 0,
       constraints: [] as unknown[],
       inputProcessor: null as InputProcessor | null,
       meterLevel: 0,
@@ -50,6 +52,26 @@ export async function installTalkBrowserFixtures(page: Page) {
         getUserMedia: async (constraints: unknown) => {
           state.constraints.push(constraints);
           return { getTracks: () => [track] };
+        },
+      },
+    });
+    Object.defineProperty(navigator, "wakeLock", {
+      configurable: true,
+      value: {
+        request: async () => {
+          state.wakeLocksRequested += 1;
+          const lock = new EventTarget();
+          Object.defineProperties(lock, {
+            release: {
+              value: async () => {
+                state.wakeLocksReleased += 1;
+                lock.dispatchEvent(new Event("release"));
+              },
+            },
+            released: { value: false },
+            type: { value: "screen" },
+          });
+          return lock;
         },
       },
     });

@@ -11,6 +11,7 @@ import {
 } from "./realtime-talk-audio.ts";
 import { describeRealtimeTalkInputError, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import { ScreenWakeLock } from "./screen-wake-lock.ts";
 
 const HOLD_THRESHOLD_MS = 250;
 const FINAL_TRANSCRIPT_QUIET_MS = 1500;
@@ -404,6 +405,7 @@ class ComposerDictationSession {
 
 export class ComposerDictationController {
   readonly inputLevel = new RealtimeTalkLevelSignal();
+  private readonly screenWakeLock = new ScreenWakeLock();
   private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
   private partialTranscript = "";
@@ -613,6 +615,7 @@ export class ComposerDictationController {
       return;
     }
     this.setPhase("connecting");
+    this.screenWakeLock.start();
     this.startElapsedTimer();
     const session = new ComposerDictationSession(client, {
       onError: (message) => {
@@ -650,6 +653,7 @@ export class ComposerDictationController {
       return false;
     }
     const wasActive = this.active;
+    this.screenWakeLock.stop();
     this.clearGesture();
     this.stopElapsedTimer();
     const session = this.session;
