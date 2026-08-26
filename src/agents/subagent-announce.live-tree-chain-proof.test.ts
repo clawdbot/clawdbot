@@ -52,9 +52,28 @@ const callGatewayMock = vi.hoisted(() =>
     return {};
   }),
 );
+const inProcessDispatchMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _method: string,
+      _params: Record<string, unknown>,
+      _options?: Record<string, unknown>,
+    ) => ({
+      runId: "return-run",
+      status: "accepted",
+    }),
+  ),
+);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: [GatewayRequest]) => callGatewayMock(...args),
+}));
+vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
+  dispatchGatewayMethodInProcess: (
+    method: string,
+    params: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => inProcessDispatchMock(method, params, options),
 }));
 
 import {
@@ -211,6 +230,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     gatewayState.waitResults.clear();
     gatewayState.chatHistoryBySessionKey.clear();
     callGatewayMock.mockClear();
+    inProcessDispatchMock.mockClear();
 
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-proof-state-live-tree-chain-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -445,6 +465,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       {
         task: "emit one raw-final delegate token",
         label: "raw-token-origin",
+        cleanup: "delete",
       },
       {
         agentSessionKey: rootSessionKey,
@@ -463,10 +484,11 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
       startedAt: 10,
       endedAt: 20,
     });
+    const originFinalText = `Origin complete.\n[[CONTINUE_DELEGATE: ${delegateTask} +1s]]`;
     gatewayState.chatHistoryBySessionKey.set(originChildSessionKey, [
       {
         role: "assistant",
-        content: `Origin complete.\n[[CONTINUE_DELEGATE: ${delegateTask} +1s]]`,
+        content: originFinalText,
       },
     ]);
 
@@ -476,7 +498,12 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
           runId: originChildRunId,
           stream: "lifecycle",
           sessionKey: originChildSessionKey,
-          data: { phase: "end", startedAt: 10, endedAt: 20 },
+          data: {
+            phase: "end",
+            startedAt: 10,
+            endedAt: 20,
+            terminalReply: { disposition: "visible", text: originFinalText },
+          },
         });
       });
     emitOriginCompletion();
@@ -515,6 +542,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect(flow.stateJson).toMatchObject({
       childSessionKey: delegateRun.childSessionKey,
     });
+    expect.soft(flow.stateJson).toMatchObject({ originRunId: originChildRunId });
     expect.soft(delegateRun.requesterSessionKey).toBe(originChildSessionKey);
     expect.soft(delegateRun.controllerSessionKey).toBe(originChildSessionKey);
     expect.soft(listTaskFlowsForOwnerKey(rootSessionKey)).toHaveLength(0);
@@ -533,6 +561,8 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     });
     expect(listTaskFlowsForOwnerKey(originChildSessionKey)).toHaveLength(1);
     expect(listDelegateRuns()).toHaveLength(1);
+    releaseSubagentRun(originChildRunId);
+    expect(getSubagentRunByChildSessionKey(originChildSessionKey)).toBeNull();
 
     const delegateChildSessionKey = delegateRun.childSessionKey;
     const delegateChildRunId = delegateRun.runId;
@@ -547,9 +577,23 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         content: delegateSentinel,
       },
     ]);
-    const countReturns = (sessionKey: string) =>
-      peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes(delegateSentinel))
-        .length;
+    const countReturns = (sessionKey: string) => {
+      const gatewayReturns = callGatewayMock.mock.calls.filter(
+        ([request]) =>
+          request.method === "agent" &&
+          request.params?.sessionKey === sessionKey &&
+          typeof request.params.message === "string" &&
+          request.params.message.includes(delegateSentinel),
+      ).length;
+      const inProcessReturns = inProcessDispatchMock.mock.calls.filter(
+        ([method, params]) =>
+          method === "agent" &&
+          params.sessionKey === sessionKey &&
+          typeof params.message === "string" &&
+          params.message.includes(delegateSentinel),
+      ).length;
+      return gatewayReturns + inProcessReturns;
+    };
     const originReturnsBefore = countReturns(originChildSessionKey);
     const rootReturnsBefore = countReturns(rootSessionKey);
     const emitDelegateCompletion = () =>
@@ -557,16 +601,36 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         runId: delegateChildRunId,
         stream: "lifecycle",
         sessionKey: delegateChildSessionKey,
-        data: { phase: "end", startedAt: 30, endedAt: 40 },
+        data: {
+          phase: "end",
+          startedAt: 30,
+          endedAt: 40,
+          terminalReply: { disposition: "visible", text: delegateSentinel },
+        },
       });
 
     emitDelegateCompletion();
-    await waitFor(
-      () =>
-        countReturns(originChildSessionKey) + countReturns(rootSessionKey) ===
-        originReturnsBefore + rootReturnsBefore + 1,
-      4_000,
-    );
+    try {
+      await waitFor(
+        () =>
+          countReturns(originChildSessionKey) + countReturns(rootSessionKey) ===
+          originReturnsBefore + rootReturnsBefore + 1,
+        4_000,
+      );
+    } catch {
+      throw new Error(
+        JSON.stringify({
+          originRun: getSubagentRunByChildSessionKey(originChildSessionKey),
+          delegateRun: getSubagentRunByChildSessionKey(delegateChildSessionKey),
+          originEvents: peekSystemEventEntries(originChildSessionKey).map((entry) => entry.text),
+          rootEvents: peekSystemEventEntries(rootSessionKey).map((entry) => entry.text),
+          gatewayCalls: callGatewayMock.mock.calls,
+          inProcessDispatches: inProcessDispatchMock.mock.calls,
+          logs: logSpy.mock.calls.map(([message]: [unknown]) => String(message)),
+          errors: errorSpy.mock.calls.map(([message]: [unknown]) => String(message)),
+        }),
+      );
+    }
     expect.soft(countReturns(originChildSessionKey)).toBe(originReturnsBefore + 1);
     expect.soft(countReturns(rootSessionKey)).toBe(rootReturnsBefore);
 

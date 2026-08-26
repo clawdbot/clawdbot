@@ -405,13 +405,15 @@ describe("subagent-announce continuation drain (F7)", () => {
       expectedRevision: 2,
     };
     consumePendingDelegatesMock.mockReturnValue([toolDelegate]);
-    spawnSubagentDirectMock
-      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" })
-      .mockResolvedValueOnce({
-        status: "accepted",
-        childSessionKey: "agent:main:subagent:tool-after-bracket-reject",
-        runId: "run-tool-after-bracket-reject",
-      });
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:tool-after-bracket-reject",
+      runId: "run-tool-after-bracket-reject",
+    });
+    dispatchToolDelegatesMock.mockResolvedValueOnce({
+      dispatched: 0,
+      rejected: 1,
+    });
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:mixed-rejected-bracket",
@@ -432,13 +434,10 @@ describe("subagent-announce continuation drain (F7)", () => {
       setTimeout(resolve, 50);
     });
 
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
-    const [bracketSpawnValue, toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(
-      ([params]) => params,
-    );
-    const bracketSpawn = expectDefined(bracketSpawnValue, "bracket spawn");
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const [toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(([params]) => params);
     const toolSpawn = expectDefined(toolSpawnValue, "tool spawn");
-    expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(toolSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
     expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-after-bracket-reject");
@@ -499,10 +498,14 @@ describe("subagent-announce continuation drain (F7)", () => {
       setTimeout(resolve, 50);
     });
 
-    expect(stagePostCompactionDelegateMock).toHaveBeenCalledWith("agent:main:main", {
-      task: "rehydrate later",
-      createdAt: expect.any(Number),
-    });
+    expect(stagePostCompactionDelegateMock).toHaveBeenCalledWith(
+      "agent:main:subagent:post-compaction-mixed",
+      {
+        task: "rehydrate later",
+        createdAt: expect.any(Number),
+        originRunId: "run-post-compaction-mixed",
+      },
+    );
     expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     const [toolSpawn] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");

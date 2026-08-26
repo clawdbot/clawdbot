@@ -9,7 +9,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import {
   emitContinuationCompactionReleasedSpan,
-  formatActiveContinuationTraceparent,
+  formatCurrentSpanContinuationTraceparent,
   resolveContinuationTraceparent,
 } from "../../infra/continuation-tracer.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -221,8 +221,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const effectiveContinuationSignal = continuationExtraction.signal;
   const continuationWorkReason = continuationExtraction.workReason;
   const internalBracketTraceparent = continuationExtraction.fromBracket
-    ? (resolveContinuationTraceparent(followupRun.run.traceparent) ??
-      formatActiveContinuationTraceparent())
+    ? (formatCurrentSpanContinuationTraceparent() ??
+      resolveContinuationTraceparent(followupRun.run.traceparent))
     : undefined;
 
   const usage = runResult.meta?.agentMeta?.usage;

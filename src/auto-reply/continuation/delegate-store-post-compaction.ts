@@ -23,6 +23,7 @@ export function stagePostCompactionTaskFlowDelegate(
     task: delegate.task,
     mode: "post-compaction",
     firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
+    ...(delegate.originRunId ? { originRunId: delegate.originRunId } : {}),
     ...(delegate.attachments !== undefined ? { attachments: delegate.attachments } : {}),
     ...(delegate.attachAs !== undefined ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
