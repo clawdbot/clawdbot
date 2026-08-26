@@ -683,6 +683,13 @@ describe("bundled plugin postinstall", () => {
   it("prunes stale private QA files without restoring compat sidecars", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
+    const currentManifest = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "example",
+      "openclaw.plugin.json",
+    );
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
     const staleManifest = path.join(
       packageRoot,
@@ -692,7 +699,9 @@ describe("bundled plugin postinstall", () => {
       "openclaw.plugin.json",
     );
     await fs.mkdir(path.dirname(stalePackage), { recursive: true });
+    await fs.mkdir(path.dirname(currentManifest), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
+    await fs.writeFile(currentManifest, "{}\n");
     await writePackageDistInventory(packageRoot);
     await fs.writeFile(stalePackage, "{}\n");
     await fs.writeFile(staleManifest, "{}\n");
@@ -702,6 +711,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
+    await expectPathExists(currentManifest);
     await expectPathMissing(stalePackage);
     await expectPathMissing(staleManifest);
     await expectPathMissing(

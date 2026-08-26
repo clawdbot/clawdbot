@@ -66,6 +66,7 @@ function withTarball(
     includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
+    postinstall?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
@@ -76,14 +77,32 @@ function withTarball(
       (validVersion !== null && semverGte(validVersion, FIRST_CODE_MODE_WORKER_VERSION));
     const includeCodeModeWorkerInInventory =
       options.includeCodeModeWorkerInInventory ?? includeCodeModeWorker;
-    const packageInventory = includeCodeModeWorkerInInventory
-      ? [...new Set([...inventory, CODE_MODE_WORKER_PATH])]
-      : inventory;
+    const controlUiFiles =
+      options.includeControlUi === false
+        ? {}
+        : {
+            "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
+            "dist/control-ui/assets/app.js": "console.log('ok');\n",
+          };
+    const packageInventory = [
+      ...new Set([
+        ...inventory,
+        ...(options.postinstall ? Object.keys(controlUiFiles) : []),
+        ...(includeCodeModeWorkerInInventory ? [CODE_MODE_WORKER_PATH] : []),
+      ]),
+    ];
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
     writeFileSync(
       join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version, ...options.packageJson }),
+      JSON.stringify({
+        name: "openclaw",
+        version,
+        ...(options.postinstall
+          ? { scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" } }
+          : {}),
+        ...options.packageJson,
+      }),
     );
     writeFileSync(
       join(packageRoot, "dist", "postinstall-inventory.json"),
@@ -98,13 +117,6 @@ function withTarball(
               `# ${relativePath}\n`,
             ]),
           );
-    const controlUiFiles =
-      options.includeControlUi === false
-        ? {}
-        : {
-            "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
-            "dist/control-ui/assets/app.js": "console.log('ok');\n",
-          };
     const installGuardFile =
       options.includeInstallGuard === false
         ? {}
@@ -339,6 +351,29 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it.each([
+    ["bundled plugin manifest", "dist/extensions/example/openclaw.plugin.json", "{}\n"],
+    ["generated non-JavaScript sidecar", "dist/generated/example.schema.json", "{}\n"],
+  ])(
+    "rejects a packaged %s omitted from the postinstall inventory",
+    (_, relativePath, contents) => {
+      withTarball(
+        ["dist/index.js"],
+        { "dist/index.js": "export {};\n", [relativePath]: contents },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(
+            `postinstall inventory omits packaged dist file ${relativePath}`,
+          );
+        },
+        "2026.7.2",
+        { postinstall: true },
+      );
+    },
+  );
+
   it("accepts historical packages published before the Code Mode worker existed", () => {
     withTarball(
       ["dist/index.js"],
@@ -376,10 +411,12 @@ describe("check-openclaw-package-tarball", () => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(`postinstall inventory omits ${CODE_MODE_WORKER_PATH}`);
+        expect(result.stderr).toContain(
+          `postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`,
+        );
       },
       FIRST_CODE_MODE_WORKER_VERSION,
-      { includeCodeModeWorkerInInventory: false },
+      { includeCodeModeWorkerInInventory: false, postinstall: true },
     );
   });
 
@@ -447,10 +484,11 @@ describe("check-openclaw-package-tarball", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(
-          "inventory omits imported dist file dist/memory-state-current.js",
+          "postinstall inventory omits packaged dist file dist/memory-state-current.js",
         );
       },
       "2026.4.27",
+      { postinstall: true },
     );
   });
 
@@ -465,9 +503,12 @@ describe("check-openclaw-package-tarball", () => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.js");
+        expect(result.stderr).toContain(
+          "postinstall inventory omits packaged dist file dist/chunk.js",
+        );
       },
       "2026.4.27",
+      { postinstall: true },
     );
   });
 
@@ -482,9 +523,12 @@ describe("check-openclaw-package-tarball", () => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.cjs");
+        expect(result.stderr).toContain(
+          "postinstall inventory omits packaged dist file dist/chunk.cjs",
+        );
       },
       "2026.4.27",
+      { postinstall: true },
     );
   });
 
@@ -535,9 +579,12 @@ describe("check-openclaw-package-tarball", () => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("inventory omits imported dist file dist/worker.js");
+        expect(result.stderr).toContain(
+          "postinstall inventory omits packaged dist file dist/worker.js",
+        );
       },
       "2026.4.27",
+      { postinstall: true },
     );
   });
 
