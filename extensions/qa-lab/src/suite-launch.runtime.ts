@@ -1,6 +1,7 @@
 // QA Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
@@ -11,6 +12,7 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
@@ -101,6 +103,7 @@ const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 // Three is the audited ceiling for concurrent Gateway and process-group lifecycles.
 // Raising it risks cleanup overlap and shared port/listener contention.
 const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
+const MAX_NATIVE_OUTPUT_LINE_LENGTH = 16_384;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -414,6 +417,53 @@ async function resolveSuiteExecutionPlan(
     testFileScenariosByKind,
   };
 }
+
+function createQaNativeOutputForwarder() {
+  const outputs = {
+    stdout: { decoder: new StringDecoder("utf8"), pending: "", dropping: false },
+    stderr: { decoder: new StringDecoder("utf8"), pending: "", dropping: false },
+  };
+
+  return {
+    write(stream: "stderr" | "stdout", chunk: Buffer) {
+      const output = outputs[stream];
+      let text = output.decoder.write(chunk);
+      while (text.length > 0) {
+        const newline = text.search(/[\r\n]/u);
+        const complete = newline !== -1;
+        const segment = complete ? text.slice(0, newline + 1) : text;
+        text = complete ? text.slice(newline + 1) : "";
+        if (output.dropping) {
+          output.dropping = !complete;
+          continue;
+        }
+        // Secrets and CI commands may span chunks; never flush an incomplete line.
+        if (output.pending.length + segment.length > MAX_NATIVE_OUTPUT_LINE_LENGTH) {
+          process[stream].write("[qa-suite] native output line omitted: exceeded safe limit\n");
+          output.pending = "";
+          output.dropping = !complete;
+          continue;
+        }
+        output.pending += segment;
+        if (complete) {
+          process[stream].write(redactQaGatewayDebugText(output.pending));
+          output.pending = "";
+        }
+      }
+    },
+    flush() {
+      for (const stream of ["stdout", "stderr"] as const) {
+        const output = outputs[stream];
+        output.pending += output.decoder.end();
+        if (output.pending && !output.dropping) {
+          process[stream].write(redactQaGatewayDebugText(output.pending));
+        }
+        output.pending = "";
+      }
+    },
+  };
+}
+
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
   runParams: QaSuiteRunParams | undefined;
@@ -425,26 +475,28 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const progressEnabled = shouldLogQaSuiteProgress();
-  return await runQaTestFileScenarios({
-    evidenceMode: runParams?.evidenceMode,
-    ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
-    ...(runParams?.failFast ? { failFast: true } : {}),
-    ...(progressEnabled
-      ? {
-          onCommandOutput: (stream: "stderr" | "stdout", chunk: Buffer) => {
-            (stream === "stdout" ? process.stdout : process.stderr).write(chunk);
-          },
-          progress: (message: string) => writeQaSuiteProgress(true, message),
-        }
-      : {}),
-    repoRoot,
-    outputDir,
-    providerMode,
-    primaryModel,
-    scenarios: params.scenarios,
-    writeEvidenceFile: runParams?.writeEvidenceFile,
-  });
+  const output = shouldLogQaSuiteProgress() ? createQaNativeOutputForwarder() : undefined;
+  try {
+    return await runQaTestFileScenarios({
+      evidenceMode: runParams?.evidenceMode,
+      ...(params.env ? { env: params.env, envMode: "replace" as const } : {}),
+      ...(runParams?.failFast ? { failFast: true } : {}),
+      ...(output
+        ? {
+            onCommandOutput: output.write,
+            progress: (message: string) => writeQaSuiteProgress(true, message),
+          }
+        : {}),
+      repoRoot,
+      outputDir,
+      providerMode,
+      primaryModel,
+      scenarios: params.scenarios,
+      writeEvidenceFile: runParams?.writeEvidenceFile,
+    });
+  } finally {
+    output?.flush();
+  }
 }
 
 function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | undefined) {

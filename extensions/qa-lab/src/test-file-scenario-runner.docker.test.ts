@@ -269,7 +269,14 @@ describe("qa test file scenario runner", () => {
       progress: (message) => progress.push(message),
       runCommand: async (command) => {
         const isDocker = command.args[0] === "scripts/test-docker-all.mjs";
-        const scenarioId = isDocker ? "long-docker" : path.basename(command.args[2], ".ts");
+        let scenarioId = "long-docker";
+        if (!isDocker) {
+          const scriptPath = command.args[2];
+          if (!scriptPath) {
+            throw new Error("missing script scenario path");
+          }
+          scenarioId = path.basename(scriptPath, ".ts");
+        }
         executionOrder.push(scenarioId);
         activeCommands += 1;
         maximumActiveCommands = Math.max(maximumActiveCommands, activeCommands);

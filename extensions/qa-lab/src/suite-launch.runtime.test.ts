@@ -1995,6 +1995,56 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("redacts split native output and neutralizes CI commands before streaming", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-safe-native-output-");
+    vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      params.onCommandOutput?.("stdout", Buffer.from("OPENAI_API_"));
+      params.onCommandOutput?.("stdout", Buffer.from("KEY=synthetic-split-secret-123456789\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("::stop-"));
+      params.onCommandOutput?.("stdout", Buffer.from("commands::attacker\n"));
+      params.onCommandOutput?.("stderr", Buffer.from("Authorization: Bea"));
+      params.onCommandOutput?.("stderr", Buffer.from("rer synthetic-bearer-secret-987654321\n"));
+      params.onCommandOutput?.("stderr", Buffer.from("#"));
+      params.onCommandOutput?.("stderr", Buffer.from("#[error]attacker\n"));
+      params.onCommandOutput?.("stderr", Buffer.from(`OPENAI_API_KEY=${"x".repeat(20_000)}`));
+      params.onCommandOutput?.("stderr", Buffer.from("discarded-secret\nsafe output resumed\n"));
+      params.onCommandOutput?.("stdout", Buffer.from("OPENAI_API_KEY="));
+      params.onCommandOutput?.("stdout", Buffer.from("synthetic-trailing-secret-1122334455"));
+      expect(stdoutWrite).toHaveBeenCalled();
+      return await defaultTestFileImplementation(params);
+    });
+
+    try {
+      await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/safe-native-output",
+        scenarioIds: ["docker-npm-onboard-channel-agent"],
+      });
+
+      const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+      const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(stdout).toContain("OPENAI_API_KEY=<redacted>");
+      expect(stdout).toContain(": :stop-commands::attacker");
+      expect(stdout).not.toContain("synthetic-split-secret-123456789");
+      expect(stdout).not.toContain("synthetic-trailing-secret-1122334455");
+      expect(stdout).not.toContain("::stop-commands::");
+      expect(stderr).toContain("Bearer <redacted>");
+      expect(stderr).toContain("# #[error]attacker");
+      expect(stderr).toContain("native output line omitted: exceeded safe limit");
+      expect(stderr).toContain("safe output resumed");
+      expect(stderr).not.toContain("synthetic-bearer-secret-987654321");
+      expect(stderr).not.toContain("discarded-secret");
+      expect(stderr).not.toContain("##[error]");
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
   it("settles flow and native work, then runs serial scripts before a bounded parallel tail", async () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
     const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
