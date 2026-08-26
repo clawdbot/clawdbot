@@ -1048,6 +1048,25 @@ describe("createMediaGenerationTaskLifecycle", () => {
     );
   });
 
+  it("keeps the stable ancestor traceparent when the active scope has a parent span", () => {
+    const lifecycle = createImageMediaLifecycle();
+
+    const handle = runWithDiagnosticTraceContext(
+      {
+        ...ACTIVE_TRACE_CONTEXT,
+        spanId: "2222222222222222",
+        parentSpanId: ACTIVE_TRACE_CONTEXT.spanId,
+      },
+      () =>
+        lifecycle.createTaskRun({
+          sessionKey: "agent:main:discord:channel:123",
+          prompt: "ancestor-anchored proof image",
+        }),
+    );
+
+    expect(handle?.traceparent).toBe(ACTIVE_TRACEPARENT);
+  });
+
   it("treats an ambiguous generated-media acknowledgement as handled", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
