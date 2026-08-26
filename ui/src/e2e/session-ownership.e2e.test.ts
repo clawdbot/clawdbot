@@ -261,7 +261,7 @@ suite.define(() => {
     }
   });
 
-  it("shows permanent owner chips and filters existing custom groups", async () => {
+  it("derives People controls and owner filtering from current session owners", async () => {
     if (captureUiProofEnabled) {
       await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
     }
@@ -284,7 +284,7 @@ suite.define(() => {
       { id: "profile-bob", background: "#985b42", label: "B" },
     ]);
     const gateway = await installMockGateway(currentPage, {
-      hasMultipleSessionSharingIdentities: true,
+      hasMultipleSessionSharingIdentities: false,
       sessionKey: "agent:main:ada",
       presenceUsers: [
         {
@@ -306,7 +306,9 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await ownerMenu.locator('[value="sort:people"]').waitFor();
+    await captureUiProof(currentPage, "00-people-controls-from-session-owners.png");
+    await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
+    await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
     const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
@@ -316,6 +318,36 @@ suite.define(() => {
     await captureUiProof(currentPage, "00-people-sort-available.png");
     expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
     await ownerMenu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "grouping:person" } },
+        }),
+      ),
+    );
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-ada"]'),
+    ).toContainText("Ada research");
+    await expectBrowser(
+      currentPage.locator('[data-session-section="person:profile-bob"]'),
+    ).toContainText("Bob operations");
+
+    const groupedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(groupedMenu.locator('[value="grouping:person"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await groupedMenu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "grouping:category" } },
+        }),
+      ),
+    );
+
+    const sortableMenu = await openSidebarSortMenu(currentPage);
+    await sortableMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,

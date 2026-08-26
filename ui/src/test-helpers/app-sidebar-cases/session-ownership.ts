@@ -372,8 +372,9 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
-  it("owns People availability and fallback at the server identity capability", async () => {
+  it("owns People availability and fallback at the live session-owner roster", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: sessionSharingHello(true) });
     const keys = ["main", "b1", "a1", "b2", "a2"].map((id) => `agent:main:${id}`);
     const harness = createSessionsHarness("main", keys);
     const result = harness.sessions.state.result;
@@ -409,31 +410,29 @@ describe("AppSidebar session ownership", () => {
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
     await sidebar.updateComplete;
 
-    gateway.publish({ hello: sessionSharingHello(true) });
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    gateway.publish({ hello: sessionSharingHello(false) });
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     await expectSort(sidebar, "people", peopleOrder);
 
     gateway.publish({ hello: null });
     await sidebar.updateComplete;
     menu = await openOwnerMenu(sidebar);
-    expect(menu.querySelector('[value="sort:people"]')).toBeNull();
-    expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(menu.querySelector('[value="sort:people"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
     await sidebar.updateComplete;
-
-    gateway.publish({ hello: sessionSharingHello(true) });
-    await sidebar.updateComplete;
-    expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
 
     await expectSort(sidebar, "updated", updatedOrder);
     await expectSort(sidebar, "created", createdOrder);
     await expectSort(sidebar, "people", peopleOrder);
-    result.owners = [
-      { type: "human", id: "profile-ada", label: "Ada" },
-      { type: "human", id: "profile-bob", label: "Bob" },
-    ];
+    result.owners = [{ type: "human", id: "profile-bob", label: "Bob" }];
+    gateway.publish({ hello: sessionSharingHello(true) });
     harness.publishList({ result, agentId: "main" });
-    gateway.publish({ hello: sessionSharingHello(false) });
     await sidebar.updateComplete;
     await sidebar.updateComplete;
 
@@ -441,16 +440,24 @@ describe("AppSidebar session ownership", () => {
     expect(menu.querySelector('[value="sort:people"]')).toBeNull();
     expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
-    gateway.publish({ hello: sessionSharingHello(true) });
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    gateway.publish({ hello: sessionSharingHello(false) });
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     menu = await openOwnerMenu(sidebar);
     expect(menu.querySelector('[value="sort:people"]')).not.toBeNull();
     expect(menu.querySelector('[value="sort:created"]')?.getAttribute("aria-checked")).toBe("true");
   });
 
-  it("groups sessions by owner only while the identity capability is available", async () => {
+  it("groups sessions by owner based on the live session-owner roster", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
-    gateway.publish({ selfUser: { id: "profile-zoe", name: "Zoe" } });
+    gateway.publish({
+      hello: sessionSharingHello(false),
+      selfUser: { id: "profile-zoe", name: "Zoe" },
+    });
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:ada",
@@ -479,12 +486,10 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     let menu = await openOwnerMenu(sidebar);
-    expect(menu.querySelector('[value="grouping:person"]')).toBeNull();
+    expect(menu.querySelector('[value="grouping:person"]')).not.toBeNull();
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
     await sidebar.updateComplete;
 
-    gateway.publish({ hello: sessionSharingHello(true) });
-    await sidebar.updateComplete;
     await selectSessionMenuValue(sidebar, "grouping:person");
 
     const ownerSections = () => [
@@ -509,6 +514,18 @@ describe("AppSidebar session ownership", () => {
 
     gateway.publish({ hello: null });
     await sidebar.updateComplete;
+    expect(ownerSections()).toHaveLength(2);
+    menu = await openOwnerMenu(sidebar);
+    expect(menu.querySelector('[value="grouping:person"]')?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    await sidebar.updateComplete;
+
+    gateway.publish({ hello: sessionSharingHello(true) });
+    result.owners = [{ type: "human", id: "profile-zoe", label: "Zoe" }];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
     expect(ownerSections()).toHaveLength(0);
     menu = await openOwnerMenu(sidebar);
     expect(menu.querySelector('[value="grouping:person"]')).toBeNull();
@@ -516,9 +533,13 @@ describe("AppSidebar session ownership", () => {
       "true",
     );
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
-    await sidebar.updateComplete;
 
-    gateway.publish({ hello: sessionSharingHello(true) });
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-zoe", label: "Zoe" },
+    ];
+    gateway.publish({ hello: sessionSharingHello(false) });
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     expect(ownerSections()).toHaveLength(2);
   });
