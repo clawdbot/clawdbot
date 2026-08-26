@@ -438,10 +438,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg().requireVisibleReply).toBe(true);
+    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
     const message = String(deliveredCallArg().triggerMessage);
-    expect(message).not.toContain("NO_REPLY");
-    expect(message).toContain("original user request still requires your visible final answer");
+    expect(message).toContain("create the next required subagent(s) and call sessions_yield again");
+    expect(message).toContain("do not send a final answer while required work remains");
+    expect(message).not.toContain("Do not keep waiting or call sessions_yield again");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
       delivered: true,
@@ -530,10 +531,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg().requireVisibleReply).toBe(true);
+    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
     const message = String(deliveredCallArg().triggerMessage);
-    expect(message).not.toContain("NO_REPLY");
-    expect(message).toContain("original user request still requires your visible final answer");
+    expect(message).toContain("continue the original request from this resumed turn");
+    expect(message).toContain("Otherwise send a truthful user-facing update");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
       delivered: true,
@@ -672,7 +673,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
-  it("retains a yielded wake after a silent final and retries its visible reply", async () => {
+  it("accepts a yielded requester continuation without requiring a visible final", async () => {
     const child = makeSettledChild({
       runId: "run-b",
       delivery: { status: "delivered" },
@@ -685,43 +686,16 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-    deliverSpy.mockResolvedValueOnce({
-      delivered: false,
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: child }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+      delivered: true,
       path: "direct",
-      reason: "visible_reply_missing",
     });
-
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(false);
-      expect(completeBatchSpy).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-        nextAttemptAt: 30_000,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-        lastError: "visible_reply_missing",
-      });
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(true);
-      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
-        requesterSettleKey("run-b:yield-1"),
-        requesterSettleKey("run-b:yield-1:retry-1"),
-      ]);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
-        delivered: true,
-        path: "direct",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("replays an ambiguous transport failure with the same idempotency key", async () => {

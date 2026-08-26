@@ -50,15 +50,24 @@ const activeRequesterSettleWakeBatches = new Set<string>();
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
-  requireVisibleReply: boolean;
+  requesterYieldedAfterDelivery: boolean;
 }): string {
+  const continuationInstruction = params.requesterYieldedAfterDelivery
+    ? "[Subagent Context] Review the completion results, then continue the original request from this resumed turn. If more work is required, create the next required subagent(s) and call sessions_yield again; do not send a final answer while required work remains. Otherwise send a truthful user-facing update."
+    : "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.";
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.",
-    params.requireVisibleReply
-      ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer."
-      : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+    ...(params.requesterYieldedAfterDelivery
+      ? []
+      : [
+          "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
+        ]),
+    continuationInstruction,
+    ...(params.requesterYieldedAfterDelivery
+      ? []
+      : [
+          `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+        ]),
     "",
     params.findings ??
       "(each child result was announced individually in earlier completion events)",
@@ -381,7 +390,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   );
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,
-    requireVisibleReply: requesterYieldedAfterDelivery,
+    requesterYieldedAfterDelivery,
   });
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
@@ -472,7 +481,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
-        ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
