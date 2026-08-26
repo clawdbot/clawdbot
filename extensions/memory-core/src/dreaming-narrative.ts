@@ -543,7 +543,7 @@ export async function readRecentDreamDiaryEntries(params: {
   const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
   return splitDiaryBlocks(inner)
     .map(normalizeDiaryBlockBody)
-    .filter((entry) => entry.length > 0)
+    .filter((entry) => entry.length > 0 && entry !== REQUEST_SCOPED_FALLBACK_NARRATIVE)
     .slice(-limit)
     .toReversed();
 }
