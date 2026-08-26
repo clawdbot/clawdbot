@@ -157,13 +157,14 @@ describe("channel ingress drain", () => {
       expect(await queue.listClaims()).toHaveLength(1);
       expect(await queue.listPending()).toEqual([]);
 
-      // Abandon loses ownership before delivery; replay must not spend an attempt.
+      // Abandon releases for retry and spends an attempt; cancellation is the
+      // pre-delivery path that requeues without retry accounting.
       await expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
       await drain.waitForIdle();
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0]?.attempts).toBe(0);
+        expect(pending[0]?.attempts).toBeGreaterThanOrEqual(1);
       });
       drain.dispose();
     });
@@ -461,7 +462,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("abandoned via turnAdoptionLifecycle releases claim without an attempt", async () => {
+  it("abandoned via turnAdoptionLifecycle releases claim with an attempt", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-q", { text: "x" }, { laneKey: "l1" });
@@ -481,7 +482,7 @@ describe("channel ingress drain", () => {
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0]?.attempts).toBe(0);
+        expect(pending[0]?.attempts).toBe(1);
         expect(pending[0]?.lastError).toBe("turn-abandoned");
       });
       drain.dispose();
@@ -680,7 +681,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("does not spend retry attempts on repeated abandonment", async () => {
+  it("keeps retry-accounted abandonment pending beyond the failure threshold", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
@@ -705,7 +706,7 @@ describe("channel ingress drain", () => {
       expect(await queue.listPending()).toEqual([
         expect.objectContaining({
           id: "abandoned",
-          attempts: 0,
+          attempts: 3,
           lastError: "turn-abandoned",
         }),
       ]);
