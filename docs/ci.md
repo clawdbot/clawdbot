@@ -111,13 +111,12 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and screenshot-risk decisions.
 
-The macOS Swift job receives 20 minutes on Blacksmith runners and 30 minutes on every GitHub-hosted route, including first-attempt pull requests from untrusted contributors.
-
 Release screenshot routing is deliberately conservative because an app change can break deterministic App Store capture without breaking compilation. Pull requests and exact-head release gates run the full iPhone, iPad, and Watch matrix when the diff touches `apps/ios/**`, linked OpenClawKit or Swabble code, Apple Swift configuration, or the scripts used by screenshot capture. Ordinary manual CI and Full Release Validation always run that matrix. The screenshot decision is independent of macOS routing; a pure iOS app change does not select macOS jobs by itself.
 
 Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code policy. Each runs only when a non-draft pull request touches its native scan scope, or when manually dispatched.
 
 - **CI workflow edits** validate the Node CI graph, workflow linting, and the Windows lane (`ci.yml` executes it), but do not force iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
+- **macOS Swift runner budgets** are 20 minutes on Blacksmith and 30 minutes on every GitHub-hosted route, including first-attempt pull requests from untrusted contributors.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** splits by proof ownership. The dedicated `core-runtime-tui-pty` Node shard owns the full real-backend suite against the exact-head built CLI in metadata-complete pull request fallbacks plus manual and release runs; routine `main` push compacts omit that serial shard. The `build-artifacts` job keeps a local model roundtrip and a real Gateway connection canary on every artifact boundary without duplicating the full serial suite inside the build job.
