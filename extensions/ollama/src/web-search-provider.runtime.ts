@@ -346,10 +346,9 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
     setCredentialValue: () => {},
     applySelectionConfig: (config) => enablePluginInConfig(config, "ollama").config,
     runSetup: async (ctx) =>
-      await warnOllamaWebSearchPrereqs({
-        config: ctx.config,
-        prompter: ctx.prompter,
-      }),
+      isOllamaCloudBaseUrl(resolveOllamaWebSearchBaseUrl(ctx.config))
+        ? ctx.config
+        : await warnOllamaWebSearchPrereqs(ctx),
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
       parameters: OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,

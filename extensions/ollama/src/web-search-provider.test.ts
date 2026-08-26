@@ -5,6 +5,7 @@ import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
+import { createLazyOllamaWebSearchProvider } from "./web-search-provider-registration.js";
 import { createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -40,8 +41,10 @@ function createOllamaConfig(provider: OllamaProviderConfigOverride = {}): OpenCl
   };
 }
 
-async function runOllamaWebSearchSetup(config: OpenClawConfig) {
-  const provider = createOllamaWebSearchProvider();
+async function runOllamaWebSearchSetup(
+  config: OpenClawConfig,
+  provider = createOllamaWebSearchProvider(),
+) {
   if (!provider.runSetup) {
     throw new Error("Expected Ollama web search setup");
   }
@@ -501,6 +504,37 @@ describe("ollama web search provider", () => {
         "Start Ollama before using this provider.",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    {
+      name: "the configured model provider",
+      config: createOllamaConfig({ baseUrl: "https://ollama.com", apiKey: "hosted-test-key" }),
+    },
+    {
+      name: "the plugin's higher-priority web search override",
+      config: {
+        ...createOllamaConfig(),
+        plugins: {
+          entries: {
+            ollama: { config: { webSearch: { baseUrl: "https://ollama.com/v1" } } },
+          },
+        },
+      },
+    },
+  ])("does not require a local daemon when $name selects hosted search", async ({ config }) => {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(guardedResponse({ models: [] }))
+      .mockResolvedValueOnce(guardedResponse({ error: "not signed in" }, { status: 401 }));
+
+    const { next, notes } = await runOllamaWebSearchSetup(
+      config,
+      createLazyOllamaWebSearchProvider(),
+    );
+
+    expect(next).toBe(config);
+    expect(notes).toEqual([]);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("resolves env var when config apiKey is a marker string", async () => {
