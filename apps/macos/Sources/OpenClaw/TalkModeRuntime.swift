@@ -479,7 +479,7 @@ actor TalkModeRuntime {
     }
 
     private func silenceLoop() async {
-        while self.isEnabled, (try? await Task.sleep(nanoseconds: 200_000_000)) != nil {
+        while self.isEnabled, await SimpleTaskSupport.waitForNextOperation(interval: 0.2) {
             await self.checkSilence()
         }
     }
