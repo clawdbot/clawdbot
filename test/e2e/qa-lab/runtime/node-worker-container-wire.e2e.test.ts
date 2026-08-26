@@ -186,7 +186,7 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
         patchArmed &&
         request.method === "sessions.patch" &&
         request.params?.key === patchSessionKey &&
-        request.params.permissionMode === "full"
+        request.params?.permissionMode === "full"
       ) {
         patchArmed = false;
         releaseHeldPatch = () => {
