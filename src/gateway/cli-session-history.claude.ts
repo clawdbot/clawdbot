@@ -336,13 +336,25 @@ function stripTrailingCliImageMentions(text: string): string {
   return lines.slice(0, end).join("\n").trimEnd();
 }
 
-// Returns null when stripping leaves no visible content (image-only prompt);
-// the local transcript row already represents that turn with media facts.
+type CliImageMentionStripResult =
+  | { kind: "unchanged" }
+  | { kind: "stripped"; content: string | unknown[] }
+  | { kind: "mention-only" };
+
+// Rows reduced to nothing but image mentions keep their original content and
+// are only tagged; the history merge decides whether a local media-bearing row
+// makes them redundant, because the parser cannot know that a local
+// counterpart survives (the local transcript may be reset or lost while the
+// external JSONL persists).
 function stripCliImageMentionsFromUserContent(
   content: string | unknown[],
-): string | unknown[] | null {
+): CliImageMentionStripResult {
   if (typeof content === "string") {
-    return stripTrailingCliImageMentions(content) || null;
+    const stripped = stripTrailingCliImageMentions(content);
+    if (stripped === content) {
+      return { kind: "unchanged" };
+    }
+    return stripped ? { kind: "stripped", content: stripped } : { kind: "mention-only" };
   }
   let changed = false;
   const next: unknown[] = [];
@@ -365,9 +377,9 @@ function stripCliImageMentionsFromUserContent(
     next.push(block);
   }
   if (!changed) {
-    return content;
+    return { kind: "unchanged" };
   }
-  return next.length > 0 ? next : null;
+  return next.length > 0 ? { kind: "stripped", content: next } : { kind: "mention-only" };
 }
 
 export function parseClaudeCliHistoryEntry(
@@ -467,9 +479,9 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
-    const strippedContent = stripCliImageMentionsFromUserContent(content);
-    if (strippedContent === null) {
-      return null;
+    const stripResult = stripCliImageMentionsFromUserContent(content);
+    if (stripResult.kind === "stripped") {
+      content = stripResult.content;
     }
     // Record provenance here, where the native flags are known, so downstream
     // display never has to infer operator authorship from message text.
@@ -477,13 +489,13 @@ export function parseClaudeCliHistoryEntry(
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
-        content: strippedContent,
+        content,
         ...(harnessInjected
           ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
           : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
-      baseMeta,
+      stripResult.kind === "mention-only" ? { ...baseMeta, cliImageMentionOnly: true } : baseMeta,
     ) as TranscriptLikeMessage;
   }
 

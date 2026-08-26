@@ -6,6 +6,11 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  isImageMediaFact,
+  normalizeMediaFacts,
+  type MediaFactInput,
+} from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -100,6 +105,43 @@ function resolveImportedExternalIdentityKey(message: unknown): string | undefine
     : undefined;
 }
 
+function addTimestampToSummary(summary: TimestampSummary, timestamp: number | undefined): void {
+  if (timestamp === undefined) {
+    summary.hasMissingTimestamp = true;
+    return;
+  }
+  const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  const bucket = summary.buckets.get(bucketKey);
+  if (bucket) {
+    bucket.min = Math.min(bucket.min, timestamp);
+    bucket.max = Math.max(bucket.max, timestamp);
+  } else {
+    summary.buckets.set(bucketKey, { min: timestamp, max: timestamp });
+  }
+}
+
+function summaryMatchesTimestamp(
+  summary: TimestampSummary | undefined,
+  timestamp: number | undefined,
+): boolean {
+  if (!summary) {
+    return false;
+  }
+  if (timestamp === undefined || summary.hasMissingTimestamp) {
+    return true;
+  }
+  const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  if (summary.buckets.has(bucketKey)) {
+    return true;
+  }
+  const previous = summary.buckets.get(bucketKey - 1);
+  if (previous && previous.max >= timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
+    return true;
+  }
+  const next = summary.buckets.get(bucketKey + 1);
+  return next !== undefined && next.min <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
+}
+
 function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
   if (!entry.role || !entry.text) {
     return;
@@ -114,41 +156,46 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
     summary = { hasMissingTimestamp: false, buckets: new Map() };
     byText.set(entry.text, summary);
   }
-  if (entry.timestamp === undefined) {
-    summary.hasMissingTimestamp = true;
-    return;
-  }
-  const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  const bucket = summary.buckets.get(bucketKey);
-  if (bucket) {
-    bucket.min = Math.min(bucket.min, entry.timestamp);
-    bucket.max = Math.max(bucket.max, entry.timestamp);
-  } else {
-    summary.buckets.set(bucketKey, { min: entry.timestamp, max: entry.timestamp });
-  }
+  addTimestampToSummary(summary, entry.timestamp);
 }
 
 function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): boolean {
   if (!entry.role || !entry.text) {
     return false;
   }
-  const summary = index.get(entry.role)?.get(entry.text);
-  if (!summary) {
+  return summaryMatchesTimestamp(index.get(entry.role)?.get(entry.text), entry.timestamp);
+}
+
+// Imported user rows containing only CLI-injected image cache mentions (tagged
+// by the Claude importer) are redundant only when a local user row with image
+// media facts represents the same turn. Local history can be reset or lost
+// while the external JSONL persists, so redundancy is proven per-merge by a
+// media-bearing local row inside the dedupe timestamp window, never assumed.
+function isCliImageMentionOnlyImport(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
     return false;
   }
-  if (entry.timestamp === undefined || summary.hasMissingTimestamp) {
-    return true;
+  const meta = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!meta || typeof meta !== "object") {
+    return false;
   }
-  const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  if (summary.buckets.has(bucketKey)) {
-    return true;
+  return (meta as { cliImageMentionOnly?: unknown }).cliImageMentionOnly === true;
+}
+
+function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
+  const message = entry.message;
+  if (entry.role !== "user" || !message || typeof message !== "object") {
+    return false;
   }
-  const previous = summary.buckets.get(bucketKey - 1);
-  if (previous && previous.max >= entry.timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
-    return true;
+  const meta = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!meta || typeof meta !== "object") {
+    return false;
   }
-  const next = summary.buckets.get(bucketKey + 1);
-  return next !== undefined && next.min <= entry.timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
+  const media = (meta as { media?: unknown }).media;
+  if (!Array.isArray(media)) {
+    return false;
+  }
+  return normalizeMediaFacts(media as readonly MediaFactInput[]).some(isImageMediaFact);
 }
 
 function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
@@ -170,6 +217,7 @@ export function mergeImportedChatHistoryMessages(params: {
   const exactExternalIdentityIndex = new Set<string>();
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
+  let localImageMediaTimestamps: TimestampSummary | undefined;
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
       exactExternalIdentityIndex.add(entry.externalIdentityKey);
@@ -180,6 +228,10 @@ export function mergeImportedChatHistoryMessages(params: {
   };
   for (const entry of merged) {
     indexEntry(entry);
+    if (hasLocalImageMediaFacts(entry)) {
+      localImageMediaTimestamps ??= { hasMissingTimestamp: false, buckets: new Map() };
+      addTimestampToSummary(localImageMediaTimestamps, entry.timestamp);
+    }
   }
   let nextOrder = merged.length;
   for (const message of params.importedMessages) {
@@ -189,6 +241,12 @@ export function mergeImportedChatHistoryMessages(params: {
         hasRoleTextCandidate(identitylessRoleTextIndex, imported)
       : hasRoleTextCandidate(allMessageRoleTextIndex, imported);
     if (duplicate) {
+      continue;
+    }
+    if (
+      isCliImageMentionOnlyImport(message) &&
+      summaryMatchesTimestamp(localImageMediaTimestamps, imported.timestamp)
+    ) {
       continue;
     }
     merged.push(imported);
