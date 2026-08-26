@@ -46,6 +46,7 @@ import {
   updateSessionCatalogData as updateSessionCatalogDataForHost,
 } from "./session-data-controller-catalog.ts";
 import {
+  publishSidebarSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
   subscribeSidebarAgentSessionCaches,
@@ -70,7 +71,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionMutationError: string | null = null;
-  private sessionErrorOwner: "list" | "action" | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
 
@@ -158,14 +158,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   get context(): ApplicationContext<RouteId> | undefined {
     return this.host.sessionDataContext;
-  }
-
-  publishSidebarSessionListError(error: string | null): void {
-    if (this.sessionErrorOwner === "action") {
-      return;
-    }
-    this.sessionMutationError = error;
-    this.sessionErrorOwner = error ? "list" : null;
   }
 
   get isSessionDataHostConnected(): boolean {
@@ -531,7 +523,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.unsubscribeFilteredSessions?.();
     this.unsubscribeFilteredSessions = null;
     this.filteredSessionScope = null;
-    this.publishSidebarSessionListError(null);
   }
 
   private bindFilteredSessions(agentId: string): void {
@@ -601,7 +592,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
       this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
-      this.notify();
     } catch (error) {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
@@ -697,8 +687,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   dismissSessionMutationError(): void {
-    this.sessionMutationError = null;
-    this.sessionErrorOwner = null;
+    publishSidebarSessionError(this, null, "action");
     this.notify();
   }
 
@@ -743,8 +732,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private invalidateSessionMutations(): void {
     this.sessionMutationEpoch += 1;
-    this.sessionMutationError = null;
-    this.sessionErrorOwner = null;
+    publishSidebarSessionError(this, null, "action");
     // Dismiss any confirm dialog still open under the retired epoch before a
     // new one can be issued; otherwise it stays modal until manually closed.
     this.sessionMutationAbortController.abort();
@@ -762,8 +750,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
-    this.sessionMutationError = null;
-    this.sessionErrorOwner = null;
+    publishSidebarSessionError(this, null, "action");
     this.notify();
     return {
       epoch: this.sessionMutationEpoch,
@@ -792,8 +779,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
-      this.sessionMutationError = formatUiError(error);
-      this.sessionErrorOwner = "action";
+      publishSidebarSessionError(this, formatUiError(error), "action");
       this.notify();
     }
   }
