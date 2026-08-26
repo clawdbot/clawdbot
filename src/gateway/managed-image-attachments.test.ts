@@ -2037,6 +2037,26 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it.each(["application/octet-stream", "binary/octet-stream"])(
+    "ignores generic %s metadata when authorizing a known local image",
+    async (mimeType) => {
+      const allowedDir = path.join(stateDir, "workspace", "uploads");
+      const allowedPath = path.join(allowedDir, "inside.png");
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [allowedPath],
+        attachments: [{ type: "file", mimeType }],
+        stateDir,
+        localRoots: [path.join(stateDir, "workspace")],
+      });
+
+      expect(requireBlock(blocks)).toMatchObject({ type: "image", mimeType: "image/png" });
+    },
+  );
+
   it("keeps byte detection authoritative after hinted-kind ingestion", async () => {
     const sourcePath = path.join(stateDir, "workspace", "report.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });

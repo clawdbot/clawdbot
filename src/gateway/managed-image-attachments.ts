@@ -28,6 +28,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+import { isGenericBinaryMediaContentType } from "../media/media-facts.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import {
   createImageProcessor,
@@ -1392,7 +1393,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
     const label = isDataUrl ? fallbackLabel : deriveAltText(localMediaPath ?? mediaUrl, index);
     const sourceKind = mediaKindFromMime(mimeTypeFromFilePath(localMediaPath ?? mediaUrl));
-    const metadataMimeKind = kindFromMime(attachmentMetadata?.mimeType);
+    const metadataMimeKind = isGenericBinaryMediaContentType(attachmentMetadata?.mimeType)
+      ? undefined
+      : kindFromMime(attachmentMetadata?.mimeType);
     const metadataNameKind = mediaKindFromMime(mimeTypeFromFilePath(attachmentMetadata?.name));
     const inferredKinds = [sourceKind, metadataMimeKind, metadataNameKind];
     // Declared metadata may identify an otherwise opaque document, but it must
