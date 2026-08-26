@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
 import type { WebClientOptions } from "@slack/web-api";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import type {
+  ChannelIngressMonitorLifecycle,
+  ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -413,6 +416,69 @@ describe("Slack durable ingress", () => {
         expect(starts).toEqual([firstEvent.ts, secondEvent.ts]);
       } finally {
         releaseFirstDispatch();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("keeps a queued same-session event alive past the adoption watchdog", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirstSettlement: () => void = () => {};
+      const firstSettlement = new Promise<void>((resolve) => {
+        releaseFirstSettlement = resolve;
+      });
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const eventId = (receiverEvent.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:shared-session");
+        starts.push(eventId);
+        if (eventId === "Ev-session-watchdog-first") {
+          (lifecycle as ChannelIngressMonitorLifecycle).onAdoptionFinalizing();
+          await firstSettlement;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const ingress = createSlackDurableIngress({
+        accountId: "default",
+        queue,
+        pollIntervalMs: 60_000,
+        adoptionStallTimeoutMs: 80,
+      });
+      const harness = createReceiverHarness();
+      ingress.wrapReceiver(harness.receiver).init({ processEvent } as App);
+      ingress.start();
+
+      try {
+        await harness.receive(createReceiverEvent("Ev-session-watchdog-first"));
+        await harness.receive(createReceiverEvent("Ev-session-watchdog-second"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2));
+        expect(starts).toEqual(["Ev-session-watchdog-first"]);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 120);
+        });
+        await harness.receive(createReceiverEvent("Ev-session-watchdog-third"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(3));
+        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+          "Ev-session-watchdog-first",
+          "Ev-session-watchdog-second",
+          "Ev-session-watchdog-third",
+        ]);
+        expect(starts).toEqual(["Ev-session-watchdog-first"]);
+
+        releaseFirstSettlement();
+        await ingress.waitForIdle();
+        expect(starts).toEqual([
+          "Ev-session-watchdog-first",
+          "Ev-session-watchdog-second",
+          "Ev-session-watchdog-third",
+        ]);
+        expect(processEvent).toHaveBeenCalledTimes(3);
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        releaseFirstSettlement();
         await ingress.waitForIdle();
         await ingress.stop();
       }

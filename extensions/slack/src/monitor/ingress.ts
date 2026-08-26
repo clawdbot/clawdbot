@@ -297,22 +297,32 @@ export function createSlackDurableIngress(
           routedSession = sessionKey;
           const previousTurn = activeSessionTurns.get(sessionKey);
           let resolveCurrentTurn: () => void = () => {};
-          const currentTurn = new Promise<void>((resolve) => {
+          const releasedCurrentTurn = new Promise<void>((resolve) => {
             resolveCurrentTurn = resolve;
           });
+          const currentTurn = previousTurn
+            ? previousTurn.then(() => releasedCurrentTurn)
+            : releasedCurrentTurn;
           activeSessionTurns.set(sessionKey, currentTurn);
           const releaseCurrentSession = () => {
-            if (activeSessionTurns.get(sessionKey) === currentTurn) {
-              activeSessionTurns.delete(sessionKey);
-            }
             lifecycle.abortSignal.removeEventListener("abort", releaseCurrentSession);
             resolveCurrentTurn();
           };
+          void currentTurn.then(() => {
+            if (activeSessionTurns.get(sessionKey) === currentTurn) {
+              activeSessionTurns.delete(sessionKey);
+            }
+          });
           releaseSession = releaseCurrentSession;
           lifecycle.abortSignal.addEventListener("abort", releaseSession, { once: true });
           // Preserve shipped channel lanes until the prepared route proves its
           // session; channel-ID migration therefore still fences all traffic.
           lifecycle.onDeferred();
+          if (previousTurn) {
+            // A queued session turn owns its durable claim; its predecessor may
+            // legitimately outlive the pre-adoption watchdog.
+            lifecycle.onAdoptionFinalizing();
+          }
           monitor.requestDrain();
           await previousTurn;
           lifecycle.abortSignal.throwIfAborted();
