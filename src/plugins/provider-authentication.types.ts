@@ -162,7 +162,15 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
-  /** True only when the provider guarantees that run() never needs terminal input. */
+  /**
+   * Opt this method into non-TTY `models auth login`.
+   *
+   * Set this to true only when `run` is guaranteed not to read terminal input
+   * or wait for an interactive prompt. The method may still display progress
+   * or verification instructions and wait for an external callback or device
+   * confirmation. This is a provider-owned capability; `kind` alone does not
+   * establish that the flow is safe for non-interactive execution.
+   */
   headless?: boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
