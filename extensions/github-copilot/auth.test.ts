@@ -102,6 +102,143 @@ describe("resolveFirstGithubToken", () => {
     });
   });
 
+  it.each([
+    {
+      label: "configured order selects the second stored account",
+      configuredOrder: ["github-copilot:preferred"],
+      expectedToken: "preferred-token",
+    },
+    {
+      label: "stored account order overrides configured order",
+      configuredOrder: ["github-copilot:first"],
+      storedOrder: ["github-copilot:preferred"],
+      expectedToken: "preferred-token",
+    },
+    {
+      label: "provider keys are matched case-insensitively",
+      providerKey: " GITHUB-COPILOT ",
+      configuredOrder: ["github-copilot:preferred"],
+      expectedToken: "preferred-token",
+    },
+    {
+      label: "an explicit empty order does not fall back to another account",
+      configuredOrder: [],
+      expectedToken: "",
+    },
+    {
+      label: "a missing configured account does not fall back to another account",
+      configuredOrder: ["github-copilot:missing"],
+      expectedToken: "",
+    },
+    {
+      label: "a cooled-down explicitly ordered account moves behind an available account",
+      configuredOrder: ["github-copilot:first", "github-copilot:preferred"],
+      firstAccountInCooldown: true,
+      expectedToken: "preferred-token",
+    },
+  ])("honors auth profile order when $label", async (testCase) => {
+    const providerKey = testCase.providerKey ?? "github-copilot";
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "first-token",
+        },
+        "github-copilot:preferred": {
+          type: "token",
+          provider: "github-copilot",
+          token: "preferred-token",
+        },
+      },
+      ...(testCase.storedOrder ? { order: { [providerKey]: testCase.storedOrder } } : {}),
+      ...(testCase.firstAccountInCooldown
+        ? {
+            usageStats: {
+              "github-copilot:first": { cooldownUntil: Date.now() + 60_000 },
+            },
+          }
+        : {}),
+    });
+    listProfilesForProviderMock.mockReturnValue([
+      "github-copilot:first",
+      "github-copilot:preferred",
+    ]);
+
+    await expect(
+      resolveFirstGithubToken({
+        config: {
+          auth: { order: { [providerKey]: testCase.configuredOrder } },
+        },
+        env: {},
+      }),
+    ).resolves.toEqual({ githubToken: testCase.expectedToken, hasProfile: true });
+  });
+
+  it("keeps the first stored account without an explicit order or cooldown mutation", async () => {
+    const expiredCooldown = Date.now() - 60_000;
+    const store = {
+      version: 1,
+      profiles: {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "first-token",
+        },
+        "github-copilot:preferred": {
+          type: "token",
+          provider: "github-copilot",
+          token: "preferred-token",
+        },
+      },
+      usageStats: {
+        "github-copilot:first": { cooldownUntil: expiredCooldown },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValue(store);
+    listProfilesForProviderMock.mockReturnValue([
+      "github-copilot:first",
+      "github-copilot:preferred",
+    ]);
+
+    await expect(resolveFirstGithubToken({ config: {}, env: {} })).resolves.toEqual({
+      githubToken: "first-token",
+      hasProfile: true,
+    });
+    expect(store.usageStats["github-copilot:first"].cooldownUntil).toBe(expiredCooldown);
+  });
+
+  it("preserves explicitly requested profiles even when account order excludes them", async () => {
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "github-copilot:first": {
+          type: "token",
+          provider: "github-copilot",
+          token: "first-token",
+        },
+        "github-copilot:preferred": {
+          type: "token",
+          provider: "github-copilot",
+          token: "preferred-token",
+        },
+      },
+    });
+    listProfilesForProviderMock.mockReturnValue([
+      "github-copilot:first",
+      "github-copilot:preferred",
+    ]);
+
+    await expect(
+      resolveFirstGithubToken({
+        config: { auth: { order: { "github-copilot": ["github-copilot:first"] } } },
+        env: {},
+        profileId: "github-copilot:preferred",
+      }),
+    ).resolves.toEqual({ githubToken: "preferred-token", hasProfile: true });
+  });
+
   it("uses environment direct auth without falling back to config or the first profile", async () => {
     const config = {
       models: {

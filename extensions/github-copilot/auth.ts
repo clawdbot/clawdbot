@@ -1,4 +1,8 @@
 // Github Copilot plugin module implements auth behavior.
+import {
+  findNormalizedProviderValue,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -73,9 +77,20 @@ export async function resolveFirstGithubToken(params: {
     return { githubToken: resolved.value?.trim() || githubToken, hasProfile: false };
   }
 
+  const explicitProfileOrder =
+    findNormalizedProviderValue(authStore.order, PROVIDER_ID) ??
+    findNormalizedProviderValue(params.config?.auth?.order, PROVIDER_ID);
+  // Preserve discovery's existing first-profile default; authored order alone
+  // delegates eligibility and cooldown handling to the canonical auth owner.
   const profileId = requestedProfileId
     ? profileIds.find((candidate) => candidate === requestedProfileId)
-    : profileIds[0];
+    : explicitProfileOrder === undefined
+      ? profileIds[0]
+      : resolveAuthProfileOrder({
+          cfg: params.config,
+          store: authStore,
+          provider: PROVIDER_ID,
+        })[0];
   const profile = profileId ? authStore.profiles[profileId] : undefined;
   if (profile?.type !== "token") {
     return { githubToken: "", hasProfile };

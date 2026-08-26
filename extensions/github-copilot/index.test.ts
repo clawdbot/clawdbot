@@ -411,6 +411,75 @@ describe("github-copilot plugin", () => {
     expect(adapter.id).toBe("github-copilot");
   });
 
+  it("uses the configured account when discovering its live Copilot model catalog", async () => {
+    const agentDir = await createAgentDir();
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "github-copilot:first": {
+            type: "token",
+            provider: "github-copilot",
+            token: "first-token",
+          },
+          "github-copilot:preferred": {
+            type: "token",
+            provider: "github-copilot",
+            token: "preferred-token",
+          },
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "preferred-copilot-token",
+      baseUrl: "https://api.githubcopilot.preferred",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  model_picker_enabled: true,
+                  policy: { state: "enabled" },
+                  capabilities: {
+                    type: "chat",
+                    limits: { max_context_window_tokens: 200_000, max_output_tokens: 64_000 },
+                    supports: { streaming: true, tool_calls: true },
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const provider = registerProviderWithPluginConfig({});
+
+    const result = await provider.catalog.run({
+      config: {
+        auth: { order: { "github-copilot": ["github-copilot:preferred"] } },
+      },
+      agentDir,
+      env: {},
+    });
+
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
+      githubToken: "preferred-token",
+      env: {},
+      githubDomain: "github.com",
+    });
+    expect(
+      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
+    ).toEqual(["gpt-5.4"]);
+  });
+
   it("skips catalog discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
