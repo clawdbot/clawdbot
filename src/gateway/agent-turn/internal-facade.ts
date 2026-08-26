@@ -48,6 +48,45 @@ export function createInternalAgentTurnFacade(
   const isWebchatConnect = options.isWebchatConnect ?? (() => false);
   const getMethodRegistry = options.getMethodRegistry ?? createRequestGatewayMethodRegistry;
 
+  const wait = async <T = unknown>(
+    params: AgentWaitParams,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    onSignalAbort?: () => Promise<void> | void,
+  ): Promise<T> => {
+    const method = "agent.wait";
+    throwIfGatewayDispatchAborted(method, signal);
+    const context = options.getContext();
+    const methodRegistry = getMethodRegistry();
+    const authorization = await authorizeGatewayRequestPreDispatch({
+      method,
+      requestParams: params,
+      client: options.client,
+      context,
+      methodRegistry,
+    });
+    if (authorization.error) {
+      return throwEnvelopeRejection(method, authorization.error);
+    }
+    const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
+    if (validationError) {
+      return throwEnvelopeRejection(method, validationError);
+    }
+    options.assertContextCurrent?.();
+    const result = runWithGatewayRequestEnvelope(
+      method,
+      options.client,
+      () => createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params),
+      {
+        context,
+        isWebchatConnect,
+        methodRegistry,
+        reject: (error) => throwEnvelopeRejection(method, error),
+      },
+    );
+    return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
+  };
+
   const dispatchRaw = async (
     request: AgentRunRequest,
     dispatchOptions: InternalAgentTurnDispatchOptions = {},
@@ -175,10 +214,29 @@ export function createInternalAgentTurnFacade(
     );
     const response = (async () => {
       const first = acceptance ?? (await acceptancePromise);
-      if (
-        dispatchOptions.expectFinal !== true ||
-        (first.payload as { status?: unknown } | undefined)?.status !== "accepted"
-      ) {
+      const firstPayload = first.payload as { runId?: unknown; status?: unknown } | undefined;
+      if (dispatchOptions.expectFinal !== true) {
+        return first;
+      }
+      if (firstPayload?.status === "in_flight") {
+        const runId = typeof firstPayload.runId === "string" ? firstPayload.runId.trim() : "";
+        if (!runId) {
+          return first;
+        }
+        const timeoutMs = dispatchOptions.timeoutMs;
+        await wait(
+          { runId, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+          timeoutMs,
+          dispatchOptions.signal,
+        );
+        // The terminal dedupe payload retains the full result needed by callers;
+        // agent.wait is only the liveness rendezvous for the already-admitted run.
+        return await dispatchRaw(request, {
+          signal: dispatchOptions.signal,
+          timeoutMs,
+        });
+      }
+      if (firstPayload?.status !== "accepted") {
         return first;
       }
       dispatchOptions.onAccepted?.(first.payload);
@@ -206,46 +264,6 @@ export function createInternalAgentTurnFacade(
       "agent",
       await dispatchRaw(request, normalizedOptions),
     ) as T;
-  };
-
-  const wait = async <T = unknown>(
-    params: AgentWaitParams,
-    timeoutMs?: number,
-    signal?: AbortSignal,
-    onSignalAbort?: () => Promise<void> | void,
-  ): Promise<T> => {
-    const method = "agent.wait";
-    throwIfGatewayDispatchAborted(method, signal);
-    options.assertContextCurrent?.();
-    const context = options.getContext();
-    const methodRegistry = getMethodRegistry();
-    const authorization = await authorizeGatewayRequestPreDispatch({
-      method,
-      requestParams: params,
-      client: options.client,
-      context,
-      methodRegistry,
-    });
-    if (authorization.error) {
-      return throwEnvelopeRejection(method, authorization.error);
-    }
-    const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
-    if (validationError) {
-      return throwEnvelopeRejection(method, validationError);
-    }
-    options.assertContextCurrent?.();
-    const result = runWithGatewayRequestEnvelope(
-      method,
-      options.client,
-      () => createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params),
-      {
-        context,
-        isWebchatConnect,
-        methodRegistry,
-        reject: (error) => throwEnvelopeRejection(method, error),
-      },
-    );
-    return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
   };
 
   return { dispatch, dispatchRaw, wait };

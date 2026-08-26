@@ -434,9 +434,18 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (!params.requireVisibleReply) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
       return {
-        delivered: true,
+        delivered: false,
         path: "direct",
+        reason: "completion_handoff_pending",
+        error: "requester agent run is still in flight",
+        disposition: "retryable",
       };
     }
 

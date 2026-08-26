@@ -4929,6 +4929,51 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("retains a yielded requester wake when replay is still in flight", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connect ECONNRESET after admission"))
+      .mockResolvedValueOnce({ runId: "run-requester-replay", status: "in_flight" });
+    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
+    testing.setDepsForTest({
+      callGateway: callGateway as typeof runtimeCallGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(true),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "all spawned subagents settled",
+      steerMessage: "all spawned subagents settled",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      requireDirectDelivery: true,
+      requireVisibleReply: true,
+      directIdempotencyKey: "announce-requester-replay",
+      sourceTool: "subagent_announce",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "completion_handoff_pending",
+      disposition: "retryable",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway.mock.calls.map(([call]) => call.params?.idempotencyKey)).toEqual([
+      "announce-requester-replay",
+      "announce-requester-replay",
+    ]);
+  });
+
   it.each([
     {
       name: "a transient network cause wrapped by outbound delivery",
