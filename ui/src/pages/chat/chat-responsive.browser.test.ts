@@ -139,7 +139,6 @@ type ChatFixtureOptions = {
   crowdedComposerFooter?: boolean;
   direct?: boolean;
   sessionRailBody?: string;
-  singleAgent?: boolean;
   slashMenu?: boolean;
 };
 
@@ -464,40 +463,6 @@ function chatFooterActionsHtml() {
   `;
 }
 
-function chatControlsHtml(opts: { agent?: boolean } = {}) {
-  const showAgent = opts.agent !== false;
-  return `
-    <div class="chat-mobile-controls-wrapper">
-      <button class="btn btn--sm btn--icon chat-controls-mobile-toggle" aria-expanded="true" aria-controls="chat-mobile-controls-dropdown">${iconSvg()}</button>
-      <div id="chat-mobile-controls-dropdown" class="chat-controls-dropdown open">
-        <div class="chat-controls">
-          <div class="chat-controls__session-row${showAgent ? "" : " chat-controls__session-row--single-agent"}">
-            ${
-              showAgent
-                ? `<label class="field chat-controls__session chat-controls__agent">
-                    <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Alpha</option><option>Beta</option></select>
-                  </label>`
-                : ""
-            }
-            <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat thread"><option>Daily planning</option></select>
-            </label>
-            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
-            </details>
-          </div>
-          <div class="chat-controls__thinking">
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
@@ -543,38 +508,6 @@ function composerControlsHtml() {
   `;
 }
 
-function chatHeaderControlsHtml(hidden = false) {
-  return `
-    <main class="content content--chat" data-chat-header-responsive-fixture>
-      <section class="content-header${hidden ? " content-header--chat-hidden" : ""}"${hidden ? ' inert aria-hidden="true"' : ""}>
-        <div>
-          <div class="chat-controls__session-row">
-            <label class="field chat-controls__session chat-controls__agent">
-              <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Valentina</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat thread"><option>main</option></select>
-            </label>
-            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
-            </details>
-          </div>
-        </div>
-        <div class="page-meta">
-          <div class="chat-controls">
-            <button class="btn btn--sm btn--icon" aria-label="Refresh chat data">${iconSvg()}</button>
-            <span class="chat-controls__separator">|</span>
-            <button class="btn btn--sm btn--icon active" aria-label="Toggle assistant thinking">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active" aria-label="Toggle tool calls">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active" aria-label="Show cron sessions">${iconSvg()}</button>
-          </div>
-        </div>
-      </section>
-      <section class="card chat"></section>
-    </main>
-  `;
-}
-
 function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   return `
     <div class="shell shell--chat${mobileNavLayout ? " shell--mobile-nav" : ""}" data-chat-responsive-fixture>
@@ -582,7 +515,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
             <button class="topbar-search">${iconSvg()}</button>
-            <div>${chatControlsHtml({ agent: !opts.singleAgent })}</div>
           </div>
         </div>
       </header>
@@ -915,19 +847,6 @@ function rectsOverlap(
     first.y < second.y + second.height &&
     first.y + first.height > second.y
   );
-}
-
-async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
-  const page = await openBrowserPage(width, height);
-  try {
-    await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
-    );
-    return page;
-  } catch (error) {
-    await closeBrowserPage(page);
-    throw error;
-  }
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -2780,66 +2699,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it.each([
-    [1120, 740],
-    [1366, 900],
-    [1440, 900],
-  ] as const)("keeps desktop chat controls in one row at %sx%s", async (width, height) => {
-    const page = await openHeaderFixture(width, height);
-    try {
-      await expectNoHorizontalOverflow(page);
-      const controls = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector);
-          const rect = node?.getBoundingClientRect();
-          return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
-        };
-        return {
-          session: rectFor('[data-chat-session-select="true"]'),
-          agent: rectFor('[data-chat-agent-filter="true"]'),
-          model: rectFor('[data-chat-model-select="true"]'),
-          action: rectFor(".page-meta .btn--icon"),
-        };
-      });
-      const rowY = [
-        controls.session?.y,
-        controls.agent?.y,
-        controls.model?.y,
-        controls.action?.y,
-      ].filter((value): value is number => typeof value === "number");
-      expect(rowY.length).toBe(4);
-      expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
-      const agent = expectControlRect(controls.agent, "agent");
-      const session = expectControlRect(controls.session, "session");
-      expect(agent.x).toBeLessThan(session.x);
-      expect(session.width / agent.width).toBeGreaterThan(1.25);
-      expect(session.width / agent.width).toBeLessThan(1.55);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("collapses the desktop chat controls row when scroll state hides it", async () => {
-    const page = await openHeaderFixture(1366, 900, { hidden: true });
-    try {
-      const hiddenState = await page.evaluate(() => {
-        const header = document.querySelector(".content-header") as HTMLElement | null;
-        const rect = header?.getBoundingClientRect();
-        const style = header ? getComputedStyle(header) : null;
-        return {
-          height: rect?.height ?? -1,
-          opacity: style?.opacity ?? "",
-          pointerEvents: style?.pointerEvents ?? "",
-        };
-      });
-      expect(hiddenState.height).toBeLessThanOrEqual(1);
-      expect(hiddenState.opacity).toBe("0");
-      expect(hiddenState.pointerEvents).toBe("none");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it.each(VIEWPORTS)("keeps the chat shell inside the viewport at %sx%s", async (width, height) => {
     const page = await openFixture(width, height);
     try {
@@ -3016,73 +2875,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(geometry.shortTableWidth).toBeLessThan(geometry.laneWidth);
         expect(geometry.trailingGap).toBeLessThanOrEqual(1);
         expect(geometry.narrowTableWidth).toBeCloseTo(geometry.narrowLaneWidth, 0);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each(["dark", "light"] as const)(
-    "keeps mobile controls inside the viewport with touch targets in %s mode",
-    async (themeMode) => {
-      const page = await openFixture(320, 568);
-      try {
-        await page.evaluate(
-          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
-          themeMode,
-        );
-        const dropdown = await getBoundingBox(page, ".chat-controls-dropdown.open");
-        expect(dropdown.x).toBeGreaterThanOrEqual(8);
-        expect(dropdown.x + dropdown.width).toBeLessThanOrEqual(312);
-        await expectNoHorizontalOverflow(page);
-        const mobileControls = await page.evaluate(() => {
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const rect = node.getBoundingClientRect();
-            return {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-              text: node.textContent?.trim() ?? "",
-              display: getComputedStyle(node).display,
-            };
-          };
-          return {
-            agent: rectFor('[data-chat-agent-filter="true"]'),
-            session: rectFor('[data-chat-session-select="true"]'),
-            model: rectFor('[data-chat-model-select="true"]'),
-            compactCount: document.querySelectorAll('[data-chat-thinking-select-compact="true"]')
-              .length,
-          };
-        });
-        const agent = expectControlRect(mobileControls.agent, "agent");
-        const session = expectControlRect(mobileControls.session, "session");
-        const model = expectControlRect(mobileControls.model, "model");
-        expect(session.y).toBe(agent.y);
-        expect(agent.x).toBeLessThan(session.x);
-        expect(session.width / agent.width).toBeGreaterThan(1.25);
-        expect(session.width / agent.width).toBeLessThan(1.55);
-        expect(model.display).not.toBe("none");
-        expect(model.text).toBe("gpt-5 · High");
-        expect(mobileControls.compactCount).toBe(0);
-
-        const sizes = await page
-          .locator(".chat-controls-mobile-toggle, .chat-controls-dropdown .btn--icon")
-          .evaluateAll((nodes) =>
-            nodes.map((node) => {
-              const rect = (node as HTMLElement).getBoundingClientRect();
-              return { width: rect.width, height: rect.height };
-            }),
-          );
-        expect(sizes.length).toBeGreaterThan(0);
-        for (const size of sizes) {
-          expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        }
       } finally {
         await closeBrowserPage(page);
       }
@@ -4445,20 +4237,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(result.outerScrollTop).toBe(0);
       expect(result.scrollTop).toBeGreaterThan(0);
       expect(result.visible).toBe(true);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("uses the compact mobile grid when the agent filter is not rendered", async () => {
-    const page = await openFixture(320, 568, { singleAgent: true });
-    try {
-      await expectNoHorizontalOverflow(page);
-      expect(await page.locator('[data-chat-agent-filter="true"]').count()).toBe(0);
-      const session = await getBoundingBox(page, '[data-chat-session-select="true"]');
-      const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
-      expect(model.y).toBeGreaterThan(session.y);
-      expect(model.width).toBe(session.width);
     } finally {
       await closeBrowserPage(page);
     }

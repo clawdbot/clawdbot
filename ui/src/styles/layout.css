@@ -4113,17 +4113,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   min-width: 0;
 }
 
-.content--chat .content-header.content-header--chat-hidden {
-  opacity: 0;
-  transform: translateY(-10px);
-  min-height: 0;
-  max-height: 0px;
-  padding-top: 0;
-  padding-bottom: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
 .page-title {
   font-size: 22px;
   font-weight: 650;
@@ -4182,12 +4171,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: visible;
 }
 
-.content--chat .chat-controls {
-  flex-shrink: 0;
-  flex-wrap: nowrap;
-  gap: 6px;
-}
-
 /* ===========================================
    Grid Utilities
    =========================================== */
@@ -4241,20 +4224,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   .list-item {
     grid-template-columns: 1fr;
   }
-}
-
-/* Mobile chat controls — hidden on desktop, shown in layout.mobile.css */
-.chat-mobile-controls-wrapper {
-  display: none;
-}
-
-.chat-controls-mobile-toggle {
-  display: none;
-  border-radius: var(--radius-full);
-}
-
-.chat-controls-dropdown {
-  display: none;
 }
 
 /* Standalone terminal/desktop documents: centered notice when the gateway
