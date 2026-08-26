@@ -74,6 +74,11 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     const input = "[[reply_to:message-7 Visible reply";
     expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
   });
+
+  test("preserves a malformed reply prefix after visible text", () => {
+    const input = "Visible reply\n[[reply_to_current] literally";
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
+  });
 });
 
 describe("parseInlineDirectives markdown code", () => {

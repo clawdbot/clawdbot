@@ -1493,6 +1493,7 @@ describe("createStreamingDirectiveAccumulator", () => {
 
   it.each<[string, string[]]>([
     ["inline prose", ["Explain [[reply_to_", "current] literally."]],
+    ["later line", ["Visible reply\n", "[[reply_to_", "current] literally"]],
     ["inline code", ["Use `[[reply_to_", "current]` literally."]],
     ["fenced code", ["```text\n[[reply_to_", "current]\n```"]],
     ["indented code", ["    [[reply_to_", "current]"]],
@@ -1685,7 +1686,11 @@ describe("parseReplyDirectives malformed reply prefixes", () => {
     expect(parseReplyDirectives(text).text).toBe(text);
   });
 
-  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Visible reply\n[[reply_to_current] literally",
+    "answer ending [",
+  ])(
     "preserves unrelated malformed bracket text: %s",
     (text) => {
       expect(parseReplyDirectives(text).text).toBe(text);
