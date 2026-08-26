@@ -3258,7 +3258,7 @@ src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
 src/infra/terminal-file-upload.ts	2
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	7
+src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
 src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
@@ -3603,7 +3603,7 @@ src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
 src/projects/project-registry.ts	1
-src/provider-runtime/operation-retry.ts	4
+src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
 src/proxy-capture/store.sqlite.ts	27
