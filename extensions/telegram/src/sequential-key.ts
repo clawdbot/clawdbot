@@ -221,11 +221,20 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   // to the in-memory cache (populated by earlier messages or getChat calls)
   // so the lane key resolves to `telegram:${chatId}:topic:1` rather than the
   // base lane, preventing a cross-lane session-init race.
+  const forumHint = msg?.chat
+    ? resolveTelegramMessageForumFlagHint({
+        chatType: msg.chat.type,
+        isForum: msg.chat.is_forum,
+        isTopicMessage: msg.is_topic_message,
+      })
+    : undefined;
   const cachedForumFlag =
-    msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
+    forumHint === undefined && msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
       ? getCachedTelegramForumFlag(msg.chat.id)
       : undefined;
-  const threadSpec = msg?.chat ? resolveTelegramMessageThreadSpec(msg, cachedForumFlag) : undefined;
+  const threadSpec = msg?.chat
+    ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
+    : undefined;
   const threadId =
     threadSpec?.scope === "dm"
       ? shouldUseTelegramDmThreadSession({

@@ -445,6 +445,23 @@ describe("getTelegramSequentialKey", () => {
       };
       expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9002");
     });
+
+    it("honors an explicit forum hint when the cached flag is stale", async () => {
+      await resolveTelegramForumFlag({
+        chatId: -9004,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: false,
+      });
+
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9004, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9004:topic:1");
+    });
   });
 });
 
