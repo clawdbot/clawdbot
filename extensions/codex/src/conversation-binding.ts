@@ -4,6 +4,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -175,7 +176,6 @@ async function resolveConversationAppServerRuntime(params: {
   agentDir?: string;
   sessionKey?: string;
   source?: CodexAppServerConversationBindingData["source"];
-  agentWorkspaceDir: string;
   workspaceDir: string;
   modelProvider?: string;
   model?: string;
@@ -217,6 +217,12 @@ async function resolveConversationAppServerRuntime(params: {
   }
   const permissionMode = entry?.permissionMode;
   const sessionRoot = permissionMode ? entry?.sessionRoot : undefined;
+  // The rootless permission boundary comes from agent config only. A bound
+  // thread's requested cwd (/codex bind --cwd) must never widen or become it.
+  const agentWorkspaceDir =
+    params.config && agentId
+      ? resolveAgentWorkspaceDir(params.config, agentId)
+      : resolveCodexDefaultWorkspaceDir(params.pluginConfig);
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     config: params.config,
     agentId,
@@ -231,7 +237,7 @@ async function resolveConversationAppServerRuntime(params: {
       ? await resolveSandboxContext({
           config: params.config,
           sessionKey,
-          workspaceDir: params.agentWorkspaceDir,
+          workspaceDir: agentWorkspaceDir,
         })
       : undefined;
   const configuredRuntime = resolveCodexAppServerRuntimeOptions({
@@ -254,7 +260,7 @@ async function resolveConversationAppServerRuntime(params: {
     appServer: configuredRuntime,
     permissionMode,
     sessionRoot,
-    defaultRoot: params.agentWorkspaceDir,
+    defaultRoot: agentWorkspaceDir,
     pluginConfig: readCodexPluginConfig(params.pluginConfig),
     canUseAutoReview,
     requirementsToml: readCodexRequirementsToml({}),
@@ -265,7 +271,7 @@ async function resolveConversationAppServerRuntime(params: {
     workspaceDir: resolveCodexSessionPermissionCwd({
       permissionMode,
       sessionRoot,
-      defaultRoot: params.agentWorkspaceDir,
+      defaultRoot: agentWorkspaceDir,
       requestedCwd: params.workspaceDir,
       fallbackCwd: params.workspaceDir,
     }),
@@ -310,7 +316,6 @@ async function startCodexConversationThread(
       bindingStore: params.bindingStore,
       identity,
       threadId: params.threadId.trim(),
-      agentWorkspaceDir: workspaceDir,
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
       model: params.model,
@@ -327,7 +332,6 @@ async function startCodexConversationThread(
       pluginConfig: params.pluginConfig,
       bindingStore: params.bindingStore,
       identity,
-      agentWorkspaceDir: workspaceDir,
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
       model: params.model,
@@ -516,7 +520,6 @@ type CodexThreadBindingParams = {
   pluginConfig?: unknown;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
-  agentWorkspaceDir: string;
   workspaceDir: string;
   agentDir?: string;
   model?: string;
@@ -567,7 +570,6 @@ async function resolveThreadBindingRuntime(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     source: params.source,
-    agentWorkspaceDir: params.agentWorkspaceDir,
     workspaceDir: params.workspaceDir,
     modelProvider: reviewerModelProvider,
     model: params.model,
@@ -842,8 +844,6 @@ async function runBoundTurn(params: {
     agentId: params.data.source?.agentId ?? params.data.agentId,
     sessionKey: params.data.legacyBinding ? params.sessionKey : params.data.source?.sessionKey,
     source: params.data.source,
-    // A requested thread cwd must never widen or become the permission boundary.
-    agentWorkspaceDir: params.data.workspaceDir,
     workspaceDir: requestedWorkspaceDir,
     modelProvider: reviewerModelProvider,
     model: binding.model,
@@ -1279,7 +1279,6 @@ async function prepareConversationBinding(
       bindingStore: params.bindingStore,
       identity,
       pluginConfig: params.pluginConfig,
-      agentWorkspaceDir: params.data.workspaceDir,
       workspaceDir: requested
         ? params.data.workspaceDir
         : (inherited?.cwd ?? params.data.workspaceDir),

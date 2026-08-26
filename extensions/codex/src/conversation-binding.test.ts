@@ -43,6 +43,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   resolveApiKeyForProfile: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveDefaultAgentDir: vi.fn(() => "/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/agent/workspace"),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string, _lookup?: { config?: unknown }) => provider),
   resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
@@ -2719,8 +2720,8 @@ describe("codex conversation binding", () => {
       "turn/start",
     ]);
     expect(requests[0]?.params).toMatchObject({
-      cwd: tempDir,
-      runtimeWorkspaceRoots: [tempDir],
+      cwd: "/agent/workspace",
+      runtimeWorkspaceRoots: ["/agent/workspace"],
       sandbox: "workspace-write",
       approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
@@ -2728,8 +2729,8 @@ describe("codex conversation binding", () => {
       config: { apps: { _default: { enabled: false } }, "features.apps": false },
     });
     expect(requests[2]?.params).toMatchObject({
-      cwd: tempDir,
-      runtimeWorkspaceRoots: [tempDir],
+      cwd: "/agent/workspace",
+      runtimeWorkspaceRoots: ["/agent/workspace"],
       sandboxPolicy: { type: "workspaceWrite" },
       approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
@@ -3228,7 +3229,7 @@ describe("codex conversation binding", () => {
         },
       },
       sessionKey: "agent:main:session-1",
-      workspaceDir: tempDir,
+      workspaceDir: "/agent/workspace",
     });
     expect(turnStartParams).toEqual([]);
   });
