@@ -32,7 +32,6 @@ type ChatModelPickerParams = {
   disabledReason?: string;
   mobileEffortDisabled: boolean;
   mobileEffortLabel: string;
-  mobileSettingsLabel: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
@@ -421,6 +420,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     if (params.mobileEffortDisabled) {
       return;
     }
+    // SAFETY: Lit binds this handler directly to the effort button rendered below.
     const modelPicker = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>(
       ".chat-controls__model-picker",
     );
@@ -433,6 +433,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     modelPicker.open = false;
     effortPicker.open = true;
   };
+  const settingsDisabled = params.disabled && params.mobileEffortDisabled;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
@@ -455,7 +456,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       }}
     >
       <summary
-        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${params.disabled
+        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${settingsDisabled
           ? "chat-controls__inline-select-trigger--disabled"
           : ""}"
         data-chat-model-select="true"
@@ -463,11 +464,13 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${params.mobileSettingsLabel}
-        aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason ?? triggerTitle}
+        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}; ${t(
+          "chat.selectors.thinkingLevel",
+        )}: ${params.mobileEffortLabel}`}
+        aria-disabled=${settingsDisabled ? "true" : "false"}
+        title=${settingsDisabled ? (params.disabledReason ?? triggerTitle) : triggerTitle}
         @click=${(event: MouseEvent) => {
-          if (params.disabled) {
+          if (settingsDisabled) {
             event.preventDefault();
             return;
           }

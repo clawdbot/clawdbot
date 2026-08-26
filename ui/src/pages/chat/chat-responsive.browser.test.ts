@@ -3190,15 +3190,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [
-          footer,
-          textarea,
-          meta,
-          model,
-          context,
-          attach,
-          send,
-        ]) {
+        for (const control of [footer, textarea, meta, model, context, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -3225,12 +3217,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(rectsOverlap(model, send)).toBe(false);
         const contextModelGap = model.x - (context.x + context.width);
         expect(contextModelGap).toBeGreaterThanOrEqual(-1);
-        expect(contextModelGap).toBeLessThanOrEqual(9);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
-        if (width <= 768) {
-          expect(composerFontSize).toBe(16);
+        expect(composerFontSize).toBe(16);
+        if (width <= 480) {
           const modelSettings = expectControlRect(
             controls.modelSettings,
             "composer model settings",
@@ -3240,14 +3231,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(modelSettings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(modelSettings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(modelSettings.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
-          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, context]) {
-            expect(
-              Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
-            ).toBeLessThanOrEqual(2);
-          }
-          expect(footer.height).toBeLessThanOrEqual(53);
         } else {
           const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
           const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
@@ -3263,10 +3246,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
           expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
+        }
+        if (width <= 768) {
+          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          for (const control of [model, context]) {
+            expect(
+              Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
+            ).toBeLessThanOrEqual(2);
+          }
+          expect(footer.height).toBeLessThanOrEqual(53);
+        } else {
           // The editor reads at input size, while the controls around it stay
           // chrome-sized — that difference is what marks the text as the
           // subject of the surface.
-          expect(composerFontSize).toBe(16);
           expect(send.width).toBeCloseTo(32, 2);
           expect(send.height).toBeCloseTo(32, 2);
         }

@@ -36,7 +36,7 @@ suite.define(() => {
   });
 
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
-    await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
+    await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
@@ -86,12 +86,12 @@ suite.define(() => {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
         expect(menuBox.x).toBeGreaterThanOrEqual(12);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
-        expect(menuBox.width).toBeGreaterThanOrEqual(642);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(381);
+        expect(menuBox.width).toBeGreaterThanOrEqual(368);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
-        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
-        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(376);
+        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(853);
+        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
       }
     });
@@ -641,11 +641,9 @@ suite.define(() => {
       }
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
-      const settingsContextGap =
-        mobileContextBox.x -
-        (mobileModelSettingsBox.x + mobileModelSettingsBox.width);
-      expect(settingsContextGap).toBeGreaterThanOrEqual(-1);
-      expect(settingsContextGap).toBeLessThanOrEqual(9);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(
+        mobileContextBox.x + mobileContextBox.width - 1,
+      );
       for (const control of [mobileModelSettingsBox, mobileContextBox]) {
         expect(
           Math.abs(

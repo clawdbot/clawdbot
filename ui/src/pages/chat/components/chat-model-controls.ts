@@ -387,9 +387,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     effortMutationDisabled ||
     (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
   const effortLabel = thinking.selection.displayLabel.replace(/^Inherited:\s*/u, "");
-  const settingsLabel = `${t("chat.selectors.model")}: ${formatPickerModelLabel(
-    committedModelLabel,
-  )}; ${t("chat.selectors.thinkingLevel")}: ${effortLabel}`;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
@@ -409,7 +406,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         disabledReason: props.modelMutationDisabledReason,
         mobileEffortDisabled: effortDisabled,
         mobileEffortLabel: effortLabel,
-        mobileSettingsLabel: settingsLabel,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,
