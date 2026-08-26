@@ -653,7 +653,7 @@ exec node "$entry" ${argv}`,
     for (let attempt = 1; attempt <= 2; attempt++) {
       const result = run(
         "prlctl",
-        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);

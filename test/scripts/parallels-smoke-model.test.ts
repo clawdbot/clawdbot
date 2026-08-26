@@ -992,6 +992,97 @@ kill -TERM "$$"`,
     expect(output).toBe("{wanted}\tpoweron\tmacOS 26.5");
   });
 
+  it.each(["poweron", "poweroff"] as const)(
+    "restores a %s macOS snapshot without discarding its saved desktop session",
+    (snapshotState) => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-macos-restore-");
+      const callsPath = join(tempDir, "prlctl-calls.jsonl");
+      const statePath = join(tempDir, "vm-state");
+      const npmBootstrapPath = join(tempDir, "npm-bootstrap.mjs");
+      writeFileSync(
+        npmBootstrapPath,
+        `if (process.argv[1]?.endsWith("npm-cli.js") && process.argv.includes("view")) {
+  process.stdout.write("2026.1.1\\n");
+  process.exit(0);
+}`,
+      );
+      writeNodeFakePrlctl(
+        tempDir,
+        `const fs = process.getBuiltinModule("node:fs");
+const callsPath = ${JSON.stringify(callsPath)};
+const statePath = ${JSON.stringify(statePath)};
+const snapshotState = ${JSON.stringify(snapshotState)};
+const commandIndex = args.findIndex((arg) =>
+  ["list", "snapshot-list", "snapshot-switch", "status", "start", "exec"].includes(arg),
+);
+const commandArgs = args.slice(commandIndex);
+fs.appendFileSync(callsPath, JSON.stringify(commandArgs) + "\\n");
+if (commandArgs[0] === "list") {
+  console.log(JSON.stringify([{ name: "macOS Tahoe", status: "running" }]));
+} else if (commandArgs[0] === "snapshot-list") {
+  console.log(JSON.stringify({ "{snapshot}": { name: "macOS 26.5 latest", state: snapshotState } }));
+} else if (commandArgs[0] === "snapshot-switch") {
+  fs.writeFileSync(statePath, snapshotState === "poweroff" || commandArgs.includes("--skip-resume") ? "stopped" : "running");
+} else if (commandArgs[0] === "status") {
+  console.log("VM macOS Tahoe " + fs.readFileSync(statePath, "utf8"));
+} else if (commandArgs[0] === "start") {
+  fs.writeFileSync(statePath, "running");
+} else if (commandArgs[0] === "exec" && commandArgs.includes("whoami")) {
+  console.log("desktop-user");
+} else if (commandArgs[0] === "exec" && commandArgs.includes("/bin/dd")) {
+  process.exit(41);
+}`,
+      );
+
+      const fakeEnv = fakePrlctlEnv(tempDir);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          TS_PATHS.macos,
+          "--mode",
+          "upgrade",
+          "--latest-version",
+          "2026.1.1",
+          "--target-package-spec",
+          "openclaw@2026.1.1",
+          "--host-ip",
+          "127.0.0.1",
+          "--api-key-env",
+          "OPENCLAW_PARALLELS_TEST_KEY",
+          "--json",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ...fakeEnv,
+            NODE_OPTIONS: `${fakeEnv.NODE_OPTIONS} --import=${pathToFileURL(npmBootstrapPath).href}`,
+            OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
+            OPENCLAW_PARALLELS_TEST_KEY: "fixture",
+          },
+          timeout: 20_000,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(1);
+      const calls = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(
+        calls.find(([command]) => command === "snapshot-switch"),
+        result.stderr,
+      ).toEqual(["snapshot-switch", "macOS Tahoe", "--id", "{snapshot}"]);
+      expect(calls.filter(([command]) => command === "start")).toHaveLength(
+        snapshotState === "poweroff" ? 1 : 0,
+      );
+    },
+    30_000,
+  );
+
   it("rejects skip-restore for combined Parallels smoke lanes", () => {
     expect(withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () => shouldSkipSnapshotRestore())).toBe(
       true,
