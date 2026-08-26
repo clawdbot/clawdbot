@@ -132,11 +132,9 @@ export function bindPayloadColumns(
   let payloadMessage: string | null;
   if (payload.kind === "systemEvent") {
     payloadMessage = payload.text;
-  } else if (isSystemOwnedCronPayloadKind(payload.kind)) {
-    payloadMessage = null;
   } else if (payload.kind === "agentTurn") {
     payloadMessage = payload.message;
-  } else {
+  } else if (payload.kind === "command" || payload.kind === "script") {
     const {
       timeoutSeconds: _timeoutSeconds,
       toolsAllow: _toolsAllow,
@@ -144,6 +142,8 @@ export function bindPayloadColumns(
       ...serializedPayload
     } = payload;
     payloadMessage = serializeJson(serializedPayload);
+  } else {
+    payloadMessage = null;
   }
 
   return {
