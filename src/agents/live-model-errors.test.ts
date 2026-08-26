@@ -84,4 +84,19 @@ describe("live model error helpers", () => {
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
+
+  it("detects bare model-unavailable wording (no 'not')", () => {
+    // OpenCode Zen's actual body for a withdrawn/deactivated route is the bare
+    // "Model is unavailable." (no "not"), which none of the "not found"/"not
+    // available" patterns above match.
+    expect(
+      isModelNotFoundErrorMessage(
+        "400 Error from provider (Console): Upstream request failed: Model is unavailable.",
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("Model is unavailable.")).toBe(true);
+    // Must not fire on unrelated "unavailable" wording that doesn't name the model.
+    expect(isModelNotFoundErrorMessage("503 service unavailable")).toBe(false);
+    expect(isModelNotFoundErrorMessage("The model service is temporarily unavailable")).toBe(false);
+  });
 });

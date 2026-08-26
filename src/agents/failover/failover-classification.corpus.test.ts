@@ -184,6 +184,29 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
   });
 
+  it("classifies bare 'Model is unavailable.' as model_not_found, not the generic format fallback", () => {
+    // OpenCode Zen's actual withdrawn-route body (#19 RCA): no "not found"/"not
+    // available" wording, so this previously fell through to the HTTP-400
+    // default `format` reason instead of the correct model-unavailable copy.
+    const message =
+      "400 Error from provider (Console): Upstream request failed: Model is unavailable.";
+    const classification = classifyFailoverSignal({ message });
+
+    expect(classification).toEqual({ kind: "reason", reason: "model_not_found" });
+    expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
+  });
+
+  it("keeps billing/plan-entitlement precedence over the bare model-unavailable wording", () => {
+    // Billing/plan text must still win even though it also contains "model" +
+    // "unavailable"-adjacent wording; precedence is enforced by check ordering
+    // in classifyFailoverClassificationFromMessage, not by regex exclusivity.
+    const message =
+      '{"code":1311,"message":"The model you requested is not available in your current plan"}';
+    const classification = classifyFailoverSignal({ message });
+
+    expect(classification).toEqual({ kind: "reason", reason: "billing" });
+  });
+
   it.each([
     "Custom tool call output is missing for call id: call_live_123.",
     "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",

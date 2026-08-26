@@ -45,6 +45,11 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model:\s*[a-z0-9._/-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
     return true;
   }
+  // OpenCode Zen's withdrawn-route body is the bare "Model is unavailable."
+  // (no "not"); the patterns above only match "not found"/"not available".
+  if (/\bmodel\b.{0,60}?\bis unavailable\b/i.test(msg)) {
+    return true;
+  }
   if (/models\/[^\s]+ is not found/i.test(msg)) {
     return true;
   }
