@@ -12,7 +12,7 @@ const callback = {
   optionIndex: 1,
 };
 
-function createCallbackActions(): TelegramCallbackMessageActions {
+function createCallbackActions() {
   const clearCallbackButtons = vi.fn<TelegramCallbackMessageActions["clearCallbackButtons"]>();
   clearCallbackButtons.mockResolvedValue(true);
   return {
@@ -23,7 +23,7 @@ function createCallbackActions(): TelegramCallbackMessageActions {
       vi.fn<TelegramCallbackMessageActions["editCallbackMessageWithButtons"]>(),
     deleteCallbackMessage: vi.fn<TelegramCallbackMessageActions["deleteCallbackMessage"]>(),
     replyToCallbackChat: vi.fn<TelegramCallbackMessageActions["replyToCallbackChat"]>(),
-  };
+  } satisfies TelegramCallbackMessageActions;
 }
 
 describe("sendTelegramQuestionFeedback", () => {
