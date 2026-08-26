@@ -1651,19 +1651,6 @@ openclaw-workboard-card-dashboard {
     overflow-y: auto;
   }
 
-  .content--workboard > openclaw-router-outlet,
-  .content--workboard openclaw-workboard-page,
-  .workboard,
-  .workboard-main,
-  .workboard-board {
-    flex: none;
-    min-height: auto;
-  }
-
-  .workboard {
-    overflow: visible;
-  }
-
   .workboard-draft {
     width: 100%;
     height: 100dvh;
@@ -1711,10 +1698,10 @@ openclaw-workboard-card-dashboard {
     grid-template-columns: 1fr;
   }
 
+  .workboard,
   .workboard-board--page {
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: visible;
+    overflow: visible;
     scroll-snap-type: none;
   }
 

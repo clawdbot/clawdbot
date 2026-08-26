@@ -2,7 +2,6 @@ import type { Locator } from "playwright";
 import type { WorkboardCard } from "../../lib/workboard/index.ts";
 
 export const expectedMobileScrollGeometry = {
-  boardScrolls: false,
   contentScrolls: true,
   lastCardIsClipped: true,
 };
@@ -23,15 +22,13 @@ export function createMobileScrollCards(now: number): WorkboardCard[] {
 
 export async function readMobileScrollGeometry(content: Locator, cardTitle: string) {
   return content.evaluate((scrollContainer, expectedTitle) => {
-    const board = scrollContainer.querySelector<HTMLElement>(".workboard-board");
     const card = Array.from(scrollContainer.querySelectorAll<HTMLElement>(".workboard-card")).find(
       (candidate) => candidate.textContent?.includes(expectedTitle),
     );
-    if (!board || !card) {
+    if (!card) {
       throw new Error("Mobile Workboard geometry fixture did not render");
     }
     return {
-      boardScrolls: board.scrollHeight > board.clientHeight + 1,
       contentScrolls: scrollContainer.scrollHeight > scrollContainer.clientHeight + 1,
       lastCardIsClipped:
         card.getBoundingClientRect().bottom > scrollContainer.getBoundingClientRect().bottom,

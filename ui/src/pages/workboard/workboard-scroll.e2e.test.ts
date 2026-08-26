@@ -73,6 +73,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}workboard`))?.status()).toBe(200);
       const content = page.locator(".content--workboard");
       const board = page.locator(".workboard-board");
+      const toolbar = page.locator(".workboard-toolbar");
       const lastCard = page
         .locator(".workboard-column--todo .workboard-card", {
           hasText: "Mobile workboard card 6",
@@ -83,9 +84,25 @@ suite.define(() => {
       expect(await readMobileScrollGeometry(content, "Mobile workboard card 6")).toEqual(
         expectedMobileScrollGeometry,
       );
-      await lastCard.evaluate((element) => element.scrollIntoView({ block: "end" }));
+      const initialToolbarTop = await toolbar.evaluate(
+        (element) => element.getBoundingClientRect().top,
+      );
+      await content.hover();
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (await cardFitsWithinWorkboardContent(lastCard)) {
+          break;
+        }
+        const previousScrollTop = await content.evaluate((element) => element.scrollTop);
+        await page.mouse.wheel(0, 320);
+        await expect
+          .poll(() => content.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(previousScrollTop);
+      }
       await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       expect(await cardFitsWithinWorkboardContent(lastCard)).toBe(true);
+      expect(await toolbar.evaluate((element) => element.getBoundingClientRect().top)).toBeLessThan(
+        initialToolbarTop,
+      );
       expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
     });
   });
