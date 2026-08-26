@@ -11,6 +11,7 @@ import {
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { describeSecretsTool } from "../tool-description-presets.js";
 import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import { beginAskUserPromptDelivery } from "./ask-user-tool.js";
 import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common.js";
@@ -33,17 +34,42 @@ type SecretsGatewayCall = (
 
 const SecretsToolSchema = Type.Object(
   {
-    action: stringEnum(["request", "list", "delete"]),
-    name: Type.Optional(Type.String({ maxLength: 128, pattern: "^[A-Z][A-Z0-9_]{0,127}$" })),
-    kind: Type.Optional(stringEnum(SECRET_STORE_KINDS)),
+    action: stringEnum(["request", "list", "delete"], {
+      description: "`request` a value from the human, `list` entry metadata, or `delete` an entry.",
+    }),
+    name: Type.Optional(
+      Type.String({
+        maxLength: 128,
+        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+        description:
+          "Entry name in uppercase environment-variable form, also its SecretRef id (STRIPE_API_KEY). Required for request and delete.",
+      }),
+    ),
+    kind: Type.Optional(
+      stringEnum(SECRET_STORE_KINDS, {
+        description:
+          "`secret` for a credential (write-only, never returned) or `env` for a plain environment value. Required for request.",
+      }),
+    ),
     allowedHosts: Type.Optional(
       Type.Array(Type.String({ minLength: 1, maxLength: 253 }), {
         maxItems: 128,
         uniqueItems: true,
+        description:
+          "Exact hostnames allowed to receive a secret, without scheme or port (api.stripe.com). Secret entries only; leaving this empty stores a secret that can never be substituted.",
       }),
     ),
-    reason: Type.Optional(Type.String({ maxLength: 200 })),
-    timeoutSeconds: Type.Optional(Type.Integer()),
+    reason: Type.Optional(
+      Type.String({
+        maxLength: 200,
+        description: "One line shown to the human explaining why the credential is needed.",
+      }),
+    ),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        description: "Seconds to wait for the human on request; defaults to 900, clamped 30-3600.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -184,8 +210,7 @@ export function createSecretsTool(params: {
   return {
     label: "Secrets",
     name: "secrets",
-    description:
-      "Write-only store; values are never returned by any action. To store a value, use `request` — the human enters it directly. List entry metadata or delete an existing entry.",
+    description: describeSecretsTool(),
     parameters: SecretsToolSchema,
     execute: async (toolCallId, args, signal) => {
       if (!isRecord(args)) {
