@@ -3816,12 +3816,20 @@ describe("chat slash menu accessibility", () => {
 
   it("executes an inline command separately and removes only its token from the draft", () => {
     let draft = "";
+    const onTypingChange = vi.fn();
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
     });
     const onSend = vi.fn();
-    const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+    const onSlashCommand = vi.fn(() => {
+      expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
+    });
+    const { container } = createReactiveDraftHarness({
+      onDraftChange,
+      onSend,
+      onSlashCommand,
+      onTypingChange,
+    });
 
     inputDraftAtEnd(container, "hello /statu");
 
@@ -3832,6 +3840,7 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/status");
     expect(draft).toBe("hello ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
     expect(onSend).not.toHaveBeenCalled();
   });
 

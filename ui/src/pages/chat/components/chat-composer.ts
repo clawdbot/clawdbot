@@ -173,10 +173,14 @@ export function renderChatComposer(props: ChatComposerProps) {
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const commitMenuDraft = (next: string) => {
+    commitComposerDraft(props, next);
+    props.onTypingChange?.(Boolean(next.trim()), next);
+  };
   const skillMenuHost: SkillMenuHost = {
     paneId: props.paneId,
     getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
-    commitDraft: (next) => commitComposerDraft(props, next),
+    commitDraft: commitMenuDraft,
     getTextarea: () => state.composerTextarea,
     refreshCommands: props.onSlashIntent,
   };
