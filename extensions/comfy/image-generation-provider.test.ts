@@ -66,6 +66,15 @@ function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
+function seedFromBody(body: Record<string, unknown>, nodeId: string): number {
+  const prompt = body.prompt as Record<string, { inputs: { seed: number } }>;
+  const node = prompt[nodeId];
+  if (!node) {
+    throw new Error(`expected seed node "${nodeId}" in submitted workflow`);
+  }
+  return node.inputs.seed;
+}
+
 function mockLocalImageResponses(promptId = "local-prompt-1") {
   fetchWithSsrFGuardMock
     .mockResolvedValueOnce({
@@ -452,6 +461,94 @@ describe("comfy image-generation provider", () => {
         outputNodeIds: ["9"],
       },
     });
+  });
+
+  it("sends configured headers to a local workflow, e.g. Basic auth for a gated instance", async () => {
+    mockLocalImageResponses("auth-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        ...testWorkflowConfig(),
+        headers: { Authorization: "Basic cGluZzpzZWNyZXQ=" },
+      }),
+    });
+
+    const submitRequest = fetchRequest(1);
+    const submitHeaders = new Headers(submitRequest.init?.headers);
+    expect(submitHeaders.get("authorization")).toBe("Basic cGluZzpzZWNyZXQ=");
+    expect(submitHeaders.get("content-type")).toBe("application/json");
+  });
+
+  it("ignores a non-object headers config value instead of throwing", async () => {
+    mockLocalImageResponses("headers-ignore-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        ...testWorkflowConfig(),
+        headers: "not-an-object",
+      }),
+    });
+
+    const submitHeaders = new Headers(fetchRequest(1).init?.headers);
+    expect(submitHeaders.get("content-type")).toBe("application/json");
+  });
+
+  it("injects a fresh random seed per submission when seedNodeId is configured", async () => {
+    mockLocalImageResponses("seed-prompt-1");
+    mockLocalImageResponses("seed-prompt-2");
+
+    const provider = buildComfyImageGenerationProvider();
+    const cfg = buildComfyConfig({
+      workflow: {
+        "4": { inputs: { seed: 0 } },
+        "6": { inputs: { text: "" } },
+        "9": { inputs: {} },
+      },
+      promptNodeId: "6",
+      outputNodeId: "9",
+      seedNodeId: "4",
+    });
+
+    await provider.generateImage({ provider: "comfy", model: "workflow", prompt: "first", cfg });
+    await provider.generateImage({ provider: "comfy", model: "workflow", prompt: "second", cfg });
+
+    const firstSeed = seedFromBody(parseJsonBody(1), "4");
+    const secondSeed = seedFromBody(parseJsonBody(4), "4");
+    expect(Number.isInteger(firstSeed)).toBe(true);
+    expect(firstSeed).toBeGreaterThanOrEqual(0);
+    expect(Number.isSafeInteger(firstSeed)).toBe(true);
+    expect(firstSeed).not.toBe(0);
+    expect(secondSeed).not.toBe(firstSeed);
+  });
+
+  it("leaves the workflow's baked-in seed untouched when seedNodeId is not configured", async () => {
+    mockLocalImageResponses("no-seed-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        workflow: {
+          "4": { inputs: { seed: 12345 } },
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(seedFromBody(parseJsonBody(1), "4")).toBe(12345);
   });
 
   it("honors local private-network access for service-discovery hostnames", async () => {
