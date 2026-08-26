@@ -416,12 +416,16 @@ knobs that exist:
 
 | Concern                         | Where                                                           | Reference                                                |
 | ------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
-| Dreaming enable, cadence, model | `plugins.entries.memory-core.config.dreaming`                   | [Dreaming](/concepts/dreaming)                           |
+| Dreaming enable, cadence, model | `plugins.entries.<memory-slot-owner>.config.dreaming`           | [Dreaming](/concepts/dreaming)                           |
 | Search providers, hybrid tuning | `memory.search`                                                 | [Memory config](/reference/memory-config)                |
 | Escalation lane mode, scope     | `plugins.entries.active-memory`                                 | [Active memory](/concepts/active-memory)                 |
 | Cross-conversation recall       | `agents.entries.<id>.memory.search.rememberAcrossConversations` | [Active memory](/concepts/active-memory)                 |
 | Flush behavior                  | `agents.defaults.compaction.memoryFlush`                        | [Memory overview](/concepts/memory)                      |
 | Memory plugin selection         | `plugins.slots.memory`                                          | [Builtin](/concepts/memory-builtin), [Plugins](/plugins) |
+
+For managed Gateway sidecar dreaming, `<memory-slot-owner>` is the plugin selected
+by `plugins.slots.memory` (defaulting to `memory-core`). Memory CLI continues to
+read `plugins.entries.memory-core.config.dreaming` regardless of slot selection.
 
 ## Related
 

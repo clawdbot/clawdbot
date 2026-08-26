@@ -563,7 +563,9 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+Dreaming user settings for Memory CLI commands are configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+
+The managed Gateway dreaming sidecar may additionally read dreaming settings from the selected memory-slot owner (for example `plugins.entries.<memory-slot-owner>.config.dreaming`) when that plugin exposes them. Slot-owned Gateway settings are separate from any plugin-specific vector-native dreaming pipeline.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 

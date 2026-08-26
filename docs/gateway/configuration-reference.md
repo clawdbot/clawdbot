@@ -25,7 +25,7 @@ ancestor declaration. A path with no declared ancestor is advanced by default.
 
 Dedicated deep references:
 
-- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
+- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and the Gateway-selected memory-slot owner's dreaming config (with `plugins.entries.memory-core.config.dreaming` retained for Memory CLI).
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog.
 - Owning channel/plugin pages for channel-specific command surfaces.
 
@@ -398,8 +398,8 @@ cannot be read, account-wide exposure fails closed.
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4.3"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
-  - `enabled`: master dreaming switch (default `false`).
+- `plugins.entries.memory-core.config.dreaming`: built-in Memory CLI dreaming settings and the default managed Gateway sidecar settings. When `plugins.slots.memory` selects a plugin that exposes dreaming settings, the Gateway sidecar reads `plugins.entries.<memory-slot-owner>.config.dreaming` instead. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+  - `enabled`: master dreaming switch (default `true`).
   - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
   - `model`: optional Dream Diary subagent model override. Requires `plugins.entries.memory-core.subagent.allowModelOverride: true`; pair with `allowedModels` to restrict targets. Model-unavailable errors retry once with the session default model; trust or allowlist failures do not fall back silently.
   - phase policy and thresholds are implementation details (not user-facing config keys).
@@ -407,7 +407,8 @@ cannot be read, account-wide exposure fails closed.
   - `memory.search.*`
   - `agents.entries.*.memory.search.*` for per-agent overrides
   - `memory.citations`
-  - `plugins.entries.memory-core.config.dreaming`
+  - `plugins.entries.memory-core.config.dreaming` for Memory CLI and the default Gateway path
+  - `plugins.entries.<memory-slot-owner>.config.dreaming` for selected-owner Gateway settings when exposed
 - Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
