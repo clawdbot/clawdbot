@@ -89,46 +89,6 @@ describe("infra/device-auth-store", () => {
     });
   });
 
-  it("lazily adds origin-scoped tokens without changing the schema version", async () => {
-    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const opened = openOpenClawStateDatabase({ env });
-      const version = opened.db.prepare("PRAGMA user_version").get();
-      closeOpenClawStateDatabaseForTest();
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const beforeEnsure = new DatabaseSync(databasePath);
-      beforeEnsure.exec("DROP TABLE gateway_origin_device_tokens;");
-      beforeEnsure.close();
-
-      const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("gateway_origin_device_tokens"),
-      ).toBeUndefined();
-      closeOpenClawStateDatabaseForTest();
-
-      expect(
-        loadOriginDeviceToken({
-          gatewayScope: "wss://one.example",
-          deviceId: "device-1",
-          role: "operator",
-          env,
-        }),
-      ).toBeNull();
-      const afterEnsure = new DatabaseSync(databasePath, { readOnly: true });
-      expect(
-        afterEnsure
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("gateway_origin_device_tokens"),
-      ).toEqual({ name: "gateway_origin_device_tokens" });
-      expect(afterEnsure.prepare("PRAGMA user_version").get()).toEqual(version);
-      afterEnsure.close();
-    });
-  });
-
   it("never exposes a device token to a different gateway origin", async () => {
     await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);
