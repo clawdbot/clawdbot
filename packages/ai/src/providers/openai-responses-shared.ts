@@ -28,6 +28,7 @@ import type {
   AssistantMessage,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamOptions,
   Usage,
@@ -44,6 +45,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
+  type OpenAIApiReasoningEffort,
 } from "./openai-reasoning-effort.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
@@ -117,8 +119,9 @@ function isResponsesReasoningEffort(
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
-  reasoningEffort?: ResponsesReasoningEffort;
+  reasoningEffort?: OpenAIApiReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
+  disableReasoningSerialization?: boolean;
 };
 
 type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
@@ -164,26 +167,108 @@ export function applyResponsesServiceTierPricing(
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
+function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>): boolean {
+  const compat =
+    model.api === "openai-responses" && model.compat && typeof model.compat === "object"
+      ? model.compat
+      : undefined;
+  return Boolean(
+    compat && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false,
+  );
+}
+
+export function shouldDisableResponsesReasoningSerialization<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: string | undefined,
+): boolean {
+  if (reasoning === undefined || !isModelThinkingLevel(reasoning)) {
+    return false;
+  }
+  const clampedReasoning = clampThinkingLevel(model, reasoning);
+  return (
+    clampedReasoning === "off" && (reasoning !== "off" || model.thinkingLevelMap?.off === null)
+  );
+}
+
+function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
+  return value === "off" || isResponsesReasoningEffort(value);
+}
+
+function resolveResponsesApiReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: string,
+  fallback = reasoning,
+): OpenAIApiReasoningEffort | undefined {
+  if (isResponsesReasoningEffortDisabled(model)) {
+    return undefined;
+  }
+  if (!isModelThinkingLevel(reasoning)) {
+    return reasoning;
+  }
+  const effectiveReasoning = clampThinkingLevel(model, reasoning);
+  if (effectiveReasoning === "off" && reasoning !== "off") {
+    return undefined;
+  }
+  if (effectiveReasoning === "off" && reasoning === "off" && model.thinkingLevelMap?.off === null) {
+    return undefined;
+  }
+  const compat =
+    model.api === "openai-responses" && model.compat && typeof model.compat === "object"
+      ? model.compat
+      : undefined;
+  const compatReasoningEffortMap: Record<string, string> | undefined =
+    compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap : undefined;
+  const compatMapped = compatReasoningEffortMap?.[effectiveReasoning];
+  if (compatMapped !== undefined) {
+    return resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: effectiveReasoning,
+      fallbackMap: compatReasoningEffortMap,
+    });
+  }
+  if (effectiveReasoning === "off") {
+    return model.thinkingLevelMap?.off ?? fallback;
+  }
+  const mappedThinkingLevel = model.thinkingLevelMap?.[effectiveReasoning];
+  return mappedThinkingLevel ?? effectiveReasoning;
+}
+
+export function resolveResponsesReasoningEffort(
+  model: Model<"openai-responses">,
+  reasoning: SimpleStreamOptions["reasoning"] | undefined,
+): OpenAIApiReasoningEffort | undefined;
+export function resolveResponsesReasoningEffort<TApi extends Exclude<Api, "openai-responses">>(
+  model: Model<TApi>,
+  reasoning: SimpleStreamOptions["reasoning"] | undefined,
+): ResponsesReasoningEffort | undefined;
 export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
-): ResponsesReasoningEffort | undefined {
+): OpenAIApiReasoningEffort | undefined {
+  if (shouldDisableResponsesReasoningSerialization(model, reasoning)) {
+    return undefined;
+  }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  if (clampedReasoning === "max") {
+  const resolvedApiReasoning = resolveResponsesApiReasoningEffort(model, clampedReasoning);
+  if (resolvedApiReasoning === undefined) {
+    return undefined;
+  }
+  if (clampedReasoning === "max" && resolvedApiReasoning === "max") {
     return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
   }
   if (
     clampedReasoning === "minimal" &&
+    resolvedApiReasoning === "minimal" &&
     model.provider === "openai" &&
     supportsOpenAIReasoningEffort(model, "max")
   ) {
     const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
     return isResponsesReasoningEffort(effort) ? effort : undefined;
   }
-  return clampedReasoning;
+  return resolvedApiReasoning;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
@@ -208,24 +293,33 @@ export function applyCommonResponsesParams<TApi extends Api>(
     }
   }
 
-  if (!model.reasoning) {
+  if (
+    !model.reasoning ||
+    isResponsesReasoningEffortDisabled(model) ||
+    options?.disableReasoningSerialization
+  ) {
     return;
   }
 
-  if (options?.reasoningEffort || options?.reasoningSummary) {
-    const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
+  const requestedEffort =
+    options?.reasoningEffort ?? (options?.reasoningSummary ? "medium" : undefined);
+  if (requestedEffort !== undefined) {
+    const effort = resolveResponsesApiReasoningEffort(model, requestedEffort);
+    if (effort === undefined) {
+      return;
+    }
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],
       summary: options?.reasoningSummary || "auto",
     };
     params.include = ["reasoning.encrypted_content"];
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
+    const effort = resolveResponsesApiReasoningEffort(model, "off", "none");
+    if (effort === undefined) {
+      return;
+    }
     params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
+      effort: effort as NonNullable<typeof params.reasoning>["effort"],
     };
   }
 }

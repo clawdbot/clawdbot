@@ -1,4 +1,5 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context, Model, ModelThinkingLevel } from "@openclaw/llm-core";
+import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -66,6 +67,18 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function isModelThinkingLevel(value: unknown): value is ModelThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  );
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -448,13 +461,18 @@ export function buildOpenAICompletionsParams(
     }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
-    ? resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: completionsReasoningEffort,
-        fallbackMap: compat.reasoningEffortMap,
-      })
+  const canonicalReasoningEffort = isModelThinkingLevel(completionsReasoningEffort)
+    ? completionsReasoningEffort
     : undefined;
+  const clampModel = { ...model, compat: model.compat ?? undefined } satisfies Model;
+  const effectiveCompletionsReasoningEffort = canonicalReasoningEffort
+    ? clampThinkingLevel(clampModel, canonicalReasoningEffort)
+    : completionsReasoningEffort;
+  const resolvedCompletionsReasoningEffort = resolveOpenAIReasoningEffortForModel({
+    model,
+    effort: effectiveCompletionsReasoningEffort,
+    fallbackMap: compat.reasoningEffortMap,
+  });
   const omitChatCompletionsToolReasoningEffort =
     Array.isArray(params.tools) &&
     params.tools.length > 0 &&

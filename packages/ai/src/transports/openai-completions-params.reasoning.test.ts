@@ -298,6 +298,80 @@ describe("openai completions params", () => {
     expect(disabled.reasoning_effort).toBe("none");
   });
 
+  it("preserves map-only canonical effort mappings in Completions payloads", () => {
+    const model = {
+      id: "custom-reasoning",
+      name: "Custom Reasoning",
+      api: "openai-completions",
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsReasoningEffort: true,
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    } as unknown as Model<"openai-completions">;
+
+    const params = buildOpenAICompletionsParams(model, emptyContext(), {
+      reasoning: "high",
+    } as never) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("xhigh");
+  });
+
+  it("falls back from an unsupported mapped xhigh effort to the requested supported effort", () => {
+    const model = {
+      id: "custom-reasoning",
+      name: "Custom Reasoning",
+      api: "openai-completions",
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    } satisfies Model<"openai-completions">;
+
+    const params = buildOpenAICompletionsParams(model, emptyContext(), {
+      reasoning: "high",
+    } as never) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("high");
+  });
+
+  it("clamps null-mapped thinking levels before serializing reasoning_effort", () => {
+    const model = {
+      id: "custom-reasoning",
+      name: "Custom Reasoning",
+      api: "openai-completions",
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: null },
+    } satisfies Model<"openai-completions">;
+
+    const params = buildOpenAICompletionsParams(model, emptyContext(), {
+      reasoning: "high",
+    } as never) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
   it("maps qwen thinking format to top-level enable_thinking", () => {
     const baseModel = {
       id: "qwen3.5-32b",

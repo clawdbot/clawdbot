@@ -263,6 +263,131 @@ describe("OpenAI-compatible completions params", () => {
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("falls back from an unsupported mapped xhigh effort at the provider boundary", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    } satisfies Model<"openai-completions">;
+
+    await streamOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "high" });
+  });
+
+  it("clamps a null-mapped thinking level at the provider boundary", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: null },
+    } satisfies Model<"openai-completions">;
+
+    await streamOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "medium" });
+  });
+
+  it("clamps a null-mapped thinking level through simple completions", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: null },
+    } satisfies Model<"openai-completions">;
+
+    await streamSimpleOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoning: "high",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "medium" });
+  });
+
+  it("preserves Grok 4.5 off-to-low clamping through simple completions", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+      thinkingLevelMap: {
+        off: null,
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+      },
+    } satisfies Model<"openai-completions">;
+
+    await streamSimpleOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoning: "off",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "low" });
+  });
+
+  it("preserves a supported mapped max effort through simple completions", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["provider-low", "provider-max"],
+        reasoningEffortMap: { low: "provider-low", max: "provider-max" },
+      },
+    } satisfies Model<"openai-completions">;
+
+    await streamSimpleOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoning: "max",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "provider-max" });
+  });
+
+  it("falls back unsupported simple max to xhigh", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high", "xhigh"],
+      },
+    } satisfies Model<"openai-completions">;
+
+    await streamSimpleOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoning: "max",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "xhigh" });
+  });
+
   it.each([
     { name: "model compat mapping", reasoningEffort: "low", expected: "high" },
     { name: "thinkingLevelMap fallback", reasoningEffort: "medium", expected: "xhigh" },

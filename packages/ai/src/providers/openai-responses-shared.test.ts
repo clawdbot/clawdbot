@@ -359,6 +359,172 @@ describe("Responses reasoning effort", () => {
 
     expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
+
+  it("clamps a null-mapped thinking level before serializing Responses reasoning", () => {
+    const cappedModel = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { high: null },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(cappedModel, "high")).toBe("medium");
+
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, cappedModel, { messages: [] }, { reasoningEffort: "high" });
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
+  it("preserves Grok 4.5 off-to-low clamping despite an off null map entry", () => {
+    const grok45Model = {
+      ...nativeOpenAIModel,
+      provider: "xai",
+      id: "grok-4.5",
+      thinkingLevelMap: {
+        off: null,
+        minimal: "low",
+        low: "low",
+        medium: "medium",
+        high: "high",
+      },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(grok45Model, "off")).toBe("low");
+  });
+
+  it("maps compat reasoning effort before serializing Responses payload", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: { xhigh: "high" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
+
+    expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
+  });
+
+  it("preserves map-only canonical effort mappings in Responses payloads", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        reasoningEffortMap: { high: "xhigh" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "high" });
+
+    expect(params.reasoning).toMatchObject({ effort: "xhigh", summary: "auto" });
+  });
+
+  it("falls back when a compat mapping is not listed as supported", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high"],
+        reasoningEffortMap: { xhigh: "provider-xhigh" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
+
+    expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
+  });
+
+  it("preserves a supported provider-native max mapping", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["provider-max"],
+        reasoningEffortMap: { max: "provider-max" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "max" });
+
+    expect(params.reasoning).toMatchObject({ effort: "provider-max", summary: "auto" });
+  });
+
+  it("omits Responses reasoning when compat explicitly disables it", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: { supportsReasoningEffort: false },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "high" });
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("omits default-off Responses reasoning when compat explicitly disables it", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: { supportsReasoningEffort: false },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] });
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("maps default-off Responses reasoning through compat metadata", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["provider-off"],
+        reasoningEffortMap: { off: "provider-off" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] });
+
+    expect(params).toMatchObject({ reasoning: { effort: "provider-off" } });
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("clamps a null-mapped extended level before applying compat mapping", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    const compatModel = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { xhigh: null },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["high"],
+        reasoningEffortMap: { xhigh: "high" },
+      },
+    } satisfies Model<"openai-responses">;
+
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "high", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
 });
 
 describe("convertResponsesMessages", () => {

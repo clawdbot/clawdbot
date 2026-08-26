@@ -278,7 +278,11 @@ const ModelCompatSchema = z
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
-    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
+    supportedReasoningEfforts: z
+      .array(z.string().min(1))
+      .transform((values): readonly string[] => values)
+      .nullable()
+      .optional(),
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])

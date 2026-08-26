@@ -19,12 +19,16 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import {
+  supportsOpenAITemperature,
+  type OpenAIApiReasoningEffort,
+} from "./openai-reasoning-effort.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
+  shouldDisableResponsesReasoningSerialization,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -52,10 +56,11 @@ function getPromptCacheRetention(
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoningEffort?: OpenAIApiReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+  disableReasoningSerialization?: boolean;
 }
 
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
@@ -108,11 +113,16 @@ export const streamSimpleOpenAIResponses: StreamFunction<
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
+  const disableReasoningSerialization = shouldDisableResponsesReasoningSerialization(
+    model,
+    options?.reasoning,
+  );
 
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    disableReasoningSerialization,
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
