@@ -6,6 +6,7 @@ import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
+  rejectCanonicalPathChange,
   resolveCanonicalReadPath,
   statRequiredDirectory,
 } from "./path-errors.js";
@@ -19,6 +20,7 @@ type DirFetchParams = {
   includeDotfiles?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
 };
 
 type DirFetchOk = {
@@ -38,6 +40,7 @@ type DirFetchErrCode =
   | "IS_FILE"
   | "TREE_TOO_LARGE"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type DirFetchErr = {
@@ -182,6 +185,11 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   });
   if (typeof canonical !== "string") {
     return canonical;
+  }
+
+  const canonicalPathChange = rejectCanonicalPathChange(params.expectedCanonicalPath, canonical);
+  if (canonicalPathChange) {
+    return canonicalPathChange;
   }
 
   const directory = await statRequiredDirectory(canonical, classifyFsError);

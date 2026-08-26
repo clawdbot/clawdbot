@@ -277,6 +277,42 @@ describe("handleFileWrite — symlink protection", () => {
     await expectAccessMissing(path.join(realDir, "new"));
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted parent before writing bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first");
+      const second = path.join(tmpRoot, "second");
+      const link = path.join(tmpRoot, "current");
+      await fs.mkdir(first);
+      await fs.mkdir(second);
+      await fs.symlink(first, link);
+      const requestedPath = path.join(link, "out.txt");
+
+      const preflight = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("approved"),
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileWrite({
+        path: requestedPath,
+        contentBase64: b64("not approved"),
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailure(result, "CANONICAL_PATH_CHANGED");
+      await expectAccessMissing(path.join(first, "out.txt"));
+      await expectAccessMissing(path.join(second, "out.txt"));
+    },
+  );
+
   it("refuses to overwrite a directory", async () => {
     const target = path.join(tmpRoot, "is-a-dir");
     await fs.mkdir(target);

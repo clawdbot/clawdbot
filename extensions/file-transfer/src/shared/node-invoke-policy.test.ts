@@ -180,6 +180,7 @@ describe("file-transfer node invoke policy", () => {
         path: "/tmp/file.txt",
         maxBytes: 512,
         followSymlinks: false,
+        expectedCanonicalPath: "/tmp/file.txt",
       },
     });
   });
@@ -315,6 +316,7 @@ describe("file-transfer node invoke policy", () => {
           path: "/tmp/new.txt",
           followSymlinks: true,
           maxBytes: 256,
+          expectedCanonicalPath: "/tmp/new.txt",
         },
       });
     },
@@ -620,6 +622,7 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(2);
     expect(requireInvokeParams(invokeNode, 0).preflightOnly).toBe(true);
     expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
+    expect(requireInvokeParams(invokeNode, 1).expectedCanonicalPath).toBe("/private/tmp/out.txt");
   });
 
   it("checks every dir.fetch preflight entry before requesting the archive", async () => {
@@ -853,6 +856,7 @@ describe("file-transfer node invoke policy", () => {
         preflightOnly: true,
       });
       expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
+      expect(requireInvokeParams(invokeNode, 1).expectedCanonicalPath).toBe("/tmp/project");
     },
   );
 

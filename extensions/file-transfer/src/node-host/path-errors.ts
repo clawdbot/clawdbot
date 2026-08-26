@@ -43,6 +43,18 @@ export function readAbsolutePath(input: unknown): string | InvalidPathResult {
   return input;
 }
 
+export function rejectCanonicalPathChange(expected: unknown, actual: string) {
+  if (typeof expected !== "string" || expected === actual) {
+    return undefined;
+  }
+  return {
+    ok: false as const,
+    code: "CANONICAL_PATH_CHANGED" as const,
+    message: "canonical path differs from the authorized target",
+    canonicalPath: actual,
+  };
+}
+
 function canonicalPathFromFsSafeError(err: unknown): string | undefined {
   if (!(err instanceof FsSafeError) || !err.cause || typeof err.cause !== "object") {
     return undefined;

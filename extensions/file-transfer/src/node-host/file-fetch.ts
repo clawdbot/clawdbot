@@ -6,6 +6,7 @@ import { root } from "openclaw/plugin-sdk/security-runtime";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
+  rejectCanonicalPathChange,
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
@@ -18,6 +19,7 @@ type FileFetchParams = {
   maxBytes?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
 };
 
 type FileFetchOk = {
@@ -38,6 +40,7 @@ type FileFetchErrCode =
   | "FILE_TOO_LARGE"
   | "PATH_TRAVERSAL"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type FileFetchErr = {
@@ -145,6 +148,13 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
   }
 
   try {
+    const canonicalPathChange = rejectCanonicalPathChange(
+      params.expectedCanonicalPath,
+      opened.realPath,
+    );
+    if (canonicalPathChange) {
+      return canonicalPathChange;
+    }
     const stats = opened.stat;
     if (stats.size > maxBytes) {
       return {

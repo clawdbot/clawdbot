@@ -6,6 +6,7 @@ import { mimeFromExtension } from "../shared/mime.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
+  rejectCanonicalPathChange,
   resolveCanonicalReadPath,
   statRequiredDirectory,
 } from "./path-errors.js";
@@ -108,16 +109,9 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     return canonical;
   }
 
-  if (
-    typeof params.expectedCanonicalPath === "string" &&
-    params.expectedCanonicalPath !== canonical
-  ) {
-    return {
-      ok: false,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
-      canonicalPath: canonical,
-    };
+  const canonicalPathChange = rejectCanonicalPathChange(params.expectedCanonicalPath, canonical);
+  if (canonicalPathChange) {
+    return canonicalPathChange;
   }
   if (params.preflightOnly === true) {
     return { ok: true, path: canonical, entries: [], truncated: false, preflight: true };

@@ -133,6 +133,36 @@ describe("handleFileFetch — happy path", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted path before reading file bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first.txt");
+      const second = path.join(tmpRoot, "second.txt");
+      const link = path.join(tmpRoot, "current.txt");
+      await fs.writeFile(first, "approved");
+      await fs.writeFile(second, "not approved");
+      await fs.symlink(first, link);
+
+      const preflight = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      expectSuccess(preflight);
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+      expect(result.canonicalPath).toBe(second);
+    },
+  );
+
   it("returns a sensible mime type for known extensions", async () => {
     const target = path.join(tmpRoot, "readme.md");
     await fs.writeFile(target, "# heading\n");

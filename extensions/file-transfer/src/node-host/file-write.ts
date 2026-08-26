@@ -9,6 +9,7 @@ import {
   root,
 } from "openclaw/plugin-sdk/security-runtime";
 import { inspectStrictBase64 } from "../shared/base64.js";
+import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
 
@@ -20,6 +21,7 @@ type FileWriteParams = {
   expectedSha256?: string;
   followSymlinks?: boolean;
   preflightOnly?: boolean;
+  expectedCanonicalPath?: unknown;
 };
 
 type FileWriteSuccess = {
@@ -151,6 +153,15 @@ export async function handleFileWrite(
     throw error;
   }
 
+  const canonicalTargetPath = await canonicalPathFromExistingAncestor(targetPath);
+  const canonicalPathChange = rejectCanonicalPathChange(
+    params.expectedCanonicalPath,
+    canonicalTargetPath,
+  );
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
+
   if (!parentExists) {
     if (!createParents) {
       return err("PARENT_NOT_FOUND", `parent directory does not exist: ${parentDir}`);
@@ -166,7 +177,7 @@ export async function handleFileWrite(
       }
       return {
         ok: true,
-        path: await canonicalPathFromExistingAncestor(targetPath),
+        path: canonicalTargetPath,
         size: buf.length,
         sha256: computedSha256,
         overwritten: false,
@@ -241,7 +252,7 @@ export async function handleFileWrite(
   if (preflightOnly) {
     return {
       ok: true,
-      path: await canonicalPathFromExistingAncestor(targetPath),
+      path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
       overwritten,

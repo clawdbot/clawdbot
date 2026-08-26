@@ -918,7 +918,10 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
-    // The node must reject target drift before reading directory entries.
+  }
+
+  if (boundCanonicalPath !== undefined) {
+    // The node must reject target drift before the final filesystem effect.
     forwardedParams.expectedCanonicalPath = boundCanonicalPath;
   }
 
