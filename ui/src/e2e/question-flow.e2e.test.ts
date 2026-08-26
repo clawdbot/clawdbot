@@ -148,10 +148,13 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }) {
     .toBeGreaterThanOrEqual(2);
   const startup = await gateway.waitForRequest("chat.startup");
   expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
+  const compactMobileViewport =
+    viewport.width <= 768 ||
+    (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);
   await page
     .locator(`[data-session-key="${questionSessionKey}"]`)
     .first()
-    .waitFor({ state: viewport.width <= 768 ? "attached" : "visible" });
+    .waitFor({ state: compactMobileViewport ? "attached" : "visible" });
   return { gateway, page };
 }
 
@@ -268,77 +271,83 @@ suite.define(() => {
     await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
-  it("joins a collapsed mobile question and composer into one surface", async () => {
-    const { gateway, page } = await openQuestionPage({ height: 844, width: 390 });
-    const prompt = "Which progress note should I use?";
-    await emitRequested(
-      gateway,
-      questionRecord("question-mobile-compound", [
-        {
-          questionId: "progress_note",
-          header: "Progress note",
-          question: prompt,
-          options: [
-            { label: "Concise", description: "Keep the update short." },
-            { label: "Detailed", description: "Include the supporting evidence." },
-          ],
-        },
-      ]),
-    );
+  it.each([
+    { height: 844, screenshotName: "portrait", width: 390 },
+    { height: 390, screenshotName: "landscape", width: 844 },
+  ])(
+    "joins a collapsed mobile question and composer into one $screenshotName surface",
+    async ({ height, screenshotName, width }) => {
+      const { gateway, page } = await openQuestionPage({ height, width });
+      const prompt = "Which progress note should I use?";
+      await emitRequested(
+        gateway,
+        questionRecord("question-mobile-compound", [
+          {
+            questionId: "progress_note",
+            header: "Progress note",
+            question: prompt,
+            options: [
+              { label: "Concise", description: "Keep the update short." },
+              { label: "Detailed", description: "Include the supporting evidence." },
+            ],
+          },
+        ]),
+      );
 
-    const panel = panelFor(page, prompt);
-    await panel.waitFor();
-    await panel.locator(".chat-question-panel__collapse").click();
-    const shell = page.locator(".agent-chat__composer-shell");
-    const composer = shell.locator(".agent-chat__input");
-    await composer.waitFor();
-    await screenshot(page, "07-question-mobile-compound.png");
+      const panel = panelFor(page, prompt);
+      await panel.waitFor();
+      await panel.locator(".chat-question-panel__collapse").click();
+      const shell = page.locator(".agent-chat__composer-shell");
+      const composer = shell.locator(".agent-chat__input");
+      await composer.waitFor();
+      await screenshot(page, `07-question-mobile-compound-${screenshotName}.png`);
 
-    expect(
-      await shell.evaluate((element) => {
-        const collapsedPanel = element.querySelector<HTMLElement>(
-          ".chat-question-panel--collapsed",
-        );
-        const input = element.querySelector<HTMLElement>(".agent-chat__input");
-        if (!collapsedPanel || !input) {
-          throw new Error("expected collapsed question and composer");
-        }
-        const shellBox = element.getBoundingClientRect();
-        const panelBox = collapsedPanel.getBoundingClientRect();
-        const inputBox = input.getBoundingClientRect();
-        return {
-          composerBorder: getComputedStyle(input).borderTopWidth,
-          joined: Math.abs(panelBox.bottom - inputBox.top) <= 1,
-          panelBorder: getComputedStyle(collapsedPanel).borderTopWidth,
-          rowHeight: Math.round(panelBox.height),
-          shellBorder: getComputedStyle(element).borderTopWidth,
-          shellContainsChildren:
-            panelBox.left >= shellBox.left - 1 &&
-            inputBox.left >= shellBox.left - 1 &&
-            panelBox.right <= shellBox.right + 1 &&
-            inputBox.right <= shellBox.right + 1,
-        };
-      }),
-    ).toEqual({
-      composerBorder: "0px",
-      joined: true,
-      panelBorder: "0px",
-      rowHeight: 48,
-      shellBorder: "1px",
-      shellContainsChildren: true,
-    });
+      expect(
+        await shell.evaluate((element) => {
+          const collapsedPanel = element.querySelector<HTMLElement>(
+            ".chat-question-panel--collapsed",
+          );
+          const input = element.querySelector<HTMLElement>(".agent-chat__input");
+          if (!collapsedPanel || !input) {
+            throw new Error("expected collapsed question and composer");
+          }
+          const shellBox = element.getBoundingClientRect();
+          const panelBox = collapsedPanel.getBoundingClientRect();
+          const inputBox = input.getBoundingClientRect();
+          return {
+            composerBorder: getComputedStyle(input).borderTopWidth,
+            joined: Math.abs(panelBox.bottom - inputBox.top) <= 1,
+            panelBorder: getComputedStyle(collapsedPanel).borderTopWidth,
+            rowHeight: Math.round(panelBox.height),
+            shellBorder: getComputedStyle(element).borderTopWidth,
+            shellContainsChildren:
+              panelBox.left >= shellBox.left - 1 &&
+              inputBox.left >= shellBox.left - 1 &&
+              panelBox.right <= shellBox.right + 1 &&
+              inputBox.right <= shellBox.right + 1,
+          };
+        }),
+      ).toEqual({
+        composerBorder: "0px",
+        joined: true,
+        panelBorder: "0px",
+        rowHeight: 48,
+        shellBorder: "1px",
+        shellContainsChildren: true,
+      });
 
-    await composer.locator(".agent-chat__composer-combobox > textarea").focus();
-    await expect
-      .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-      .toBe("none");
-    await page.evaluate(() => {
-      document.documentElement.dataset.themeMode = "light";
-    });
-    await expect
-      .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-      .toBe("none");
-  });
+      await composer.locator(".agent-chat__composer-combobox > textarea").focus();
+      await expect
+        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
+        .toBe("none");
+      await page.evaluate(() => {
+        document.documentElement.dataset.themeMode = "light";
+      });
+      await expect
+        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
+        .toBe("none");
+    },
+  );
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();

@@ -444,7 +444,7 @@ openclaw-chat-question-panel {
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* A collapsed question restores the composer, so both rows are one input
      surface. Keep popovers unclipped while the shell owns their shared frame. */
   .agent-chat__composer-shell--question-composer {
