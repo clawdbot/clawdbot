@@ -69,7 +69,8 @@
             "type": "string"
           },
           "humanReadable": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "model": {
             "type": "string"

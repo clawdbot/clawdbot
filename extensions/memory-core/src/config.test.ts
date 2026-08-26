@@ -105,4 +105,18 @@ describe("memory-core manifest config schema", () => {
 
     expect(result.ok).toBe(false);
   });
+
+  it("declares the runtime default for dreaming.humanReadable", () => {
+    // The schema-driven Control UI renders an unset boolean from `schema.default`
+    // and shows false when it is missing. Without this, an untouched install would
+    // display machine-only mode while the gateway still writes Dream Diary prose.
+    const dreaming = manifest.configSchema?.properties?.dreaming as
+      | { properties?: Record<string, { default?: unknown }> }
+      | undefined;
+
+    expect(dreaming?.properties?.humanReadable?.default).toBe(true);
+    expect(dreaming?.properties?.humanReadable?.default).toBe(
+      dreaming?.properties?.enabled?.default,
+    );
+  });
 });
