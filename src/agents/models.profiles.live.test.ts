@@ -10,8 +10,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
-import { withBundledPluginEnablementCompat } from "../plugins/bundled-compat.js";
-import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   discoverAuthStorage,
@@ -21,12 +19,33 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
+import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+} from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+} from "./live-test-provider-drift.test-support.js";
+import {
+  getApiKeyForModelCore,
+  requireApiKey,
+  resolveUsableCustomProviderApiKey,
+} from "./model-auth.js";
+import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
+import type { StreamFn } from "./runtime/index.js";
+import {
+  appendPrioritizedDynamicLiveModels,
+  applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
@@ -36,7 +55,8 @@ import {
   selectHighSignalLiveItems,
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "./live-model-filter.js";
+  resolveLiveProviderDiscoveryProviderIds,
+} from "./test-helpers/live-model-dynamic-candidates.js";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
@@ -51,28 +71,8 @@ import {
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
-import { createLiveTargetMatcher } from "./live-target-matcher.js";
-import {
-  isLiveProfileKeyModeEnabled,
-  isLiveTestEnabled,
-  readLiveTestConfig,
-  requiresLiveProfileCredential,
-  resolveLiveCredentialPrecedence,
-} from "./live-test-helpers.js";
-import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
-import {
-  isLiveBillingDrift,
-  isLiveRateLimitDrift,
-} from "./live-test-provider-drift.test-support.js";
-import {
-  getApiKeyForModel,
-  requireApiKey,
-  resolveUsableCustomProviderApiKey,
-} from "./model-auth.js";
-import { shouldSuppressBuiltInModel } from "./model-suppression.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
-import type { StreamFn } from "./runtime/index.js";
+} from "./test-helpers/live-model-turn-probes.js";
+import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -200,93 +200,16 @@ function findUnmatchedExplicitLiveModelRefs(params: {
   return unmatched;
 }
 
-function resolveLiveProviderDiscoveryProviderIds(params: {
-  providerFilter: Set<string> | null;
-  explicitRefs: readonly { provider: string; id: string }[];
-  priorityRefs?: readonly { provider: string; id: string }[];
-}): string[] | undefined {
-  // Narrow startup discovery to providers that can affect the requested live target set.
-  const providers = new Set<string>();
-  for (const provider of params.providerFilter ?? []) {
-    const normalized = normalizeProviderId(provider);
-    if (normalized) {
-      providers.add(normalized);
-    }
-  }
-  for (const ref of params.explicitRefs) {
-    providers.add(ref.provider);
-  }
-  for (const ref of params.priorityRefs ?? []) {
-    providers.add(ref.provider);
-  }
-  return providers.size > 0
-    ? [...providers].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function resolveLiveProviderDiscoveryPluginIds(params: {
-  config?: OpenClawConfig;
-  providers: readonly string[] | undefined;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const pluginIds = new Set<string>();
-  for (const provider of params.providers ?? []) {
-    const owners =
-      resolveOwningPluginIdsForProviderRef({
-        provider,
-        config: params.config,
-        env: params.env,
-      }) ?? [];
-    if (owners.length === 0) {
-      pluginIds.add(provider);
-      continue;
-    }
-    for (const owner of owners) {
-      pluginIds.add(owner);
-    }
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
-}
-
 function applyLiveProviderDiscoveryPluginCompat(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
   env?: NodeJS.ProcessEnv;
 }): OpenClawConfig {
-  const pluginIds = resolveLiveProviderDiscoveryPluginIds(params);
-  const pluginConfig =
-    pluginIds.length > 0 ? enableLiveProviderPlugins(params.config, pluginIds) : params.config;
   return applyLiveOllamaProviderEnvCompat({
-    config: pluginConfig,
+    config: applyLiveProviderPluginDiscoveryCompat(params),
     providers: params.providers,
     env: params.env,
   });
-}
-
-function enableLiveProviderPlugins(
-  config: OpenClawConfig,
-  pluginIds: readonly string[],
-): OpenClawConfig {
-  const compatConfig =
-    withBundledPluginEnablementCompat({
-      config,
-      pluginIds,
-    }) ?? config;
-  const entries = { ...compatConfig.plugins?.entries };
-  const allow = new Set(compatConfig.plugins?.allow ?? []);
-  for (const pluginId of pluginIds) {
-    allow.add(pluginId);
-    entries[pluginId] ??= { enabled: true };
-  }
-  return {
-    ...compatConfig,
-    plugins: {
-      ...compatConfig.plugins,
-      enabled: true,
-      allow: [...allow].toSorted((left, right) => left.localeCompare(right)),
-      entries,
-    },
-  };
 }
 
 function applyLiveOllamaProviderEnvCompat(params: {
@@ -487,7 +410,7 @@ async function resolveLiveModelApiKeyInfo(params: {
   model: Model;
   cfg: OpenClawConfig;
   requireProfileKeys: boolean;
-}): Promise<Awaited<ReturnType<typeof getApiKeyForModel>>> {
+}): Promise<Awaited<ReturnType<typeof getApiKeyForModelCore>>> {
   if (isLiveLocalOllamaModel(params.model, params.cfg)) {
     const configuredKey = canReuseConfiguredLocalOllamaApiKey(params.model, params.cfg)
       ? resolveUsableCustomProviderApiKey({
@@ -508,7 +431,7 @@ async function resolveLiveModelApiKeyInfo(params: {
       mode: "api-key",
     };
   }
-  return await getApiKeyForModel({
+  return await getApiKeyForModelCore({
     model: params.model,
     cfg: params.cfg,
     credentialPrecedence: resolveLiveCredentialPrecedence(
@@ -1597,7 +1520,7 @@ async function runDeepSeekV4ReplayRegression(params: {
   if (second.stopReason === "error") {
     throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
   }
-  expect(extractAssistantText(second).length).toBeGreaterThan(0);
+  expect(extractEmbeddedAssistantText(second).length).toBeGreaterThan(0);
 }
 
 async function runExtraTurnProbes(params: {
@@ -1627,7 +1550,7 @@ async function runExtraTurnProbes(params: {
     if (file.stopReason === "error") {
       throw new Error(file.errorMessage || "file-read probe returned error with no message");
     }
-    let fileText = extractAssistantText(file);
+    let fileText = extractEmbeddedAssistantText(file);
     if (!fileProbeTextMatches(fileText)) {
       logProgress(`${params.progressLabel}: file-read probe retry`);
       const retry = await completeSimpleWithTimeout(
@@ -1644,7 +1567,7 @@ async function runExtraTurnProbes(params: {
           retry.errorMessage || "file-read probe retry returned error with no message",
         );
       }
-      fileText = extractAssistantText(retry);
+      fileText = extractEmbeddedAssistantText(retry);
     }
     if (!fileProbeTextMatches(fileText)) {
       if (fileText.length === 0) {
@@ -1689,7 +1612,7 @@ async function runExtraTurnProbes(params: {
             : `${attemptLabel} returned error with no message`;
         throw new Error(image.errorMessage || fallback);
       }
-      return extractAssistantText(image);
+      return extractEmbeddedAssistantText(image);
     },
     onRetry: (firstText) => {
       const reason = firstText.length === 0 ? "was empty" : "did not return ok";
@@ -1829,11 +1752,11 @@ describeLive("live models (profile keys)", () => {
       const skipped: Array<{ model: string; reason: string }> = [];
       const candidates: Array<{
         model: Model;
-        apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>>;
+        apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
       }> = [];
 
       for (const model of models) {
-        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+        if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
           continue;
         }
         if (!targetMatcher.matchesProvider(model.provider)) {

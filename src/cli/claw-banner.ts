@@ -1,4 +1,4 @@
-// Shared OpenClaw banner: the pixel lobster mascot beside the OPENCLAW
+// Shared OpenClaw banner: the dot-matrix lobster mascot beside the OPENCLAW
 // wordmark, with a short startup animation on rich interactive terminals.
 // Used by the wizard flows (doctor/onboard/configure) and the foreground
 // gateway run; non-TTY and CI paths always get the plain static banner.
@@ -10,22 +10,25 @@ import { restoreTerminalState } from "../../packages/terminal-core/src/restore.j
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-// Art is pregenerated from pixel bitmaps (two pixel rows per terminal row via
-// ▀▄█). Mascot and wordmark are separate so they can be tinted independently;
-// the wordmark starts on mascot row 2, keeping the claws above the text line.
+// Mascot and wordmark are separate so they can be tinted independently; the
+// wordmark starts on mascot row 3, keeping the claws above the text line.
 const MASCOT_ART = [
-  "▄███▄     ▄███▄",
-  "▀█▄█▀     ▀█▄█▀",
-  "     ▀▄ ▄▀",
-  "    ██ █ ██",
-  "    ▀█████▀",
-  "   ▄█▀ █ ▀█▄",
+  " •●●:.        .:●●•",
+  ":●●●●:        :●●●●:",
+  ".●●●●:.:•●●•:.:●●●●.",
+  " .●●●: •●●●●• :●●●.",
+  " ..:••●●●●●●●●••:..",
+  ".::••••●●●●●●••••::.",
+  " . .:  •●●●●•  :. .",
+  "    .  :●●●●:  .",
+  "      .●●●●●●.",
+  "       :••••:",
 ] as const;
 // Claw tips with the pincer notch widened; swapping the top two rows in and
 // out produces the "snip".
-const MASCOT_OPEN_ROWS = ["▄█▀█▄     ▄█▀█▄", "▀█ █▀     ▀█ █▀"] as const;
-const MASCOT_WIDTH = 15;
-const WORDMARK_ROW_OFFSET = 2;
+const MASCOT_OPEN_ROWS = ["•●•.:.        .:.•●•", ":●●●•:        :•●●●:"] as const;
+const MASCOT_WIDTH = 20;
+const WORDMARK_ROW_OFFSET = 3;
 
 const WORDMARK_ART = [
   "█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █",

@@ -1,5 +1,6 @@
+import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
@@ -8,7 +9,10 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
+  readLiveModelCatalogStringField,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
@@ -16,7 +20,11 @@ import {
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
+import {
+  normalizeProviderId,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
+} from "./provider-model-shared.js";
 import {
   fetchWithSsrFGuard,
   type LookupFn,
@@ -32,6 +40,11 @@ export type LiveModelCatalogHeaderContext = {
 };
 
 export { clearLiveCatalogCacheForTests };
+export {
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
+};
 
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;
@@ -125,10 +138,21 @@ export type OpenAICompatibleModelDiscoveryOptions = {
 export type BuildOpenAICompatibleProviderCatalogParams = {
   ctx: ProviderCatalogContext;
   providerId: string;
+  providerAliases?: readonly string[];
   buildProvider: () => ModelProviderConfig | Promise<ModelProviderConfig>;
   allowExplicitBaseUrl?: boolean;
   modelDiscovery?: OpenAICompatibleModelDiscoveryOptions;
 };
+
+function matchesProviderCatalogScope(
+  ctx: Pick<ProviderCatalogContext, "providerIds">,
+  providerIds: readonly string[],
+): boolean {
+  const selected = ctx.providerIds;
+  return (
+    selected === undefined || providerIds.some((id) => selected.includes(normalizeProviderId(id)))
+  );
+}
 
 function readDefaultLiveModelCatalogRows(body: unknown): readonly unknown[] {
   if (Array.isArray(body)) {
@@ -198,12 +222,6 @@ function buildHeaders(
   return headers;
 }
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
   const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
@@ -213,10 +231,6 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-}
-
-function readLiveModelCatalogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
@@ -609,6 +623,10 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
     catalog: {
       order: "paired" as const,
       run: async (ctx: ProviderCatalogContext) => {
+        const entries = params.entries.filter(({ id }) => matchesProviderCatalogScope(ctx, [id]));
+        if (entries.length === 0) {
+          return null;
+        }
         const auth = ctx.resolveProviderApiKey(params.credentialProviderId);
         if (!auth.apiKey) {
           return null;
@@ -616,7 +634,7 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
         return {
           providers: Object.fromEntries(
             await Promise.all(
-              params.entries.map(
+              entries.map(
                 async ({ id, buildProvider }) =>
                   [
                     id,
@@ -641,6 +659,11 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
 export async function buildOpenAICompatibleProviderCatalog(
   params: BuildOpenAICompatibleProviderCatalogParams,
 ): Promise<ProviderCatalogResult> {
+  if (
+    !matchesProviderCatalogScope(params.ctx, [params.providerId, ...(params.providerAliases ?? [])])
+  ) {
+    return null;
+  }
   const result = await buildSingleProviderApiKeyCatalog({
     ctx: params.ctx,
     providerId: params.providerId,

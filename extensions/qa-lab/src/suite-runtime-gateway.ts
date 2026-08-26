@@ -1,11 +1,11 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
@@ -77,13 +77,6 @@ async function waitForTransportReady(
   });
 }
 
-async function waitForQaChannelReady(
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-  timeoutMs = 45_000,
-) {
-  await waitForTransportReady(env, timeoutMs);
-}
-
 async function waitForConfigRestartSettle(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   restartDelayMs = 1_000,
@@ -126,6 +119,8 @@ async function waitForConfigRestartSettle(
 }
 
 function formatGatewayPrimaryErrorText(error: unknown) {
+  // The persistent QA client flattens low-level closes and appends child logs,
+  // so the public one-shot gateway guards cannot recover a typed close here.
   const text = formatErrorMessage(error);
   const gatewayLogsIndex = text.indexOf("\nGateway logs:");
   return (gatewayLogsIndex >= 0 ? text.slice(0, gatewayLogsIndex) : text).trim();
@@ -368,7 +363,7 @@ async function runConfigMutation(params: {
       continue;
     }
   }
-  throw toQaErrorObject(
+  throw toErrorObject(
     lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
     "Non-Error thrown",
   );
@@ -448,6 +443,5 @@ export {
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
-  waitForQaChannelReady,
   waitForTransportReady,
 };

@@ -29,7 +29,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "write",
   "edit",
   "apply_patch",
-  "image",
+  "view_image",
   "sessions_list",
   "sessions_history",
   "sessions_search",

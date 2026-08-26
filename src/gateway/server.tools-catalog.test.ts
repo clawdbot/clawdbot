@@ -3,13 +3,13 @@
  */
 import { describe, expect, it } from "vitest";
 import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
-import { withServer } from "./test-with-server.js";
+import { withGatewayClient } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("gateway tools.catalog", () => {
   it("returns core catalog data and includes tts", async () => {
-    await withServer(async (ws) => {
+    await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
       const res = await rpcReq<{
         agentId?: string;
@@ -31,7 +31,7 @@ describe("gateway tools.catalog", () => {
   });
 
   it("supports includePlugins=false and rejects unknown agent ids", async () => {
-    await withServer(async (ws) => {
+    await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
 
       const noPlugins = await rpcReq<{

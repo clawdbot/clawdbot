@@ -1,6 +1,6 @@
 // OC Path tests cover oc path parse edges plugin behavior.
 import { describe, expect, it } from "vitest";
-import { OcPathError, formatOcPath, hasWildcard, parseOcPath } from "../../oc-path.js";
+import { OcPathError, formatOcPath, isPattern, parseOcPath } from "../../oc-path.js";
 
 function expectErr(fn: () => unknown, code: string): void {
   try {
@@ -13,10 +13,6 @@ function expectErr(fn: () => unknown, code: string): void {
 }
 
 describe("oc-path-parse-edges", () => {
-  it("file-only", () => {
-    expect(parseOcPath("oc://SOUL.md")).toEqual({ file: "SOUL.md" });
-  });
-
   it("file + section", () => {
     expect(parseOcPath("oc://SOUL.md/Boundaries").section).toBe("Boundaries");
   });
@@ -176,8 +172,8 @@ describe("oc-path-parse-edges", () => {
 
   it("wildcard detection is quote-aware (literal `*` inside quoted segment)", () => {
     const concrete = parseOcPath('oc://config.jsonc/"items.*.glob"');
-    expect(hasWildcard(concrete)).toBe(false);
+    expect(isPattern(concrete)).toBe(false);
     const wildcard = parseOcPath("oc://config.jsonc/items/*");
-    expect(hasWildcard(wildcard)).toBe(true);
+    expect(isPattern(wildcard)).toBe(true);
   });
 });

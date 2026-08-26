@@ -9,9 +9,27 @@ import {
   extractThinkingFromMessage,
   formatTuiFooter,
   formatTuiErrorMessage,
-  isCommandMessage,
+  isolateRtlRenderedLine,
+  isTerminalSafeAutocompleteValue,
+  isCommandMarkedMessage,
+  resolveFinalAssistantText,
+  sanitizeMarkdownSource,
+  sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("resolveFinalAssistantText", () => {
+  it("hides complete HTML error pages after an HTTP reason phrase", () => {
+    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
+
+    const rendered = resolveFinalAssistantText({ errorMessage: raw });
+
+    expect(rendered).toBe(
+      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+    );
+    expect(rendered).not.toContain("<html>");
+  });
+});
 
 describe("formatTuiFooter", () => {
   it("shows session modes and the process delivery mode in one compact summary", () => {
@@ -60,6 +78,37 @@ describe("formatTuiFooter", () => {
     });
 
     expect(new Text(summary, 1, 0).render(48).every((line) => visibleWidth(line) <= 48)).toBe(true);
+  });
+
+  it("sanitizes terminal controls and collapses footer fields to one line", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;footer-title\u0007",
+      "\u001b]52;c;footer-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;footer-c1-title\u009c",
+    ];
+    const footer = formatTuiFooter({
+      agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
+      sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
+      sessionInfo: {
+        model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
+      },
+      deliver: true,
+    });
+
+    expect(footer).toContain("agent-startagent-end");
+    expect(footer).toContain("مرحبا");
+    expect(footer).toContain("session-startsession-end");
+    expect(footer).toContain("שלום");
+    expect(footer).toContain("model-startmiddlemodel-end Unicode");
+    expect(footer).toContain("\u2067");
+    expect(footer).toContain("\u2069");
+    expect(footer).not.toMatch(/[\r\n\t]/u);
+    for (const attack of attacks) {
+      expect(footer).not.toContain(attack);
+    }
   });
 
   it("renders active goal usage", () => {
@@ -607,11 +656,11 @@ describe("extractContentFromMessage", () => {
   });
 });
 
-describe("isCommandMessage", () => {
+describe("isCommandMarkedMessage", () => {
   it("detects command-marked messages", () => {
-    expect(isCommandMessage({ command: true })).toBe(true);
-    expect(isCommandMessage({ command: false })).toBe(false);
-    expect(isCommandMessage({})).toBe(false);
+    expect(isCommandMarkedMessage({ command: true })).toBe(true);
+    expect(isCommandMarkedMessage({ command: false })).toBe(false);
+    expect(isCommandMarkedMessage({})).toBe(false);
   });
 });
 
@@ -728,6 +777,11 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+
+  it("removes untrusted bidi overrides before adding trusted RTL isolation", () => {
+    expect(sanitizeRenderableText("\u202eمرحبا\u202c")).toBe("\u2067مرحبا\u2069");
+    expect(sanitizeRenderableText("\u061cمرحبا\u200f")).toBe("\u2067مرحبا\u2069");
   });
 
   it("preserves long camelCase identifiers wrapped in inline code spans (#48432)", () => {
@@ -857,5 +911,66 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toContain("[binary data omitted]");
+  });
+});
+
+describe("Markdown display safety", () => {
+  it("strips hostile controls from source without adding directional isolates", () => {
+    const input = "\u202e# مرحبا\u202c\n\u009b31m> שלום\u009b0m";
+    const sanitized = sanitizeMarkdownSource(input);
+
+    expect(sanitized).toBe("# مرحبا\n> שלום");
+    expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
+  });
+
+  it("isolates rendered RTL lines without changing visible width", () => {
+    const rendered = "\x1b[1mمرحبا\x1b[0m";
+    const isolated = isolateRtlRenderedLine(rendered);
+
+    expect(isolated).toBe(`\u2067${rendered}\u2069`);
+    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
+  });
+
+  it("keeps rendered padding outside RTL isolates", () => {
+    const rendered = "  \x1b[1mمرحبا\x1b[0m   ";
+    const isolated = isolateRtlRenderedLine(rendered);
+
+    expect(isolated).toBe(`  \u2067\x1b[1mمرحبا\x1b[0m\u2069   `);
+    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
+  });
+});
+
+describe("isTerminalSafeAutocompleteValue", () => {
+  it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
+    expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+    for (const value of [
+      "bad\x1b[31m",
+      "bad\tvalue",
+      "bad\u009bvalue",
+      "bad\u200evalue",
+      "bad\u202evalue",
+    ]) {
+      expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
+    }
+  });
+});
+
+describe("sanitizeRenderableLine", () => {
+  it("preserves RTL isolation while collapsing carriage returns, newlines, and tabs", () => {
+    expect(sanitizeRenderableLine("left\r\nمرحبا\tשלום right")).toBe(
+      "\u2067left مرحبا שלום right\u2069",
+    );
+  });
+
+  it("preserves long exact labels without prose token splitting", () => {
+    const label = "a".repeat(300);
+
+    expect(sanitizeRenderableLine(label)).toBe(label);
+  });
+
+  it("strips terminal controls and redacts binary-like lines before collapsing whitespace", () => {
+    const input = `safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`;
+
+    expect(sanitizeRenderableLine(input)).toBe("safe [binary data omitted]");
   });
 });

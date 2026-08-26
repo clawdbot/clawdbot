@@ -35,6 +35,8 @@ function taskDetailCase(task: { id: string; title: string } & Record<string, unk
 export function buildBackgroundTasksMock(baseTime: number) {
   const now = Date.now();
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
+  const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
+  const requesterSessionKey = "agent:main:main";
   const tasks = [
     {
       id: "task-mock-running",
@@ -49,6 +51,8 @@ export function buildBackgroundTasksMock(baseTime: number) {
       toolUseCount: 7,
       lastToolName: "read",
       progressSummary: "Tracing task events through the background task rail",
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
       childSessionKey: taskSessionKey,
     },
     {
@@ -62,6 +66,9 @@ export function buildBackgroundTasksMock(baseTime: number) {
       startedAt: now - 95_000,
       updatedAt: now - 1_000,
       progressSummary: "Comparing agent-scoped task event paths",
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
+      childSessionKey: secondTaskSessionKey,
     },
     finishedTask(1, now),
     finishedTask(2, now),
@@ -88,6 +95,25 @@ export function buildBackgroundTasksMock(baseTime: number) {
               ),
             ],
             sessionId: "control-ui-mock-task-session",
+            thinkingLevel: null,
+          },
+        },
+        {
+          match: { sessionKey: secondTaskSessionKey },
+          response: {
+            messages: [
+              historyMessage(
+                "user",
+                "Audit the gateway task-event scope guards.",
+                baseTime + 41 * 60_000,
+              ),
+              historyMessage(
+                "assistant",
+                "Comparing requester, owner, and child-session event routing.",
+                baseTime + 41 * 60_000 + 6_000,
+              ),
+            ],
+            sessionId: "control-ui-mock-task-session-2",
             thinkingLevel: null,
           },
         },

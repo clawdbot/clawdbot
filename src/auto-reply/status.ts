@@ -1,6 +1,6 @@
 /** Auto-reply status/help message builders for commands, status, and tool inventory output. */
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
-import { normalizeToolName } from "../agents/tool-policy-shared.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
 
 export {
@@ -52,7 +52,7 @@ export function buildToolsMessage(
     const tools: ToolsMessageItem[] = [];
     for (const tool of group.tools) {
       tools.push({
-        id: normalizeToolName(tool.id),
+        id: normalizeToolPolicyName(tool.id),
         name: tool.label,
         description: tool.description || "Tool",
         rawDescription: tool.rawDescription || tool.description || "Tool",

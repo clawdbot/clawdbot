@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 function mockMediaState(
@@ -43,7 +43,208 @@ function mockMediaState(
   };
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 describe("ChatMediaSourceController", () => {
+  it("normalizes and applies native playback immediately", () => {
+    const media = document.createElement("audio");
+    const controller = new ChatMediaSourceController();
+
+    expect(controller.sync(media, "  /media/native.mp3  ", "  media:native  ", "native")).toBe(
+      null,
+    );
+
+    expect(controller.readiness).toBe("ready");
+    expect(controller.readySource).toBe("/media/native.mp3");
+    expect(controller.currentIdentity).toBe("media:native");
+    expect(media.getAttribute("src")).toBe("/media/native.mp3");
+  });
+
+  it("keeps preparation pending across a 202 and applies the ready rendition", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const media = document.createElement("video");
+    const controller = new ChatMediaSourceController();
+
+    const pending = controller.sync(
+      media,
+      "/media/clip.avi?mediaTicket=ticket",
+      "media:clip",
+      "transcode",
+    );
+    expect(controller.readiness).toBe("preparing");
+    expect(media.hasAttribute("src")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(controller.readiness).toBe("ready");
+    expect(media.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
+  });
+
+  it("aborts preparation and starts it again after reconnect", async () => {
+    let firstSignal: AbortSignal | undefined;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        async (_source, init) =>
+          await new Promise<Response>((_resolve, reject) => {
+            firstSignal = init?.signal ?? undefined;
+            firstSignal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("disconnected", "AbortError")),
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const media = document.createElement("audio");
+    const controller = new ChatMediaSourceController();
+    const source = "/media/voice.caf?mediaTicket=ticket";
+
+    const first = controller.sync(media, source, "media:voice", "transcode");
+    controller.cancel();
+    expect(firstSignal?.aborted).toBe(true);
+    expect(controller.readiness).toBe("idle");
+
+    const second = controller.sync(media, source, "media:voice", "transcode");
+    await Promise.all([first, second]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(controller.readiness).toBe("ready");
+    expect(media.getAttribute("src")).toContain("playback=1");
+  });
+
+  it("suppresses a stale completion after the readiness identity changes", async () => {
+    let resolveOld: ((response: Response) => void) | undefined;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<Response>((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const media = document.createElement("video");
+    const controller = new ChatMediaSourceController();
+
+    const oldRequest = controller.sync(
+      media,
+      "/media/old.avi?mediaTicket=old",
+      "media:old",
+      "transcode",
+      "old-token",
+    );
+    const newRequest = controller.sync(
+      media,
+      "/media/new.avi?mediaTicket=new",
+      "media:new",
+      "transcode",
+      "new-token",
+    );
+    await newRequest;
+    resolveOld?.(new Response(null, { status: 200 }));
+    await oldRequest;
+
+    expect(controller.currentIdentity).toBe("media:new");
+    expect(media.getAttribute("src")).toContain("mediaTicket=new&playback=1");
+  });
+
+  it("keeps a usable same-identity source when a refresh is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
+    );
+    const media = document.createElement("audio");
+    const controller = new ChatMediaSourceController();
+    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+    expect(controller.handleError(media)).toBe(false);
+    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+
+    const pending = controller.sync(
+      media,
+      "/media/voice.mp3?mediaTicket=fresh",
+      "media:voice",
+      "transcode",
+    );
+    expect(controller.readiness).toBe("ready");
+    await pending;
+
+    expect(controller.readiness).toBe("ready");
+    expect(controller.readySource).toContain("mediaTicket=old");
+    expect(media.getAttribute("src")).toContain("mediaTicket=old");
+  });
+
+  it("reports an unavailable rendition when there is no usable fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
+    );
+    const media = document.createElement("audio");
+    const controller = new ChatMediaSourceController();
+    void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
+    expect(controller.handleError(media)).toBe(false);
+
+    await controller.sync(
+      media,
+      "/media/voice.caf?mediaTicket=refresh",
+      "media:voice",
+      "transcode",
+    );
+
+    expect(controller.readiness).toBe("unavailable");
+    expect(controller.readySource).toBe("");
+    expect(media.getAttribute("src")).toContain("mediaTicket=old");
+  });
+
+  it.each([
+    {
+      boundary: "authentication",
+      source: "/media/protected.caf?mediaTicket=refresh",
+      identity: "media:protected",
+      authToken: "principal-b",
+    },
+    {
+      boundary: "source identity",
+      source: "/media/replacement.caf?mediaTicket=refresh",
+      identity: "media:replacement",
+      authToken: "principal-a",
+    },
+  ])("removes the old source when a changed $boundary is unavailable", async (next) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
+    );
+    const media = document.createElement("video");
+    const controller = new ChatMediaSourceController();
+    void controller.sync(
+      media,
+      "/media/protected.mp4?mediaTicket=old",
+      "media:protected",
+      "native",
+      "principal-a",
+    );
+
+    const pending = controller.sync(media, next.source, next.identity, "transcode", next.authToken);
+    expect(media.hasAttribute("src")).toBe(false);
+    await pending;
+
+    expect(controller.readiness).toBe("unavailable");
+    expect(media.hasAttribute("src")).toBe(false);
+  });
+
   it("queues a refreshed ticket while paused mid-stream and restores it after failure", async () => {
     const media = document.createElement("audio");
     const state = { currentTime: 0, duration: 120, paused: true };
@@ -58,7 +259,6 @@ describe("ChatMediaSourceController", () => {
     controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
 
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
-    expect(controller.queuedSource).toBe("/media?mediaTicket=fresh");
 
     expect(controller.handleError(media)).toBe(true);
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
@@ -131,7 +331,6 @@ describe("ChatMediaSourceController", () => {
 
     expect(media.hasAttribute("src")).toBe(false);
     expect(load).toHaveBeenCalledOnce();
-    expect(controller.currentSource).toBe("");
     expect(controller.currentIdentity).toBe("");
   });
 
@@ -148,7 +347,6 @@ describe("ChatMediaSourceController", () => {
     controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
 
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
-    expect(controller.queuedSource).toBe("");
     media.currentTime = 0;
     state.error = null;
     controller.handleLoadedMetadata(media);
@@ -169,6 +367,5 @@ describe("ChatMediaSourceController", () => {
 
     expect(pause).toHaveBeenCalledOnce();
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=second");
-    expect(controller.queuedSource).toBe("");
   });
 });

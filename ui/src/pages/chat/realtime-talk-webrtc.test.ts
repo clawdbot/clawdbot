@@ -78,6 +78,23 @@ function stubAnswerSdpFetch(): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch);
 }
 
+function createPendingSdpResponse(signal: AbortSignal | undefined): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = signal?.reason;
+            controller.error(reason instanceof Error ? reason : new Error("offer request aborted"));
+          },
+          { once: true },
+        );
+      },
+    }),
+  );
+}
+
 function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
@@ -88,6 +105,7 @@ function createOpenAiTransport(
       provider: "openai",
       transport: "webrtc",
       clientSecret: "client-secret-123",
+      offerResponseMaxBytes: 256 * 1024,
     },
     {
       client: client as never,
@@ -368,23 +386,11 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   it("aborts stalled WebRTC SDP answer body reads after the offer timeout", async () => {
     vi.useFakeTimers();
     let offerSignal: AbortSignal | undefined;
+    let response: Response | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return {
-        ok: true,
-        status: 200,
-        text: () =>
-          new Promise<string>((_, reject) => {
-            offerSignal?.addEventListener(
-              "abort",
-              () => {
-                const reason = offerSignal?.reason;
-                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
-              },
-              { once: true },
-            );
-          }),
-      } as Response;
+      response = createPendingSdpResponse(offerSignal);
+      return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
@@ -396,6 +402,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(offerSignal?.aborted).toBe(false);
+    expect(response?.body?.locked).toBe(true);
 
     await vi.runAllTimersAsync();
 
@@ -403,38 +410,29 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       new Error("Realtime WebRTC offer request timed out after 30000ms"),
     );
     expect(offerSignal?.aborted).toBe(true);
+    expect(response?.body?.locked).toBe(false);
   });
 
   it("aborts a pending WebRTC SDP answer body read when stopped", async () => {
     let offerSignal: AbortSignal | undefined;
+    let response: Response | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return {
-        ok: true,
-        status: 200,
-        text: () =>
-          new Promise<string>((_, reject) => {
-            offerSignal?.addEventListener(
-              "abort",
-              () => {
-                const reason = offerSignal?.reason;
-                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
-              },
-              { once: true },
-            );
-          }),
-      } as Response;
+      response = createPendingSdpResponse(offerSignal);
+      return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
 
     const startResult = transport.start();
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(response?.body?.locked).toBe(true);
 
     transport.stop();
 
     await expect(startResult).resolves.toBe("cancelled");
     expect(offerSignal?.aborted).toBe(true);
+    expect(response?.body?.locked).toBe(false);
   });
 
   it("reports a closed candidate when the peer fails during final setup", async () => {
@@ -579,13 +577,13 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    for (const type of [
-      "input_audio_buffer.speech_started",
-      "input_audio_buffer.speech_stopped",
-      "response.created",
-      "response.done",
+    for (const event of [
+      { type: "input_audio_buffer.speech_started" },
+      { type: "input_audio_buffer.speech_stopped" },
+      { type: "response.created", response: { id: "response-1" } },
+      { type: "response.done", response: { id: "response-1", status: "completed" } },
     ]) {
-      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type }) }));
+      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
     }
 
     expect(onStatus).toHaveBeenCalledWith("listening", "Speech detected");
@@ -602,6 +600,49 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       "turn-1",
       "turn-1",
     ]);
+    transport.stop();
+  });
+
+  it.each([
+    ["cancelled", "turn.cancelled"],
+    ["failed", "turn.ended"],
+    ["incomplete", "turn.ended"],
+  ] as const)("keeps browser Talk reusable after a %s response", async (status, terminalType) => {
+    stubAnswerSdpFetch();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createOpenAiTransport({}, { onStatus, onTalkEvent });
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    const response = {
+      id: "response-1",
+      status,
+      ...(status === "failed"
+        ? { status_details: { error: { code: "provider_error" } } }
+        : status === "incomplete"
+          ? { status_details: { reason: "max_output_tokens" } }
+          : { status_details: { reason: "client_cancelled" } }),
+    };
+    dispatchRealtimeEvent(peer, { type: "response.created", response: { id: "response-1" } });
+    dispatchRealtimeEvent(peer, { type: "response.done", response });
+    dispatchRealtimeEvent(peer, { type: "response.done", response });
+    dispatchRealtimeEvent(peer, { type: "response.created", response: { id: "response-2" } });
+    dispatchRealtimeEvent(peer, {
+      type: "response.done",
+      response: { id: "response-2", status: "completed" },
+    });
+
+    const terminalEvents = onTalkEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "turn.ended" || event.type === "turn.cancelled");
+    expect(terminalEvents).toHaveLength(2);
+    expect(terminalEvents[0]?.type).toBe(terminalType);
+    expect(
+      onTalkEvent.mock.calls
+        .map(([event]) => event.type)
+        .filter((type) => type === "session.error"),
+    ).toHaveLength(status === "cancelled" ? 0 : 1);
+    expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
     transport.stop();
   });
 

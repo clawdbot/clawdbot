@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 import { summarizeWithFallback } from "./compaction.test-support.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -106,14 +107,39 @@ describe("summarizeWithFallback", () => {
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry and propagates AbortError immediately when caller signal is already aborted", async () => {
+  it("retries a summarization_failed result and persists the recovered summary", async () => {
+    agentSessionMocks.generateSummary
+      .mockRejectedValueOnce(
+        new CompactionError(
+          "summarization_failed",
+          "Summarization failed: model returned no summary text",
+        ),
+      )
+      .mockResolvedValueOnce("recovered non-empty summary");
+
+    await expect(
+      summarizeWithFallback({
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+          } satisfies UserMessage,
+        ],
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: new AbortController().signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+      }),
+    ).resolves.toBe("recovered non-empty summary");
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not contact the provider when the caller signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
-
-    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    agentSessionMocks.generateSummary.mockRejectedValueOnce(providerAbortErr);
 
     await expect(
       summarizeWithFallback({
@@ -133,8 +159,7 @@ describe("summarizeWithFallback", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
 
-    // Caller abort is terminal — no retry, no fallback to placeholder.
-    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.generateSummary).not.toHaveBeenCalled();
   });
 
   it("stops retry backoff promptly when the caller aborts mid-sleep", async () => {

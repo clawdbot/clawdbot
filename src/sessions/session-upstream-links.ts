@@ -1,5 +1,6 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -42,11 +43,7 @@ function parseJson(value: string | null): SessionUpstreamJsonValue | null {
   if (value === null) {
     return null;
   }
-  try {
-    return JSON.parse(value) as SessionUpstreamJsonValue;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(value) as SessionUpstreamJsonValue | undefined) ?? null;
 }
 
 function rowToSessionUpstreamLink(row: SessionUpstreamLinkRow): SessionUpstreamLink {

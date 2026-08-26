@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginHookSkillProposalEvaluateEvent } from "../../plugins/hook-types.js";
 import {
   createOpenClawTestState,
@@ -22,6 +22,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 }));
 
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
+import { SkillProposalRevisionChangedError } from "./service-evaluation.js";
 import {
   applySkillProposal,
   evaluateSkillProposal,
@@ -36,19 +37,53 @@ import { prepareSkillProposalSupportFiles } from "./store.js";
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
-beforeEach(async () => {
+beforeAll(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-evaluation-state-",
   });
+});
+
+beforeEach(() => {
+  testState.applyEnv();
   hookMocks.evaluate.mockReset();
   hookMocks.hasEvaluators = true;
 });
 
 afterEach(async () => {
-  await testState.cleanup();
   await tempDirs.cleanup();
 });
+
+afterAll(async () => {
+  await testState.cleanup();
+});
+
+async function createOwnedSkill(
+  workspaceDir: string,
+  name: string,
+  description = "Existing skill",
+): Promise<string> {
+  const proposal = await proposeCreateSkill({
+    workspaceDir,
+    agentId: "main",
+    name,
+    description,
+    content: `# ${name}\n`,
+  });
+  const hadEvaluators = hookMocks.hasEvaluators;
+  hookMocks.hasEvaluators = false;
+  try {
+    await applySkillProposal({
+      workspaceDir,
+      agentId: "main",
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+  } finally {
+    hookMocks.hasEvaluators = hadEvaluators;
+  }
+  return proposal.record.target.skillDir;
+}
 
 describe("Skill Workshop proposal evaluation", () => {
   it("persists attributed results and exposes durable lifecycle events", async () => {
@@ -116,6 +151,7 @@ describe("Skill Workshop proposal evaluation", () => {
     });
     const hookEvent = hookMocks.evaluate.mock.calls[0]?.[0] as PluginHookSkillProposalEvaluateEvent;
     expect(hookEvent).toMatchObject({
+      correlationId: "optimization-run-1",
       proposal: {
         id: proposal.record.id,
         revision: "v1",
@@ -175,7 +211,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
   it("overlays update candidates and discards results after a concurrent revision", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-update-");
-    const skillDir = path.join(workspaceDir, "skills", "existing");
+    const skillDir = await createOwnedSkill(workspaceDir, "existing");
     await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
@@ -241,8 +277,7 @@ describe("Skill Workshop proposal evaluation", () => {
     "preserves the target marker casing in evaluation bundles for %s",
     async (skillFileName) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-filename-");
-      const skillDir = path.join(workspaceDir, "skills", "existing-marker-case");
-      await fs.mkdir(skillDir, { recursive: true });
+      const skillDir = await createOwnedSkill(workspaceDir, "existing-marker-case");
       const canonicalSkillFile = path.join(skillDir, "SKILL.md");
       await fs.writeFile(
         canonicalSkillFile,
@@ -343,7 +378,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
   it("rejects a candidate whose proposed files push it over the file-count limit", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-candidate-count-limit-");
-    const skillDir = path.join(workspaceDir, "skills", "candidate-count-limit");
+    const skillDir = await createOwnedSkill(workspaceDir, "candidate-count-limit");
     await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
@@ -374,7 +409,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
   it("rejects a candidate whose proposed files push it over the total-byte limit", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-candidate-byte-limit-");
-    const skillDir = path.join(workspaceDir, "skills", "candidate-byte-limit");
+    const skillDir = await createOwnedSkill(workspaceDir, "candidate-byte-limit");
     await fs.mkdir(path.join(skillDir, "assets"), { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
@@ -420,7 +455,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Evaluation Drift\n\nUncommitted replacement.\n",
     );
@@ -476,7 +511,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Concurrent Drift\n\nReplaced while evaluating.\n",
     );
@@ -490,8 +525,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
   it("discards evaluator results when the live skill baseline changes during evaluation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-baseline-drift-");
-    const skillDir = path.join(workspaceDir, "skills", "baseline-drift");
-    await fs.mkdir(skillDir, { recursive: true });
+    const skillDir = await createOwnedSkill(workspaceDir, "baseline-drift");
     const skillFile = path.join(skillDir, "SKILL.md");
     await fs.writeFile(
       skillFile,
@@ -596,7 +630,11 @@ describe("Skill Workshop proposal evaluation", () => {
         proposalId: proposal.record.id,
         expectedRevisionHash: proposal.revisionHash,
       }),
-    ).rejects.toThrow("proposal revision changed");
+    ).rejects.toMatchObject({
+      constructor: SkillProposalRevisionChangedError,
+      expectedRevisionHash: proposal.revisionHash,
+      currentRevisionHash: revised.revisionHash,
+    });
     expect(hookMocks.evaluate).not.toHaveBeenCalled();
   });
 
@@ -893,7 +931,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
   it("applies large existing skills without evaluator bundle limits when no evaluator exists", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-no-hooks-");
-    const skillDir = path.join(workspaceDir, "skills", "large-existing");
+    const skillDir = await createOwnedSkill(workspaceDir, "large-existing", "Existing large skill");
     const largeAsset = path.join(skillDir, "assets", "large.bin");
     await fs.mkdir(path.dirname(largeAsset), { recursive: true });
     await fs.writeFile(

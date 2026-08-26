@@ -78,6 +78,7 @@ function createManagedProfileState(
     isHttpReachable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
     isTransportAvailable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   },
+  executablePath?: string,
 ) {
   return {
     resolved: {
@@ -85,7 +86,7 @@ function createManagedProfileState(
       headless: false,
       headlessSource: "default",
       noSandbox: false,
-      executablePath: undefined,
+      executablePath,
     },
     profiles: new Map(),
     forProfile: () =>
@@ -112,8 +113,9 @@ function createManagedProfileState(
 }
 
 async function callBasicRouteWithState(params: {
+  route?: "/" | "/doctor";
   query?: Record<string, string>;
-  state: ReturnType<typeof createExistingSessionProfileState>;
+  state: ReturnType<typeof createExistingSessionProfileState | typeof createManagedProfileState>;
   signal?: AbortSignal;
 }) {
   const { app, getHandlers } = createBrowserRouteApp();
@@ -122,7 +124,7 @@ async function callBasicRouteWithState(params: {
     forProfile: params.state.forProfile,
   } as never);
 
-  const handler = getHandlers.get("/");
+  const handler = getHandlers.get(params.route ?? "/");
   expect(handler).toBeTypeOf("function");
 
   const response = createBrowserRouteResponse();
@@ -224,6 +226,66 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["/", "/doctor"] as const)(
+    "detects the local managed profile executable for %s",
+    async (route) => {
+      const response = await callBasicRouteWithState({
+        route,
+        query: { profile: "openclaw" },
+        state: createManagedProfileState(
+          { executablePath: process.execPath, headless: true },
+          undefined,
+          "/definitely-missing-global-chromium",
+        ),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = responseBodyRecord(response);
+      const browserStatus = route === "/doctor" ? responseBodyRecord({ body: body.status }) : body;
+      expect(browserStatus).toMatchObject({
+        executablePath: process.execPath,
+        detectedBrowser: "custom",
+        detectedExecutablePath: process.execPath,
+        detectError: null,
+      });
+      if (route === "/doctor") {
+        expect(body.ok).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    { name: "loopback attach-only", profile: { attachOnly: true } },
+    {
+      name: "remote CDP",
+      profile: {
+        cdpHost: "remote.example",
+        cdpIsLoopback: false,
+        cdpUrl: "http://remote.example:9222",
+      },
+    },
+    { name: "extension relay", profile: { driver: "extension", attachOnly: true } },
+    { name: "existing session", profile: { driver: "existing-session", attachOnly: true } },
+  ])("ignores a non-owning $name profile executable override", async ({ profile }) => {
+    const ignoredExecutable = "/definitely-missing-ignored-profile-chromium";
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState(
+        { ...profile, executablePath: ignoredExecutable, headless: true },
+        undefined,
+        process.execPath,
+      ),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(responseBodyRecord(response)).toMatchObject({
+      executablePath: ignoredExecutable,
+      detectedBrowser: "custom",
+      detectedExecutablePath: process.execPath,
+      detectError: null,
+    });
   });
 
   it("reports Linux no-display headless fallback for local managed profiles", async () => {

@@ -6,13 +6,13 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
+import { claimMainSessionRecoveryOwner } from "./main-session-recovery/main-session-recovery-store.js";
 
 const recoveryOwnerMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("./main-session-recovery-owner-release.js", () => ({
+vi.mock("./main-session-recovery/main-session-recovery-owner-release.js", () => ({
   scheduleMainSessionRecoveryPendingTarget:
     recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget,
 }));

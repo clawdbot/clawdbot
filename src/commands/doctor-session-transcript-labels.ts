@@ -3,7 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
-  readSqliteTranscriptEventRows,
+  readTranscriptEventRows,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -226,12 +226,14 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // Build per-row change list keyed by seq. Parse each row individually so unparseable
         // rows (with corrupted eventJson) don't break the whole session.
         const updates: Array<{ seq: number; eventJson: string }> = [];
+        let hasMalformedRow = false;
         for (const row of readResult.rows) {
           let event: TranscriptEvent;
           try {
             event = JSON.parse(row.eventJson) as TranscriptEvent;
           } catch {
-            // Skip rows with unparseable eventJson (corrupted data).
+            // A malformed sibling cannot produce a valid deferred projection after repair.
+            hasMalformedRow = true;
             continue;
           }
           if (normalizeLegacyInboundContextLabels(event)) {
@@ -249,10 +251,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
         // REPAIR PHASE (if --fix): process immediately, don't buffer.
         if (params.shouldRepair) {
           try {
+            if (hasMalformedRow) {
+              throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
+            }
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
                 // Use rows-only guard (tolerant of malformed JSON in sibling rows).
-                const currentRows = readSqliteTranscriptEventRows(writeDatabase, sessionId);
+                const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
                 if (!snapshotsMatch(readResult.rows, currentRows)) {
                   throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
                 }

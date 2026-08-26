@@ -17,6 +17,7 @@ import {
   getMatrixMemberInfo,
   getMatrixRoomInfo,
   getMatrixVerificationSas,
+  listMatrixEmojis,
   listMatrixPins,
   listMatrixReactions,
   listMatrixVerifications,
@@ -49,7 +50,7 @@ import {
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
-const reactionActions = new Set(["react", "reactions"]);
+const reactionActions = new Set(["react", "reactions", "emoji-list"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const pollActions = new Set(["pollVote"]);
 const profileActions = new Set(["setProfile"]);
@@ -193,6 +194,19 @@ export async function handleMatrixAction(
       throw new Error("Matrix reactions are disabled.");
     }
     const roomId = readRoomId(params);
+    if (action === "emoji-list") {
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
+      const emojis = await withReadTarget(roomId, async (target) =>
+        listMatrixEmojis(target.roomId, {
+          ...clientOpts,
+          client: target.client,
+          limit,
+        }),
+      );
+      return jsonResult({ ok: true, emojis });
+    }
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
@@ -273,6 +287,7 @@ export async function handleMatrixAction(
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
+          trim: false,
         });
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
@@ -297,7 +312,7 @@ export async function handleMatrixAction(
       case "editMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { required: true, trim: false });
         const result = await withReadTarget(roomId, async (target) => {
           return await editMatrixMessage(target.roomId, messageId, content, {
             ...clientOpts,

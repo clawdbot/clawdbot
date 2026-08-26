@@ -1,10 +1,11 @@
 /**
  * Lazy channel registry value loader.
  *
- * Resolves plugin sub-surfaces from the process-root registry.
+ * Resolves plugin sub-surfaces from the request-scoped or process-root registry.
  */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ChannelId } from "./channel-id.types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -12,7 +13,7 @@ type ChannelRegistryValueResolver<TValue> = (
 ) => TValue | undefined;
 
 /**
- * Creates a lazy loader that resolves one value from the active channel registry.
+ * Creates a lazy loader that resolves one value from the authoritative channel registry.
  */
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
@@ -25,6 +26,8 @@ export function createChannelRegistryLoader<TValue>(
       return pluginEntry ? resolveValue(pluginEntry) : undefined;
     };
 
-    return resolveFromRegistry(getActivePluginRegistry());
+    return resolveFromRegistry(
+      getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry(),
+    );
   };
 }

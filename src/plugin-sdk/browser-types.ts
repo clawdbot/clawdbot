@@ -1,3 +1,5 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+
 /** Browser profile config embedded in resolved browser config. */
 export type ResolvedBrowserProfileConfig = {
   cdpPort?: number;
@@ -13,15 +15,7 @@ export type ResolvedBrowserProfileConfig = {
 };
 
 /** SSRF policy embedded in resolved browser config. */
-export type ResolvedBrowserSsrFPolicy = {
-  allowPrivateNetwork?: boolean;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  allowRfc2544BenchmarkRange?: boolean;
-  allowIpv6UniqueLocalRange?: boolean;
-  allowedHostnames?: string[];
-  allowedOrigins?: string[];
-  hostnameAllowlist?: string[];
-};
+export type ResolvedBrowserSsrFPolicy = SsrFPolicy;
 
 /** Resolved browser tab cleanup settings after defaults and config are applied. */
 export type ResolvedBrowserTabCleanupConfig = {

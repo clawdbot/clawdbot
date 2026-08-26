@@ -3,20 +3,19 @@
  * APIs for modules that need a stable local import surface.
  */
 export {
-  applyBrowserProxyPaths,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
   normalizeBrowserFormField,
   normalizeBrowserFormFieldValue,
-  persistBrowserProxyFiles,
   redactCdpUrl,
   resolveBrowserConfig,
   resolveExistingUploadPaths,
   resolveRequestedBrowserProfile,
   startBrowserControlServiceFromConfig,
 } from "./browser-runtime.js";
+export { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,

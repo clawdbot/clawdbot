@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluationOutcome } from "../../plugins/hook-types.js";
 import type { SkillScanFinding } from "../security/scanner.js";
+import type { SkillCollectionReconcileContext } from "./collection-contracts.js";
 
 /** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
@@ -73,6 +74,8 @@ export type SkillWorkshopProposalMutationBudget = {
   failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
+  /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
+  readSkillHashes?: Map<string, string>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {
@@ -90,13 +93,24 @@ export type SkillWorkshopProposalReviewCompletion = {
   recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
+/** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
+export type SkillWorkshopProposalRevisionConstraint = {
+  readonly agentId: string;
+  readonly workspaceDir: string;
+  readonly proposalId: string;
+  readonly expectedRevisionHash: string;
+};
+
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
+  updateProposals?: boolean;
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
+  collectionReconcile?: SkillCollectionReconcileContext;
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type SkillProposalScan = {
@@ -125,6 +139,10 @@ export type SkillProposalSupportFile = {
   targetContentHash?: string;
 };
 
+export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
+
+export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -143,7 +161,7 @@ export type SkillProposalRecord = {
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   proposedVersion: string;
-  draftFile: "PROPOSAL.md";
+  draftFile: SkillProposalDraftFile;
   draftHash: string;
   supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
@@ -171,6 +189,8 @@ export type SkillProposalManifestEntry = {
   scanState: SkillProposalScannerState;
   /** The proposal remains bound to an earlier workspace for this agent. */
   workspaceMismatch?: true;
+  /** The durable proposal body is unavailable; metadata remains inspectable in list output. */
+  degradedState?: "draft-missing";
 };
 
 export type SkillProposalManifest = {
@@ -225,7 +245,15 @@ export type SkillProposalUpdateInput = {
   env?: NodeJS.ProcessEnv;
   skillName: string;
   description?: string;
-  content: string;
+  /** Complete replacement body. Exactly one of content or composePatch is required. */
+  content?: string;
+  /**
+   * Targeted find-and-replace composed onto the live body inside the same read that
+   * hash-binds the proposal. An empty oldString appends newString to the end.
+   */
+  composePatch?: { oldString: string; newString: string };
+  /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
+  expectedCurrentContentHash?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;
@@ -292,7 +320,7 @@ export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   revisionHash: string;
   content: string;
-  supportFiles?: SkillProposalSupportFileInput[];
+  supportFiles?: PreparedSkillProposalSupportFile[];
 };
 
 export type SkillProposalApplyResult = {

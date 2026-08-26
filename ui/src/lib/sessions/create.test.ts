@@ -25,7 +25,7 @@ describe("requestSessionCreate", () => {
 
     await expect(requestSessionCreate(client as never, { message: "hello" })).resolves.toEqual({
       key: "agent:main:dashboard:new",
-      initialRun: { status: "started", messageId: "initial-send-id", messageSeq: 7 },
+      initialRun: { status: "started", runId: "initial-send-id", messageSeq: 7 },
     });
   });
 
@@ -65,7 +65,7 @@ describe("requestSessionCreate", () => {
       key: "agent:main:dashboard:rejected",
       initialRun: {
         status: "rejected",
-        error: "The thread was created, but its first message could not be sent.",
+        error: "The session was created, but its first message could not be sent.",
       },
     });
   });

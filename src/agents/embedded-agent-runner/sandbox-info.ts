@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../../config/sessions.js";
 /**
  * Builds sandbox/full-access status metadata for embedded-agent run results.
  */
@@ -73,6 +74,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  permissionMode?: SessionEntry["permissionMode"];
   sandboxAvailable?: boolean;
   execOverrides?: EmbeddedSandboxInfoExecOverrides;
 }): EmbeddedFullAccessExecPolicy {
@@ -80,6 +82,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
     cfg: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.permissionMode ? { permissionMode: params.permissionMode } : undefined,
     sandboxAvailable: params.sandboxAvailable,
     elevatedRequested: true,
     execOverrides: params.execOverrides,

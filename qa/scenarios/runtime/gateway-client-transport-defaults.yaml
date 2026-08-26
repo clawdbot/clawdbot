@@ -1,0 +1,29 @@
+title: Gateway client transport defaults
+
+scenario:
+  id: gateway-client-transport-defaults
+  surface: runtime
+  category: gateway.protocol-compatibility
+  coverage:
+    primary:
+      - gateway.client-transport-defaults
+  objective: Verify the public Gateway client applies its documented request, handshake, reconnect, and tick-watch defaults over a real WebSocket transport.
+  successCriteria:
+    - Requests without an override time out after 30 seconds.
+    - A connected socket that receives no challenge closes after the 15 second challenge watchdog.
+    - Consecutive transport failures reconnect after 1, 2, 4, 8, and 16 seconds before capping at 30 seconds.
+    - The hello-ok tick interval replaces the pre-handshake watchdog basis.
+    - Missing ticks close the socket with code 4000 and the tick-timeout reason.
+    - Inbound ticks keep an unbounded request alive beyond the default request deadline.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/reference/test.md
+  codeRefs:
+    - packages/gateway-client/src/client.ts
+    - packages/gateway-client/src/protocol-client.ts
+    - packages/gateway-client/src/timeouts.ts
+    - test/e2e/qa-lab/runtime/gateway-client-transport-defaults.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-client-transport-defaults.e2e.test.ts
+    summary: Run the public GatewayClient against a real local WebSocketServer with deterministic post-connect timers for request, challenge, reconnect, and tick-watch defaults.

@@ -1,13 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
 } from "./ambient-transcript-watermark.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+
+const tempDirs: string[] = [];
 
 describe("ambient transcript watermark", () => {
   let tempDir: string;
@@ -20,12 +24,14 @@ describe("ambient transcript watermark", () => {
   });
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ambient-watermark-"));
+    tempDir = makeTempDir(tempDirs, "openclaw-ambient-watermark-");
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanupTempDirs(tempDirs);
   });
 
   it("stamps and resolves the watermark for the current session id only", async () => {
@@ -51,7 +57,7 @@ describe("ambient transcript watermark", () => {
       messageId: "11",
       timestampMs: 1_700_000_001_000,
     });
-    expect(readAmbientTranscriptWatermark(persistedEntry, key)).toMatchObject({
+    expect(readAmbientTranscriptWatermarkFromEntry(persistedEntry, key)).toMatchObject({
       sessionId: "before-reset",
       messageId: "11",
     });
@@ -66,7 +72,7 @@ describe("ambient transcript watermark", () => {
     );
 
     const resetEntry = loadSessionEntry({ sessionKey, storePath });
-    expect(readAmbientTranscriptWatermark(resetEntry, key)).toBeUndefined();
+    expect(readAmbientTranscriptWatermarkFromEntry(resetEntry, key)).toBeUndefined();
 
     await updateAmbientTranscriptWatermark({
       storePath,
@@ -78,7 +84,7 @@ describe("ambient transcript watermark", () => {
     });
 
     expect(
-      readAmbientTranscriptWatermark(loadSessionEntry({ sessionKey, storePath }), key),
+      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
     ).toBeUndefined();
 
     await updateAmbientTranscriptWatermark({
@@ -91,7 +97,7 @@ describe("ambient transcript watermark", () => {
     });
 
     expect(
-      readAmbientTranscriptWatermark(loadSessionEntry({ sessionKey, storePath }), key),
+      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
     ).toMatchObject({
       sessionId: "after-reset",
       messageId: "12",
@@ -118,7 +124,7 @@ describe("ambient transcript watermark", () => {
     );
 
     expect(
-      readAmbientTranscriptWatermark(loadSessionEntry({ sessionKey, storePath }), key),
+      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
     ).toBeUndefined();
   });
 });

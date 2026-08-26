@@ -179,6 +179,7 @@ describe("slack socket reconnect loop", () => {
     await Promise.resolve();
 
     expect(setStatus).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lastConnectedAt: expect.any(Number),
       terminalDisconnect: undefined,

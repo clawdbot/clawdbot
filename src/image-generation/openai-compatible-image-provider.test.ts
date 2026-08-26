@@ -183,6 +183,32 @@ describe("OpenAI-compatible image provider helper", () => {
     });
   });
 
+  it("checks config-backed auth under the credential owner, not its HTTP config alias", () => {
+    const provider = createProvider({ providerConfigKey: "different-http-provider" });
+    const cfg = {
+      models: {
+        providers: {
+          sample: {
+            apiKey: "sample-config-key",
+            baseUrl: "https://sample.example/v1/",
+            models: [],
+          },
+          "different-http-provider": {
+            apiKey: "wrong-owner-key",
+            baseUrl: "https://different-http-provider.example/v1/",
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(provider.isConfigured?.({ cfg })).toBe(true);
+    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: "sample",
+      cfg,
+    });
+  });
+
   it("posts JSON generation requests and parses OpenAI-compatible image data", async () => {
     const release = mockGeneratedResponse();
     const provider = createProvider();
@@ -259,7 +285,6 @@ describe("OpenAI-compatible image provider helper", () => {
       cfg: {} as never,
     });
 
-    expect(result.images).toHaveLength(4);
     expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
       imageBytes.byteLength,
       imageBytes.byteLength,

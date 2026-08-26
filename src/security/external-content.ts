@@ -1,5 +1,6 @@
 // Wraps external content with source tags and random boundary tokens.
 import { randomBytes } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
@@ -241,17 +242,17 @@ function replaceMarkers(content: string): string {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  // Match markers with or without id attribute (handles both legacy and spoofed
-  // markers). The id body is an unbounded negated class: any finite cap lets a
+  // Match markers with or without ids, including JSON-escaped quotes. The id
+  // body stays unbounded: any finite cap lets a
   // forged marker with a longer id slip through unsanitized (a real injection
   // bypass), while `[^"]*` stays linear-time with no catastrophic backtracking.
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
-      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
+      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id=\\*"[^"]*")?\s*>>>/gi,
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
+      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id=\\*"[^"]*")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];
@@ -301,6 +302,54 @@ export function sanitizeModelSpecialTokens(content: string): string {
     output = output.replace(pattern, SPECIAL_TOKEN_REPLACEMENT);
   }
   return output;
+}
+
+/** Bound sanitized external prose while preserving its exact retained source prefix. */
+export function truncateSanitizedExternalContent(
+  value: string,
+  maxChars: number,
+): { text: string; truncated: boolean; retainedRawChars: number } {
+  const sanitizePrefix = (candidate: string): { text: string; retainedRawChars: number } => {
+    let retained = candidate;
+    let text = sanitizeExternalContentText(retained);
+    if (retained.length < value.length) {
+      const markerPrefix = /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT/iu;
+      if (markerPrefix.test(foldMarkerTextWithIndexMap(text).folded)) {
+        // Clipping inside a forged marker bypasses complete-marker replacement.
+        const folded = foldMarkerTextWithIndexMap(retained);
+        const match = markerPrefix.exec(folded.folded);
+        retained = retained.slice(0, folded.originalStartByFoldedIndex[match?.index ?? 0] ?? 0);
+        text = sanitizeExternalContentText(retained);
+      }
+    }
+    return { text, retainedRawChars: retained.length };
+  };
+  const prefix = truncateUtf16Safe(value, maxChars);
+  const sanitized = sanitizePrefix(prefix);
+  if (sanitized.text.length <= maxChars) {
+    return {
+      ...sanitized,
+      truncated: sanitized.retainedRawChars < value.length,
+    };
+  }
+
+  let lower = 0;
+  let upper = prefix.length;
+  let text = "";
+  let retainedRawChars = 0;
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const candidate = truncateUtf16Safe(prefix, middle);
+    const safeCandidate = sanitizePrefix(candidate);
+    if (safeCandidate.text.length <= maxChars) {
+      text = safeCandidate.text;
+      retainedRawChars = safeCandidate.retainedRawChars;
+      lower = middle + 1;
+    } else {
+      upper = middle - 1;
+    }
+  }
+  return { text, truncated: true, retainedRawChars };
 }
 
 function sanitizeExternalContentText(content: string): string {

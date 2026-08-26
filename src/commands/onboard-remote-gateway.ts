@@ -1,5 +1,6 @@
 // Remote-Gateway onboarding adapters keep inference detection and activation on the Gateway host.
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
   SystemAgentChatResult,
   SystemAgentSetupActivateResult,
@@ -7,7 +8,11 @@ import type {
   SystemAgentSetupVerifyResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
+import {
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+  type CallGatewayCliOptions,
+} from "../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type {
   ActivateSetupInferenceParams,
@@ -19,11 +24,12 @@ import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
-const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 20_000;
+const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 const GATEWAY_SETUP_VERIFY_TIMEOUT_MS = 30_000;
 const GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
+const GATEWAY_RESTART_WAIT_TIMEOUT_MS = 45_000;
 
 type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 
@@ -137,6 +143,7 @@ function toSetupInferenceActivationResult(
       modelRef: result.modelRef,
       latencyMs: result.latencyMs,
       lines: result.lines,
+      ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
     };
   }
   if (!isSetupInferenceFailureStatus(result.status) || !result.error?.trim()) {
@@ -255,11 +262,52 @@ export async function runRemoteGatewayInferenceOnboarding(
     if (!activation.ok) {
       return activation;
     }
-    const verification = await request<SystemAgentSetupVerifyResult>({
-      method: "openclaw.setup.verify",
-      payload: {},
-      timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
-    });
+    const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
+    let retryDelayMs = 250;
+    let verification: SystemAgentSetupVerifyResult | undefined;
+    for (;;) {
+      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      if (activation.gatewayRestartRequired === true && remainingBeforeAttemptMs <= 0) {
+        break;
+      }
+      try {
+        verification = await request<SystemAgentSetupVerifyResult>({
+          method: "openclaw.setup.verify",
+          payload: {},
+          timeoutMs:
+            activation.gatewayRestartRequired === true
+              ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
+              : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
+        });
+        const retryableResult =
+          activation.gatewayRestartRequired === true &&
+          !verification.ok &&
+          verification.status === "unavailable";
+        const remainingMs = restartDeadline - Date.now();
+        if (!retryableResult || remainingMs <= 0) {
+          break;
+        }
+        await delay(Math.min(retryDelayMs, remainingMs));
+        retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
+      } catch (error) {
+        const retryable =
+          activation.gatewayRestartRequired === true &&
+          (isGatewayTransportError(error) ||
+            (isGatewayClientRequestError(error) && error.retryable));
+        const remainingMs = restartDeadline - Date.now();
+        if (!retryable || remainingMs <= 0) {
+          throw error;
+        }
+        const requestedDelay = isGatewayClientRequestError(error)
+          ? (error.retryAfterMs ?? retryDelayMs)
+          : retryDelayMs;
+        await delay(Math.min(requestedDelay, remainingMs));
+        retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
+      }
+    }
+    if (!verification) {
+      throw new Error("Gateway did not finish restarting before inference verification.");
+    }
     assertVerifiedActivation({
       activation,
       verification,

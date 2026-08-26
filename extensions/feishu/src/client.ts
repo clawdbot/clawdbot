@@ -46,17 +46,7 @@ const feishuClientSdk: FeishuClientSdk = {
   WSClient: Lark.WSClient,
 };
 
-type RequestInterceptorApi = {
-  use: (fn: (req: unknown) => unknown) => unknown;
-};
-
-type FeishuDefaultHttpInstanceWithInterceptors = {
-  interceptors?: {
-    request?: RequestInterceptorApi;
-  };
-};
-
-function setRequestUserAgent(req: unknown) {
+function setRequestUserAgent<T>(req: T): T {
   const request = req as { headers?: unknown };
   const headers = request.headers;
   if (!headers) {
@@ -77,15 +67,7 @@ function setRequestUserAgent(req: unknown) {
 // Override the SDK's default User-Agent through the public interceptor API.
 // The SDK fallback interceptor only fills User-Agent when it is absent, so this
 // interceptor can preserve the rest of the SDK's request interceptor stack.
-{
-  const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
-  inst.interceptors?.request?.use(setRequestUserAgent);
-}
-
-type FeishuHttpInstanceLike = Pick<
-  typeof feishuClientSdk.defaultHttpInstance,
-  "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
->;
+Lark.defaultHttpInstance.interceptors.request.use(setRequestUserAgent);
 
 function readHeader(headers: unknown, name: string): string | undefined {
   if (!isRecord(headers)) {
@@ -277,7 +259,8 @@ function createFeishuHttpInstance(
   defaultTimeoutMs: number,
   configuredDomain?: FeishuDomain,
 ): Lark.HttpInstance {
-  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
+  // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
+  const base = feishuClientSdk.defaultHttpInstance as Lark.HttpInstance;
   const customDomain =
     configuredDomain && configuredDomain !== "feishu" && configuredDomain !== "lark"
       ? new URL(configuredDomain)

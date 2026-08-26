@@ -8,4 +8,3 @@ import "../styles/config.css";
 import "../styles/usage.css";
 import "../styles/dreams.css";
 import "../styles/memory-overview.css";
-import "@create-markdown/preview/themes/system.css";

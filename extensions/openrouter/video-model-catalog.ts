@@ -57,10 +57,6 @@ type OpenRouterVideoRequestPolicyCacheKey = ReturnType<
 
 type OpenRouterVideoRequestConfig = Parameters<typeof sanitizeConfiguredModelProviderRequest>[0];
 
-function normalizeStringArray(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 function normalizeNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry))
@@ -68,14 +64,14 @@ function normalizeNumberArray(value: unknown): number[] {
 }
 
 function normalizeResolutionArray(value: unknown): VideoGenerationResolution[] {
-  return normalizeStringArray(value).map(
+  return normalizeTrimmedStringList(value).map(
     (entry) => entry.toUpperCase() as VideoGenerationResolution,
   );
 }
 
 function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_frame"> {
   const seen = new Set<"first_frame" | "last_frame">();
-  for (const entry of normalizeStringArray(value)) {
+  for (const entry of normalizeTrimmedStringList(value)) {
     if (entry === "first_frame" || entry === "last_frame") {
       seen.add(entry);
     }
@@ -136,12 +132,14 @@ function buildOpenRouterVideoModeCapabilities(params: {
 function buildOpenRouterVideoModelCapabilities(
   model: OpenRouterVideoModel,
 ): OpenRouterVideoModelCatalogCapabilities {
-  const aspectRatios = normalizeStringArray(model.supported_aspect_ratios);
+  const aspectRatios = normalizeTrimmedStringList(model.supported_aspect_ratios);
   const durations = normalizeNumberArray(model.supported_durations);
   const frameImages = normalizeFrameImageRoles(model.supported_frame_images);
   const resolutions = normalizeResolutionArray(model.supported_resolutions);
-  const sizes = normalizeStringArray(model.supported_sizes);
-  const allowedPassthroughParameters = normalizeStringArray(model.allowed_passthrough_parameters);
+  const sizes = normalizeTrimmedStringList(model.supported_sizes);
+  const allowedPassthroughParameters = normalizeTrimmedStringList(
+    model.allowed_passthrough_parameters,
+  );
   const supportsAudio =
     typeof model.generate_audio === "boolean" ? model.generate_audio : undefined;
   const modeCapabilities = buildOpenRouterVideoModeCapabilities({

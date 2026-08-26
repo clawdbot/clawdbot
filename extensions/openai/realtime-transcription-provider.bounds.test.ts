@@ -94,6 +94,113 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    { label: "without item identity", itemId: undefined, committed: false },
+    { label: "before item commit", itemId: "uncommitted-item", committed: false },
+    { label: "after item commit", itemId: "committed-item", committed: true },
+  ])("rejects an oversized final transcript $label", async ({ itemId, committed }) => {
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onError,
+      onTranscript,
+    });
+    const socket = await connectFakeSession(session);
+    if (committed) {
+      emitJson(socket, {
+        type: "input_audio_buffer.committed",
+        item_id: itemId,
+        previous_item_id: null,
+      });
+    }
+
+    const transcript = `${"🙂".repeat((256 * 1024) / 4)}x`;
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      ...(itemId ? { item_id: itemId } : {}),
+      transcript,
+    });
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      ...(itemId ? { item_id: itemId } : {}),
+      transcript: "late transcript",
+    });
+
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit",
+      }),
+    );
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(session.isConnected()).toBe(false);
+    expect(socket.closed).toBe(true);
+    session.close();
+  });
+
+  it("accepts an exact-limit UTF-8 final after releasing its own partial", async () => {
+    const onError = vi.fn();
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onError,
+      onPartial,
+      onTranscript,
+    });
+    const socket = await connectFakeSession(session);
+    const transcript = "🙂".repeat((256 * 1024) / 4);
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "uncommitted-item",
+      delta: transcript,
+    });
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "uncommitted-item",
+      transcript,
+    });
+
+    expect(onPartial).toHaveBeenCalledExactlyOnceWith(transcript);
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith(transcript);
+    expect(onError).not.toHaveBeenCalled();
+    expect(session.isConnected()).toBe(true);
+    session.close();
+  });
+
+  it("counts retained sibling text when admitting a final transcript", async () => {
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onError,
+      onTranscript,
+    });
+    const socket = await connectFakeSession(session);
+    const partial = "🙂".repeat((128 * 1024) / 4);
+    for (const itemId of ["retained-item", "completing-item"]) {
+      emitJson(socket, {
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: itemId,
+        delta: partial,
+      });
+    }
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "completing-item",
+      transcript: `${partial}x`,
+    });
+
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit",
+      }),
+    );
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(session.isConnected()).toBe(false);
+    session.close();
+  });
+
   it("does not re-admit a terminal item after the settled frontier fills", async () => {
     const onError = vi.fn();
     const onPartial = vi.fn();

@@ -1,5 +1,6 @@
 // Covers outbound send service plugin/core routing, media access scoping,
 // transcript mirroring, and poll fallback.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -120,12 +121,8 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
+const defaultPlugin = createChannelTestPluginBase({ id: "demo-outbound" });
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBe(true);
@@ -197,6 +194,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -216,6 +214,7 @@ describe("executeSendAction", () => {
     overrides: Partial<ExecuteSendContext>,
   ): ExecuteSendContext {
     return {
+      plugin: defaultPlugin,
       cfg: {},
       channel: "demo-outbound",
       params: { media: "/tmp/host.png" },
@@ -262,6 +261,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -301,6 +301,7 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -327,6 +328,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -359,6 +361,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -386,6 +389,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -417,6 +421,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -511,6 +516,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -540,7 +546,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -551,9 +556,11 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", presentation },
+        runId: "run-presentation-delivery",
         dryRun: false,
         mirror: {
           sessionKey: "agent:main:discord:channel:123",
@@ -569,6 +576,7 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       content: "",
+      runId: "run-presentation-delivery",
       mirror: {
         sessionKey: "agent:main:discord:channel:123",
         agentId: "main",
@@ -596,7 +604,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -607,6 +614,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "Deployment trend", presentation },
@@ -642,11 +650,11 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", components: nativeComponents, presentation },
@@ -702,7 +710,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "whatsapp", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "whatsapp",
       to: "+15551234567",
@@ -712,6 +719,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "whatsapp",
         params: { to: "+15551234567", message: "Deployment trend", presentation },
@@ -750,11 +758,11 @@ describe("executeSendAction", () => {
         handleAction: async () => ({ content: [], details: { ok: true } }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", presentation },
@@ -779,6 +787,7 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -795,11 +804,70 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+    },
+  ])("passes the host-owned $label through direct plugin fallback", async ({ reply }) => {
+    const prepareSendPayload = vi.fn(({ ctx }) => {
+      expect(ctx.reply).toEqual(reply);
+      return null;
+    });
+    const handleAction = vi.fn(async (ctx) => {
+      expect(ctx.params.components).toBeTypeOf("function");
+      return { content: [], details: { ok: true } };
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "unused-core-send" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+        prepareSendPayload,
+        handleAction,
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockImplementation(async (ctx) => {
+      return await plugin.actions?.handleAction?.(ctx);
+    });
+
+    const components = () => [];
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello", components, replyTo: reply.replyToId },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      reply,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ components, replyTo: reply.replyToId }),
+        reply,
+      }),
+    );
+  });
+
   it("uses plugin poll action when available", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -825,6 +893,7 @@ describe("executeSendAction", () => {
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -848,6 +917,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -874,6 +944,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -901,6 +972,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -930,6 +1002,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -1004,9 +1077,11 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
+        idempotencyKey: "stable-send-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -1027,6 +1102,7 @@ describe("executeSendAction", () => {
       content: "hello",
       dryRun: true,
       silent: true,
+      idempotencyKey: "stable-send-key",
     });
     expectFields(requireRecord(sendArgs.gateway, "send gateway"), {
       url: "http://127.0.0.1:18789",
@@ -1052,7 +1128,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1062,6 +1137,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
@@ -1073,8 +1149,7 @@ describe("executeSendAction", () => {
       to: "channel:123",
       message: "hello",
       payload: { text: "hello", presentation },
-      replyToId: "reply-1",
-      replyToIdSource: "explicit",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
     });
 
@@ -1091,10 +1166,11 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",
       queuePolicy: "best_effort",
-      replyToId: "reply-1",
+      reply: { replyToId: "reply-1", source: "explicit" },
       threadId: "thread-1",
       conversationReadOrigin: "delegated",
     });
+    expect(sendArgs.preparedPlugin).toBe(plugin);
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {
       channelData: { prepared: true },
@@ -1116,7 +1192,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1126,6 +1201,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
@@ -1157,15 +1233,19 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
         accountId: "acc-1",
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        inboundEventKind: "room_event",
         dryRun: false,
       },
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
+        content: "Vote now",
         options: ["Pizza", "Sushi"],
         maxSelections: 1,
         durationSeconds: 300,
@@ -1179,11 +1259,14 @@ describe("executeSendAction", () => {
       accountId: "acc-1",
       to: "channel:123",
       question: "Lunch?",
+      content: "Vote now",
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
       durationSeconds: 300,
       threadId: "thread-1",
       isAnonymous: true,
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      inboundEventKind: "room_event",
     });
   });
 
@@ -1201,9 +1284,11 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
+        idempotencyKey: "stable-poll-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -1230,6 +1315,7 @@ describe("executeSendAction", () => {
       durationHours: 6,
       dryRun: true,
       silent: true,
+      idempotencyKey: "stable-poll-key",
     });
     expectFields(requireRecord(pollArgs.gateway, "poll gateway"), {
       url: "http://127.0.0.1:18789",

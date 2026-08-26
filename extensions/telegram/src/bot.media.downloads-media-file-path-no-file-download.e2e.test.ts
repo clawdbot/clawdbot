@@ -1,11 +1,12 @@
 // Telegram tests cover bot.mediaownloads media file path no file download plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readRemoteMediaBufferSpy,
   setNextSavedMediaPath,
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
-} from "./bot.media.e2e-harness.js";
+} from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,
@@ -39,12 +40,7 @@ function replyPayload(replySpy: ReturnType<typeof vi.fn>, index = 0): ReplyPaylo
   return payload as ReplyPayload;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record-short");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -299,6 +295,7 @@ describe("telegram inbound media", () => {
 
     const cases = [
       {
+        updateId: 7005,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 5,
@@ -317,9 +314,13 @@ describe("telegram inbound media", () => {
           expect(payload.LocationLon).toBe(2.294351);
           expect(payload.LocationSource).toBe("pin");
           expect(payload.LocationIsLive).toBe(false);
+          expect(payload.ProviderUpdateId).toBe("7005");
+          expect(payload.ProviderUpdateKind).toBe("message");
+          expect(payload.ProviderMessageTimestamp).toBe(1736380800000);
         },
       },
       {
+        updateId: 7006,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 6,
@@ -342,6 +343,7 @@ describe("telegram inbound media", () => {
     for (const testCase of cases) {
       replySpy.mockClear();
       await handler({
+        update: { update_id: testCase.updateId, message: testCase.message },
         message: testCase.message,
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),

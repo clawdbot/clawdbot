@@ -2,6 +2,7 @@
 /** Common gateway RPC flags accepted by direct gateway command helpers. */
 export type GatewayRpcOpts = {
   url?: string;
+  port?: string;
   token?: string;
   password?: string;
   timeout?: string;

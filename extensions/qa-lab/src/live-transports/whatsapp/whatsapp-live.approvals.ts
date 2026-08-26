@@ -4,6 +4,7 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   assertApprovalDecisionResult,
@@ -13,7 +14,6 @@ import {
 import type {
   WhatsAppObservedMessage,
   WhatsAppQaApprovalDecision,
-  WhatsAppQaApprovalKind,
   WhatsAppQaApprovalScenarioRun,
   WhatsAppQaGateway,
   WhatsAppQaScenarioMetadata,
@@ -84,7 +84,7 @@ async function requestWhatsAppApproval(params: {
 async function waitForApprovalDecision(params: {
   approvalId: string;
   gateway: WhatsAppQaGateway;
-  kind: WhatsAppQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const method =
     params.kind === "exec" ? "exec.approval.waitDecision" : "plugin.approval.waitDecision";
@@ -102,7 +102,7 @@ async function resolveApprovalDecision(params: {
   approvalId: string;
   decision: WhatsAppQaApprovalDecision;
   gateway: WhatsAppQaGateway;
-  kind: WhatsAppQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
   return await params.gateway.call(
@@ -117,7 +117,7 @@ async function resolveApprovalDecision(params: {
 
 function matchesWhatsAppApprovalPendingText(params: {
   approvalId: string;
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   text: string;
   token: string;
 }) {
@@ -134,7 +134,7 @@ function matchesWhatsAppApprovalPendingText(params: {
 
 function matchesWhatsAppApprovalResolvedText(params: {
   approvalId: string;
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision?: WhatsAppQaApprovalDecision;
   text: string;
 }) {
@@ -154,7 +154,7 @@ function matchesWhatsAppApprovalResolvedText(params: {
 
 function formatWhatsAppApprovalWaitDiagnostics(params: {
   approvalId: string;
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision?: WhatsAppQaApprovalDecision;
   driver: WhatsAppQaDriverSession;
   observedAfter?: Date;
@@ -205,7 +205,7 @@ function formatWhatsAppApprovalWaitDiagnostics(params: {
 
 async function waitForWhatsAppApprovalMessage(params: {
   approvalId: string;
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision?: WhatsAppQaApprovalDecision;
   driver: WhatsAppQaDriverSession;
   observedAfter?: Date;

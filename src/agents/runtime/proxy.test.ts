@@ -44,6 +44,28 @@ function responseFromText(text: string): Response {
   );
 }
 
+function responseFromSseFrames(frames: unknown[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+  const reader = {
+    read: vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const value = chunks.shift();
+      return value ? { done: false, value } : { done: true, value: undefined };
+    }),
+    cancel: vi.fn(async () => undefined),
+    releaseLock: vi.fn(),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    ok: true,
+    status: 200,
+    body: { getReader: () => reader },
+  } as Response;
+}
+
 function responseFromReaderText(text: string, releaseLock: () => void): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
     { done: false, value: new TextEncoder().encode(text) },
@@ -157,6 +179,74 @@ describe("streamProxy", () => {
     ]);
     await expect(stream.result()).resolves.toMatchObject({
       content: [{ type: "text", text: "Working...", textSignature: contentSignature }],
+    });
+  });
+
+  it("delays tool argument previews while preserving exact terminal arguments", async () => {
+    const initialContent = "a".repeat(128);
+    const checkpointContent = "b".repeat(400);
+    const deltas = [`{"content":"${initialContent}`, checkpointContent, `","terminal":"exact"}`];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromSseFrames([
+          { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "write" },
+          ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
+          { type: "toolcall_end", contentIndex: 0 },
+          { type: "done", reason: "toolUse", usage },
+        ]),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const argumentSnapshots: Array<Record<string, unknown>> = [];
+    let terminalArguments: Record<string, unknown> | undefined;
+    for await (const event of stream) {
+      if (event.type === "toolcall_delta") {
+        const content = event.partial.content[event.contentIndex];
+        if (content?.type === "toolCall") {
+          argumentSnapshots.push(structuredClone(content.arguments));
+        }
+      } else if (event.type === "toolcall_end") {
+        terminalArguments = structuredClone(event.toolCall.arguments);
+      }
+    }
+
+    const checkpointPreview = { content: initialContent + checkpointContent };
+    expect(argumentSnapshots).toEqual([{}, checkpointPreview, checkpointPreview]);
+    const exactArguments = {
+      content: initialContent + checkpointContent,
+      terminal: "exact",
+    };
+    expect(terminalArguments).toEqual(exactArguments);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "toolCall", arguments: exactArguments }],
+    });
+  });
+
+  it("preserves empty arguments for terminal-only tool calls", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromSseFrames([
+          { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "list" },
+          { type: "toolcall_end", contentIndex: 0 },
+          { type: "done", reason: "toolUse", usage },
+        ]),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "list", arguments: {} }],
     });
   });
 

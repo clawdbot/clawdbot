@@ -6,13 +6,13 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import {
+  normalizeConfiguredMemoryExtraPaths,
+  resolveRememberAcrossConversations,
+} from "../memory-host-sdk/host/config-utils.js";
+import type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
@@ -32,7 +32,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   /** Sources searched when memory_search omits an explicit corpus. */
   searchSources: Array<"memory" | "sessions">;
-  extraPaths: string[];
+  extraPaths: MemoryExtraPath[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
   remote?: {
@@ -127,7 +127,7 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
-const DEFAULT_MMR_ENABLED = false;
+const DEFAULT_MMR_ENABLED = true;
 const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = true;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
@@ -270,11 +270,10 @@ function mergeConfig(
     rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
     sessionMemory,
   );
-  const rawPaths = normalizeStringEntries([
+  const extraPaths = normalizeConfiguredMemoryExtraPaths([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
   ]);
-  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,

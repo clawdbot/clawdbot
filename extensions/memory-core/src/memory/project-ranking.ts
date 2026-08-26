@@ -8,7 +8,7 @@ type ProjectRankable = {
   projectKey?: string;
 };
 
-function projectScoreMultiplier(
+export function projectScoreMultiplier(
   projectKey: string | null | undefined,
   activeProjectKeys: readonly string[] | undefined,
 ): number {

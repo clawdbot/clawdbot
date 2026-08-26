@@ -92,13 +92,13 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
-    expect(result.groupAllowFrom).toEqual(["@carol:example.org"]);
+    expect(result.allowFrom).toEqual(["@Alice:Example.org", "@bob:example.org"]);
+    expect(result.groupAllowFrom).toEqual(["@Carol:Example.org"]);
     expect(result.roomsConfig).toEqual({
       "*": { enabled: true },
       "!ops:example.org": {
         enabled: true,
-        users: ["@dana:example.org", "@erin:example.org"],
+        users: ["@dana:example.org", "@Erin:Example.org"],
       },
       "!general:example.org": {
         enabled: true,
@@ -122,6 +122,35 @@ describe("resolveMatrixMonitorConfig", () => {
     });
   });
 
+  it("keeps a room version 12 room ID (no :server suffix) as already resolved", async () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
+    // now a hash of the create event — so this must not be sent through name/alias
+    // resolution the way an unresolved query would be.
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async ({ inputs }: { inputs: string[] }) =>
+      inputs.map((input) => ({ input, resolved: false })),
+    );
+
+    const roomsConfig: MatrixRoomsConfig = {
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
+    };
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      allowFrom: [],
+      groupAllowFrom: [],
+      roomsConfig,
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result.roomsConfig).toEqual({
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70": { enabled: true },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
   it("strips config prefixes before lookups and logs unresolved guidance once per section", async () => {
     const runtime = createRuntime();
     const resolveTargets = vi.fn(
@@ -139,6 +168,7 @@ describe("resolveMatrixMonitorConfig", () => {
       allowFrom: ["user:Ghost"],
       groupAllowFrom: ["matrix:@known:example.org"],
       roomsConfig: {
+        "!": { enabled: true },
         "channel:Project X": {
           enabled: true,
           users: ["matrix:Ghost"],
@@ -159,16 +189,16 @@ describe("resolveMatrixMonitorConfig", () => {
     expectResolveTargetCall(resolveTargets, 1, {
       accountId: "ops",
       kind: "group",
-      inputs: ["Project X"],
+      inputs: ["!", "Project X"],
     });
     expect(resolveTargets).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: user:Ghost");
     expect(runtime.log).toHaveBeenCalledWith(
       "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender.",
     );
-    expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: channel:Project X");
+    expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: !, channel:Project X");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+      "matrix rooms must be room IDs or aliases (example: !room:server, the suffixless !room form on room version 12+, or #alias:server). Unresolved entries are ignored.",
     );
   });
 
@@ -245,15 +275,15 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toEqual(["@bob:example.org"]);
+    expect(result.allowFrom).toEqual(["@Bob:Example.org"]);
     expect(result.allowFromResolvedEntries).toEqual([
-      { input: "matrix:@Bob:Example.org", id: "@bob:example.org" },
+      { input: "matrix:@Bob:Example.org", id: "@Bob:Example.org" },
     ]);
     expect(result.groupAllowFrom).toEqual(["Carol"]);
     expect(result.roomsConfig).toEqual({
       "!ops:example.org": {
         enabled: true,
-        users: ["@erin:example.org", "Frank"],
+        users: ["@Erin:Example.org", "Frank"],
       },
     });
     expect(resolveTargets).toHaveBeenCalledTimes(1);
@@ -276,6 +306,37 @@ describe("resolveMatrixMonitorConfig", () => {
     );
   });
 
+  it("keeps case-distinct qualified user ids in startup allowlists", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+    const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      allowFrom: caseDistinctIds,
+      groupAllowFrom: caseDistinctIds,
+      roomsConfig: {
+        "!ops:example.org": {
+          enabled: true,
+          users: caseDistinctIds,
+        },
+      },
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result.allowFrom).toEqual(caseDistinctIds);
+    expect(result.groupAllowFrom).toEqual(caseDistinctIds);
+    expect(result.roomsConfig).toEqual({
+      "!ops:example.org": {
+        enabled: true,
+        users: caseDistinctIds,
+      },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
   it("does not resolve mutable live allowlist entries by default", async () => {
     const runtime = createRuntime();
     const resolveTargets = vi.fn(async () => [
@@ -291,7 +352,24 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["@bob:example.org", "*"]);
+    expect(result).toEqual(["@Bob:Example.org", "*"]);
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
+  it("keeps case-distinct qualified user ids in live allowlists", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+    const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
+
+    const result = await resolveMatrixMonitorLiveUserAllowlist({
+      cfg: createConfig(),
+      accountId: "ops",
+      entries: caseDistinctIds,
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result).toEqual(caseDistinctIds);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
@@ -311,7 +389,7 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["Alice", "@bob:example.org"]);
+    expect(result).toEqual(["Alice", "@Bob:Example.org"]);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
@@ -329,7 +407,7 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["@bob:example.org", "*", "@alice:example.org"]);
+    expect(result).toEqual(["@Bob:Example.org", "*", "@alice:example.org"]);
     expectResolveTargetCall(resolveTargets, 0, {
       accountId: "ops",
       kind: "user",

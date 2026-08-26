@@ -17,7 +17,7 @@ function isVideoGenerationTransformCapabilities(
   return Boolean(capabilities && "enabled" in capabilities);
 }
 
-export function buildReferenceInputCapabilityFailure(params: {
+export function buildVideoGenerationCapabilityFailure(params: {
   providerId: string;
   model: string;
   provider: VideoGenerationProvider;
@@ -27,12 +27,22 @@ export function buildReferenceInputCapabilityFailure(params: {
 }): string | undefined {
   const { providerId, model, provider, inputImageCount, inputVideoCount, inputAudioCount } = params;
   const label = `${providerId}/${model}`;
-  const { capabilities } = resolveVideoGenerationModeCapabilities({
+  const { mode, capabilities } = resolveVideoGenerationModeCapabilities({
     provider,
     model,
     inputImageCount,
     inputVideoCount,
   });
+  const catalogModes = provider.catalogByModel?.[model]?.modes;
+  if (mode && catalogModes && !catalogModes.includes(mode)) {
+    const modeLabel =
+      mode === "generate"
+        ? "text-to-video generation"
+        : mode === "imageToVideo"
+          ? "image-to-video generation"
+          : "video-to-video generation";
+    return `${label} does not support ${modeLabel}; skipping`;
+  }
 
   if (inputImageCount > 0 || inputVideoCount > 0) {
     // Reference inputs must be explicitly supported. Falling back to a provider

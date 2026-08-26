@@ -13,7 +13,12 @@ export type GatewayCronServiceContract = CronServiceContract & {
   readScratch(id: string): Promise<CronJobScratchState>;
   writeScratch(
     id: string,
-    params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+    params: {
+      content: string | null;
+      expectedRevision?: number;
+      sourceSha256?: string;
+      commitGuard?: () => void;
+    },
   ): Promise<CronJobScratchWriteResult>;
   /** Serialize agent-job removal with the roster commit and restore on failure. */
   removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T>;

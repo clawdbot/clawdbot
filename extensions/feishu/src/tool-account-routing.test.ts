@@ -44,6 +44,7 @@ function createConfig(params: {
     bitable?: boolean;
   };
   defaultAccount?: string;
+  enabledA?: boolean;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
@@ -53,6 +54,7 @@ function createConfig(params: {
         tools: params.topTools,
         accounts: {
           a: {
+            enabled: params.enabledA,
             appId: "app-a",
             appSecret: "sec-a", // pragma: allowlist secret
             tools: params.toolsA,
@@ -145,6 +147,23 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { action: "search" });
 
     expect(lastClientAppId()).toBe("app-a");
+  });
+
+  test("wiki tool skips a disabled configured defaultAccount", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "a",
+        enabledA: false,
+        toolsA: { wiki: true },
+        toolsB: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki");
+    await tool.execute("call", { action: "search" });
+
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {
@@ -278,6 +297,23 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { url: "invalid-url" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+  });
+
+  test("bitable tool skips a disabled configured defaultAccount", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "a",
+        enabledA: false,
+        toolsA: { bitable: true },
+        toolsB: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta");
+    await tool.execute("call", { url: "invalid-url" });
+
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("bitable tool rejects a disabled contextual account when another account enables it", async () => {

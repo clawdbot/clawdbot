@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -16,7 +17,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
-import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -72,6 +72,22 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   closeActiveMemorySearchManager: hoisted.closeActiveMemorySearchManager,
   getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
 }));
+
+vi.mock("openclaw/plugin-sdk/memory-host-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/memory-host-core")>(
+    "openclaw/plugin-sdk/memory-host-core",
+  );
+  return {
+    ...actual,
+    getMemoryCapabilityRegistration: () => ({
+      pluginId: "memory-core",
+      capability: {
+        deterministicRecallToolName: "memory_search",
+        supportsPrivateTranscriptRecall: true,
+      },
+    }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
@@ -557,6 +573,11 @@ describe("active-memory plugin", () => {
         agentId: "main",
         trigger: "user",
         messageProvider: "webchat",
+        toolAuthority: {
+          fingerprint: "allowed-memory-authority",
+          allows: () => true,
+          assertActive: () => undefined,
+        },
         ...defaultSession,
         ...context,
       },
@@ -720,117 +741,67 @@ describe("active-memory plugin", () => {
     const [hookName, handler, options] = firstHookRegistration();
     expect(hookName).toBe("before_prompt_build");
     expect(typeof handler).toBe("function");
-    expect(options).toEqual({ timeoutMs: 153_000 });
+    expect(options).toEqual({ timeoutMs: 153_000, requiresToolAuthority: true });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
-    expect(typeof hooks.before_model_resolve).toBe("function");
+    expect(hooks.before_model_resolve).toBeUndefined();
     expect(typeof hooks.agent_end).toBe("function");
   });
 
-  it("prewarms a cold lane-1 lookup before the first QA-channel turn budget starts", async () => {
-    registerPluginConfig({ mode: "off" });
-    let cold = true;
-    const simulatedBudgetMs = 500;
-    const coldDelayMs = 650;
-    const runtimePreparationMs = 500;
-    const runId = "run-cold-qa-channel";
-    const triggerEntry = {
-      path: "MEMORY.md",
-      startLine: 1,
-      endLine: 1,
-      score: 1,
-      snippet: "Prefer aisle seats.",
-      source: "memory" as const,
-      originClass: "agent" as const,
-      triggers: "booking a flight",
-    };
-    const warmLookup = async () => {
-      if (cold) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, coldDelayMs);
-        });
-        cold = false;
-      }
-    };
-    const search = vi.fn(async () => {
-      await warmLookup();
-      return [];
-    });
-    const listTriggerCandidates = vi.fn(async () => {
-      await warmLookup();
-      return [triggerEntry];
-    });
-    hoisted.getActiveMemorySearchManager.mockResolvedValue({
-      manager: { search, listTriggerCandidates },
-    } as never);
+  it("does not read or inject memory when the turn authority denies recall tools", async () => {
+    const assertActive = vi.fn();
 
-    const prewarmResult = await requireHook("before_model_resolve")(
-      { prompt: "Help when booking a flight" },
-      {
-        agentId: "main",
-        runId,
-        trigger: "user",
-        sessionKey: "agent:main:qa-channel:direct:owner",
-        messageProvider: "qa-channel",
-        channelId: "owner",
-      },
-    );
-    expect(prewarmResult).toBeUndefined();
-    expect(coldDelayMs).toBeGreaterThan(simulatedBudgetMs);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, runtimePreparationMs);
-    });
-
-    const startedAt = performance.now();
     const result = await runPromptBuild(
-      { prompt: "Help when booking a flight" },
+      { prompt: "what wings should i order?" },
       {
-        sessionKey: "agent:main:qa-channel:direct:owner",
-        messageProvider: "qa-channel",
-        channelId: "owner",
-        runId,
+        toolAuthority: {
+          fingerprint: "denied-memory-authority",
+          allows: () => false,
+          assertActive,
+        },
       },
     );
-    const firstTurnMs = performance.now() - startedAt;
 
-    expectPrependContextContains(result, "Prefer aisle seats.");
-    expect(cold).toBe(false);
-    expect(firstTurnMs).toBeLessThan(simulatedBudgetMs);
-    expect(search).toHaveBeenCalledTimes(1);
-    expect(listTriggerCandidates).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+    expect(assertActive).toHaveBeenCalled();
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("does not prewarm a session disabled with /active-memory off", async () => {
-    const sessionKey = "agent:main:qa-channel:direct:paused";
-    seedSession(sessionKey, "s-paused");
-    await runActiveMemoryCommand({ sessionKey, args: "off" });
-
-    await requireHook("before_model_resolve")(
-      { prompt: "Help when booking a flight" },
+  it("does not inject recall that completes after the turn authority closes", async () => {
+    let releaseRecall: () => void = () => {
+      throw new Error("recall gate was not initialized");
+    };
+    const recallGate = new Promise<void>((resolve) => {
+      releaseRecall = resolve;
+    });
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await recallGate;
+      await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
+      return { payloads: [{ text: "- stale private memory" }] };
+    });
+    let authorityActive = true;
+    const result = runPromptBuild(
+      { prompt: "what should i remember?" },
       {
-        agentId: "main",
-        runId: "run-paused-qa-channel",
-        trigger: "user",
-        sessionKey,
-        messageProvider: "qa-channel",
-        channelId: "paused",
+        toolAuthority: {
+          fingerprint: "closing-memory-authority",
+          allows: () => true,
+          assertActive: () => {
+            if (!authorityActive) {
+              throw new Error("turn authority is no longer active");
+            }
+          },
+        },
       },
     );
+    await vi.waitFor(() => {
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
 
-    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
-  });
+    authorityActive = false;
+    releaseRecall();
 
-  it("does not synthesize a main agent when every configured agent opts out", () => {
-    expect(
-      hasRememberAcrossConversationsAgent({
-        agents: {
-          list: [
-            { id: "personal", memory: { search: { rememberAcrossConversations: false } } },
-            { id: "support", memory: { search: { rememberAcrossConversations: false } } },
-          ],
-        },
-      }),
-    ).toBe(false);
+    await expect(result).resolves.toBeUndefined();
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -944,7 +915,7 @@ describe("active-memory plugin", () => {
     expect(secondSessionKey).not.toBe(firstSessionKey);
   });
 
-  it("shares recall results across changed-prompt retries in one run", async () => {
+  it("does not share recall results across changed prompts in one run", async () => {
     const context = {
       runId: "run-changed-prompt-retry",
       sessionKey: "agent:main:changed-prompt-retry",
@@ -958,10 +929,10 @@ describe("active-memory plugin", () => {
 
     expectPrependContextContains(first, "lemon pepper wings");
     expectPrependContextContains(second, "lemon pepper wings");
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
   });
 
-  it("joins concurrent recall attempts in one run", async () => {
+  it("joins concurrent identical recall attempts in one run", async () => {
     let releaseRecall: () => void = () => {
       throw new Error("recall gate was not initialized");
     };
@@ -982,7 +953,7 @@ describe("active-memory plugin", () => {
     await vi.waitFor(() => {
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     });
-    const second = runPromptBuild({ prompt: "what wings did I order last time?" }, context);
+    const second = runPromptBuild({ prompt: "what wings should i order?" }, context);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -2109,7 +2080,6 @@ describe("active-memory plugin", () => {
     expect(params.model).toBe("gpt-5.4-mini");
     expect(params.messageProvider).toBe("webchat");
     expect(params.sessionKey).toMatch(/^agent:main:main:active-memory:[a-f0-9]{12}$/);
-    expect(activeMemoryConfigFrom(embeddedRunConfig()).qmd).toEqual({ searchMode: "search" });
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -2141,7 +2111,11 @@ describe("active-memory plugin", () => {
             score: 1,
             snippet: "Prefer aisle seats.",
             source: "memory" as const,
-            originClass: "agent",
+            provenance: {
+              originClass: "agent" as const,
+              sessionKind: "interactive" as const,
+              observedAt: 1,
+            },
             triggers: "booking a flight",
           },
         ]),
@@ -2183,42 +2157,6 @@ describe("active-memory plugin", () => {
       true,
     );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets active memory inherit the main QMD search mode when configured", async () => {
-    api.config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "github-copilot/gpt-5.4-mini",
-          },
-        },
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
-        },
-      },
-    };
-    registerPluginConfig({
-      qmd: {
-        searchMode: "inherit",
-      },
-    });
-
-    await runPromptBuild({
-      prompt: "what wings should i order? inherit-qmd-mode-check",
-    });
-
-    const config = embeddedRunConfig();
-    expect(config.memory).toEqual({
-      backend: "qmd",
-      qmd: {
-        searchMode: "query",
-      },
-    });
-    expect(activeMemoryConfigFrom(config).qmd).toEqual({ searchMode: "inherit" });
   });
 
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
@@ -2670,7 +2608,7 @@ describe("active-memory plugin", () => {
       return {
         meta: {
           activeMemorySearchDebug: {
-            backend: "qmd",
+            backend: "builtin",
             configuredMode: "search",
             effectiveMode: "query",
             fallback: "unsupported-search-flags",
@@ -2706,7 +2644,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
     expectLinesToContain(
       entries?.[0]?.lines ?? [],
-      "🔎 Active Memory Debug: backend=qmd configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
+      "🔎 Active Memory Debug: backend=builtin configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
     );
   });
 
@@ -2721,7 +2659,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { debug: { backend: "qmd", hits: 3 } },
+              details: { debug: { backend: "builtin", hits: 3 } },
             },
           }),
           JSON.stringify({
@@ -2751,7 +2689,7 @@ describe("active-memory plugin", () => {
       line.startsWith("🔎 Active Memory Debug:"),
     );
     const line = requireNonEmptyString(debugLine, "active memory debug line missing");
-    expect(line).toContain("backend=qmd");
+    expect(line).toContain("backend=builtin");
     expect(line).toContain("hits=3");
   });
 
@@ -3559,7 +3497,7 @@ describe("active-memory plugin", () => {
           role: "toolResult",
           toolName: "memory_search",
           details: {
-            debug: { backend: "qmd", effectiveMode: "search", hits: 1 },
+            debug: { backend: "builtin", effectiveMode: "search", hits: 1 },
           },
         },
       },
@@ -3579,7 +3517,7 @@ describe("active-memory plugin", () => {
     const debug = await testing.readActiveMemorySearchDebug(sessionFile, {
       maxLines: 4,
     });
-    expect(debug?.backend).toBe("qmd");
+    expect(debug?.backend).toBe("builtin");
     expect(debug?.hits).toBe(1);
   });
 
@@ -3917,7 +3855,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { results: [], debug: { backend: "qmd", hits: 0, searchMs: 8 } },
+              details: { results: [], debug: { backend: "builtin", hits: 0, searchMs: 8 } },
             },
           },
         ]);
@@ -3939,7 +3877,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
@@ -3956,7 +3894,7 @@ describe("active-memory plugin", () => {
             toolName: "memory_search",
             details: {
               results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
-              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+              debug: { backend: "builtin", hits: 0, searchMs: 8 },
             },
           },
         },
@@ -3976,7 +3914,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=ok");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
@@ -4012,7 +3950,7 @@ describe("active-memory plugin", () => {
                     results: [
                       { path: "memory/food.md", text: "User usually orders tonkotsu ramen." },
                     ],
-                    debug: { backend: "qmd", hits: 1, searchMs: 8 },
+                    debug: { backend: "builtin", hits: 1, searchMs: 8 },
                   },
                   null,
                   2,
@@ -5652,6 +5590,8 @@ describe("active-memory plugin", () => {
           agentId: "main",
           sessionKey,
           query: `cache pressure prompt ${index}`,
+          authorityFingerprint: "cache-authority",
+          recallToolNames: ["memory_search"],
         }),
         {
           status: "ok",
@@ -5669,6 +5609,8 @@ describe("active-memory plugin", () => {
           agentId: "main",
           sessionKey,
           query: "cache pressure prompt 0",
+          authorityFingerprint: "cache-authority",
+          recallToolNames: ["memory_search"],
         }),
       ),
     ).toBeUndefined();
@@ -5677,10 +5619,42 @@ describe("active-memory plugin", () => {
         agentId: "main",
         sessionKey,
         query: "cache pressure prompt 1",
+        authorityFingerprint: "cache-authority",
+        recallToolNames: ["memory_search"],
       }),
     );
     expect(cached?.status).toBe("ok");
     expect(cached?.summary).toBe("memory 1");
+  });
+
+  it("partitions cached recall by turn authority and memory resource scope", () => {
+    const base = {
+      agentId: "main",
+      sessionKey: "agent:main:cache-scope",
+      query: "same prompt",
+      authorityFingerprint: "authority-a",
+      recallToolNames: ["memory_search"],
+      memorySlot: "memory-core",
+      activeProjectKeys: ["project-a"],
+      modelProviderId: "openai",
+      modelId: "gpt-5",
+    };
+
+    expect(testing.buildCacheKey(base)).not.toBe(
+      testing.buildCacheKey({ ...base, authorityFingerprint: "authority-b" }),
+    );
+    expect(testing.buildCacheKey(base)).not.toBe(
+      testing.buildCacheKey({ ...base, activeProjectKeys: ["project-b"] }),
+    );
+    expect(testing.buildCacheKey(base)).not.toBe(
+      testing.buildCacheKey({ ...base, modelId: "gpt-5-mini" }),
+    );
+    expect(testing.buildCacheKey(base)).not.toBe(
+      testing.buildCacheKey({ ...base, recallToolNames: ["memory_get"] }),
+    );
+    expect(testing.buildCacheKey(base)).not.toBe(
+      testing.buildCacheKey({ ...base, resourceScope: "same-agent-private:sessions" }),
+    );
   });
 
   it("drops cached active-memory results when the current clock is not a valid date timestamp", () => {
@@ -5689,6 +5663,8 @@ describe("active-memory plugin", () => {
       agentId: "main",
       sessionKey: "agent:main:invalid-clock-cache",
       query: "cache invalid clock prompt",
+      authorityFingerprint: "cache-authority",
+      recallToolNames: ["memory_search"],
     });
     testing.setCachedResult(
       cacheKey,
@@ -5712,6 +5688,8 @@ describe("active-memory plugin", () => {
       agentId: "main",
       sessionKey: "agent:main:overflow-cache",
       query: "cache overflow prompt",
+      authorityFingerprint: "cache-authority",
+      recallToolNames: ["memory_search"],
     });
     testing.setCachedResult(
       cacheKey,
@@ -5919,17 +5897,4 @@ describe("active-memory plugin", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

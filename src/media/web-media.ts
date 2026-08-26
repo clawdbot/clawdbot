@@ -17,7 +17,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -25,7 +25,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -40,8 +40,9 @@ import { readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore,
   LocalMediaAccessError,
+  readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
@@ -52,7 +53,7 @@ import {
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
-export { getDefaultLocalRoots, LocalMediaAccessError };
+export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
 /** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
@@ -158,6 +159,11 @@ function resolveWebMediaOptions(params: {
       : false,
   };
 }
+
+// Pre-compression fetch headroom for callers with an explicit delivery cap:
+// enough to pull a large phone photo (~20MB+) and compress it under the cap,
+// without letting a tight channel cap buffer up to the 100MB document bound.
+const IMAGE_OPTIMIZE_HEADROOM_FACTOR = 4;
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
@@ -294,19 +300,9 @@ function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   return printableRatio > 0.95 ? text : undefined;
 }
 
-function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
-  if (!filePath) {
-    return false;
-  }
-  const relative = path.relative(path.resolve(root), path.resolve(filePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function resolveLocalMediaFileName(filePath: string): string | undefined {
   const fileName = basenameFromAnyPath(filePath) || undefined;
-  return fileName && isPathInsideRoot(filePath, getMediaDir())
+  return fileName && isPathInside(getMediaDir(), filePath)
     ? extractOriginalFilename(fileName)
     : fileName;
 }
@@ -369,15 +365,13 @@ async function resolveTrustedGeneratedHostReadHtml(
   }
   // Outbound staging always requires provenance, even when a custom state dir
   // places media/outbound underneath the otherwise trusted temp root.
-  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (outboundRoot && isPathInside(outboundRoot, resolvedFilePath)) {
     const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
     return marker
       ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
       : undefined;
   }
-  return tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)
-    ? { source: "temp-root" }
-    : undefined;
+  return tmpRoot && isPathInside(tmpRoot, resolvedFilePath) ? { source: "temp-root" } : undefined;
 }
 
 /** Records exact-byte provenance for a trusted generated HTML staged outbound. */
@@ -387,7 +381,7 @@ export async function markTrustedGeneratedHtmlPath(
 ): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
-  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (!outboundRoot || !isPathInside(outboundRoot, resolvedFilePath)) {
     throw new Error(
       `markTrustedGeneratedHtmlPath: refusing path outside outbound staging: ${resolvedFilePath}`,
     );
@@ -610,7 +604,7 @@ function assertHostReadMediaAllowed(params: {
   );
 }
 
-function toJpegFileName(fileName?: string): string | undefined {
+function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
@@ -619,10 +613,10 @@ function toJpegFileName(fileName?: string): string | undefined {
     return fileName;
   }
   const parsed = path.parse(trimmed);
-  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
-  }
-  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+  const ext = extensionForMime(mimeType);
+  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
+    ? fileName
+    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
 type OptimizedImage = {
@@ -1000,7 +994,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
+    fileName: toImageFileName(params.fileName, optimized.mimeType),
   };
 }
 
@@ -1029,7 +1023,7 @@ async function loadWebMediaInternal(
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
-  if (mediaUrl.startsWith("file://")) {
+  if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
     } catch (err) {
@@ -1060,7 +1054,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
+    const fileName = toImageFileName(meta?.fileName, optimized.mimeType);
 
     return {
       buffer: optimized.buffer,
@@ -1130,13 +1124,19 @@ async function loadWebMediaInternal(
   };
 
   // Bound source reads before buffering. Optimized images may exceed their
-  // delivery cap because they are compressed before the final size check.
+  // delivery cap because they are compressed before the final size check, so
+  // an explicit caller cap gets image-compression headroom — sized off the
+  // image cap, not the 100MB document cap, or a tight channel cap would still
+  // permit a 100MB buffer from a hostile URL. Accepted tradeoff: originals
+  // above the headroom fail even when they would have compressed under the
+  // cap; the error names the fetch bound so the user can shrink the source.
   const defaultSourceReadCap = maxBytesForKind("document");
+  const imageOptimizeHeadroom = IMAGE_OPTIMIZE_HEADROOM_FACTOR * maxBytesForKind("image");
   const sourceReadCap =
     maxBytes === undefined
       ? defaultSourceReadCap
       : optimizeImages
-        ? Math.max(maxBytes, defaultSourceReadCap)
+        ? Math.max(maxBytes, imageOptimizeHeadroom)
         : maxBytes;
 
   if (hasHttpUrlPrefix(mediaUrl)) {
@@ -1185,7 +1185,7 @@ async function loadWebMediaInternal(
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
+  if (readFileOverride && !(sandboxValidated || localRoots === "any")) {
     await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
@@ -1206,12 +1206,10 @@ async function loadWebMediaInternal(
     data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });
   } else {
     try {
-      data = (
-        await readLocalFileSafely({
-          filePath: mediaUrl,
-          maxBytes: sourceReadCap,
-        })
-      ).buffer;
+      data = await readLocalMediaFile(mediaUrl, localRoots, {
+        ...(inboundRoots ? { inboundRoots } : {}),
+        maxBytes: sourceReadCap,
+      });
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
@@ -1231,6 +1229,15 @@ async function loadWebMediaInternal(
             { cause: err },
           );
         }
+        if (err.code === "path-mismatch") {
+          // fs-safe reports pre-open identity drift as path-mismatch; keep the
+          // product-facing classification as an access denial, not a bad path.
+          throw new LocalMediaAccessError(
+            "path-not-allowed",
+            `Local media path is not under an allowed directory: ${mediaUrl}`,
+            { cause: err },
+          );
+        }
         throw new LocalMediaAccessError(
           "invalid-path",
           `Local media path is not safe to read: ${mediaUrl}`,
@@ -1240,7 +1247,7 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const sniffedMime = await detectMime({ buffer: data });
+  const sniffedMime = hostReadCapability ? await detectMime({ buffer: data }) : undefined;
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {

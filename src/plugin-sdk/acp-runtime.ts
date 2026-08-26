@@ -31,7 +31,7 @@ export type {
 } from "@openclaw/acp-core/runtime/types";
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
+export { tryDispatchAcpReplyHook } from "./acpx.js";
 
 export function resolveAcpSessionAvailability(params: {
   config: OpenClawConfig;

@@ -3,6 +3,7 @@
  * Runs provider calls across configured keys on rate-limit failures and keeps
  * same-key transient retries separate from key rotation.
  */
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -59,9 +60,11 @@ export async function executeWithApiKeyRotation<T>(
   keyLoop: for (const [apiKeyIndex, apiKey] of keys.entries()) {
     const maxOperationAttempts = resolveTransientProviderAttempts(transientRetry);
     for (let attemptNumber = 1; attemptNumber <= maxOperationAttempts; attemptNumber += 1) {
+      transientRetry?.signal?.throwIfAborted();
       try {
         return await params.execute(apiKey);
       } catch (error) {
+        transientRetry?.signal?.throwIfAborted();
         lastError = error;
         const message = formatErrorMessage(error);
         const rotateKey = params.shouldRetry
@@ -106,20 +109,4 @@ export async function executeWithApiKeyRotation<T>(
     throw new Error(`Failed to run API request for ${params.provider}.`);
   }
   throw toLintErrorObject(lastError, "Non-Error thrown");
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  // Preserve thrown object properties for callers/tests while still satisfying
-  // Error-only throw lint expectations.
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

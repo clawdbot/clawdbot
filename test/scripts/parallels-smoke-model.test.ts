@@ -622,6 +622,64 @@ describe("Parallels smoke model selection", () => {
     ).toBe(false);
   });
 
+  it("starts the default macOS upgrade without host networking or packaging the checkout", () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-macos-upgrade-no-pack-");
+    writeNodeFakePrlctl(
+      tempDir,
+      `if (args.includes("list")) {
+         console.log(JSON.stringify([{ name: "macOS Tahoe", status: "running" }]));
+         process.exit(0);
+       }
+       if (args.includes("exec") && args.includes("whoami")) {
+         console.log("runner");
+         process.exit(0);
+       }
+       process.stderr.write("FAKE_GUEST_COMMAND_BOUNDARY\\n");
+       process.exit(73);`,
+    );
+    const fakePnpm = join(tempDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      '#!/usr/bin/env node\nprocess.stderr.write("UNEXPECTED_HOST_PACKAGE_BUILD\\n"); process.exit(86);\n',
+    );
+    chmodSync(fakePnpm, 0o755);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        TS_PATHS.macos,
+        "--mode",
+        "upgrade",
+        "--latest-version",
+        "2026.8.25",
+        "--api-key-env",
+        "OPENCLAW_PARALLELS_TEST_API_KEY",
+        "--json",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...fakePrlctlEnv(tempDir),
+          "BASH_FUNC_ifconfig%%": "() { return 1; }",
+          OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(tempDir, "artifacts"),
+          OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1",
+          OPENCLAW_PARALLELS_TEST_API_KEY: "fixture-not-a-real-credential",
+          TMPDIR: tempDir,
+          npm_execpath: fakePnpm,
+        },
+      },
+    );
+
+    expect(result.stderr).toContain("upgrade.restore-snapshot");
+    expect(result.stderr).toContain("upgrade.reset-state");
+    expect(result.stderr).toContain("FAKE_GUEST_COMMAND_BOUNDARY");
+    expect(result.stderr).not.toContain("UNEXPECTED_HOST_PACKAGE_BUILD");
+  });
+
   it("rejects short flags as Parallels smoke option values", () => {
     const cases = [
       [parseLinuxSmokeArgs, "--mode", "-h"],
@@ -631,6 +689,14 @@ describe("Parallels smoke model selection", () => {
     ] as const;
     for (const [parseArgs, flag, value] of cases) {
       expectFatalError(() => parseArgs([flag, value]), `${flag} requires a value`);
+    }
+  });
+
+  it("rejects inherited object keys as unknown Parallels smoke arguments", () => {
+    for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
+      for (const arg of ["constructor", "toString"]) {
+        expectFatalError(() => parseArgs([arg, "ignored"]), `unknown arg: ${arg}`);
+      }
     }
   });
 
@@ -983,6 +1049,96 @@ kill -TERM "$$"`,
 
     expect(output).toBe("{wanted}\tpoweron\tmacOS 26.5");
   });
+
+  it.each(["poweron", "poweroff"] as const)(
+    "restores a %s macOS snapshot without discarding its saved desktop session",
+    (snapshotState) => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-macos-restore-");
+      const callsPath = join(tempDir, "prlctl-calls.jsonl");
+      const statePath = join(tempDir, "vm-state");
+      const npmBootstrapPath = join(tempDir, "npm-bootstrap.mjs");
+      writeFileSync(
+        npmBootstrapPath,
+        `if (process.argv[1]?.endsWith("npm-cli.js") && process.argv.includes("view")) {
+  process.stdout.write("2026.1.1\\n");
+  process.exit(0);
+}`,
+      );
+      writeNodeFakePrlctl(
+        tempDir,
+        `const fs = process.getBuiltinModule("node:fs");
+const callsPath = ${JSON.stringify(callsPath)};
+const statePath = ${JSON.stringify(statePath)};
+const snapshotState = ${JSON.stringify(snapshotState)};
+const commandIndex = args.findIndex((arg) =>
+  ["list", "snapshot-list", "snapshot-switch", "status", "start", "exec"].includes(arg),
+);
+const commandArgs = args.slice(commandIndex);
+fs.appendFileSync(callsPath, JSON.stringify(commandArgs) + "\\n");
+if (commandArgs[0] === "list") {
+  console.log(JSON.stringify([{ name: "macOS Tahoe", status: "running" }]));
+} else if (commandArgs[0] === "snapshot-list") {
+  console.log(JSON.stringify({ "{snapshot}": { name: "macOS 26.5 latest", state: snapshotState } }));
+} else if (commandArgs[0] === "snapshot-switch") {
+  fs.writeFileSync(statePath, snapshotState === "poweroff" || commandArgs.includes("--skip-resume") ? "stopped" : "running");
+} else if (commandArgs[0] === "status") {
+  console.log("VM macOS Tahoe " + fs.readFileSync(statePath, "utf8"));
+} else if (commandArgs[0] === "start") {
+  fs.writeFileSync(statePath, "running");
+} else if (commandArgs[0] === "exec" && commandArgs.includes("whoami")) {
+  console.log("desktop-user");
+} else if (commandArgs[0] === "exec" && commandArgs.includes("/bin/dd")) {
+  process.exit(41);
+}`,
+      );
+
+      const fakeEnv = fakePrlctlEnv(tempDir);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          TS_PATHS.macos,
+          "--mode",
+          "upgrade",
+          "--latest-version",
+          "2026.1.1",
+          "--target-package-spec",
+          "openclaw@2026.1.1",
+          "--api-key-env",
+          "OPENCLAW_PARALLELS_TEST_KEY",
+          "--json",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ...fakeEnv,
+            "BASH_FUNC_ifconfig%%": "() { return 1; }",
+            NODE_OPTIONS: `${fakeEnv.NODE_OPTIONS} --import=${pathToFileURL(npmBootstrapPath).href}`,
+            OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
+            OPENCLAW_PARALLELS_TEST_KEY: "fixture",
+          },
+          timeout: 20_000,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(1);
+      const calls = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(
+        calls.find(([command]) => command === "snapshot-switch"),
+        result.stderr,
+      ).toEqual(["snapshot-switch", "macOS Tahoe", "--id", "{snapshot}"]);
+      expect(calls.filter(([command]) => command === "start")).toHaveLength(
+        snapshotState === "poweroff" ? 1 : 0,
+      );
+    },
+    30_000,
+  );
 
   it("rejects skip-restore for combined Parallels smoke lanes", () => {
     expect(withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () => shouldSkipSnapshotRestore())).toBe(
@@ -1371,8 +1527,8 @@ kill -TERM "$$"`,
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
-    expect(windowsGit.indexOf('"MinGit-2.55.0.3-64-bit.zip"')).toBeLessThan(
-      windowsGit.indexOf('"MinGit-2.55.0.3-arm64.zip"'),
+    expect(windowsGit.indexOf('"MinGit-2.55.0.4-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.55.0.4-arm64.zip"'),
     );
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
@@ -1621,6 +1777,41 @@ kill -TERM "$$"`,
     expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("fails boundedly when Windows background polling loses guest transport", async () => {
+    const retries: string[] = [];
+    let donePolls = 0;
+    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
+      const command = args.at(-1) ?? "";
+      if (options?.input) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args.includes("--current-user")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args.includes("cmd.exe") && command.includes("echo wait")) {
+        donePolls++;
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "ref-onboard",
+        onLaunchRetry: (message) => retries.push(message),
+        pollIntervalMs: 1,
+        runCommand,
+        script: "Write-Output ok",
+        timeoutMs: 720_000,
+        vmName: "Windows 11",
+      }),
+    ).rejects.toThrow("ref-onboard done poll failed after 3 consecutive guest transport errors");
+
+    expect(donePolls).toBe(3);
+    expect(retries).toHaveLength(3);
+    expect(retries.at(-1)).toContain("transport failure 3/3");
+  });
+
   it("returns timed-out host command status when check is disabled", () => {
     const result = runNode("process.stdout.write('partial'); setTimeout(() => {}, 1000);", {
       check: false,
@@ -1703,6 +1894,52 @@ kill -TERM "$$"`,
       } finally {
         if (grandchildPid && isProcessAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "settles timed host commands when an escaped descendant retains child pipes",
+    () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      let grandchildPid = 0;
+      const grandchildScript = [
+        "const { writeFileSync } = require('node:fs');",
+        "writeFileSync(process.env.GRANDCHILD_PID_PATH, String(process.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], {`,
+        "  detached: true,",
+        "  env: process.env,",
+        "  stdio: ['ignore', 'inherit', 'inherit'],",
+        "});",
+        "child.unref();",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const startedAt = Date.now();
+
+      try {
+        const result = run(process.execPath, ["-e", parentScript], {
+          check: false,
+          env: {
+            ...process.env,
+            GRANDCHILD_PID_PATH: grandchildPidPath,
+          },
+          quiet: true,
+          timeoutMs: 100,
+        });
+
+        expect(result.status).toBe(124);
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(-grandchildPid, "SIGKILL");
         }
       }
     },
@@ -2072,7 +2309,15 @@ kill -TERM "$$"`,
     expect(transports).toContain("launch retry");
   });
 
-  it("keeps Windows update-only env flags scoped before verification", () => {
+  it("preserves bundled plugin inventory during dev updates", () => {
+    const devUpdateLines = [macos, windows].map((script) =>
+      script.split("\n").find((line) => line.includes("update --channel dev")),
+    );
+
+    expect(devUpdateLines).not.toContain(undefined);
+    for (const updateLine of devUpdateLines) {
+      expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
     expect(powershell).toContain("windowsScopedEnvFunction");
     expect(windows).toContain(
       "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",

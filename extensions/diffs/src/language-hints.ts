@@ -22,19 +22,20 @@ const BASE_LANGUAGE_ALIASES = new Map<string, SupportedLanguages>(
 );
 type DiffPayloadFile = FileContents | FileDiffMetadata;
 
-function normalizeOptionalString(value: unknown): string | undefined {
+// The curated viewer bundles this module outside Plugin SDK package resolution.
+function normalizeLanguageHint(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  return normalized ? normalized : undefined;
+  return normalized || undefined;
 }
 
 export async function normalizeSupportedLanguageHint(
   value?: string,
   options: { languagePackAvailable?: boolean } = {},
 ): Promise<SupportedLanguages | undefined> {
-  const normalized = normalizeOptionalString(value);
+  const normalized = normalizeLanguageHint(value);
   if (!normalized) {
     return undefined;
   }

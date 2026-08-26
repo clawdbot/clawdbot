@@ -59,6 +59,28 @@ describe("OpenClawTerminalPanel dock suppression", () => {
     expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
   });
 
+  it("restores a suppressed main placement", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "main", height: 320, width: 520 }),
+    );
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull();
+
+    panel.suppressed = true;
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
+    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+      open: true,
+      dock: "main",
+    });
+
+    panel.suppressed = false;
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull());
+  });
+
   it("defers availability restore until suppression ends", async () => {
     localStorage.setItem(
       "openclaw.terminal.panel.v1",

@@ -105,17 +105,18 @@ Core:
 - `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
-- `/model <provider/model>` (or `/models`)
+- `/model <provider/model|default>` (or `/models`; `default` clears the session override)
 
 Session controls:
 
-- `/think <off|minimal|low|medium|high>` (higher tiers may add levels like `xhigh`/`max` depending on the model)
-- `/fast <status|auto|on|off>`
+- `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model; `default` clears the session override)
+- `/fast <status|auto|on|off|default>` (`default` clears the session override)
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
-- `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
-- `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs; `reset`/`inherit`/`clear`/`default` clears the session override)
+- `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
@@ -126,6 +127,7 @@ Session lifecycle:
 - `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
 - `/reset` (reset the current session key in place)
 - `/abort` (abort the active run)
+- `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
 

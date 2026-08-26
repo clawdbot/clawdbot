@@ -1,6 +1,9 @@
 // Codex tests cover attempt steering plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexSteeringQueue } from "./attempt-steering.js";
+import {
+  CodexSteeringAcceptedUnconfirmedError,
+  createCodexSteeringQueue,
+} from "./attempt-steering.js";
 import { createClientHarness } from "./test-support.js";
 
 const PNG_1X1 =
@@ -15,21 +18,12 @@ describe("Codex app-server steering queue", () => {
     vi.useRealTimers();
   });
 
-  function createQueue(
-    request: ReturnType<typeof vi.fn>,
-    options: {
-      signal?: AbortSignal;
-      claimPendingUserInput?: () =>
-        | { answer: (text: string) => boolean; cancel: () => boolean }
-        | undefined;
-    } = {},
-  ) {
+  function createQueue(request: ReturnType<typeof vi.fn>, options: { signal?: AbortSignal } = {}) {
     return createCodexSteeringQueue({
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
-      claimPendingUserInput: options.claimPendingUserInput ?? (() => undefined),
       signal: options.signal ?? new AbortController().signal,
     });
   }
@@ -39,8 +33,9 @@ describe("Codex app-server steering queue", () => {
   it("resolves only after the matching Codex user message completes", async () => {
     const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));
     const queue = createQueue(request);
+    const onQueueAccepted = vi.fn();
 
-    const queued = queue.queue("accepted", { debounceMs: 0 });
+    const queued = queue.queue("accepted", { debounceMs: 0, onQueueAccepted });
     let settled = false;
     void queued.finally(() => {
       settled = true;
@@ -49,6 +44,7 @@ describe("Codex app-server steering queue", () => {
 
     const requestParams = request.mock.calls[0]?.[1] as { clientUserMessageId?: string };
     expect(requestParams.clientUserMessageId).toBe("openclaw:turn-1:steer:1");
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
     expect(settled).toBe(false);
     expect(queue.confirmConsumed("unrelated-user-message")).toBe(false);
     expect(queue.confirmConsumed(requestParams.clientUserMessageId ?? "")).toBe(true);
@@ -74,14 +70,13 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 1_000,
-      claimPendingUserInput: () => undefined,
       signal: new AbortController().signal,
     });
 
-    const outcomes: string[] = [];
+    const outcomes: unknown[] = [];
     void queue.queue("steer me", { debounceMs: 0 }).then(
       () => outcomes.push("resolved"),
-      (error: unknown) => outcomes.push(`rejected: ${(error as Error).message}`),
+      (error: unknown) => outcomes.push(error),
     );
     await vi.advanceTimersByTimeAsync(0);
     expect((JSON.parse(harness.writes[0] ?? "{}") as { method?: string }).method).toBe(
@@ -91,7 +86,10 @@ describe("Codex app-server steering queue", () => {
     // Codex accepted the frame but never responds: the caller must not wait forever.
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(outcomes).toEqual(["rejected: turn/steer timed out"]);
+    expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    expect((outcomes[0] as Error & { cause?: unknown }).cause).toMatchObject({
+      message: "turn/steer timed out",
+    });
     harness.client.close();
   });
 
@@ -103,7 +101,6 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
-      claimPendingUserInput: () => undefined,
       signal: controller.signal,
     });
     const pendingRequests = (
@@ -111,7 +108,7 @@ describe("Codex app-server steering queue", () => {
     ).pending;
 
     const queued = queue.queue("steer me", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(pendingRequests.size).toBe(1);
 
@@ -132,10 +129,12 @@ describe("Codex app-server steering queue", () => {
       return { turnId: "turn-1" };
     });
     const queue = createQueue(request);
+    const onQueueAccepted = vi.fn();
 
-    const queued = queue.queue("consumed first", { debounceMs: 0 });
+    const queued = queue.queue("consumed first", { debounceMs: 0, onQueueAccepted });
     await vi.advanceTimersByTimeAsync(0);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
     await queued;
 
     acceptSteer?.();
@@ -180,11 +179,13 @@ describe("Codex app-server steering queue", () => {
       throw new Error("cannot steer this turn");
     });
     const queue = createQueue(request);
+    const onQueueAccepted = vi.fn();
 
-    const queued = queue.queue("rejected", { debounceMs: 0 });
+    const queued = queue.queue("rejected", { debounceMs: 0, onQueueAccepted });
     const rejected = expect(queued).rejects.toThrow("cannot steer this turn");
     await vi.advanceTimersByTimeAsync(0);
     await rejected;
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
   });
 
   it("rejects later steering behind a failed batch", async () => {
@@ -221,7 +222,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request);
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue cancelled");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -239,7 +240,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request, { signal: controller.signal });
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -264,11 +265,21 @@ describe("Codex app-server steering queue", () => {
       })
       .mockResolvedValue({ turnId: "turn-1" });
     const queue = createQueue(request);
+    const onFirstAccepted = vi.fn();
+    const onSecondAccepted = vi.fn();
 
-    const first = queue.queue("on the wire", { debounceMs: 0 });
-    const firstRejected = expect(first).rejects.toThrow("steering queue cancelled");
+    const first = queue.queue("on the wire", {
+      debounceMs: 0,
+      onQueueAccepted: onFirstAccepted,
+    });
+    const firstRejected = expect(first).rejects.toBeInstanceOf(
+      CodexSteeringAcceptedUnconfirmedError,
+    );
     await vi.advanceTimersByTimeAsync(0);
-    const second = queue.queue("waiting", { debounceMs: 0 });
+    const second = queue.queue("waiting", {
+      debounceMs: 0,
+      onQueueAccepted: onSecondAccepted,
+    });
     const secondRejected = expect(second).rejects.toThrow("steering queue cancelled");
     await vi.advanceTimersByTimeAsync(0);
 
@@ -277,136 +288,92 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     await Promise.all([firstRejected, secondRejected]);
     expect(request).toHaveBeenCalledTimes(1);
+    expect(onFirstAccepted).toHaveBeenCalledWith(true);
+    expect(onSecondAccepted).toHaveBeenCalledWith(false);
   });
 
-  it("answers pending user input without steering", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const answerPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: vi.fn(() => true),
-      }),
+  it("seals unsent admission while preserving a dispatched consumption confirmation", async () => {
+    let acceptFirstSteer: (() => void) | undefined;
+    const firstSteerAccepted = new Promise<void>((resolve) => {
+      acceptFirstSteer = resolve;
     });
-
-    await queue.queue("answer locally", { debounceMs: 0 });
-    expect(answerPendingUserInput).toHaveBeenCalledWith("answer locally");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("steers a complete image reply before releasing pending input", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const answerPendingUserInput = vi.fn(() => true);
-    const cancelPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: cancelPendingUserInput,
-      }),
-    });
-
-    const queued = queue.queue("compare these", {
-      images: [
-        { type: "image", data: PNG_1X1, mimeType: "image/png" },
-        { type: "image", data: PNG_1X1, mimeType: "image/png" },
-      ],
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(answerPendingUserInput).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith(
-      "turn/steer",
-      {
-        threadId: "thread-1",
-        expectedTurnId: "turn-1",
-        input: [
-          { type: "text", text: "compare these", text_elements: [] },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-        ],
-        clientUserMessageId: "openclaw:turn-1:steer:1",
-      },
-      steerRequestOptions,
-    );
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
-    expect(request.mock.invocationCallOrder[0]!).toBeLessThan(
-      cancelPendingUserInput.mock.invocationCallOrder[0]!,
-    );
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await queued;
-  });
-
-  it("claims pending input before a later queued message can answer it", async () => {
-    let resolveImageSteer: (() => void) | undefined;
-    const request = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<{ turnId: string }>((resolve) => {
-            resolveImageSteer = () => resolve({ turnId: "turn-1" });
-          }),
-      )
-      .mockResolvedValue({ turnId: "turn-1" });
-    const cancelPendingUserInput = vi.fn(() => true);
-    let pendingClaimed = false;
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => {
-        if (pendingClaimed) {
-          return undefined;
-        }
-        pendingClaimed = true;
-        return { answer: vi.fn(() => true), cancel: cancelPendingUserInput };
-      },
-    });
-
-    const imageQueued = queue.queue("image reply", {
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const laterQueued = queue.queue("later reply", { debounceMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    resolveImageSteer?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
-    await Promise.all([imageQueued, laterQueued]);
-    expect(request.mock.calls[0]?.[1]).toMatchObject({
-      input: [
-        { type: "text", text: "image reply" },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-      ],
-    });
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
-      input: [{ type: "text", text: "later reply" }],
-    });
-  });
-
-  it("releases pending input when an atomic image steer is rejected", async () => {
     const request = vi.fn(async () => {
-      throw new Error("cannot steer this turn");
+      await firstSteerAccepted;
+      return { turnId: "turn-1" };
     });
-    const answerPendingUserInput = vi.fn(() => true);
-    const cancelPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: cancelPendingUserInput,
-      }),
-    });
+    const queue = createQueue(request);
+    const onDispatchedAccepted = vi.fn();
+    const onChainedAccepted = vi.fn();
+    const onDebouncedAccepted = vi.fn();
+    const onLateAccepted = vi.fn();
 
-    const queued = queue.queue("compare this", {
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    const dispatched = queue.queue("on the wire", {
+      debounceMs: 0,
+      onQueueAccepted: onDispatchedAccepted,
     });
-    const rejected = expect(queued).rejects.toThrow("cannot steer this turn");
     await vi.advanceTimersByTimeAsync(0);
-    await rejected;
+    const chained = queue.queue("waiting on send chain", {
+      debounceMs: 0,
+      onQueueAccepted: onChainedAccepted,
+    });
+    const chainedRejected = expect(chained).rejects.toThrow("queue admission sealed");
+    const debounced = queue.queue("still debounced", {
+      debounceMs: 30_000,
+      onQueueAccepted: onDebouncedAccepted,
+    });
+    const debouncedRejected = expect(debounced).rejects.toThrow("queue admission sealed");
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(answerPendingUserInput).not.toHaveBeenCalled();
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
+    queue.sealAdmission();
+
+    await Promise.all([chainedRejected, debouncedRejected]);
+    await expect(
+      queue.queue("too late", { debounceMs: 0, onQueueAccepted: onLateAccepted }),
+    ).rejects.toThrow("queue admission sealed");
+    expect(request).toHaveBeenCalledOnce();
+    expect(onChainedAccepted).toHaveBeenCalledWith(false);
+    expect(onDebouncedAccepted).toHaveBeenCalledWith(false);
+    expect(onLateAccepted).toHaveBeenCalledWith(false);
+    expect(onDispatchedAccepted).not.toHaveBeenCalled();
+
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+    await dispatched;
+    expect(onDispatchedAccepted).toHaveBeenCalledWith(true);
+
+    queue.cancel();
+    acceptFirstSteer?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("fully cancels a dispatched batch after admission was sealed", async () => {
+    let acceptSteer: (() => void) | undefined;
+    const steerAccepted = new Promise<void>((resolve) => {
+      acceptSteer = resolve;
+    });
+    const request = vi.fn(async () => {
+      await steerAccepted;
+      return { turnId: "turn-1" };
+    });
+    const queue = createQueue(request);
+    const onQueueAccepted = vi.fn();
+
+    const dispatched = queue.queue("on the wire", { debounceMs: 0, onQueueAccepted });
+    const rejected = expect(dispatched).rejects.toBeInstanceOf(
+      CodexSteeringAcceptedUnconfirmedError,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    queue.sealAdmission();
+    expect(onQueueAccepted).not.toHaveBeenCalled();
+    queue.cancel();
+    queue.cancel();
+
+    await rejected;
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    acceptSteer?.();
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("rejects before dispatch when the run is already aborted", async () => {
@@ -414,10 +381,12 @@ describe("Codex app-server steering queue", () => {
     controller.abort();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
     const queue = createQueue(request, { signal: controller.signal });
+    const onQueueAccepted = vi.fn();
 
-    await expect(queue.queue("aborted", { debounceMs: 0 })).rejects.toThrow(
+    await expect(queue.queue("aborted", { debounceMs: 0, onQueueAccepted })).rejects.toThrow(
       "steering queue aborted",
     );
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -425,13 +394,15 @@ describe("Codex app-server steering queue", () => {
     const controller = new AbortController();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
     const queue = createQueue(request, { signal: controller.signal });
+    const onQueueAccepted = vi.fn();
 
-    const queued = queue.queue("aborted", { debounceMs: 5 });
+    const queued = queue.queue("aborted", { debounceMs: 5, onQueueAccepted });
     const rejected = expect(queued).rejects.toThrow("steering queue aborted");
     controller.abort();
     await vi.advanceTimersByTimeAsync(5);
 
     await rejected;
     expect(request).not.toHaveBeenCalled();
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
   });
 });

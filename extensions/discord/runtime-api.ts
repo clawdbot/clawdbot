@@ -152,8 +152,6 @@ export {
   type ResolveDiscordOutboundSessionRouteParams,
 } from "./runtime-api.send.js";
 export {
-  testing as __testing,
-  testing,
   autoBindSpawnedDiscordSubagent,
   createNoopThreadBindingManager,
   createThreadBindingManager,

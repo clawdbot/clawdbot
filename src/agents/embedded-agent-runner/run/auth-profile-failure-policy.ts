@@ -2,7 +2,7 @@
  * Resolves why an auth profile failed during provider auth selection.
  */
 import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
-import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
 /**
@@ -29,9 +29,12 @@ export function resolveAuthProfileFailureReason(params: {
   if (
     params.policy === "local" ||
     !params.failoverReason ||
+    // Provider-scoped overload must not cool one credential (#121341 classification).
+    // Preserve #121278 credential scoping by rotating without a profile-health write.
+    params.failoverReason === "overloaded" ||
     (params.policy === "local_transient" &&
-      (params.failoverReason === "overloaded" ||
-        (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
+      params.failoverReason === "rate_limit" &&
+      params.transientRateLimit === true) ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||

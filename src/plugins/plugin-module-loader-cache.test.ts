@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
@@ -38,12 +38,7 @@ function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactor
   return factory as PluginModuleLoaderFactory;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -859,5 +854,36 @@ describe("getCachedPluginModuleLoader", () => {
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
     );
+  });
+});
+
+describe("clearPluginModuleLoaderLifecycleCache", () => {
+  it.each([
+    { boundaryRoot: "/repo/dist/extensions/demo", dependencyRoot: "/repo/dist" },
+    { boundaryRoot: "/repo/dist/extensions", dependencyRoot: "/repo/dist" },
+    { boundaryRoot: "/repo/installed/demo", dependencyRoot: "/repo/installed/demo" },
+  ])("evicts native dependencies under $dependencyRoot for $boundaryRoot", async (params) => {
+    const clearNativeRequireJavaScriptModuleCache = vi.fn();
+    vi.doMock("./native-module-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./native-module-require.js")>()),
+      clearNativeRequireJavaScriptModuleCache,
+    }));
+    const { clearPluginModuleLoaderLifecycleCache } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(
+      import.meta.url,
+      `./plugin-module-loader-cache.js?scope=lifecycle-${params.boundaryRoot.replaceAll("/", "-")}`,
+    );
+    const modulePath = "/repo/dist/extensions/demo/api.js";
+    const moduleLoaders = new Map([[modulePath, () => ({ marker: "retired" })]]);
+    const moduleRoots = new Map([[modulePath, params.boundaryRoot]]);
+
+    clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
+
+    expect(clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(modulePath, {
+      dependencyRoot: params.dependencyRoot,
+    });
+    expect(moduleLoaders.size).toBe(0);
+    expect(moduleRoots.size).toBe(0);
   });
 });

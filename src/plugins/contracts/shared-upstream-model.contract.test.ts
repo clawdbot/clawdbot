@@ -1,6 +1,7 @@
 // Shared upstream model contract tests keep capability flags aligned across bundled catalogs.
 import fs from "node:fs";
 import path from "node:path";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
@@ -55,12 +56,6 @@ function readBundledManifests(): Array<Record<string, unknown>> {
 function normalizeSharedModelId(modelId: string): string {
   const separator = modelId.indexOf("/");
   return (separator === -1 ? modelId : modelId.slice(separator + 1)).toLowerCase();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function collectCatalogEntries(): CatalogEntry[] {

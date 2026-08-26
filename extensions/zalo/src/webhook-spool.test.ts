@@ -119,6 +119,7 @@ describe("Zalo durable webhook ingress", () => {
 
   it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_update, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -134,8 +135,9 @@ describe("Zalo durable webhook ingress", () => {
         await ingress.accept(raw);
         await waitForZaloWebhookVerdict(queue, "duplicate", "completed");
         await ingress.accept(raw);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
@@ -146,6 +148,7 @@ describe("Zalo durable webhook ingress", () => {
 
   it("preserves old replay-guard parity for the same message id with changed payload bytes", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_update, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -162,8 +165,9 @@ describe("Zalo durable webhook ingress", () => {
         await ingress.accept(
           rawEvent({ messageId: "redelivery", text: "transport redelivery", date: 2 }),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliver.mock.calls[0]?.[0].message?.text).toBe("original");

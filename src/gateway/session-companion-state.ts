@@ -1,17 +1,21 @@
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 
-export type SessionCompanionSeedMessage = {
-  role: "user" | "assistant";
+export type SessionCompanionContextMessage = {
+  role: "assistant" | "user";
   text: string;
   ts: number;
 };
 
+export type SessionCompanionPreparedContext = {
+  empty: boolean;
+  messages: SessionCompanionContextMessage[];
+  sessionId: string;
+};
+
 export type SessionCompanionThread = {
+  context: SessionCompanionPreparedContext;
+  digestText: string;
   exchanges: SessionCompanionExchange[];
-  seed: {
-    messages: SessionCompanionSeedMessage[];
-    digestJson: string;
-  };
   lastNoteSequence: number;
   busy: boolean;
   lastUsedAt: number;

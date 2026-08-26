@@ -31,6 +31,15 @@ function mockGeneratedPngResponse() {
   });
 }
 
+function mockEditedPngResponse() {
+  postMultipartRequestMock.mockResolvedValue({
+    response: jsonResponse({
+      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+    }),
+    release: vi.fn(async () => {}),
+  });
+}
+
 function mockObjectArg(mock: unknown, index = -1): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = index < 0 ? calls.at(index) : calls[index];
@@ -147,8 +156,8 @@ describe("litellm image generation provider", () => {
     });
   });
 
-  it("routes to the edit endpoint when input images are provided", async () => {
-    mockGeneratedPngResponse();
+  it("routes to the edit endpoint as multipart when input images are provided", async () => {
+    mockEditedPngResponse();
 
     const provider = buildLitellmImageGenerationProvider();
     await provider.generateImage({
@@ -164,9 +173,40 @@ describe("litellm image generation provider", () => {
       ],
     });
 
-    expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/edits");
-    const call = postJsonRequestMock.mock.calls[0]?.[0] as { body: { images: unknown[] } };
-    expect(call.body.images).toHaveLength(1);
+    // Edits must be multipart, never JSON: LiteLLM's /images/edits maps onto
+    // `aimage_edit(image=...)` and rejects a JSON body outright.
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(mockObjectArg(postMultipartRequestMock).url).toBe("http://localhost:4000/images/edits");
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    expect(form.get("model")).toBe("gpt-image-2");
+    expect(form.get("prompt")).toBe("refine the hero");
+    // A single reference uses the singular `image` part name.
+    expect(form.getAll("image")).toHaveLength(1);
+    expect(form.getAll("image[]")).toHaveLength(0);
+    expect(form.get("image")).toBeInstanceOf(Blob);
+  });
+
+  it("sends multiple reference images as repeated image[] parts", async () => {
+    mockEditedPngResponse();
+
+    const provider = buildLitellmImageGenerationProvider();
+    await provider.generateImage({
+      provider: "litellm",
+      model: "gpt-image-2",
+      prompt: "merge these",
+      cfg: {},
+      inputImages: [
+        { buffer: Buffer.from("first"), mimeType: "image/png" },
+        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
+      ],
+    });
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    // Both names are accepted by OpenAI-compatible edit endpoints, but only one
+    // may be present per request — sending both is an error.
+    expect(form.getAll("image[]")).toHaveLength(2);
+    expect(form.getAll("image")).toHaveLength(0);
   });
 
   it("throws a clear error when the API key is missing", async () => {

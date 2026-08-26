@@ -26,7 +26,7 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
-import type { MatrixStoredCredentials } from "../credentials-read.js";
+import type { MatrixStoredCredentials } from "../credentials-state.js";
 import {
   DEFAULT_ACCOUNT_ID,
   isPrivateNetworkOptInEnabled,

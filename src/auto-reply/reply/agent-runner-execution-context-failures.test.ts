@@ -9,6 +9,7 @@ import {
   makeTestModel,
   getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectRecordFields,
@@ -32,10 +33,13 @@ describe("executeAgentTurn: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",
@@ -75,10 +79,13 @@ describe("executeAgentTurn: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",
@@ -182,7 +189,7 @@ describe("executeAgentTurn: context failures", () => {
   it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("custom", "uncataloged-32k");
+      await params.run("custom", "uncataloged-32k", initialFallbackAttemptOptions(params));
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(

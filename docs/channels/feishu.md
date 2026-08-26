@@ -404,9 +404,9 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -417,7 +417,7 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
           },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -460,11 +460,11 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
-    list: [
-      { id: "main" },
-      { id: "agent-a", workspace: "/home/user/agent-a" },
-      { id: "agent-b", workspace: "/home/user/agent-b" },
-    ],
+    entries: {
+      main: { default: true },
+      "agent-a": { workspace: "/home/user/agent-a" },
+      "agent-b": { workspace: "/home/user/agent-b" },
+    },
   },
   bindings: [
     {
@@ -640,12 +640,13 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
 | `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
 | `channels.feishu.encryptKey`                             | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.webhookPath`                            | Webhook route path                                                                   | `/feishu/events`                     |
+| `channels.feishu.webhookPath`                            | Canonical HTTP request path (must start with `/`)                                    | `/feishu/events`                     |
 | `channels.feishu.webhookHost`                            | Webhook bind host                                                                    | `127.0.0.1`                          |
 | `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
+| `channels.feishu.accounts.<id>.replyToMode`              | Per-account reply-reference mode                                                     | inherited                            |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
@@ -658,6 +659,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
@@ -682,6 +684,14 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
+
+In webhook mode, both `channels.feishu.webhookPath` and
+`channels.feishu.accounts.<id>.webhookPath` must be canonical HTTP request paths
+beginning with `/`, such as `/feishu/events`. An optional query string is
+supported and must match exactly. Full URLs, relative paths, URL fragments, dot
+segments, and unencoded spaces or Unicode are rejected. If an existing
+configuration contains a noncanonical path, run `openclaw doctor --fix` to
+repair it before starting the gateway.
 
 ## Supported message types
 

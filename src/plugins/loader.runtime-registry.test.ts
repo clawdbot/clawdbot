@@ -1,14 +1,19 @@
 // Verifies plugin loader runtime registry behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
+  getRegisteredEmbeddingProvider,
+  registerEmbeddingProvider,
+} from "./embedding-providers.js";
+import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   clearPluginRegistryLoadCache,
   loadAndActivateRootPluginRegistry,
@@ -16,11 +21,12 @@ import {
   loadPluginRegistryHandle,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
-import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
-  getRegisteredMemoryEmbeddingProvider,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
+  makePluginLoaderTempDir,
+  resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
+} from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -39,8 +45,82 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
+it("keeps injected instance runtime surfaces independent of the broad runtime module", () => {
+  const gateway = {} as PluginRuntime["gateway"];
+  const nodes = {} as PluginRuntime["nodes"];
+  const subagent = {} as PluginRuntime["subagent"];
+  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
+    throw new Error("broad runtime should stay lazy");
+  });
+  const runtime = createLazyPluginRuntime({
+    loadPluginModule,
+    runtimeOptions: { gateway, nodes, subagent },
+  });
+
+  expect(runtime.gateway).toBe(gateway);
+  expect(runtime.nodes).toBe(nodes);
+  expect(runtime.subagent).toBe(subagent);
+  expect(loadPluginModule).not.toHaveBeenCalled();
+});
+
+describe("cached plugin load failures", () => {
+  it.each([
+    { name: "active root registry", load: loadAndActivateRootPluginRegistry, activates: true },
+    { name: "non-activating registry handle", load: loadPluginRegistryHandle, activates: false },
+  ])("enforces strict errors for a cached $name before activation", ({ load, activates }) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-load-failure",
+      body: 'module.exports = { id: "cached-load-failure", register() { throw new Error("cached registration failed"); } };',
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      },
+    };
+    const cached = load(options);
+    expect(cached.plugins).toContainEqual(
+      expect.objectContaining({ id: plugin.id, status: "error" }),
+    );
+
+    const active = createEmptyPluginRegistry();
+    setActivePluginRegistry(active, "existing-registry");
+
+    expect(() => load({ ...options, throwOnLoadError: true })).toThrow(
+      "cached registration failed",
+    );
+    expect(getActivePluginRegistry()).toBe(active);
+    expect(load(options)).toBe(cached);
+    expect(getActivePluginRegistry()).toBe(activates ? cached : active);
+  });
+
+  it("continues to reuse healthy cached registries for strict loads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-load-healthy",
+      body: 'module.exports = { id: "cached-load-healthy", register() {} };',
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      },
+    };
+    const cached = loadPluginRegistryHandle(options);
+
+    expect(loadPluginRegistryHandle({ ...options, throwOnLoadError: true })).toBe(cached);
+  });
+});
+
 function requireMemoryEmbeddingProvider(providerId: string) {
-  const provider = getRegisteredMemoryEmbeddingProvider(providerId)?.adapter;
+  const provider = getRegisteredEmbeddingProvider(providerId)?.adapter;
   if (!provider) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
@@ -55,7 +135,7 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
     },
   };
   const env = process.env;
-  const workspaceDir = makeTempDir();
+  const workspaceDir = makePluginLoaderTempDir();
   const installRecords: Record<string, PluginInstallRecord> = {
     demo: {
       source: "npm",
@@ -81,6 +161,17 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 }
 
 describe("resolvePluginLoadCacheContext", () => {
+  it("partitions process-HOME catalog registration policy", () => {
+    const processHomeKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: true,
+    }).cacheKey;
+    const isolatedKey = resolvePluginLoadCacheContext({
+      allowProcessHomeSessionCatalogs: false,
+    }).cacheKey;
+
+    expect(isolatedKey).not.toBe(processHomeKey);
+  });
+
   it("partitions full and setup channel plugin load intent", () => {
     const fullKey = resolvePluginLoadCacheContext({ config: {} }).cacheKey;
     const setupKey = resolvePluginLoadCacheContext({
@@ -133,7 +224,7 @@ describe("resolvePluginLoadCacheContext", () => {
   });
 
   it("loads a custom profile's install records instead of reusing the process snapshot", () => {
-    const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makeTempDir() };
+    const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
     const profileInstallRecords: Record<string, PluginInstallRecord> = {
       demo: {
         source: "npm",
@@ -215,7 +306,8 @@ describe("resolvePluginLoadCacheContext", () => {
     const { config, env } = setLoaderMetadataSnapshot();
 
     expect(
-      resolvePluginLoadCacheContext({ config, env, workspaceDir: makeTempDir() }).installRecords,
+      resolvePluginLoadCacheContext({ config, env, workspaceDir: makePluginLoaderTempDir() })
+        .installRecords,
     ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
   });
 
@@ -301,7 +393,7 @@ describe("resolveRuntimePluginRegistry", () => {
 
 describe("clearPluginRegistryLoadCache", () => {
   it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
-    registerMemoryEmbeddingProvider({
+    registerEmbeddingProvider({
       id: "still-live",
       create: async () => ({ provider: null }),
     });

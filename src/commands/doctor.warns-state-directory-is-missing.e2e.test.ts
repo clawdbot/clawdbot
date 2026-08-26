@@ -110,6 +110,10 @@ function mockDoctorBrowserFastPath(): void {
       changes: [],
       warnings: [],
     }),
+    maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+      changes: [],
+      warnings: [],
+    }),
     noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
   }));
 }
@@ -153,7 +157,7 @@ describe("doctor command", () => {
   });
 
   it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {
-    const loadBundledPluginPublicSurfaceModuleSync = vi.fn(() => {
+    const loadBundledPluginPublicSurfaceModuleSyncCore = vi.fn(() => {
       throw new Error("missing browser doctor facade");
     });
     vi.doMock("../plugin-sdk/facade-loader.js", async () => {
@@ -162,7 +166,7 @@ describe("doctor command", () => {
       );
       return {
         ...actual,
-        loadBundledPluginPublicSurfaceModuleSync,
+        loadBundledPluginPublicSurfaceModuleSyncCore,
       };
     });
     try {
@@ -184,7 +188,7 @@ describe("doctor command", () => {
 
       await runDoctorNonInteractive();
 
-      expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
         dirName: "browser",
         artifactBasename: "browser-doctor.js",
       });

@@ -6,6 +6,8 @@ import {
   validateApprovalHistoryResult,
   validateApprovalPresentation,
   validateApprovalResolveParams,
+  validateExecApprovalResolveParams,
+  validatePluginApprovalResolveParams,
   validateApprovalResolveResult,
 } from "./index.js";
 
@@ -98,6 +100,32 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalResolveParams({ id: execRecord.id, decision: "deny" })).toBe(false);
     expect(
       validateApprovalResolveParams({ id: execRecord.id, kind: "exec", decision: "accept" }),
+    ).toBe(false);
+  });
+
+  it("accepts only complete channel reviewer facts on every resolve surface", () => {
+    const reviewer = { channel: "telegram", accountId: "ops", senderId: "owner" };
+    expect(
+      validateApprovalResolveParams({
+        id: execRecord.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer,
+      }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalResolveParams({ id: execRecord.id, decision: "deny", reviewer }),
+    ).toBe(true);
+    expect(
+      validatePluginApprovalResolveParams({ id: pluginRecord.id, decision: "deny", reviewer }),
+    ).toBe(true);
+    expect(
+      validateApprovalResolveParams({
+        id: execRecord.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "telegram", accountId: "ops" },
+      }),
     ).toBe(false);
   });
 

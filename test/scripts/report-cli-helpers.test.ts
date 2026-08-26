@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseReportCliArgs } from "../../scripts/lib/report-cli-helpers.mjs";
+import { parseReportCliArgs } from "../../scripts/lib/report-cli-helpers.mts";
 
 describe("report-cli-helpers", () => {
   it("parses report artifact paths", () => {

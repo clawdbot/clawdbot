@@ -11,10 +11,13 @@ import {
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
-const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const HEARTBEAT_TASK_PROMPT_ACKS = [HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN].map(
+  (token) => `After completing all due tasks, reply ${token}.`,
+);
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "functionCall",
@@ -269,9 +272,13 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
-    // Provider thinking is not user-visible output; it must not keep a
+    // Provider thinking/reasoning is not user-visible output; it must not keep a
     // no-op heartbeat acknowledgement in future model request history.
-    if (block.type === "thinking" || block.type === "redacted_thinking") {
+    if (
+      block.type === "thinking" ||
+      block.type === "reasoning" ||
+      block.type === "redacted_thinking"
+    ) {
       continue;
     }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
@@ -327,7 +334,8 @@ export function isHeartbeatUserMessage(
     return true;
   }
   return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) &&
+    HEARTBEAT_TASK_PROMPT_ACKS.some((acknowledgement) => trimmed.includes(acknowledgement))
   );
 }
 
@@ -346,7 +354,10 @@ export function isHeartbeatOkResponse(
   if (hasNonTextContent) {
     return false;
   }
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
+  return (
+    isSilentReplyPayloadText(text) ||
+    stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip
+  );
 }
 
 function advancePastAdjacentToolResults(

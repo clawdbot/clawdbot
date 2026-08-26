@@ -558,9 +558,17 @@ describe("config form integrity", () => {
     await host.updateComplete;
     expect(commits).toHaveBeenCalledTimes(1);
 
+    // Identity churn with identical content (autosave ack clone) keeps the
+    // draft open; only a real external array change closes it.
     host.props = {
       ...host.props,
       sourceIdentity: [],
+    };
+    await host.updateComplete;
+    expect(host.querySelector(".cfg-collection-draft")).not.toBeNull();
+    host.props = {
+      ...host.props,
+      sourceIdentity: ["externally-added"],
     };
     await host.updateComplete;
     expect(host.querySelector(".cfg-collection-draft")).toBeNull();
@@ -995,12 +1003,14 @@ describe("config form integrity", () => {
     expect(siblingUpdateTextarea.validationMessage).not.toBe("");
     expect(error.hidden).toBe(false);
 
+    // A genuinely external change (different content) still resets in-progress
+    // text; identity churn with identical bytes (autosave ack) must not.
     render(
       renderConfigForm({
         schema: analysis.schema,
         uiHints: {},
         unsupportedPaths: analysis.unsupportedPaths,
-        value: { accounts: { primary: { enabled: true } } },
+        value: { accounts: { primary: { enabled: false } } },
         showAdvanced: true,
         onShowAdvanced: () => {},
         onPatch,
@@ -1011,7 +1021,7 @@ describe("config form integrity", () => {
       container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
       "externally reset JSON map value",
     );
-    expect(resetTextarea.value).toContain('"enabled": true');
+    expect(resetTextarea.value).toContain('"enabled": false');
     expect(resetTextarea.getAttribute("aria-invalid")).toBe("false");
     expect(resetTextarea.validationMessage).toBe("");
     expect(error.hidden).toBe(true);

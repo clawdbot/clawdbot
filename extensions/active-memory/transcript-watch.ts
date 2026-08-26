@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -221,7 +221,7 @@ function watchTerminalMemorySearchResult(params: {
 }
 
 function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
-  const debug = asRecord(value);
+  const debug = asOptionalRecord(value);
   if (!debug) {
     return undefined;
   }
@@ -255,8 +255,8 @@ function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefin
 function readActiveMemorySearchDebugFromRunResult(
   result: unknown,
 ): ActiveMemorySearchDebug | undefined {
-  const record = asRecord(result);
-  const meta = asRecord(record?.meta);
+  const record = asOptionalRecord(result);
+  const meta = asOptionalRecord(record?.meta);
   return (
     normalizeSearchDebug(meta?.activeMemorySearchDebug) ??
     normalizeSearchDebug(meta?.memorySearchDebug) ??
@@ -266,9 +266,9 @@ function readActiveMemorySearchDebugFromRunResult(
 }
 
 function readActiveMemorySessionFileFromRunResult(result: unknown): string | undefined {
-  const record = asRecord(result);
-  const meta = asRecord(record?.meta);
-  const agentMeta = asRecord(meta?.agentMeta);
+  const record = asOptionalRecord(result);
+  const meta = asOptionalRecord(record?.meta);
+  const agentMeta = asOptionalRecord(meta?.agentMeta);
   return (
     normalizeOptionalString(agentMeta?.sessionFile) ?? normalizeOptionalString(meta?.sessionFile)
   );

@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { smsPlugin } from "./channel.js";
 
 describe("SMS outbound session routing", () => {
+  it("classifies valid phone numbers as direct", () => {
+    expect(smsPlugin.messaging?.inferTargetChatType?.({ to: "+1 (555) 123-4567" })).toBe("direct");
+    expect(smsPlugin.messaging?.inferTargetChatType?.({ to: "not-a-phone" })).toBeUndefined();
+  });
+
   it("uses the canonical inbound phone session", async () => {
     const route = await smsPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: { session: { dmScope: "per-channel-peer" } },

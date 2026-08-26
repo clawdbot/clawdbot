@@ -1,6 +1,7 @@
 // Google Meet plugin module implements chrome create behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
@@ -39,39 +40,6 @@ type GoogleMeetBrowserCreateResult = {
   notes?: string[];
   source: "browser";
 };
-
-type GoogleMeetBrowserManualAction = {
-  source: "browser";
-  error: string;
-  manualAction: GoogleMeetBrowserManualActionState;
-  browser: {
-    nodeId: string;
-    targetId?: string;
-    browserUrl?: string;
-    browserTitle?: string;
-    notes?: string[];
-  };
-};
-
-class GoogleMeetBrowserManualActionError extends Error {
-  readonly payload: GoogleMeetBrowserManualAction;
-
-  constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {
-    super(`${payload.manualAction.reason}: ${payload.manualAction.message}`);
-    this.name = "GoogleMeetBrowserManualActionError";
-    this.payload = {
-      source: "browser",
-      error: this.message,
-      ...payload,
-    };
-  }
-}
-
-export function isGoogleMeetBrowserManualActionError(
-  error: unknown,
-): error is GoogleMeetBrowserManualActionError {
-  return error instanceof GoogleMeetBrowserManualActionError;
-}
 
 function formatBrowserAutomationError(error: unknown): string {
   if (error instanceof Error) {

@@ -101,13 +101,15 @@ describe("openai tts", () => {
   describe("isValidOpenAIModel", () => {
     it("matches the supported model set and rejects unsupported values", () => {
       expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
+      expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts-2025-12-15");
       expect(OPENAI_TTS_MODELS).toContain("tts-1");
       expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
-      expect(OPENAI_TTS_MODELS).toHaveLength(3);
+      expect(OPENAI_TTS_MODELS).toHaveLength(4);
       expect(Array.isArray(OPENAI_TTS_MODELS)).toBe(true);
       expect(OPENAI_TTS_MODELS.length).toBeGreaterThan(0);
       const cases = [
         { model: "gpt-4o-mini-tts", expected: true },
+        { model: "gpt-4o-mini-tts-2025-12-15", expected: true },
         { model: "tts-1", expected: true },
         { model: "tts-1-hd", expected: true },
         { model: "invalid", expected: false },

@@ -101,14 +101,10 @@ function createSupportRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
-function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
-
 function countOwnObjectEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const key in record) {
-    if (hasOwnRecordKey(record, key)) {
+    if (Object.hasOwn(record, key)) {
       count += 1;
     }
   }
@@ -122,7 +118,7 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   let count = 0;
   const entries: SupportObjectEntry[] = [];
   for (const key in record) {
-    if (!hasOwnRecordKey(record, key)) {
+    if (!Object.hasOwn(record, key)) {
       continue;
     }
     count += 1;

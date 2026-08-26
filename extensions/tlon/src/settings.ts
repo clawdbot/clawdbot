@@ -9,6 +9,7 @@
  * without requiring a gateway restart.
  */
 
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 /** Pending approval request stored for persistence */
@@ -112,10 +113,10 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
 
   return {
     groupChannels: Array.isArray(settings.groupChannels)
-      ? settings.groupChannels.filter((x): x is string => typeof x === "string")
+      ? filterStringEntries(settings.groupChannels)
       : undefined,
     dmAllowlist: Array.isArray(settings.dmAllowlist)
-      ? settings.dmAllowlist.filter((x): x is string => typeof x === "string")
+      ? filterStringEntries(settings.dmAllowlist)
       : undefined,
     autoDiscoverChannels:
       typeof settings.autoDiscoverChannels === "boolean"
@@ -129,11 +130,11 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
         ? settings.autoAcceptGroupInvites
         : undefined,
     groupInviteAllowlist: Array.isArray(settings.groupInviteAllowlist)
-      ? settings.groupInviteAllowlist.filter((x): x is string => typeof x === "string")
+      ? filterStringEntries(settings.groupInviteAllowlist)
       : undefined,
     channelRules: parseChannelRules(settings.channelRules),
     defaultAuthorizedShips: Array.isArray(settings.defaultAuthorizedShips)
-      ? settings.defaultAuthorizedShips.filter((x): x is string => typeof x === "string")
+      ? filterStringEntries(settings.defaultAuthorizedShips)
       : undefined,
     ownerShip: typeof settings.ownerShip === "string" ? settings.ownerShip : undefined,
     pendingApprovals: parsePendingApprovals(settings.pendingApprovals),
@@ -242,14 +243,10 @@ function applySettingsUpdate(
 
   switch (key) {
     case "groupChannels":
-      next.groupChannels = Array.isArray(value)
-        ? value.filter((x): x is string => typeof x === "string")
-        : undefined;
+      next.groupChannels = Array.isArray(value) ? filterStringEntries(value) : undefined;
       break;
     case "dmAllowlist":
-      next.dmAllowlist = Array.isArray(value)
-        ? value.filter((x): x is string => typeof x === "string")
-        : undefined;
+      next.dmAllowlist = Array.isArray(value) ? filterStringEntries(value) : undefined;
       break;
     case "autoDiscoverChannels":
       next.autoDiscoverChannels = typeof value === "boolean" ? value : undefined;
@@ -264,17 +261,13 @@ function applySettingsUpdate(
       next.autoAcceptGroupInvites = typeof value === "boolean" ? value : undefined;
       break;
     case "groupInviteAllowlist":
-      next.groupInviteAllowlist = Array.isArray(value)
-        ? value.filter((x): x is string => typeof x === "string")
-        : undefined;
+      next.groupInviteAllowlist = Array.isArray(value) ? filterStringEntries(value) : undefined;
       break;
     case "channelRules":
       next.channelRules = parseChannelRules(value);
       break;
     case "defaultAuthorizedShips":
-      next.defaultAuthorizedShips = Array.isArray(value)
-        ? value.filter((x): x is string => typeof x === "string")
-        : undefined;
+      next.defaultAuthorizedShips = Array.isArray(value) ? filterStringEntries(value) : undefined;
       break;
     case "ownerShip":
       next.ownerShip = typeof value === "string" ? value : undefined;

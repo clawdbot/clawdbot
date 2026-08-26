@@ -8,6 +8,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import {
   captureScreenshot,
   getMainFrameDocumentIdentityViaCdp,
@@ -23,9 +24,9 @@ import {
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import {
-  buildAiSnapshotFromChromeMcpSnapshot,
-  flattenChromeMcpSnapshotToAriaNodes,
-} from "../chrome-mcp.snapshot.js";
+  buildChromeMcpRouteSnapshot,
+  flattenChromeMcpRouteSnapshot,
+} from "../chrome-mcp.snapshot-result.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
@@ -65,7 +66,7 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -131,15 +132,21 @@ async function clearChromeMcpOverlay(params: ChromeMcpSnapshotOperation): Promis
 async function renderChromeMcpLabels(
   params: ChromeMcpSnapshotOperation & {
     refs: string[];
+    clipToRef?: boolean;
   },
 ): Promise<{ labels: number; skipped: number }> {
   const refList = JSON.stringify(params.refs);
+  const clipToRef = params.clipToRef === true ? "true" : "false";
   const result = await evaluateChromeMcpScript({
     ...params,
     args: params.refs,
     fn: `(...elements) => {
       const refs = ${refList};
+      const clipToRef = ${clipToRef};
       document.querySelectorAll("[${CHROME_MCP_OVERLAY_ATTR}]").forEach((node) => node.remove());
+      if (clipToRef && elements[0] instanceof Element) {
+        elements[0].scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      }
       const root = document.createElement("div");
       root.setAttribute("${CHROME_MCP_OVERLAY_ATTR}", "labels");
       root.style.position = "fixed";
@@ -164,8 +171,8 @@ async function renderChromeMcpLabels(
         badge.textContent = refs[index] || String(labels);
         badge.style.position = "fixed";
         badge.style.left = \`\${Math.max(0, rect.left)}px\`;
-        badge.style.top = \`\${Math.max(0, rect.top)}px\`;
-        badge.style.transform = "translateY(-100%)";
+        badge.style.top = \`\${Math.max(0, rect.top + (clipToRef ? 2 : 0))}px\`;
+        badge.style.transform = clipToRef ? "none" : "translateY(-100%)";
         badge.style.padding = "2px 6px";
         badge.style.borderRadius = "999px";
         badge.style.background = "#FF4500";
@@ -203,6 +210,7 @@ async function saveNormalizedScreenshotResponse(params: {
   labels?: boolean;
   labelsCount?: number;
   labelsSkipped?: number;
+  truncated?: boolean;
   annotations?: AnnotationItem[];
 }) {
   // Measure original dimensions BEFORE normalization so we can rescale
@@ -231,6 +239,7 @@ async function saveNormalizedScreenshotResponse(params: {
     labels: params.labels,
     labelsCount: params.labelsCount,
     labelsSkipped: params.labelsSkipped,
+    truncated: params.truncated,
     annotations,
   });
 }
@@ -274,6 +283,7 @@ async function saveBrowserMediaResponse(params: {
   labels?: boolean;
   labelsCount?: number;
   labelsSkipped?: number;
+  truncated?: boolean;
   annotations?: AnnotationItem[];
 }) {
   await ensureMediaDir();
@@ -291,6 +301,7 @@ async function saveBrowserMediaResponse(params: {
     ...(params.labels ? { labels: true } : {}),
     ...(typeof params.labelsCount === "number" ? { labelsCount: params.labelsCount } : {}),
     ...(typeof params.labelsSkipped === "number" ? { labelsSkipped: params.labelsSkipped } : {}),
+    ...(params.truncated ? { truncated: true } : {}),
     ...(params.annotations && params.annotations.length > 0
       ? { annotations: params.annotations }
       : {}),
@@ -329,6 +340,16 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    let timeoutMs: number | undefined;
+    try {
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
     await withRouteTabContext({
       req,
       res,
@@ -343,6 +364,7 @@ export function registerBrowserAgentSnapshotRoutes(
             profile: profileCtx.profile,
             targetId: tab.targetId,
             url,
+            timeoutMs,
             signal,
           });
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
@@ -356,6 +378,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
+          timeoutMs,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({
@@ -452,15 +475,20 @@ export function registerBrowserAgentSnapshotRoutes(
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
           }
           if (labels) {
-            const snapshot = await takeChromeMcpSnapshot(operation);
-            const built = buildAiSnapshotFromChromeMcpSnapshot({ root: snapshot });
+            const built = ref
+              ? undefined
+              : buildChromeMcpRouteSnapshot({
+                  root: await takeChromeMcpSnapshot(operation),
+                });
             const labelResult = await renderChromeMcpLabels({
               ...operation,
-              refs: Object.keys(built.refs),
+              refs: ref ? [ref] : Object.keys(built?.refs ?? {}),
+              clipToRef: Boolean(ref),
             });
             try {
               const buffer = await takeChromeMcpScreenshot({
                 ...operation,
+                uid: ref,
                 fullPage,
                 format: type,
               });
@@ -473,6 +501,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 labels: true,
                 labelsCount: labelResult.labels,
                 labelsSkipped: labelResult.skipped,
+                truncated: built?.truncated,
               });
             } finally {
               await clearChromeMcpOverlay(operation);
@@ -551,6 +580,7 @@ export function registerBrowserAgentSnapshotRoutes(
         } else {
           buffer = await captureScreenshot({
             wsUrl: tab.wsUrl ?? "",
+            ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
             fullPage,
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
@@ -667,16 +697,17 @@ export function registerBrowserAgentSnapshotRoutes(
             };
             const snapshot = await takeChromeMcpSnapshot(operation);
             if (plan.format === "aria") {
+              const flattened = flattenChromeMcpRouteSnapshot(snapshot, plan.limit);
               return res.json({
                 ok: true,
                 format: "aria",
                 targetId: tab.targetId,
                 url: tab.url,
-                nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
+                ...flattened,
               });
             }
             const deltaState = createDeltaState();
-            const built = buildAiSnapshotFromChromeMcpSnapshot({
+            const built = buildChromeMcpRouteSnapshot({
               root: snapshot,
               options: {
                 interactive: plan.interactive ?? undefined,
@@ -693,11 +724,15 @@ export function registerBrowserAgentSnapshotRoutes(
                   ),
                 }
               : built;
-            const finalized = finalizeRoleSnapshot({
+            const finalizedBase = finalizeRoleSnapshot({
               ...builtWithUrls,
               maxChars: plan.resolvedMaxChars,
               delta: deltaState.delta,
             });
+            const finalized =
+              built.truncated && !finalizedBase.truncated
+                ? { ...finalizedBase, truncated: true }
+                : finalizedBase;
             if (plan.labels) {
               const refs = Object.keys(finalized.refs);
               const labelResult = await renderChromeMcpLabels({
@@ -784,6 +819,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             return await getMainFrameDocumentIdentityViaCdp({
               wsUrl: tab.wsUrl,
+              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
               timeoutMs: plan.timeoutMs,
             }).catch(() => undefined);
           };
@@ -828,6 +864,7 @@ export function registerBrowserAgentSnapshotRoutes(
               }
               return await snapshotRoleViaCdp({
                 wsUrl: tab.wsUrl,
+                ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 urls: plan.urls,
                 timeoutMs: plan.timeoutMs,
                 maxChars: plan.resolvedMaxChars,
@@ -956,6 +993,7 @@ export function registerBrowserAgentSnapshotRoutes(
               })()
             : snapshotAria({
                 wsUrl: tab.wsUrl ?? "",
+                ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
                 limit: plan.limit,
                 timeoutMs: plan.timeoutMs,
               });

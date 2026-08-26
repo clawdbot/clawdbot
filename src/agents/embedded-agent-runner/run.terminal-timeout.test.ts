@@ -24,18 +24,31 @@ function makeTimedOutAttempt(
   };
 }
 
+type TimeoutInput = Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0];
+
 function makeTimeoutInput(
   attempt: EmbeddedRunAttemptResult,
-  overrides: Partial<Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0]> = {},
-): Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0] {
+  preparedOverrides: Partial<TimeoutInput["terminalPrepared"]> = {},
+  overrides: Partial<Omit<TimeoutInput, "terminalPrepared">> = {},
+): TimeoutInput {
   return {
-    timedOutDuringPrompt: true,
-    hasSuccessfulFinalAssistantAfterPromptTimeout: false,
+    terminalPrepared: {
+      timedOutDuringPrompt: true,
+      hasSuccessfulFinalAssistantAfterPromptTimeout: false,
+      hasPartialAssistantTextAfterPromptTimeout: false,
+      payloads: undefined,
+      payloadsWithToolMedia: undefined,
+      agentMeta: {
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      attemptToolSummary: undefined,
+      failureSignal: undefined,
+      ...preparedOverrides,
+    },
     shouldSurfaceCodexCompletionTimeout: false,
     attempt,
-    hasPartialAssistantTextAfterPromptTimeout: false,
-    payloads: undefined,
-    payloadsWithToolMedia: undefined,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
       assistant: attempt.lastAssistant,
@@ -43,13 +56,6 @@ function makeTimeoutInput(
     resolveReplayInvalid: vi.fn(() => false),
     setTerminalLifecycleMeta: vi.fn(),
     startedAtMs: Date.now(),
-    agentMeta: {
-      sessionId: "session-1",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    },
-    attemptToolSummary: undefined,
-    failureSignal: undefined,
     ...overrides,
   };
 }
@@ -63,6 +69,32 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     ]);
   });
 
+  it("preserves an accepted child spawn while surfacing the parent timeout", () => {
+    const acceptedSessionSpawns = [
+      { runId: "run-child", childSessionKey: "agent:claude:subagent:child" },
+    ];
+    const result = resolveEmbeddedRunTerminalTimeout(
+      makeTimeoutInput(makeTimedOutAttempt({ acceptedSessionSpawns })),
+    );
+
+    expect(result?.payloads).toEqual([
+      { text: expect.stringContaining("timed out"), isError: true },
+    ]);
+    expect(result?.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+  });
+
+  it("does not replace a successfully recovered final assistant after a prompt-timeout race", () => {
+    expect(
+      resolveEmbeddedRunTerminalTimeout(
+        makeTimeoutInput(makeTimedOutAttempt(), {
+          hasSuccessfulFinalAssistantAfterPromptTimeout: true,
+          payloads: [{ text: "Completed answer after the timeout race." }],
+          payloadsWithToolMedia: [{ text: "Completed answer after the timeout race." }],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("prefers harness timeout metadata while retaining terminal attribution", () => {
     const setTerminalLifecycleMeta = vi.fn();
     const attempt = makeTimedOutAttempt({
@@ -74,7 +106,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     });
 
     const result = resolveEmbeddedRunTerminalTimeout(
-      makeTimeoutInput(attempt, { setTerminalLifecycleMeta }),
+      makeTimeoutInput(attempt, {}, { setTerminalLifecycleMeta }),
     );
 
     expect(result?.payloads).toEqual([

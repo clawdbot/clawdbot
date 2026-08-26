@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
-import { inspectPortUsage } from "../infra/ports.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -512,10 +512,10 @@ export async function readScheduledTaskRuntime(
       return resolveFallbackRuntime(env);
     }
     const detail = (res.stderr || res.stdout).trim();
-    const missing = normalizeLowercaseStringOrEmpty(detail).includes("cannot find the file");
+    const missing = probeScheduledTaskExists(taskName) === false;
     return {
       status: missing ? "stopped" : "unknown",
-      detail: detail || undefined,
+      ...(!missing && detail ? { detail } : {}),
       missingUnit: missing,
     };
   }

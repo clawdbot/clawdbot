@@ -1,5 +1,5 @@
 // Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
-import { setTimeout as delay } from "node:timers/promises";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
@@ -21,7 +21,7 @@ vi.mock("./bot/delivery.resolve-media.runtime.js", async () => {
   );
   return {
     readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    formatErrorMessage: coerceErrorMessage,
     logVerbose: () => {},
     MediaFetchError: actual.MediaFetchError,
     resolveTelegramApiBase: (apiRoot?: string) =>
@@ -100,15 +100,19 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   return flushTimer;
 }
 
-async function waitForBufferedProcessing() {
-  await delay(75);
-}
-
 async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
+  const replyDispatched = new Promise<void>((resolve) => {
+    const previousReply = replySpy.getMockImplementation();
+    replySpy.mockImplementationOnce(async (...args) => {
+      const result = await previousReply?.(...args);
+      resolve();
+      return result;
+    });
+  });
   const flushTimer = resolveFlushTimer(setTimeoutSpy);
   expect(flushTimer).toBeTypeOf("function");
   await flushTimer?.();
-  await waitForBufferedProcessing();
+  await replyDispatched;
 }
 
 function createChannelPostContext(params: {
@@ -205,7 +209,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       expect(sendMessageSpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       expect(sendMessageSpy).toHaveBeenCalledWith(
         CHANNEL_ID,
         expect.stringContaining("1 of 2 images"),
@@ -218,7 +222,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       );
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 could not be fetched and was skipped");
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalled());
+      expect(replySpy).toHaveBeenCalled();
       expect(replySpy.mock.calls[0]?.[0]?.media).toEqual([
         expect.objectContaining({ path: "/tmp/p1.jpg", contentType: "image/png" }),
         expect.objectContaining({ kind: "image" }),
@@ -245,7 +249,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("0 of 2 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
@@ -280,7 +284,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 of 3 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");

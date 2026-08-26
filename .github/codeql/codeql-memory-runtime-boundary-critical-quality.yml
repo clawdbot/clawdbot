@@ -20,7 +20,6 @@ paths:
   - src/plugin-sdk/memory-*.ts
   - src/plugin-sdk/memory-core-host-*.ts
   - src/plugins/memory-*.ts
-  - src/gateway/server-startup-memory.ts
   - src/commands/doctor-memory-search.ts
   - src/commands/doctor/cron/dreaming-payload-migration.ts
 

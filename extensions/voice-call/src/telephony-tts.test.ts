@@ -36,6 +36,67 @@ function createRuntime(
 }
 
 describe("createTelephonyTtsProvider", () => {
+  it.each([
+    ["Azure", "raw-8khz-8bit-mono-mulaw"],
+    ["Gradium", "ulaw_8000"],
+  ])("passes through %s 8 kHz mu-law output", async (providerName, outputFormat) => {
+    const audioBuffer = Buffer.from([0x00, 0x7f, 0xff]);
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer,
+        outputFormat,
+        sampleRate: 8_000,
+        provider: providerName.toLowerCase(),
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toBe(audioBuffer);
+  });
+
+  it("converts provider PCM output to 8 kHz mu-law", async () => {
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer: Buffer.alloc(480 * 2),
+        outputFormat: "pcm",
+        sampleRate: 24_000,
+        provider: "openai",
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toEqual(
+      Buffer.alloc(160, 0xff),
+    );
+  });
+
+  it.each([
+    ["mp3", 24_000],
+    ["riff-8khz-8bit-mono-mulaw", 8_000],
+  ])(
+    "rejects unsupported %s container output with provider context",
+    async (outputFormat, sampleRate) => {
+      const provider = await createTelephonyTtsProvider({
+        coreConfig: createCoreConfig(),
+        runtime: createRuntime(async () => ({
+          success: true,
+          audioBuffer: Buffer.from("container"),
+          outputFormat,
+          sampleRate,
+          provider: "example-provider",
+        })),
+      });
+
+      const synthesis = provider.synthesizeForTelephony("hello");
+      await expect(synthesis).rejects.toMatchObject({
+        name: "UnsupportedTelephonyTtsOutputFormatError",
+        message: `Unsupported telephony TTS output format "${outputFormat}" from provider "example-provider"`,
+      });
+    },
+  );
+
   it("uses shared preparation for the surface override and request text", async () => {
     const effectiveConfig: OpenClawConfig = {
       tts: { provider: "openai", timeoutMs: 15_000 },

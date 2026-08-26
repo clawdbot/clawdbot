@@ -105,6 +105,30 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 }
 
 struct GatewayTLSPinningTests {
+    @Test func `keychain namespace configures once and fails closed after use`() {
+        var state = GatewayTLSKeychainNamespaceState()
+        let configuredWork = state.configure(suffix: ".profile.work")
+        let reconfiguredWork = state.configure(suffix: ".profile.work")
+        let configuredOther = state.configure(suffix: ".profile.other")
+        let workService = state.service(base: "ai.openclaw.tls-pinning")
+        let configuredWorkAfterUse = state.configure(suffix: ".profile.work")
+        let configuredDefaultAfterUse = state.configure(suffix: "")
+        #expect(configuredWork)
+        #expect(reconfiguredWork)
+        #expect(!configuredOther)
+        #expect(workService == "ai.openclaw.tls-pinning.profile.work")
+        #expect(configuredWorkAfterUse)
+        #expect(!configuredDefaultAfterUse)
+
+        var usedDefault = GatewayTLSKeychainNamespaceState()
+        let defaultService = usedDefault.service(base: "ai.openclaw.tls-pinning")
+        let configuredDefault = usedDefault.configure(suffix: "")
+        let configuredProfileAfterDefaultUse = usedDefault.configure(suffix: ".profile.work")
+        #expect(defaultService == "ai.openclaw.tls-pinning")
+        #expect(configuredDefault)
+        #expect(!configuredProfileAfterDefaultUse)
+    }
+
     private func withFakeKeychain<T>(_ operation: (GatewayTLSFakeKeychain) throws -> T) rethrows -> T {
         let keychain = GatewayTLSFakeKeychain()
         return try GatewayTLSStore.$keychainOperations.withValue(keychain.operations) {
@@ -129,10 +153,17 @@ struct GatewayTLSPinningTests {
     @Test func `TLS authority includes normalized host and effective port`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
         let route = try #require(GatewayTLSAuthority(url: url))
+        let explicitPortURL = try #require(URL(string: "wss://gateway.example.com:8443/path"))
+        let explicitPort = try #require(GatewayTLSAuthority(url: explicitPortURL))
 
-        #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(route.host == "gateway.example.com")
+        #expect(route.port == 443)
+        #expect(route.matches(host: "gateway.example.com", port: 0))
+        #expect(route.matches(host: "gateway.example.com", port: 443))
+        #expect(!route.matches(host: "redirect.example.com", port: 443))
+        #expect(!route.matches(host: "gateway.example.com", port: 8443))
+        #expect(!explicitPort.matches(host: "gateway.example.com", port: 0))
+        #expect(explicitPort.matches(host: "gateway.example.com", port: 8443))
     }
 
     @Test func `matching explicit pin overrides system trust`() {
@@ -174,6 +205,23 @@ struct GatewayTLSPinningTests {
             host: "gateway.example",
             port: 443,
             params: mismatch) == .reject)
+    }
+
+    @Test func `server trust evaluator rejects a different system-trusted certificate after pinning`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: true)
+        let pinnedFingerprint = SHA256.hash(data: Data("previous certificate".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: pinnedFingerprint,
+            allowTOFU: false,
+            storeKey: "profile:pinned")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: params) == .reject)
     }
 
     @Test func `server trust evaluator claims trusted first use`() throws {
@@ -388,5 +436,18 @@ struct GatewayTLSPinningTests {
             allowTOFU: true,
             required: true,
             systemTrustOk: false) == .reject(.untrustedCertificate))
+    }
+
+    @Test func `clear all fingerprints removes every canonical pin without live storage`() {
+        self.withFakeKeychain { _ in
+            GatewayTLSStore.saveFingerprint("11", stableID: "gateway-1")
+            GatewayTLSStore.saveFingerprint("22", stableID: "gateway-2")
+            var clearedLegacy = false
+
+            #expect(GatewayTLSStore.clearAllFingerprints(clearLegacy: { clearedLegacy = true }))
+            #expect(clearedLegacy)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-1") == nil)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-2") == nil)
+        }
     }
 }

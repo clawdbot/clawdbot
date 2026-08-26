@@ -160,6 +160,22 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
+  it("honors a caller-selected secure root without changing the default temp policy", () => {
+    const preferredDir = "/var/cache/openclaw";
+    const lstatSync = vi.fn(() => secureDirStat());
+
+    expect(
+      resolvePreferredOpenClawTmpDir({
+        accessSync: vi.fn(),
+        getuid: () => 501,
+        lstatSync,
+        preferredDir,
+        tmpdir: () => "/var/cache",
+      }),
+    ).toBe(preferredDir);
+    expect(lstatSync).toHaveBeenCalledWith(preferredDir);
+  });
+
   it("prefers /tmp/openclaw when it does not exist but /tmp is writable", () => {
     const lstatSyncMock = missingThenSecureLstat();
 

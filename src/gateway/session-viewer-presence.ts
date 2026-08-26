@@ -3,6 +3,7 @@
 
 type SessionViewerPresenceDeclarationsDeps = {
   onReplace: (connId: string, sessionKeys: readonly string[]) => void;
+  isConnectionActive?: (connId: string) => boolean;
 };
 
 type SessionViewerPresenceDeclarations = {
@@ -35,7 +36,7 @@ export function createSessionViewerPresenceDeclarations(
       return [];
     }
     const normalizedConnId = connId.trim();
-    if (!normalizedConnId) {
+    if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
       return [];
     }
     const next = normalizedSessionKeys(sessionKeys);

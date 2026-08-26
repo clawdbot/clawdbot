@@ -39,8 +39,8 @@ export async function installGatewayDaemonNonInteractive(params: {
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    // Container and CI sessions often lack a user systemd manager; setup can
-    // still succeed with a direct gateway run, so this is a skip not a fatal.
+    // Container and CI sessions often lack a user systemd manager; onboarding
+    // owns the failure outcome for an explicitly requested installation.
     runtime.log(
       "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
     );

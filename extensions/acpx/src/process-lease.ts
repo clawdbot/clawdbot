@@ -14,6 +14,8 @@ import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 /** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
+/** Synthetic session identity for generated-wrapper health probes. */
+export const ACPX_PROBE_LEASE_SESSION_KEY = "openclaw:acpx:probe";
 
 export type AcpxProcessLeaseIdentity = {
   leaseId: string;
@@ -114,6 +116,7 @@ export function openAcpxProcessLeaseStateStore(
   return openKeyedStore<AcpxProcessLease>({
     namespace: ACPX_PROCESS_LEASE_NAMESPACE,
     maxEntries: ACPX_PROCESS_LEASE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
   });
 }
 

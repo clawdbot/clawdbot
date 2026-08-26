@@ -252,14 +252,13 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         subagents: { allowAgents: ["worker"] },
       },
-      { id: "worker", tools: { swarm: false } },
-    ],
+      worker: { tools: { swarm: false } },
+    },
   },
 }
 ```
@@ -390,7 +389,10 @@ while (pending.size > 0) {
   for (const item of batch.completed) {
     pending.delete(item.runId);
     if (item.status !== "done") {
-      throw new Error(item.schemaError ?? item.result ?? `${item.runId}: ${item.status}`);
+      const detail = [item.error, item.schemaError, item.result].find(
+        (value) => typeof value === "string" && value.trim(),
+      );
+      throw new Error(detail ?? `${item.runId}: ${item.status}`);
     }
     completed.push(item); // Process each result as soon as it finishes.
   }
@@ -413,6 +415,7 @@ type AgentsWaitResult = {
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
     structured?: unknown;
+    error?: string;
     schemaError?: string;
     sessionKey: string;
     label?: string;
@@ -425,6 +428,16 @@ type AgentsWaitResult = {
   }>;
 };
 ```
+
+A completed item can contain partial `structured` data and still have
+`status: "failed"` when the provider or runtime fails afterward. In that case,
+`error` is the authoritative terminal failure. Recovery code should prefer a
+nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
+run/status fallback.
+
+Individual failed items do not make a mixed `agents_wait` poll a top-level tool
+error. The poll remains a successful JSON result so callers can process its
+`completed`, `pending`, and `errors` arrays independently.
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,

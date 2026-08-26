@@ -99,6 +99,7 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
     adoptCompactionTranscript: vi.fn(async () => undefined),
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
+    prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     armPostCompactionGuard: vi.fn(),
     ...inputOverrides,
   } as unknown as RecoveryInput;
@@ -189,6 +190,7 @@ describe("recoverEmbeddedRunTimeout", () => {
       lastCompactionTokensAfter: 80_000,
     });
     expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
+    expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });
 
   it("counts compacted-false results against the shared retry cap", async () => {

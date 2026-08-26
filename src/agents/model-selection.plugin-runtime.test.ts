@@ -26,12 +26,14 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => [],
+  loadProviderScopedThinkingCatalog: async () => [],
   loadPreparedModelCatalog: async () => [],
   loadPreparedModelCatalogSnapshot: loadPreparedModelCatalogSnapshotMock,
 }));

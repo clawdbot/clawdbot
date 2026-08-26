@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -22,7 +22,7 @@ describe("noteSourceInstallIssues", () => {
   });
 
   it("does not treat a packaged workspace config as a source checkout", async () => {
-    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
       await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
       await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
 
@@ -33,7 +33,7 @@ describe("noteSourceInstallIssues", () => {
   });
 
   it("warns source checkouts when node_modules was not installed by pnpm", async () => {
-    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
       await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
       await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
       await writeFile(root, "src/entry.ts", "export {};\n");

@@ -38,7 +38,7 @@ export function parseCaseFilter(raw?: string): Set<string> | null {
   return values.length > 0 ? new Set(values) : null;
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseImageProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
 }
 

@@ -266,7 +266,7 @@ export default { id: "tool-result-middleware", register(api) {
 
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
     const manifestRegistry = await import("../plugins/manifest-registry.js");
-    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
 
     // Startup activation stays false here; the runner must load the owner only
     // when Codex asks for the middleware runtime.

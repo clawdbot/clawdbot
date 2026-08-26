@@ -1,3 +1,4 @@
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Discord plugin module implements runtime.shared behavior.
 import {
   parseAvailableTags,
@@ -45,13 +46,6 @@ export function readDiscordAutoArchiveDurationParam(
   return value;
 }
 
-function readDiscordBooleanParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  return typeof params[key] === "boolean" ? params[key] : undefined;
-}
-
 export function createDiscordActionOptions<
   T extends Record<string, unknown> = Record<string, never>,
 >(params: {
@@ -80,7 +74,7 @@ export function readDiscordChannelCreateParams(
     parentId: parentId ?? undefined,
     topic: readStringParam(params, "topic") ?? undefined,
     position: readNonNegativeIntegerParam(params, "position") ?? undefined,
-    nsfw: readDiscordBooleanParam(params, "nsfw"),
+    nsfw: asBoolean(params.nsfw),
   };
 }
 
@@ -92,10 +86,10 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
     topic: readStringParam(params, "topic") ?? undefined,
     position: readNonNegativeIntegerParam(params, "position") ?? undefined,
     parentId: parentId === undefined ? undefined : parentId,
-    nsfw: readDiscordBooleanParam(params, "nsfw"),
+    nsfw: asBoolean(params.nsfw),
     rateLimitPerUser: readNonNegativeIntegerParam(params, "rateLimitPerUser") ?? undefined,
-    archived: readDiscordBooleanParam(params, "archived"),
-    locked: readDiscordBooleanParam(params, "locked"),
+    archived: asBoolean(params.archived),
+    locked: asBoolean(params.locked),
     autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
     availableTags: parseAvailableTags(params.availableTags),
   };

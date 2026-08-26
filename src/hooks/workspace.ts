@@ -1,19 +1,19 @@
 // Hook workspace helpers resolve hook roots and workspace-local hook files.
 import fs from "node:fs";
 import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import {
-  parseFrontmatter,
+  parseHookFrontmatter,
   resolveHookInvocationPolicy,
-  resolveOpenClawMetadata,
+  resolveHookManifestMetadata,
 } from "./frontmatter.js";
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
@@ -44,11 +44,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
   if (raw === null) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as HookPackageManifest;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(raw) as HookPackageManifest | undefined) ?? null;
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
@@ -85,7 +81,7 @@ function loadHookFromDir(params: {
     return null;
   }
   try {
-    const frontmatter = parseFrontmatter(content);
+    const frontmatter = parseHookFrontmatter(content);
 
     const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
     const description = frontmatter.description || "";
@@ -221,7 +217,7 @@ function loadHookEntriesFromDir(params: {
         pluginId: params.pluginId,
       },
       frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
+      metadata: resolveHookManifestMetadata(frontmatter),
       invocation: resolveHookInvocationPolicy(frontmatter),
     };
     return entry;
@@ -328,6 +324,9 @@ function withOpenedRootFileSync<T>(
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
+    // Operator hook dirs are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the hook root.
+    rejectSymlinks: false,
   });
   if (!opened.ok) {
     return null;

@@ -171,9 +171,11 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 }
 ```
 
-Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
-compatibility, but new config should keep the provider/model canonical and
-put the execution backend in provider/model runtime policy.
+Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
+input, but new config should keep the provider/model canonical and put the
+execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
+to rewrite persisted legacy model selections, model-map keys, and explicit
+`modelPolicy.allow` entries to that canonical shape.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex
@@ -214,9 +216,9 @@ canonical subscription `github-copilot` provider and is **never** selected by
 }
 ```
 
-The harness claims its provider, runtime, CLI session key, and auth profile
-prefix in `extensions/copilot/doctor-contract-api.ts`, which `openclaw doctor`
-auto-loads. For configuration, auth, transcript mirroring, compaction, the
+The plugin manifest declares the harness provider, runtime, CLI session key,
+and auth profile prefix without requiring `openclaw doctor` to load plugin
+code. For configuration, auth, transcript mirroring, compaction, the
 declarative doctor contract, and the broader PI vs Codex vs Copilot SDK
 decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 

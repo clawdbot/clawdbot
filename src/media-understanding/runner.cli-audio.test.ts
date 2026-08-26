@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
@@ -196,12 +196,44 @@ describe("media-understanding CLI audio entry", () => {
   });
 
   it.each([
+    { source: "model entry", entryLanguage: "de", configLanguage: "fr", expected: "de" },
+    {
+      source: "capability default",
+      entryLanguage: undefined,
+      configLanguage: "fr",
+      expected: "fr",
+    },
+  ])("applies the configured $source language to CLI templating", async (testCase) => {
+    await withAudioFixture("openclaw-cli-language", async ({ ctx, media, cache }) => {
+      await runCliEntry({
+        capability: "audio",
+        entry: {
+          type: "cli",
+          command: "mock-transcriber",
+          args: ["--language", "{{Language}}", "--file", "{{MediaPath}}"],
+          language: testCase.entryLanguage,
+        },
+        cfg: {
+          tools: { media: { audio: { language: testCase.configLanguage } } },
+        } as OpenClawConfig,
+        ctx,
+        attachment: requireFirstAttachment(media),
+        cache,
+        config: { language: testCase.configLanguage } as never,
+      });
+    });
+
+    const [, args] = requireFirstRunExecCall();
+    expect(args).toEqual(["--language", testCase.expected, "--file", expect.any(String)]);
+  });
+
+  it.each([
     { name: "one attachment", count: 1, leadingEmpty: false },
     { name: "many attachments after an empty slot", count: 2, leadingEmpty: true },
   ])(
     "projects facts-first and deprecated template variables for $name",
     async ({ count, leadingEmpty }) => {
-      await withTempDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
         const media = await Promise.all(
           Array.from({ length: count }, async (_, index) => {
             const mediaPath = path.join(base, `audio-${index}.wav`);

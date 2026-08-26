@@ -420,18 +420,12 @@ public actor GatewayChannelActor {
         }
     }
 
-    private static func loadDeviceIdentityForConnect(
+    static func loadDeviceIdentityForConnect(
         includeDeviceIdentity: Bool,
         profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
     {
         guard includeDeviceIdentity else { return nil }
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else {
-            throw NSError(
-                domain: "Gateway",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
-        }
-        return identity
+        return try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: profile)
     }
 
     private func sendConnect(
@@ -496,15 +490,7 @@ public actor GatewayChannelActor {
             "role": ProtoAnyCodable(role),
             "scopes": ProtoAnyCodable(scopes),
         ]
-        if !options.commands.isEmpty {
-            params["commands"] = ProtoAnyCodable(options.commands)
-        }
-        if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines), !pathEnv.isEmpty {
-            params["pathEnv"] = ProtoAnyCodable(pathEnv)
-        }
-        if !options.permissions.isEmpty {
-            params["permissions"] = ProtoAnyCodable(options.permissions)
-        }
+        options.applyOptionalConnectParams(to: &params)
         self.applyConnectAuth(
             selectedAuth,
             deviceId: identity?.deviceId,
@@ -554,6 +540,7 @@ public actor GatewayChannelActor {
             let outcome = try await self.handleConnectResponse(
                 response,
                 identity: identity,
+                selectedAuth: selectedAuth,
                 role: role,
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile,
@@ -894,6 +881,7 @@ extension GatewayChannelActor {
     private func handleConnectResponse(
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
+        selectedAuth: SelectedConnectAuth,
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
@@ -948,18 +936,18 @@ extension GatewayChannelActor {
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
-        if let tick = ok.policy["tickIntervalMs"]?.value as? Double {
+        if let tick = ok.policy["tickIntervalMs"]?.doubleValue {
             self.tickIntervalMs = tick
-        } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
-            self.tickIntervalMs = Double(tick)
         }
         let auth = ok.auth
         var issuedRoles = Set<String>()
         if let identity {
-            if let deviceToken = auth["deviceToken"]?.value as? String {
-                let authRole = auth["role"]?.value as? String ?? role
-                let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
-                    .compactMap { $0.value as? String } ?? []
+            if let deviceToken = auth["deviceToken"]?.stringValue {
+                let authRole = auth["role"]?.stringValue ?? role
+                let helloScopes = auth["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                let sameStoredToken = authRole == role && deviceToken == selectedAuth.storedToken
+                // Hello scopes describe this socket. Reissuing the stored token must not narrow its reusable grant.
+                let scopes = sameStoredToken ? (selectedAuth.storedScopes ?? helloScopes) : helloScopes
                 if self.persistIssuedDeviceToken(
                     authSource: self.lastAuthSource,
                     deviceId: identity.deviceId,
@@ -973,17 +961,16 @@ extension GatewayChannelActor {
                 }
             }
             if self.shouldPersistBootstrapHandoffTokens(),
-               let tokenEntries = auth["deviceTokens"]?.value as? [ProtoAnyCodable]
+               let tokenEntries = auth["deviceTokens"]?.arrayValue
             {
                 for entry in tokenEntries {
-                    guard let rawEntry = entry.value as? [String: ProtoAnyCodable],
-                          let deviceToken = rawEntry["deviceToken"]?.value as? String,
-                          let authRole = rawEntry["role"]?.value as? String
+                    guard let rawEntry = entry.dictionaryValue,
+                          let deviceToken = rawEntry["deviceToken"]?.stringValue,
+                          let authRole = rawEntry["role"]?.stringValue
                     else {
                         continue
                     }
-                    let scopes = (rawEntry["scopes"]?.value as? [ProtoAnyCodable])?
-                        .compactMap { $0.value as? String } ?? []
+                    let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
                     if self.persistBootstrapHandoffToken(
                         deviceId: identity.deviceId,
                         role: authRole,

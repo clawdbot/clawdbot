@@ -77,27 +77,12 @@ export function buildStatusOverviewSurfaceFromScan(
 export function buildStatusOverviewSurfaceFromOverview(
   params: { overview: StatusOverviewInput } & StatusOverviewServices,
 ): StatusOverviewSurface {
-  return {
-    cfg: params.overview.cfg,
-    update: params.overview.update,
-    tailscaleMode: params.overview.tailscaleMode,
-    tailscaleDns: params.overview.tailscaleDns,
-    tailscaleHttpsUrl: params.overview.tailscaleHttpsUrl,
-    ...(params.overview.advertisedControlUiLinks
-      ? { advertisedControlUiLinks: params.overview.advertisedControlUiLinks }
-      : {}),
-    gatewayMode: params.overview.gatewaySnapshot.gatewayMode,
-    remoteUrlMissing: params.overview.gatewaySnapshot.remoteUrlMissing,
-    gatewayConnection: params.overview.gatewaySnapshot.gatewayConnection,
-    gatewayReachable: params.overview.gatewaySnapshot.gatewayReachable,
-    gatewayProbe: params.overview.gatewaySnapshot.gatewayProbe,
-    gatewayProbeAuth: params.overview.gatewaySnapshot.gatewayProbeAuth,
-    gatewayProbeAuthWarning: params.overview.gatewaySnapshot.gatewayProbeAuthWarning,
-    gatewaySelf: params.overview.gatewaySnapshot.gatewaySelf,
+  return buildStatusOverviewSurfaceFromScan({
+    scan: { ...params.overview, ...params.overview.gatewaySnapshot },
     gatewayService: params.gatewayService,
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
-  };
+  });
 }
 
 /** Builds overview rows from an already-normalized surface. */

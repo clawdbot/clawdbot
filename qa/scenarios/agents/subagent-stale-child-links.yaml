@@ -20,7 +20,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - src/gateway/session-utils.ts
-    - src/agents/subagent-run-liveness.ts
+    - src/agents/subagents/registry/subagent-run-liveness.ts
     - extensions/qa-lab/src/gateway-child.ts
   execution:
     kind: flow

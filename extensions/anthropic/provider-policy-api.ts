@@ -8,11 +8,14 @@ import {
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { CLAUDE_CLI_OFF_THINKING_PROFILE } from "./cli-shared.js";
+import { CLAUDE_CLI_OFF_THINKING_PROFILE, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+
+/** Profile ids that native Claude auth has retired from OpenClaw ownership. */
+export const deprecatedProfileIds = [CLAUDE_CLI_PROFILE_ID] as const;
 
 /** Normalize Anthropic provider config without importing runtime registration. */
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {

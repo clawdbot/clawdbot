@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import {
   isActiveWorkboardCard,
@@ -115,15 +116,21 @@ function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
   }
   if (latestDiagnostic) {
     badges.push(
-      html`<span class="workboard-card__badge--warning" title=${latestDiagnostic.detail}>
+      html`<span
+        class="workboard-card__badge--warning"
+        title=${formatUiExternalText(latestDiagnostic.detail)}
+      >
         ${icons.alertTriangle}${clampText(latestDiagnostic.title.trim(), 64)}
       </span>`,
     );
   }
   if (blockedReason) {
     badges.push(
-      html`<span class="workboard-card__badge--warning" title=${blockedReason}>
-        ${icons.alertTriangle}${clampText(blockedReason.trim(), 64)}
+      html`<span
+        class="workboard-card__badge--warning"
+        title=${formatUiExternalText(blockedReason)}
+      >
+        ${icons.alertTriangle}${clampText(formatUiExternalText(blockedReason), 64)}
       </span>`,
     );
   }
@@ -207,7 +214,9 @@ function renderLifecycle(
   `;
 }
 
-function renderCard(props: WorkboardProps, card: WorkboardCard) {
+type WorkboardCardSurface = "page" | "widget";
+
+function renderCard(props: WorkboardProps, card: WorkboardCard, surface: WorkboardCardSurface) {
   const {
     state,
     task,
@@ -219,45 +228,55 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     showStartControls,
     archived,
   } = getCardActionState(props, card);
-  const syncing = state.syncingCardIds.has(card.id);
+  const widget = surface === "widget";
   const healthHighlighted = state.activeHealthHighlight
     ? workboardCardMatchesHealthKey(card, state.activeHealthHighlight, props.sessions, task)
     : false;
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const topStartAction = showStartControls
-    ? renderStartExecutionButton(props, card, null, "autonomous", { iconOnly: true })
-    : nothing;
+  const topStartAction =
+    !widget && showStartControls
+      ? renderStartExecutionButton(props, card, null, "autonomous", { iconOnly: true })
+      : nothing;
   const topEditAction =
-    writable && !archived ? renderEditCardAction(props, card, { iconOnly: true }) : nothing;
-  const topArchiveAction = writable
-    ? renderArchiveCardAction(props, card, busy, archived, { iconOnly: true })
-    : nothing;
-  const detailAction = html`
-    <openclaw-tooltip .content=${t("workboard.viewDetails")}>
-      <button
-        class="btn btn--icon workboard-card__icon"
-        aria-label=${t("workboard.viewDetails")}
-        aria-haspopup="dialog"
-        aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
-        aria-controls=${workboardCardDetailDrawerId}
-        @click=${() => {
-          openCardDetails(state, card);
-          props.onRequestUpdate?.();
-        }}
-      >
-        ${icons.panelRightOpen}
-      </button>
-    </openclaw-tooltip>
-  `;
-  const sessionAction = renderOpenSessionCardAction(props, linkedSessionKey, { iconOnly: true });
+    !widget && writable && !archived
+      ? renderEditCardAction(props, card, { iconOnly: true })
+      : nothing;
+  const topArchiveAction =
+    !widget && writable
+      ? renderArchiveCardAction(props, card, busy, archived, { iconOnly: true })
+      : nothing;
+  const detailAction = widget
+    ? nothing
+    : html`
+        <openclaw-tooltip .content=${t("workboard.viewDetails")}>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            aria-label=${t("workboard.viewDetails")}
+            aria-haspopup="dialog"
+            aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
+            aria-controls=${workboardCardDetailDrawerId}
+            @click=${() => {
+              openCardDetails(state, card);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${icons.panelRightOpen}
+          </button>
+        </openclaw-tooltip>
+      `;
+  const sessionAction = widget
+    ? nothing
+    : renderOpenSessionCardAction(props, linkedSessionKey, { iconOnly: true });
   const stopAction =
-    writable && (linkedSessionKey ? live : activeTask)
+    !widget && writable && (linkedSessionKey ? live : activeTask)
       ? renderStopCardAction(props, card, busy, { iconOnly: true })
       : nothing;
-  const moveAction = writable && !archived ? renderCardMoveControl(props, card, busy) : nothing;
-  const deleteAction = writable
-    ? renderDeleteCardAction(props, card, busy, { iconOnly: true })
-    : nothing;
+  const moveAction =
+    !archived && (writable || widget)
+      ? renderCardMoveControl(props, card, busy || !writable, { wide: widget })
+      : nothing;
+  const deleteAction =
+    !widget && writable ? renderDeleteCardAction(props, card, busy, { iconOnly: true }) : nothing;
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy
@@ -265,22 +284,22 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         : ""} ${archived ? "workboard-card--archived" : ""}
       ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${healthHighlighted
         ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
-        : ""} workboard-card--openable"
-      role="button"
-      tabindex="0"
-      title=${t("workboard.viewDetails")}
-      aria-haspopup="dialog"
-      aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
-      aria-controls=${workboardCardDetailDrawerId}
+        : ""} ${widget ? "workboard-card--widget" : "workboard-card--openable"}"
+      role=${widget ? nothing : "button"}
+      tabindex=${widget ? nothing : "0"}
+      title=${widget ? nothing : t("workboard.viewDetails")}
+      aria-haspopup=${widget ? nothing : "dialog"}
+      aria-expanded=${widget ? nothing : state.detailCardId === card.id ? "true" : "false"}
+      aria-controls=${widget ? nothing : workboardCardDetailDrawerId}
       draggable=${writable && !archived && !state.dispatching ? "true" : "false"}
       @click=${(event: MouseEvent) => {
-        if (!isCardActionTarget(event)) {
+        if (!widget && !isCardActionTarget(event)) {
           openCardDetails(state, card);
           props.onRequestUpdate?.();
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
-        if (isCardActionTarget(event) || (event.key !== "Enter" && event.key !== " ")) {
+        if (widget || isCardActionTarget(event) || (event.key !== "Enter" && event.key !== " ")) {
           return;
         }
         openCardDetails(state, card);
@@ -325,7 +344,6 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
           ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
           : nothing}
         ${live ? html`<span class="workboard-live">${t("workboard.live")}</span>` : nothing}
-        ${syncing ? html`<span class="workboard-live">${t("common.saving")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
       ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props, task)}
@@ -340,14 +358,18 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         <span>${linkedSessionKey ?? t("workboard.noLinkedSession")}</span>
       </div>
       ${renderEvents(card)}
-      <div class="workboard-card__actions">
-        ${renderCardActionSlot(detailAction)}
-        <div class="workboard-card__actions-primary">
-          ${renderCardActionSlot(sessionAction)} ${renderCardActionSlot(stopAction)}
-          ${renderCardActionSlot(moveAction)}
-        </div>
-        ${renderCardActionSlot(deleteAction)}
-      </div>
+      ${widget
+        ? html`<div class="workboard-card__actions workboard-card__actions--widget">
+            ${moveAction}
+          </div>`
+        : html`<div class="workboard-card__actions">
+            ${renderCardActionSlot(detailAction)}
+            <div class="workboard-card__actions-primary">
+              ${renderCardActionSlot(sessionAction)} ${renderCardActionSlot(stopAction)}
+              ${renderCardActionSlot(moveAction)}
+            </div>
+            ${renderCardActionSlot(deleteAction)}
+          </div>`}
     </article>
   `;
 }
@@ -356,14 +378,36 @@ export function renderColumn(
   props: WorkboardProps,
   status: WorkboardStatus,
   cards: WorkboardCard[],
+  options: { surface?: WorkboardCardSurface } = {},
 ) {
   const state = getWorkboardState(props.host);
   const writable = canMutate(props);
+  const surface = options.surface ?? "page";
+  const collapsible = surface === "page";
+  const label = formatStatusLabel(status);
+  const autoCollapsed =
+    state.emptyColumnMode === "collapse" &&
+    cards.length === 0 &&
+    !state.expandedEmptyStatuses.has(status);
+  const collapsed = collapsible && (state.collapsedStatuses.has(status) || autoCollapsed);
+  const expandColumn = () => {
+    state.collapsedStatuses.delete(status);
+    if (cards.length === 0) {
+      state.expandedEmptyStatuses.add(status);
+    }
+    props.onRequestUpdate?.();
+  };
+  const collapseColumn = () => {
+    state.collapsedStatuses.add(status);
+    state.expandedEmptyStatuses.delete(status);
+    props.onRequestUpdate?.();
+  };
   return html`
     <section
       class="workboard-column workboard-column--${status} ${state.draggedCardId
         ? "workboard-column--drop"
-        : ""}"
+        : ""} ${collapsed ? "workboard-column--collapsed" : ""}"
+      aria-label=${`${label}, ${cards.length}`}
       @dragover=${(event: DragEvent) => {
         if (writable && state.draggedCardId) {
           event.preventDefault();
@@ -389,15 +433,68 @@ export function renderColumn(
         });
       }}
     >
-      <div class="workboard-column__header">
-        <h2>${formatStatusLabel(status)}</h2>
-        <span>${cards.length}</span>
-      </div>
-      <div class="workboard-column__cards">
-        ${cards.length
-          ? cards.map((card) => renderCard(props, card))
-          : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`}
-      </div>
+      ${collapsed
+        ? html`
+            <button
+              class="workboard-column__rail"
+              type="button"
+              aria-label=${t("workboard.expandColumn", { column: label })}
+              aria-expanded="false"
+              @click=${expandColumn}
+            >
+              <span class="workboard-column__rail-title">${label}</span>
+              <span class="workboard-column__count">${cards.length}</span>
+              <span class="workboard-column__rail-icon" aria-hidden="true">
+                <span
+                  class="workboard-column__direction-icon workboard-column__direction-icon--expand-horizontal"
+                  >${icons.panelRightClose}</span
+                >
+                <span
+                  class="workboard-column__direction-icon workboard-column__direction-icon--expand-vertical"
+                  >${icons.panelBottomOpen}</span
+                >
+              </span>
+            </button>
+          `
+        : html`
+            <div class="workboard-column__header">
+              <h2>${label}</h2>
+              ${collapsible
+                ? html`
+                    <div class="workboard-column__header-actions">
+                      <span class="workboard-column__count">${cards.length}</span>
+                      <openclaw-tooltip
+                        .content=${t("workboard.collapseColumn", { column: label })}
+                      >
+                        <button
+                          class="btn btn--icon workboard-column__collapse"
+                          type="button"
+                          aria-label=${t("workboard.collapseColumn", { column: label })}
+                          aria-expanded="true"
+                          @click=${collapseColumn}
+                        >
+                          <span class="workboard-column__collapse-icon" aria-hidden="true">
+                            <span
+                              class="workboard-column__direction-icon workboard-column__direction-icon--collapse-horizontal"
+                              >${icons.panelRightOpen}</span
+                            >
+                            <span
+                              class="workboard-column__direction-icon workboard-column__direction-icon--collapse-vertical"
+                              >${icons.panelBottomClose}</span
+                            >
+                          </span>
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `
+                : html`<span class="workboard-column__count">${cards.length}</span>`}
+            </div>
+            <div class="workboard-column__cards">
+              ${cards.length
+                ? cards.map((card) => renderCard(props, card, surface))
+                : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`}
+            </div>
+          `}
     </section>
   `;
 }

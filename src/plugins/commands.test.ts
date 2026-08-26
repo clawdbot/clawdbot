@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
-import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
+import {
+  getPluginCommandEntrySpecs,
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+} from "./command-specs.js";
 import {
   clearPluginCommands,
   executePluginCommand,
@@ -14,6 +18,7 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -393,6 +398,68 @@ describe("registerPluginCommand", () => {
         error: "Command nativeNames must be an object",
       },
     },
+    {
+      name: "rejects primitive client presentation metadata",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: "device-pairing",
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must be an object",
+      },
+    },
+    {
+      name: "rejects unknown client presentation actions",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "open-route" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action kind is not supported",
+      },
+    },
+    {
+      name: "rejects additional client presentation fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+          route: "/settings/devices",
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must contain only when and action",
+      },
+    },
+    {
+      name: "rejects additional client presentation action fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing", callback: "run" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action must contain only kind",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
@@ -402,6 +469,10 @@ describe("registerPluginCommand", () => {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
       agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
+      clientPresentation: {
+        when: "no-arguments",
+        action: { kind: "device-pairing" },
+      },
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -420,7 +491,62 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(getPluginCommandEntrySpecs()).toEqual([
+      {
+        name: "demo_cmd",
+        nativeName: "demo_cmd",
+        description: "Demo command",
+        acceptsArgs: false,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
+      },
+    ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it("prefers a request-scoped registry over ambient compatibility state", async () => {
+    const ambientHandler = vi.fn(async () => ({ text: "ambient" }));
+    const scopedHandler = vi.fn(async () => ({ text: "scoped" }));
+    expect(
+      registerPluginCommand("ambient", {
+        name: "same",
+        description: "Ambient command",
+        agentPromptGuidance: ["Ambient guidance"],
+        handler: ambientHandler,
+      }),
+    ).toEqual({ ok: true });
+    const scoped = createEmptyPluginRegistry();
+
+    await withPluginRuntimeRegistryScope(scoped, async () => {
+      expect(
+        registerPluginCommand("scoped", {
+          name: "same",
+          description: "Scoped command",
+          agentPromptGuidance: ["Scoped guidance"],
+          handler: scopedHandler,
+        }),
+      ).toEqual({ ok: true });
+      expect(listProviderPluginCommandSpecs().map((entry) => entry.description)).toEqual([
+        "Scoped command",
+      ]);
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Scoped guidance"]);
+      const match = matchPluginCommand("/same");
+      expect(match?.command.pluginId).toBe("scoped");
+      await executePluginCommand({
+        command: match!.command,
+        senderId: "user-1",
+        channel: "telegram",
+        isAuthorizedSender: true,
+        commandBody: "/same",
+        config: {},
+      });
+    });
+
+    expect(scopedHandler).toHaveBeenCalledOnce();
+    expect(ambientHandler).not.toHaveBeenCalled();
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
   it.each([

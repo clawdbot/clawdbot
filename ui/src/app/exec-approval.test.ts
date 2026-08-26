@@ -371,7 +371,7 @@ describe("approval queue ordering and countdown timer", () => {
     }
   });
 
-  it("publishes one shared countdown tick and cleans every timer", () => {
+  it("does not publish shared countdown ticks", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
     try {
@@ -384,8 +384,7 @@ describe("approval queue ordering and countdown timer", () => {
       enqueueExecApprovalPrompt(state, createExecApproval({ expiresAtMs: Date.now() + 60_000 }));
 
       vi.advanceTimersByTime(1_000);
-      expect(state.execApprovalChanged).toHaveBeenCalledTimes(1);
-      expect(state.execApprovalNowMs).toBe(Date.now());
+      expect(state.execApprovalChanged).not.toHaveBeenCalled();
 
       clearExecApprovalTimers(state);
       expect(vi.getTimerCount()).toBe(0);

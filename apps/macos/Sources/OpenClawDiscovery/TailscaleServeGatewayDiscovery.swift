@@ -268,12 +268,6 @@ enum TailscaleServeGatewayDiscovery {
 
         return event == "connect.challenge"
     }
-
-    #if DEBUG
-    static func probeSessionIdentifierForTesting() -> ObjectIdentifier {
-        ObjectIdentifier(self.probeSession)
-    }
-    #endif
 }
 
 private struct TailscaleStatus: Decodable {

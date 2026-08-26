@@ -43,7 +43,9 @@ export function buildLmstudioAuthHeaders(
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-function sanitizeStringHeaders(headers: unknown): Record<string, string> | undefined {
+export function sanitizeLmstudioStringHeaders(
+  headers: unknown,
+): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
@@ -166,7 +168,7 @@ export async function resolveLmstudioProviderHeaders(params: {
   }
 
   if (!params.config) {
-    return sanitizeStringHeaders(headerInputs);
+    return sanitizeLmstudioStringHeaders(headerInputs);
   }
 
   const pathPrefix = params.path ?? "models.providers.lmstudio.headers";

@@ -25,16 +25,71 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns true for ACP slash commands", () => {
+  it.each([
+    {
+      name: "ACP slash commands",
+      provider: "discord",
+      command: "/acp cancel",
+      expected: true,
+    },
+    {
+      name: "ACP slash commands addressed to another bot",
+      provider: "discord",
+      command: "/acp@otherbot cancel",
+      expected: false,
+    },
+    {
+      name: "local status commands",
+      provider: "discord",
+      command: "/status",
+      expected: true,
+    },
+    {
+      name: "local status plugin commands",
+      provider: "discord",
+      command: "/STATUS plugins",
+      expected: true,
+    },
+    {
+      name: "registry-backed local help commands",
+      provider: "whatsapp",
+      command: "/help",
+      expected: true,
+    },
+    {
+      name: "local unfocus commands",
+      provider: "discord",
+      command: "/unfocus",
+      expected: true,
+    },
+    {
+      name: "local verbose commands",
+      provider: "discord",
+      command: "/verbose on",
+      expected: true,
+    },
+    {
+      name: "local verbose alias commands",
+      provider: "discord",
+      command: "/v off",
+      expected: true,
+    },
+    {
+      name: "bare ACP reset slash commands",
+      provider: "discord",
+      command: "/reset",
+      expected: true,
+    },
+  ])("returns $expected for $name", ({ provider, command, expected }) => {
     const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/acp cancel",
-      BodyForCommands: "/acp cancel",
-      BodyForAgent: "/acp cancel",
+      Provider: provider,
+      Surface: provider,
+      CommandBody: command,
+      BodyForCommands: command,
+      BodyForAgent: command,
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(expected);
   });
 
   it("returns true for native ACP slash commands", () => {
@@ -50,54 +105,6 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
-  it("returns false for ACP slash commands addressed to another bot", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/acp@otherbot cancel",
-      BodyForCommands: "/acp@otherbot cancel",
-      BodyForAgent: "/acp@otherbot cancel",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
-  });
-
-  it("returns true for local status commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/status",
-      BodyForCommands: "/status",
-      BodyForAgent: "/status",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for local status plugin commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/STATUS plugins",
-      BodyForCommands: "/STATUS plugins",
-      BodyForAgent: "/STATUS plugins",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for registry-backed local help commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandBody: "/help",
-      BodyForCommands: "/help",
-      BodyForAgent: "/help",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
   it("prefers clean command text over channel envelopes", () => {
     const ctx = buildTestCtx({
       Provider: "whatsapp",
@@ -105,42 +112,6 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
       BodyForCommands: "/status",
       BodyForAgent: "/status",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for local unfocus commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/unfocus",
-      BodyForCommands: "/unfocus",
-      BodyForAgent: "/unfocus",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for local verbose commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/verbose on",
-      BodyForCommands: "/verbose on",
-      BodyForAgent: "/verbose on",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for local verbose alias commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/v off",
-      BodyForCommands: "/v off",
-      BodyForAgent: "/v off",
     });
 
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
@@ -169,18 +140,6 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       CommandBody: "/new continue with deployment",
       BodyForCommands: "/new continue with deployment",
       BodyForAgent: "/new continue with deployment",
-    });
-
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
-  });
-
-  it("returns true for bare ACP reset slash commands", () => {
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      CommandBody: "/reset",
-      BodyForCommands: "/reset",
-      BodyForAgent: "/reset",
     });
 
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);

@@ -25,6 +25,7 @@ import {
   listApplicationCommands,
   listChannelMessages,
   listGuildChannels,
+  listGuildEmojis,
   overwriteApplicationCommands,
   pinChannelMessage,
   searchGuildMessages,
@@ -77,7 +78,12 @@ describe("Discord REST API helpers", () => {
   });
 
   it("routes guild helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([[{ id: "c1" }], { id: "event1" }, undefined]);
+    const rest = createFakeRestClient([
+      [{ id: "c1" }],
+      [{ id: "emoji1", name: "party", animated: true }],
+      { id: "event1" },
+      undefined,
+    ]);
     const body = {
       name: "standup",
       scheduled_start_time: "2026-04-29T10:00:00.000Z",
@@ -87,11 +93,15 @@ describe("Discord REST API helpers", () => {
     } as const;
 
     await expect(listGuildChannels(rest, "g1")).resolves.toEqual([{ id: "c1" }]);
+    await expect(listGuildEmojis(rest, "g1")).resolves.toEqual([
+      { id: "emoji1", name: "party", animated: true },
+    ]);
     await expect(createGuildScheduledEvent(rest, "g1", body)).resolves.toEqual({ id: "event1" });
     await createGuildBan(rest, "g1", "u1", { body: { delete_message_seconds: 0 } });
 
     expect(rest.calls).toEqual([
       { method: "GET", path: Routes.guildChannels("g1") },
+      { method: "GET", path: Routes.guildEmojis("g1") },
       {
         method: "POST",
         path: Routes.guildScheduledEvents("g1"),
@@ -103,6 +113,12 @@ describe("Discord REST API helpers", () => {
         data: { body: { delete_message_seconds: 0 } },
       },
     ]);
+  });
+
+  it("rejects malformed guild emoji responses at the Discord REST boundary", async () => {
+    await expect(listGuildEmojis(createFakeRestClient([{ invalid: true }]), "g1")).rejects.toThrow(
+      "Invalid Discord guild emoji response.",
+    );
   });
 
   it("routes command helpers through the typed REST client", async () => {

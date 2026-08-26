@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -57,12 +58,19 @@ export async function runSkillHistoryScanReview(params: {
       }
     : undefined;
   const runId = params.runId ?? `${HISTORY_SCAN_SESSION_SEGMENT}:${randomUUID()}`;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.config,
+    runId,
+    params.agentId,
+    "skill-workshop.history-scan",
+  );
   let runError: unknown;
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
+      preparedRunAdmission,
       sessionId,
       sessionKey,
       sandboxSessionKey: sessionKey,
@@ -81,11 +89,11 @@ export async function runSkillHistoryScanReview(params: {
       provider: modelRef.provider,
       model: modelRef.model,
       // A smaller configured fallback must not receive a prompt sized for the primary model.
+      modelSelectionLocked: true,
       modelFallbacksOverride: [],
       timeoutMs: HISTORY_SCAN_TIMEOUT_MS,
       runId,
       toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
       disableTrajectory: true,
       skillWorkshopProposalOnly: true,
       skillWorkshopProposalEnv: params.env,
@@ -102,6 +110,8 @@ export async function runSkillHistoryScanReview(params: {
     runError = resolveSkillHistoryScanRunFailure(result);
   } catch (error) {
     runError = error;
+  } finally {
+    preparedRunAdmission.close();
   }
   if (proposalReviewCompletion?.completed) {
     return proposalMutationBudget.completed;

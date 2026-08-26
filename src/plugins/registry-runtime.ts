@@ -1,22 +1,23 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
+import { registerChannelAdmissionEvidenceOwner } from "../channels/message-access/admission-evidence.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
   type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
-import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
-import type {
-  PluginStateLeaseContext,
-  PluginStateLeaseOptions,
-} from "../plugin-state/plugin-state-lease.types.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -25,14 +26,29 @@ import {
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import {
+  classifySessionKeyShape,
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
+import {
+  activatePluginRecordLifecycleEpoch,
+  isPluginRecordLifecycleEpochActive,
+  isPluginRegistryActivated,
+  isPluginRegistryRetired,
+  revokePluginRecordLifecycleEpoch,
+} from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
+  getGatewayContextResolver,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
+  withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -53,6 +69,7 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.fork",
   "sessions.create",
   "sessions.delete",
+  "sessions.patchMany",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reset",
@@ -69,8 +86,18 @@ const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
+  // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
+  const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
+  const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
+  const recordChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
+  const registeredChannelRuntime = new WeakMap<PluginRecord, PluginRuntime["channel"]>();
+  const registeredRuntimeRecordById = new Map<string, PluginRecord>();
+  const registeredAdmissionOwnerByRecord = new WeakMap<
+    PluginRecord,
+    { isLive: () => boolean; dispose: () => void }
+  >();
 
   const addPluginRuntimeResolutionContext = (params: {
     error: unknown;
@@ -96,6 +123,89 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       ].join("; ");
     }
     throw error;
+  };
+
+  const resolveRecordChannelRuntime = (
+    record: PluginRecord,
+    requireCurrentRuntimeRecord: boolean,
+  ): PluginRuntime["channel"] => {
+    const cache = requireCurrentRuntimeRecord ? recordChannelRuntime : registeredChannelRuntime;
+    const cached = cache.get(record);
+    const cachedOwner = registeredAdmissionOwnerByRecord.get(record);
+    if (cached && (requireCurrentRuntimeRecord || cachedOwner?.isLive() === true)) {
+      return cached;
+    }
+    if (!requireCurrentRuntimeRecord && cachedOwner) {
+      cachedOwner.dispose();
+      registeredAdmissionOwnerByRecord.delete(record);
+    }
+    const channel = (() => {
+      try {
+        return Reflect.get(
+          registryParams.runtime,
+          "channel",
+          registryParams.runtime,
+        ) as PluginRuntime["channel"];
+      } catch (error) {
+        return addPluginRuntimeResolutionContext({
+          error,
+          pluginId: record.id,
+          prop: "channel",
+        });
+      }
+    })();
+    if (record.origin !== "bundled" || requireCurrentRuntimeRecord) {
+      cache.set(record, channel);
+      return channel;
+    }
+    const ownsLiveRegistrySlot = () =>
+      activePluginRuntimeRecords.has(record) &&
+      registeredRuntimeRecordById.get(record.id) === record &&
+      isPluginRegistryActivated(registry) &&
+      !isPluginRegistryRetired(registry) &&
+      registry.plugins.some((candidate) => candidate === record && candidate.status === "loaded");
+    const previousRecord = registeredRuntimeRecordById.get(record.id);
+    if (previousRecord && previousRecord !== record) {
+      registeredAdmissionOwnerByRecord.get(previousRecord)?.dispose();
+      registeredAdmissionOwnerByRecord.delete(previousRecord);
+      revokePluginRecordLifecycleEpoch(registry, previousRecord);
+    }
+    registeredRuntimeRecordById.set(record.id, record);
+    const epoch = activatePluginRecordLifecycleEpoch(registry, record);
+    if (!epoch) {
+      cache.set(record, channel);
+      return channel;
+    }
+    const owner = Object.freeze({
+      channelId: record.id,
+      record,
+      epoch,
+      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
+      isLive: () =>
+        ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
+    });
+    const disposeOwner = registerChannelAdmissionEvidenceOwner(owner);
+    registeredAdmissionOwnerByRecord.set(record, {
+      isLive: owner.isLive,
+      dispose: disposeOwner,
+    });
+    const buildHostContext = createHostChannelInboundEventContextBuilder(
+      channel.inbound.buildContext,
+      owner,
+    );
+    const buildContext = ((
+      params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0],
+    ) => {
+      // Audit provenance is passive: stale closures still build the message context,
+      // but only the exact live bundled owner may attach participant evidence.
+      return buildHostContext(params as never);
+    }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const scoped = {
+      ...channel,
+      inbound: { ...channel.inbound, buildContext },
+    } satisfies PluginRuntime["channel"];
+    cache.set(record, scoped);
+    return scoped;
   };
 
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
@@ -218,6 +328,37 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertReservedSessionKeyOwned(params.sessionKey, params.action);
     };
+    const resolveStoredSessionOwnershipTarget = (params: {
+      agentId?: string;
+      env?: NodeJS.ProcessEnv;
+      sessionKey: string;
+      storePath?: string;
+    }): { entry?: SessionEntry; sessionKey: string } => {
+      if (
+        classifySessionKeyShape(params.sessionKey) === "legacy_or_alias" &&
+        !isUnscopedSessionKeySentinel(params.sessionKey) &&
+        params.agentId === undefined &&
+        params.storePath === undefined
+      ) {
+        // Logical keys need their configured agent before SQLite ownership admission.
+        const target = resolveSessionEntryAccessTarget({
+          cfg: currentSessionConfig(),
+          sessionKey: params.sessionKey,
+          ...(params.env !== undefined ? { env: params.env } : {}),
+        });
+        return { entry: target.entry, sessionKey: target.canonicalKey };
+      }
+      return {
+        entry: registryParams.runtime.agent.session.getSessionEntry({
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+          ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+          ...(params.env !== undefined ? { env: params.env } : {}),
+          ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
+        }),
+        sessionKey: params.sessionKey,
+      };
+    };
     const assertStoredSessionEntryOwned = (params: {
       action: string;
       agentId?: string;
@@ -225,15 +366,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       sessionKey: string;
       storePath?: string;
     }): SessionEntry | undefined => {
-      const entry = registryParams.runtime.agent.session.getSessionEntry({
-        sessionKey: params.sessionKey,
-        readConsistency: "latest",
-        ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-        ...(params.env !== undefined ? { env: params.env } : {}),
-        ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-      });
-      assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
-      return entry;
+      const target = resolveStoredSessionOwnershipTarget(params);
+      assertSessionEntryOwned({ action: params.action, ...target });
+      return target.entry;
     };
     const resolveStoredSessionExecutionOwner = (params: {
       action: string;
@@ -241,27 +376,23 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       sessionKey: string;
       storePath?: string;
     }): string | undefined => {
-      const entry = registryParams.runtime.agent.session.getSessionEntry({
-        sessionKey: params.sessionKey,
-        readConsistency: "latest",
-        ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-        ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-      });
+      const target = resolveStoredSessionOwnershipTarget(params);
+      const { entry, sessionKey } = target;
       const locked = entry
-        ? resolveLockedSessionHarnessRegistration(params.sessionKey, entry, params.action)
+        ? resolveLockedSessionHarnessRegistration(sessionKey, entry, params.action)
         : undefined;
       if (!entry || !locked || locked.ownerPluginId === pluginId) {
-        assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
+        assertSessionEntryOwned({ action: params.action, ...target });
         return undefined;
       }
       const registration = "registration" in locked ? locked.registration : undefined;
       if (!registration) {
         throw new Error(
-          `Locked session "${params.sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
+          `Locked session "${sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
         );
       }
       if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
-        assertLockedSessionEntryOwned(params.sessionKey, entry, params.action);
+        assertLockedSessionEntryOwned(sessionKey, entry, params.action);
       }
       return locked.ownerPluginId;
     };
@@ -379,6 +510,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const sessionKey = targetSessionKey ?? directSessionKey;
       const storePath = normalizeOptionalString(target?.storePath);
       const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
+      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
+      // Embedded runs accept one exact key. Carry its resolved store into the
+      // keyless ID/file scan so incognito ownership stays in the process-held DB.
+      const ownershipStorePath =
+        sessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: sessionKeyAgentId,
+              sessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entry = sessionKey
         ? registryParams.runtime.agent.session.getSessionEntry({
             sessionKey,
@@ -453,11 +602,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: ownershipStorePath,
       });
       return undefined;
     };
@@ -472,6 +621,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const request = params ?? {};
+      if (method === "sessions.patchMany" && Array.isArray(request.targets)) {
+        for (const target of request.targets) {
+          if (!isRecord(target)) {
+            continue;
+          }
+          assertSessionIdentitiesOwned({
+            action: `request gateway method "${method}" for`,
+            agentId: target.agentId,
+            sessionKeys: [target.key],
+          });
+        }
+        return;
+      }
       const sessionKeys = [request.sessionKey, request.key, request.parentSessionKey];
       const sessionIds = [request.sessionId];
       assertSessionIdentitiesOwned({
@@ -541,7 +703,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               | "openBlobStore"
               | "openKeyedStore"
               | "openSyncKeyedStore"
-              | "withLease"
               | "openChannelIngressQueue"
               | "openChannelIngressDrain",
           ) => {
@@ -573,13 +734,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ): PluginStateSyncKeyedStore<T> => {
               assertPluginStateAllowed("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
-            },
-            withLease: <T>(
-              options: PluginStateLeaseOptions,
-              run: (lease: PluginStateLeaseContext) => Promise<T>,
-            ): Promise<T> => {
-              assertPluginStateAllowed("withLease");
-              return withPluginStateLease(pluginId, options, run);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
@@ -638,6 +792,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               runWithPluginScope(() => config.replaceConfigFile(params)),
           } satisfies PluginRuntime["config"];
         }
+        if (prop === "channel") {
+          const ownerRecord = pluginRuntimeRecordById.get(pluginId);
+          if (!ownerRecord) {
+            return getRuntimeProperty();
+          }
+          return resolveRecordChannelRuntime(ownerRecord, true);
+        }
         if (prop === "llm") {
           const llm = getRuntimeProperty();
           return {
@@ -663,6 +824,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             list: (params) => runWithPluginScope(() => nodes.list(params)),
             invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+            openDuplex: (params) =>
+              withPluginRuntimeRegistryScope(registry, () =>
+                runWithPluginScope(() => nodes.openDuplex(params)),
+              ),
           } satisfies PluginRuntime["nodes"];
         }
         if (prop === "agent") {
@@ -821,24 +986,62 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 });
               }),
           } satisfies PluginRuntime["agent"]["session"];
-          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) =>
-            await runWithPluginScope(async () => {
-              const ownerPluginId = resolveRunSessionExecutionOwner(params);
-              return ownerPluginId
-                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params)
-                : await agent.runEmbeddedAgent(params);
+          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
+            const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
+            return await runWithPluginScope(async () => {
+              const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
+              if (ownerPluginId) {
+                return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
+              }
+              // The public runtime adapter owns admission preparation. Passing
+              // host authority through this plugin wrapper is rejected by design.
+              return await agent.runEmbeddedAgent(runParams);
             });
+          };
+          const channelOwnerRecord = pluginRuntimeRecordById.get(pluginId);
+          const runCommandFromIngress: PluginRuntime["agent"]["runCommandFromIngress"] = async (
+            params,
+            commandRuntime,
+          ) => {
+            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
+            const senderIsOwner = claimedOwner === true;
+            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
+            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
+            if (
+              !channelOwnerRecord ||
+              // Community channels may admit guests; trusted provenance is required only for owner elevation.
+              (senderIsOwner &&
+                channelOwnerRecord.origin !== "bundled" &&
+                channelOwnerRecord.trustedOfficialInstall !== true) ||
+              pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
+              !activePluginRuntimeRecords.has(channelOwnerRecord) ||
+              isPluginRegistryRetired(registry) ||
+              !registry.plugins.some(
+                (record) => record === channelOwnerRecord && record.status === "loaded",
+              ) ||
+              !registry.channels.some(
+                (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
+              )
+            ) {
+              throw new Error(
+                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
+              );
+            }
+            return await runWithPluginScope(() =>
+              agent.runCommandFromIngress(ingressParams, commandRuntime),
+            );
+          };
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),
           ) as PluginRuntime["agent"];
           Object.defineProperties(scopedAgent, {
-            runEmbeddedAgent: {
+            runCommandFromIngress: {
               configurable: true,
               enumerable: true,
-              value: runEmbeddedAgent,
+              value: runCommandFromIngress,
             },
-            runEmbeddedPiAgent: {
+            runEmbeddedAgent: {
               configurable: true,
               enumerable: true,
               value: runEmbeddedAgent,
@@ -883,8 +1086,23 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 
   return {
     resolvePluginRuntime,
+    resolveRegisteredChannelRuntime: (record: PluginRecord) =>
+      resolveRecordChannelRuntime(record, false),
     setPluginRuntimeRecord: (record: PluginRecord) => {
       pluginRuntimeRecordById.set(record.id, record);
+      activePluginRuntimeRecords.add(record);
+    },
+    revokePluginRuntimeRecord: (pluginId: string, record?: PluginRecord) => {
+      const ownedRecord = record ?? pluginRuntimeRecordById.get(pluginId);
+      if (ownedRecord) {
+        activePluginRuntimeRecords.delete(ownedRecord);
+        revokePluginRecordLifecycleEpoch(registry, ownedRecord);
+        registeredAdmissionOwnerByRecord.get(ownedRecord)?.dispose();
+        registeredAdmissionOwnerByRecord.delete(ownedRecord);
+        if (registeredRuntimeRecordById.get(pluginId) === ownedRecord) {
+          registeredRuntimeRecordById.delete(pluginId);
+        }
+      }
     },
   };
 }

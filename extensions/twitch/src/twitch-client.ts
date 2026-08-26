@@ -3,6 +3,7 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
@@ -39,13 +40,7 @@ export class TwitchClientManager {
   }
 
   private publishReady(): void {
-    this.statusSink?.({
-      connected: true,
-      lifecycle: "ready",
-      lastConnectedAt: Date.now(),
-      lastError: null,
-      terminalDisconnect: undefined,
-    });
+    this.statusSink?.(channelReadyPatch());
   }
 
   private publishRecovering(lastError: string): void {
@@ -130,7 +125,13 @@ export class TwitchClientManager {
       return pending;
     }
 
-    const connection = this.createConnectedClient(key, account, cfg, accountId);
+    const connection: Promise<ChatClient> = this.createConnectedClient(
+      key,
+      account,
+      () => this.connectionPromises.get(key) === connection,
+      cfg,
+      accountId,
+    );
     this.connectionPromises.set(key, connection);
     try {
       return await connection;
@@ -144,6 +145,7 @@ export class TwitchClientManager {
   private async createConnectedClient(
     key: string,
     account: TwitchAccountConfig,
+    ownsConnection: () => boolean,
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<ChatClient> {
@@ -168,6 +170,9 @@ export class TwitchClientManager {
     const normalizedToken = normalizeToken(tokenResolution.token);
 
     const authProvider = await this.createAuthProvider(account, normalizedToken);
+    if (!ownsConnection()) {
+      throw new Error(`Twitch connection cancelled for ${account.username}`);
+    }
 
     const client = new ChatClient({
       authProvider,
@@ -378,19 +383,21 @@ export class TwitchClientManager {
     const key = this.getAccountKey(account);
     const client = this.clients.get(key);
     const pendingClient = this.pendingClients.get(key);
+    const pendingConnection = this.connectionPromises.delete(key);
 
     if (pendingClient) {
       pendingClient.quit();
       this.pendingClients.delete(key);
-      this.connectionPromises.delete(key);
-      this.clearMessageHandler(key);
     }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.clearMessageHandler(key);
       this.logger.info(`Disconnected ${key}`);
+    }
+
+    if (pendingConnection || pendingClient || client) {
+      this.clearMessageHandler(key);
     }
   }
 

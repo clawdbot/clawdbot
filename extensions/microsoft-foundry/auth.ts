@@ -44,12 +44,6 @@ function shouldTestFoundryTextConnection(params: {
   );
 }
 
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, { ...api, shouldTestFoundryTextConnection });
-}
-
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
   label: "Entra ID (az login)",
@@ -241,6 +235,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
           ? (ctx.secretInputMode ?? "plaintext")
           : ctx.secretInputMode,
       config: ctx.config,
+      workspaceDir: ctx.workspaceDir,
       expectedProviders: [PROVIDER_ID],
       provider: PROVIDER_ID,
       envLabel: "AZURE_OPENAI_API_KEY",

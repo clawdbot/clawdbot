@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
       },
     },
     diagnostics: [],
+    prepareDataDirsByServer: {
+      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
+    },
   },
 }));
 
@@ -44,6 +47,19 @@ describe("loadMergedBundleMcpConfig", () => {
     expect(merged.config.mcpServers.bundleProbe).toEqual({
       transport: "streamable-http",
       url: "https://mcp.example.com/mcp",
+    });
+    expect(merged.prepareDataDirsByServer).toStrictEqual({});
+  });
+
+  it("preserves Agent Plugins launch ownership for unshadowed bundle servers", () => {
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      mapConfiguredServer: (server) => ({ ...server, mapped: true }),
+    });
+
+    expect(merged.config.mcpServers.bundleProbe).toMatchObject({ mapped: true });
+    expect(merged.prepareDataDirsByServer).toEqual({
+      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
     });
   });
 
@@ -96,6 +112,7 @@ describe("loadMergedBundleMcpConfig", () => {
     });
 
     expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
+    expect(merged.prepareDataDirsByServer).toStrictEqual({});
   });
 
   it.each([

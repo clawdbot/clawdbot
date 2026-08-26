@@ -8,10 +8,11 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionCompactionCheckpointReason,
-  SessionEntry,
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+  type SessionCompactionCheckpointReason,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
@@ -20,13 +21,13 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   type SessionCompactionCheckpointMutationResult,
+  type SessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
-  branchSqliteCompactionCheckpointSession,
-  restoreSqliteCompactionCheckpointSession,
-} from "../config/sessions/session-accessor.sqlite.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+  branchCompactionCheckpointSession,
+  restoreCompactionCheckpointSession,
+} from "../config/sessions/session-accessor.sqlite-checkpoint.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -65,10 +66,14 @@ export function resolveCompactionCheckpointTranscriptPosition(params: {
   };
 }
 
-type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
+type CompactionCheckpointSessionMutationResult =
+  | SessionCompactionCheckpointMutationResult
+  | { status: "conflict" };
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 type BranchCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sourceKey: string;
   sourceStoreKey?: string;
@@ -78,6 +83,7 @@ type BranchCheckpointSessionParams = {
 
 type RestoreCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sessionKey: string;
   sessionStoreKey?: string;
@@ -86,6 +92,7 @@ type RestoreCheckpointSessionParams = {
 
 type PersistSessionCompactionCheckpointParams = {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   sessionId: string;
   reason: SessionCompactionCheckpointReason;
@@ -428,7 +435,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
 }
 
 function readSessionLeafStateFromRecords(
-  records: readonly Record<string, unknown>[],
+  records: readonly { type?: unknown; id?: unknown }[],
 ): { entryId: string; leafId: string | null } | null {
   let latestEntryId: string | undefined;
   for (const record of records) {
@@ -450,12 +457,13 @@ function readSessionLeafStateFromRecords(
 function resolveCheckpointTranscriptForkSource(
   checkpoint: SessionCompactionCheckpoint,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
       sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: checkpointTokensTrusted ? checkpoint.tokensBefore : undefined,
     };
   }
 
@@ -471,7 +479,7 @@ function resolveCheckpointTranscriptForkSource(
   return {
     sourceFile: postCompactionFile,
     sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
+    totalTokens: checkpointTokensTrusted ? checkpoint.tokensAfter : undefined,
   };
 }
 
@@ -532,12 +540,13 @@ async function branchCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await branchSqliteCompactionCheckpointSession({
+  return await branchCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sourceKey: params.sourceKey,
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -554,11 +563,12 @@ async function restoreCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await restoreSqliteCompactionCheckpointSession({
+  return await restoreCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -610,7 +620,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries();
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,
@@ -713,6 +723,7 @@ async function persistSessionCompactionCheckpoint(
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const createdAt = params.createdAt ?? Date.now();
   const checkpoint: SessionCompactionCheckpoint = {
@@ -721,6 +732,7 @@ async function persistSessionCompactionCheckpoint(
     sessionId: params.sessionId,
     createdAt,
     reason: params.reason,
+    tokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...(typeof params.tokensBefore === "number" ? { tokensBefore: params.tokensBefore } : {}),
     ...(typeof params.tokensAfter === "number" ? { tokensAfter: params.tokensAfter } : {}),
     ...(params.summary?.trim() ? { summary: params.summary.trim() } : {}),

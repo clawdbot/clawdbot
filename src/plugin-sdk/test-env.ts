@@ -9,7 +9,8 @@ export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";
+export { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 export { withServer } from "./test-helpers/http-test-server.js";
 export { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
-export { withTempHome } from "./test-helpers/temp-home.js";
+export { withTempHomeCore as withTempHome } from "./test-helpers/temp-home.js";

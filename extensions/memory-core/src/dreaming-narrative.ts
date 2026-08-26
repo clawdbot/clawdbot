@@ -17,6 +17,7 @@ import {
   DREAMING_SESSION_KEY_PREFIX,
   scrubDreamingNarrativeArtifacts,
 } from "./dreaming-session-cleanup.js";
+import { extractAssistantText } from "./dreaming-shared.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -25,16 +26,27 @@ export type SubagentSurface = {
     idempotencyKey: string;
     sessionKey: string;
     message: string;
+    disableTools?: boolean;
     model?: string;
     extraSystemPrompt?: string;
     lane?: string;
     lightContext?: boolean;
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
-  waitForRun: (params: {
-    runId: string;
-    timeoutMs?: number;
-  }) => Promise<{ status: string; error?: string }>;
+  waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{
+    status: string;
+    error?: string;
+    /**
+     * Authoritative final assistant text captured by the run registry while the
+     * raw text was still available. Preferred over polling the session store,
+     * which lags a completed run (see readSettledNarrativeText) and can stay
+     * empty past the settle budget when a sibling phase's cleanup races it (#123360).
+     */
+    terminalReply?: {
+      disposition: "visible" | "silent" | "empty";
+      text?: string;
+    };
+  }>;
   getSessionMessages: (params: {
     sessionKey: string;
     limit?: number;
@@ -243,6 +255,7 @@ async function startNarrativeRunOrFallback(params: {
       idempotencyKey: `${params.runKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
+      disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       lane: `dreaming-narrative:${params.sessionKey}`,
@@ -349,44 +362,6 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
   return lines.join("\n");
 }
 
-// ── Message extraction ─────────────────────────────────────────────────
-
-function extractNarrativeText(messages: unknown[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-      continue;
-    }
-    const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    const content = record.content;
-    if (typeof content === "string" && content.trim().length > 0) {
-      return content.trim();
-    }
-    if (Array.isArray(content)) {
-      const text = content
-        .filter(
-          (part: unknown) =>
-            part &&
-            typeof part === "object" &&
-            !Array.isArray(part) &&
-            ((part as Record<string, unknown>).type === "text" ||
-              (part as Record<string, unknown>).type === "output_text") &&
-            typeof (part as Record<string, unknown>).text === "string",
-        )
-        .map((part) => (part as { text: string }).text)
-        .join("\n")
-        .trim();
-      if (text.length > 0) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
-
 function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -401,7 +376,7 @@ async function readNarrativeText(params: {
     sessionKey: params.sessionKey,
     limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
   });
-  return extractNarrativeText(messages);
+  return extractAssistantText(messages);
 }
 
 async function readSettledNarrativeText(params: {
@@ -421,6 +396,31 @@ async function readSettledNarrativeText(params: {
     }
   }
   return null;
+}
+
+/**
+ * Classifies the run result's terminal reply for diary use. The terminal
+ * reply is the authoritative completion-time fact, so an explicit
+ * non-visible disposition (silent/empty) means "this run produced no diary
+ * text" — the transcript must not be read for it, or an older narrative from
+ * a previous run could resurface (#127184 review). Only an absent terminal
+ * reply (legacy runtime) falls back to the transcript.
+ */
+type TerminalReplyNarrative =
+  | { kind: "visible"; text: string }
+  | { kind: "non-visible" }
+  | { kind: "absent" };
+
+function classifyTerminalReplyNarrative(
+  result: Awaited<ReturnType<SubagentSurface["waitForRun"]>>,
+): TerminalReplyNarrative {
+  const reply = result.terminalReply;
+  if (!reply) {
+    return { kind: "absent" };
+  }
+  const text =
+    reply.disposition === "visible" && typeof reply.text === "string" ? reply.text.trim() : "";
+  return text ? { kind: "visible", text } : { kind: "non-visible" };
 }
 
 // ── Date formatting ────────────────────────────────────────────────────
@@ -830,7 +830,8 @@ async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
   // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const runKey = buildNarrativeRunKey({
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
@@ -846,6 +847,7 @@ async function generateAndAppendDreamNarrative(
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
     let successfulSessionKey: string | null = null;
+    let terminalReply: TerminalReplyNarrative | null = null;
     try {
       const attemptModels = params.model ? [params.model, undefined] : [undefined];
 
@@ -892,6 +894,7 @@ async function generateAndAppendDreamNarrative(
 
           if (result.status === "ok") {
             successfulSessionKey = attemptSessionKey;
+            terminalReply = classifyTerminalReplyNarrative(result);
             break;
           }
 
@@ -942,10 +945,20 @@ async function generateAndAppendDreamNarrative(
         return;
       }
 
-      const narrative = await readSettledNarrativeText({
-        subagent: params.subagent,
-        sessionKey: successfulSessionKey,
-      });
+      // Prefer the terminal reply the run registry captured at completion time.
+      // A visible reply is immune to the sibling-cleanup race (#123360); an
+      // explicit non-visible reply is authoritative no-text and must not read
+      // history (an older narrative could resurface); only an absent reply
+      // (legacy runtime) falls back to polling the session store.
+      const narrative =
+        terminalReply?.kind === "visible"
+          ? terminalReply.text
+          : terminalReply?.kind === "absent"
+            ? await readSettledNarrativeText({
+                subagent: params.subagent,
+                sessionKey: successfulSessionKey,
+              })
+            : null;
       if (!narrative) {
         params.logger.warn(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
@@ -1076,7 +1089,8 @@ export async function runDreamNarrative(
     : async () => {
         await appendFallbackNarrativeEntry({
           ...rest,
-          nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
+          nowMs:
+            typeof rest.nowMs === "number" && Number.isFinite(rest.nowMs) ? rest.nowMs : Date.now(),
           reason: "the dreaming sweep has no owning agent id",
         });
         return { status: "completed" as const };

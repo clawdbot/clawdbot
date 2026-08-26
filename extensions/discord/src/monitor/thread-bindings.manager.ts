@@ -1,10 +1,10 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Discord plugin module implements thread bindings.manager behavior.
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   getRuntimeConfigSnapshot,
   type OpenClawConfig,
@@ -51,7 +51,6 @@ import {
   setBindingRecord,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
   shouldDefaultPersist,
-  resetThreadBindingsForTests,
 } from "./thread-bindings.state.js";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
@@ -71,8 +70,6 @@ function unregisterManager(accountId: string, manager: ThreadBindingManager) {
     MANAGERS_BY_ACCOUNT_ID.delete(accountId);
   }
 }
-
-const SWEEPERS_BY_ACCOUNT_ID = new Map<string, () => Promise<void>>();
 
 function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
   const accountId = normalizeAccountId(accountIdRaw);
@@ -232,8 +229,6 @@ export function createThreadBindingManager(params: {
       }
     }
   };
-  SWEEPERS_BY_ACCOUNT_ID.set(accountId, runSweepOnce);
-
   const manager: ThreadBindingManager = {
     accountId,
     getIdleTimeoutMs: () => idleTimeoutMs,
@@ -384,7 +379,7 @@ export function createThreadBindingManager(params: {
         agentId:
           normalizeOptionalString(bindParams.agentId) ??
           normalizeOptionalString(existingValue?.agentId) ??
-          resolveAgentIdFromSessionKey(targetSessionKey, resolveDefaultAgentId(cfg)),
+          resolveSessionAgentId({ config: cfg, sessionKey: targetSessionKey }),
         label:
           normalizeOptionalString(bindParams.label) ??
           normalizeOptionalString(existingValue?.label),
@@ -499,7 +494,6 @@ export function createThreadBindingManager(params: {
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      SWEEPERS_BY_ACCOUNT_ID.delete(accountId);
       unregisterManager(accountId, manager);
       unregisterSessionBindingAdapter({
         channel: "discord",
@@ -543,15 +537,3 @@ export function getThreadBindingManager(accountId?: string): ThreadBindingManage
   const normalized = normalizeAccountId(accountId);
   return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
 }
-
-export const testing = {
-  resolveThreadBindingThreadName,
-  resetThreadBindingsForTests,
-  runThreadBindingSweepForAccount: async (accountId?: string) => {
-    const sweep = SWEEPERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId));
-    if (sweep) {
-      await sweep();
-    }
-  },
-};
-export { testing as __testing };

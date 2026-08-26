@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -6,42 +7,39 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSwarmRunByLaunchReplayKey,
+  initSubagentRegistry,
+} from "./subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "./swarm-code-mode.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+} from "./subagents/swarm/swarm-code-mode.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
+import {
+  consumeTrustedToolNoStartError,
+  registerTrustedToolNoStartError,
+} from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,
   type CollectorCompletionResult,
 } from "./tools/agents-wait-tool.js";
 import { ToolInputError } from "./tools/common.js";
-import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
-type CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent: typeof emitSessionLifecycleEvent;
-  getSwarmRunByLaunchReplayKey: typeof getSwarmRunByLaunchReplayKey;
-  initSubagentRegistry: typeof initSubagentRegistry;
-  waitForCollectorCompletion: typeof waitForCollectorCompletion;
-};
-
-const defaultCodeModeSwarmDeps: CodeModeSwarmDeps = {
-  emitSessionLifecycleEvent,
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-  waitForCollectorCompletion,
-};
-
-const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 type CodeModeNode = {
   id: string;
@@ -75,7 +73,7 @@ async function callNodesTool(params: {
     parentToolCallId: params.parentToolCallId,
     signal: params.signal,
     onUpdate: params.onUpdate,
-    recoverySurface: "tools",
+    recoverySurface: "catalog",
   });
 }
 
@@ -159,8 +157,6 @@ async function runNodesBridge(params: {
   throw new ToolInputError("unsupported nodes bridge action.");
 }
 
-let codeModeSwarmDeps = defaultCodeModeSwarmDeps;
-
 export function codeModeReplayIdForToolCall(
   ctx: ToolSearchToolContext,
   toolCallId: string,
@@ -188,6 +184,12 @@ export function codeModeReplayIdForToolCall(
 function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   if (!resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled) {
     throw new ToolInputError("code mode swarm globals are disabled.");
+  }
+  // Swarm globals are the sessions_spawn capability: phase/log emit foreground lifecycle
+  // events and agents.run launches collectors. A run that executes only an allowlist
+  // (detached skill review) gets the same refusal as the tool, never the foreground session.
+  if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
+    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
   }
 }
 
@@ -282,9 +284,10 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
+  let existing = getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
+    params.ctx.agentId,
   );
   if (existing) {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
@@ -295,9 +298,9 @@ async function runAgentSpawnBridge(params: {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      codeModeSwarmDeps.initSubagentRegistry();
+      initSubagentRegistry();
       existing =
-        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey) ??
+        getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
         existing;
       if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
@@ -343,9 +346,11 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  return await codeModeSwarmDeps.waitForCollectorCompletion({
+  return await waitForCollectorCompletion({
     runId: runId.trim(),
     currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+    currentAgentId: params.ctx.agentId,
+    config: params.ctx.runtimeConfig ?? params.ctx.config,
     signal: params.signal,
   });
 }
@@ -365,7 +370,7 @@ function runSwarmNoteBridge(params: {
   if (!sessionKey) {
     throw new ToolInputError("swarmNote requires session identity.");
   }
-  codeModeSwarmDeps.emitSessionLifecycleEvent({
+  emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
@@ -381,14 +386,18 @@ function runSwarmNoteBridge(params: {
 
 export async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
+  maxOutputBytes: number;
+  remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
+  const catalogProjection = params.catalogProjection;
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
@@ -399,49 +408,75 @@ export async function runBridgeRequest(params: {
           throw new ToolInputError("search query must be a string.");
         }
         const options = isRecord(values[1]) ? values[1] : undefined;
-        value = await params.runtime.search(query, {
+        const matches = await params.runtime.search(query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           includeMcp: false,
+          allowedIds: catalogProjection.byId,
         });
+        const exact = query.trim().toLowerCase();
+        const exactBinding = catalogProjection.bindings.find(
+          (binding) =>
+            binding.name.toLowerCase() === exact || binding.callableName.toLowerCase() === exact,
+        );
+        value = exactBinding
+          ? [exactBinding.callableName]
+          : matches.flatMap((entry) => {
+              const binding = catalogProjection.byId.get(entry.id);
+              return binding ? [binding.callableName] : [];
+            });
         break;
       }
       case "describe": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("describe id must be a string.");
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("describe callable name must be a string.");
         }
-        value = await params.runtime.describe(id, {
-          includeMcp: false,
-          recoverySurface: "tools",
-        });
-        break;
-      }
-      case "call": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("call id must be a string.");
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
         }
-        value = await params.runtime.call(id, values[1] ?? {}, {
+        const described = await params.runtime.describe(binding.id, {
           includeMcp: false,
-          parentToolCallId: params.parentToolCallId,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          recoverySurface: "tools",
         });
+        const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        value = { ...guestDescription, callableName: binding.callableName };
         break;
       }
       case "callValue": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("callValue id must be a string.");
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("catalog callable name must be a string.");
         }
-        value = await params.runtime.callValue(id, values[1] ?? {}, {
-          includeMcp: false,
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
+        }
+        let input = values[1] ?? {};
+        if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          // The shell's 10s default equals Code Mode's default budget. Yield
+          // within the remaining shared deadline so late sequential calls can
+          // still return their process handle and resume the guest inline.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+          };
+        }
+        const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
-          recoverySurface: "tools",
         });
+        value =
+          isRecord(called.result) && "details" in called.result
+            ? called.result.details
+            : called.result;
         break;
       }
       case "nodes": {
@@ -489,7 +524,13 @@ export async function runBridgeRequest(params: {
               onUpdate: params.onUpdate,
             });
             if (request.catalogId) {
-              return called.result;
+              const guestResult = consumeMcpCodeModeGuestResult(called.result);
+              if (guestResult === undefined) {
+                throw new ToolInputError(
+                  "MCP namespace tool result is missing its owned guest projection.",
+                );
+              }
+              return guestResult;
             }
             return isRecord(called.result) && "details" in called.result
               ? called.result.details
@@ -528,19 +569,35 @@ export async function runBridgeRequest(params: {
         value = await readCodeModeSkill(skill, params.signal);
         break;
       }
+      case "sleep": {
+        const delay = values[0];
+        if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+          throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
+        }
+        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+          signal: params.signal,
+        });
+        break;
+      }
       case "swarmNote": {
         value = runSwarmNoteBridge(params);
         break;
       }
     }
-    return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
+    return {
+      id: params.request.id,
+      ok: true,
+      value: boundCodeModeValue(value, params.maxOutputBytes),
+    };
   } catch (error) {
-    return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
+    const settled: SettledBridgeRequest = {
+      id: params.request.id,
+      ok: false,
+      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+    };
+    if (consumeTrustedToolNoStartError(error)) {
+      registerTrustedToolNoStartError(settled);
+    }
+    return settled;
   }
-}
-
-export function setCodeModeSwarmDepsForTest(overrides?: Partial<CodeModeSwarmDeps>): void {
-  codeModeSwarmDeps = overrides
-    ? { ...defaultCodeModeSwarmDeps, ...overrides }
-    : defaultCodeModeSwarmDeps;
 }

@@ -4,6 +4,15 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  initializeMarkdownCodeBlocks,
+} from "../../components/markdown-code-blocks.ts";
+import {
+  enhanceMarkdownTables,
+  handleMarkdownTableInteraction,
+  releaseMarkdownTables,
+} from "../../components/markdown-tables.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -11,6 +20,8 @@ import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
+import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
@@ -24,21 +35,33 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) newAgentIntent = false;
   @property({ attribute: false }) showChannelOnboardingNudge = false;
+  @property({ attribute: false }) channelOnboardingError: string | null = null;
+  @property({ attribute: false }) channelOnboardingRetrying = false;
+  @property({ attribute: false }) onRetryChannelOnboarding: () => void = () => undefined;
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
+  private alertCleanup: (() => void) | null = null;
   private lastMessageId: number | null = null;
+  private markdownHost: HTMLElement | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.subscribeToStore();
+    this.alertCleanup = custodianAlertStore.subscribe(() => this.requestUpdate());
   }
 
   override disconnectedCallback(): void {
+    if (this.markdownHost) {
+      releaseMarkdownTables(this.markdownHost);
+      this.markdownHost = null;
+    }
     this.storeCleanup?.();
     this.storeCleanup = null;
+    this.alertCleanup?.();
+    this.alertCleanup = null;
     this.subscribedStore = null;
     super.disconnectedCallback();
   }
@@ -63,10 +86,28 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override updated(): void {
+    const store = this.store;
+    if (
+      store.chatAvailable &&
+      !store.sending &&
+      !store.hasUnresolvedQuestion() &&
+      !store.setupRequired
+    ) {
+      custodianAlertStore.askIfReady((question) => void store.send(question));
+    }
+    const transcript = this.querySelector<HTMLElement>(".custodian__messages");
+    if (transcript) {
+      // Caretaker turns render through the assistant bubble, so they carry the
+      // same interactive code-block and table markup the chat thread emits.
+      // Without this lifecycle those controls render but never do anything.
+      this.markdownHost = transcript;
+      initializeMarkdownCodeBlocks(transcript);
+      enhanceMarkdownTables(transcript);
+    }
     const messageId = this.store.messages.at(-1)?.id ?? null;
     if (messageId !== this.lastMessageId) {
       this.lastMessageId = messageId;
-      const lastMessage = this.querySelector(".custodian__messages")?.lastElementChild;
+      const lastMessage = transcript?.lastElementChild;
       if (lastMessage instanceof HTMLElement) {
         lastMessage.scrollIntoView?.({ block: "nearest" });
       }
@@ -92,7 +133,14 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
-    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.basePath);
+    const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.resourceBasePath);
+    const alertCard = custodianAlertStore.alert
+      ? renderCustodianAlertCard({
+          alert: custodianAlertStore.alert,
+          context: this.context,
+          onDismiss: () => custodianAlertStore.dismiss(),
+        })
+      : nothing;
     if (store.setupRequired) {
       const unavailable = store.setupIssue === "unavailable";
       return html`
@@ -101,6 +149,7 @@ class CustodianSurface extends OpenClawLightDomElement {
             ? "custodian-surface--panel"
             : ""}"
         >
+          ${alertCard}
           <div class="custodian__setup-state" role="alert">
             <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
             <h2>
@@ -133,19 +182,36 @@ class CustodianSurface extends OpenClawLightDomElement {
       `;
     }
     const emptyError = store.messages.length === 0 && store.error !== null && !store.sending;
+    const activeWizardMessage = store.wizardInputPending
+      ? store.messages.findLast((message) => message.step !== null)
+      : undefined;
     return html`
       <section
         class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""} ${emptyError
           ? "custodian-surface--empty-error"
           : ""}"
       >
-        <div class="custodian__messages" aria-live="polite">
-          ${this.showChannelOnboardingNudge
-            ? eventNudgeState.renderCustodianChannelOnboardingNudge({
-                onOpenChannels: () => store.openChannelsFromOnboarding(),
+        <div
+          class="custodian__messages"
+          aria-live="polite"
+          @click=${(event: MouseEvent) => {
+            handleMarkdownCodeBlockClick(event);
+            handleMarkdownTableInteraction(event);
+          }}
+        >
+          ${alertCard}
+          ${this.channelOnboardingError
+            ? eventNudgeState.renderCustodianChannelOnboardingError({
+                retrying: this.channelOnboardingRetrying,
+                onRetry: this.onRetryChannelOnboarding,
                 onDismiss: () => store.dismissChannelOnboardingNudge(),
               })
-            : nothing}
+            : this.showChannelOnboardingNudge
+              ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                  onOpenChannels: () => store.openChannelsFromOnboarding(),
+                  onDismiss: () => store.dismissChannelOnboardingNudge(),
+                })
+              : nothing}
           ${!this.onboarding && store.eventNudge && !store.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({
                 nudge: store.eventNudge,
@@ -172,6 +238,15 @@ class CustodianSurface extends OpenClawLightDomElement {
                 store.sending || !store.chatAvailable || store.answeredQuestions.has(questionKey),
               onSelect: (label) => store.answerQuestion(message, label),
               onSkip: () => void store.dismissQuestion(message),
+              showWizardStep: message === activeWizardMessage,
+              wizardValue: store.wizardValue,
+              wizardDisabled: store.sending || !store.chatAvailable,
+              wizardSecretVisible: store.wizardSecretVisible,
+              onWizardValueChange: (value) => store.setWizardValue(value),
+              onWizardAnswer: (value) => store.answerWizardStep(message, value),
+              showWizardCancel: store.wizardCancelAvailable,
+              onWizardCancel: () => store.cancelWizardStep(message),
+              onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
             });
           })}
           ${store.sending
@@ -204,60 +279,61 @@ class CustodianSurface extends OpenClawLightDomElement {
         </div>
 
         ${this.historyContent}
-
-        <div class="agent-chat__composer-shell">
-          <div class="agent-chat__input">
-            <div class="agent-chat__composer-input-row">
-              <div class="agent-chat__composer-combobox">
-                ${store.sensitive
-                  ? html`<input
-                      type="password"
-                      .value=${store.input}
-                      autocomplete="off"
-                      placeholder=${t("custodian.sensitivePlaceholder")}
-                      aria-label=${t("custodian.sensitivePlaceholder")}
-                      ?disabled=${!store.activeClient ||
+        ${activeWizardMessage
+          ? nothing
+          : html`<div class="agent-chat__composer-shell">
+              <div class="agent-chat__input">
+                <div class="agent-chat__composer-input-row">
+                  <div class="agent-chat__composer-combobox">
+                    ${store.sensitive
+                      ? html`<input
+                          type="password"
+                          .value=${store.input}
+                          autocomplete="off"
+                          placeholder=${t("custodian.sensitivePlaceholder")}
+                          aria-label=${t("custodian.sensitivePlaceholder")}
+                          ?disabled=${!store.activeClient ||
+                          !store.chatAvailable ||
+                          store.sending ||
+                          store.setupRequired}
+                          @input=${(event: Event) =>
+                            store.setInput((event.target as HTMLInputElement).value)}
+                          @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+                        />`
+                      : html`<textarea
+                          rows="1"
+                          .value=${store.input}
+                          autocomplete="on"
+                          placeholder=${t("custodian.placeholder")}
+                          aria-label=${t("custodian.placeholder")}
+                          ?disabled=${!store.activeClient ||
+                          !store.chatAvailable ||
+                          store.sending ||
+                          store.setupRequired}
+                          @input=${(event: Event) =>
+                            store.setInput((event.target as HTMLTextAreaElement).value)}
+                          @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+                        ></textarea>`}
+                  </div>
+                  <div class="agent-chat__composer-actions">
+                    <button
+                      class="chat-send-btn"
+                      type="button"
+                      aria-label=${t("custodian.send")}
+                      ?disabled=${!store.input.trim() ||
+                      !store.activeClient ||
                       !store.chatAvailable ||
                       store.sending ||
                       store.setupRequired}
-                      @input=${(event: Event) =>
-                        store.setInput((event.target as HTMLInputElement).value)}
-                      @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
-                    />`
-                  : html`<textarea
-                      rows="1"
-                      .value=${store.input}
-                      autocomplete="on"
-                      placeholder=${t("custodian.placeholder")}
-                      aria-label=${t("custodian.placeholder")}
-                      ?disabled=${!store.activeClient ||
-                      !store.chatAvailable ||
-                      store.sending ||
-                      store.setupRequired}
-                      @input=${(event: Event) =>
-                        store.setInput((event.target as HTMLTextAreaElement).value)}
-                      @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
-                    ></textarea>`}
+                      @click=${() => void store.send()}
+                    >
+                      ${icons.arrowUp}
+                      <span class="agent-chat__control-label">${t("custodian.send")}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div class="agent-chat__composer-actions">
-                <button
-                  class="chat-send-btn"
-                  type="button"
-                  aria-label=${t("custodian.send")}
-                  ?disabled=${!store.input.trim() ||
-                  !store.activeClient ||
-                  !store.chatAvailable ||
-                  store.sending ||
-                  store.setupRequired}
-                  @click=${() => void store.send()}
-                >
-                  ${icons.arrowUp}
-                  <span class="agent-chat__control-label">${t("custodian.send")}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+            </div>`}
       </section>
     `;
   }

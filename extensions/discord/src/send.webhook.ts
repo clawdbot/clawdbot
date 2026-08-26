@@ -20,6 +20,10 @@ import {
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
+import {
+  resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
+} from "./send.message-request.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -36,6 +40,7 @@ type DiscordWebhookSendOpts = {
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 function resolveWebhookExecutionUrl(params: {
@@ -121,6 +126,9 @@ export async function sendWebhookMessageDiscord(
     accountId: account.accountId,
     mentionAliases: account.config.mentionAliases,
   });
+  const flags = resolveDiscordMessageFlags({
+    suppressEmbeds: resolveDiscordSuppressEmbeds({ configured: account.config.suppressEmbeds }),
+  });
   const threadConversationId = opts.threadId == null ? "" : String(opts.threadId).trim();
   if (threadConversationId) {
     // Reserve the webhook source before the request so an immediate gateway echo
@@ -147,6 +155,7 @@ export async function sendWebhookMessageDiscord(
   try {
     const response = await request(
       async () => {
+        await opts.onPlatformSendDispatch?.();
         const attemptResponse = await (proxyFetch ?? fetch)(url, {
           method: "POST",
           headers: {
@@ -156,6 +165,7 @@ export async function sendWebhookMessageDiscord(
             content: rewrittenText,
             username: normalizeOptionalString(opts.username),
             avatar_url: normalizeOptionalString(opts.avatarUrl),
+            ...(flags ? { flags } : {}),
             ...(messageReference ? { message_reference: messageReference } : {}),
           }),
           signal: deadline.signal,

@@ -1,6 +1,8 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
@@ -160,17 +162,23 @@ export function parseConfigSetPath(path: string): string[] {
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
   if (strictJson) {
+    let parsed: unknown;
     try {
-      return JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch (err) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
+    rejectConfigNonFiniteNumbers(parsed);
+    return parsed;
   }
+  let parsed: unknown;
   try {
-    return JSON5.parse(trimmed);
+    parsed = JSON5.parse(trimmed);
   } catch {
     return raw;
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 export function validatePathSegments(path: PathSegment[]): void {
@@ -222,7 +230,7 @@ export function formatConfigUnsetMissingPathMessage(params: {
 }
 
 function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isPlainRecord(value);
 }
 
 function schemaTypes(schema: JsonSchemaRecord): Set<string> {
@@ -317,6 +325,13 @@ function schemasAtPath(
     }
   }
   return schemas;
+}
+
+export function isConfigSchemaPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean {
+  return schemasAtPath(schema, path).length > 0;
 }
 
 function schemaPrefersArrayAtPath(
@@ -594,8 +609,4 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   }
   delete record[last];
   return { removed: true, leafContainer: "object" };
-}
-
-export function toDotPath(path: readonly PathSegment[]): string {
-  return path.join(".");
 }

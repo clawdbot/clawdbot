@@ -96,14 +96,6 @@ describe("fallback-state", () => {
     expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
   });
 
-  it("normalizes fallback reason whitespace for summaries", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, reason: "rate_limit\n\tburst" }],
-    });
-
-    expect(resolved.reasonSummary).toBe("rate limit burst");
-  });
-
   it("prefers formatted transient error details over generic rate-limit labels", () => {
     const resolved = resolveDemoFallbackTransition({
       attempts: [

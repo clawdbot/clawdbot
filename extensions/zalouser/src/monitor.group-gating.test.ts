@@ -1,9 +1,23 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send.test-mocks.js";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  sendDeliveredZalouserMock,
+  sendMessageZalouserMock,
+  sendSeenZalouserMock,
+  sendTypingZalouserMock,
+} from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  listZaloFriendsMock,
+  listZaloGroupsMock,
+  startZaloListenerMock,
+} from "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {
   createRawZalouserMessageFromNormalized,
@@ -11,22 +25,11 @@ import {
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
-import {
-  sendDeliveredZalouserMock,
-  sendMessageZalouserMock,
-  sendSeenZalouserMock,
-  sendTypingZalouserMock,
-} from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendMessageZalouser } from "./send.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import {
-  listZaloFriendsMock,
-  listZaloGroupsMock,
-  startZaloListenerMock,
-} from "./zalo-js.test-mocks.js";
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -310,7 +313,7 @@ async function processMessageThroughMonitor(params: {
   config: OpenClawConfig;
   runtime: ReturnType<typeof createZalouserRuntimeEnv>;
   historyState?: { historyLimit?: number };
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const messages = params.messages ?? (params.message ? [params.message] : []);
   const account = params.historyState?.historyLimit

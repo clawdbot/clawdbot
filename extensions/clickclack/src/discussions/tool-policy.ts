@@ -38,7 +38,6 @@ export function isClickClackDiscussionSessionTarget(params: {
       serverBaseUrl: matched.binding.serverBaseUrl,
       channelId: matched.binding.channelId,
     }) &&
-    !matched.binding.archived &&
     bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, matched.binding) &&
     resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, matched.binding)
       .state === "active"

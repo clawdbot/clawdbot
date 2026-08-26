@@ -22,7 +22,6 @@ export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
   forceBodyForCommands?: boolean;
   forceChatType?: boolean;
-  forceConversationLabel?: boolean;
 };
 
 const FINALIZED_INBOUND_CONTEXT = Symbol("openclaw.finalizedInboundContext");
@@ -153,7 +152,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.BodyForCommands = normalized.commandText;
 
   const explicitLabel = normalizeOptionalString(normalized.ConversationLabel);
-  if (opts.forceConversationLabel || !explicitLabel) {
+  if (!explicitLabel) {
     const resolved = normalizeOptionalString(resolveConversationLabel(normalized));
     if (resolved) {
       normalized.ConversationLabel = resolved;

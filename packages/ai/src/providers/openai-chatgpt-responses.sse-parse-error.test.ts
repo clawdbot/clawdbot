@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
-import { parseSSEForTest, streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
+import { streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
 
 // Stands in for the payload class this path exposes: text that reached the SSE
 // frame as ordinary stream content rather than as a provider error envelope.
@@ -94,50 +94,6 @@ async function streamCodexSseFrames(
 }
 
 describe("Codex malformed SSE frames", () => {
-  it("classifies only parser-owned SyntaxErrors as malformed frames", async () => {
-    const iterator = parseSSEForTest(
-      new Response(`data: ${MALFORMED_FRAME}\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-
-    let caught: unknown;
-    try {
-      await iterator.next();
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toMatchObject({
-      name: "CodexProtocolError",
-      message: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-      cause: expect.any(SyntaxError),
-    });
-  });
-
-  it("preserves a consumer-thrown SyntaxError unchanged", async () => {
-    const iterator = parseSSEForTest(
-      new Response(`data: ${COMPLETED_FRAME}\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-    const first = await iterator.next();
-    expect(first).toMatchObject({
-      done: false,
-      value: { type: "response.completed" },
-    });
-
-    const consumerError = new SyntaxError("consumer failed after receiving an event");
-    let caught: unknown;
-    try {
-      await iterator.throw(consumerError);
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBe(consumerError);
-  });
-
   it("reports the shared malformed-fragment error without echoing parser text", async () => {
     const result = await streamCodexSseFrames([MALFORMED_FRAME]);
 

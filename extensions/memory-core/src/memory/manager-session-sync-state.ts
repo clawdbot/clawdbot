@@ -8,11 +8,13 @@ export type MemorySessionStartupFileState = {
   size: number;
 };
 
-export function resolveMemorySessionStartupDirtyFiles(params: {
+export function resolveMemorySessionStartupState(params: {
   files: MemorySessionStartupFileState[];
   existingRows?: MemorySourceFileStateRow[] | null;
-}): string[] {
-  const indexedRows = new Map((params.existingRows ?? []).map((row) => [row.path, row]));
+}): { dirtyFiles: string[]; hasStaleIndexedPaths: boolean } {
+  const existingRows = params.existingRows ?? [];
+  const indexedRows = new Map(existingRows.map((row) => [row.path, row]));
+  const activePaths = new Set(params.files.map((file) => file.path));
   const dirtyFiles: string[] = [];
   for (const file of params.files) {
     const existing = indexedRows.get(file.path);
@@ -32,14 +34,16 @@ export function resolveMemorySessionStartupDirtyFiles(params: {
       dirtyFiles.push(file.absPath);
     }
   }
-  return dirtyFiles;
+  return {
+    dirtyFiles,
+    hasStaleIndexedPaths: existingRows.some((row) => !activePaths.has(row.path)),
+  };
 }
 
 export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;
   files: string[];
   targetSessionFiles: Set<string> | null;
-  sessionsDirtyFiles: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
 }): {
@@ -56,9 +60,6 @@ export function resolveMemorySessionSyncPlan(params: {
     activePaths,
     existingRows,
     existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
-    indexAll:
-      params.needsFullReindex ||
-      Boolean(params.targetSessionFiles) ||
-      params.sessionsDirtyFiles.size === 0,
+    indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

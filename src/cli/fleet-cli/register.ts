@@ -1,6 +1,6 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { validateDiskSize } from "../../fleet/cell-profile.js";
-import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { collectOption, parseStrictPositiveIntOption } from "../program/helpers.js";
 

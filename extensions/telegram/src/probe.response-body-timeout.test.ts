@@ -1,6 +1,6 @@
 // Telegram tests cover stalled diagnostic response body handling.
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
+import { probeTelegram } from "./probe.js";
 
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
@@ -85,8 +85,10 @@ function makeTricklingJsonResponse(cancel: (reason?: unknown) => void): Response
 }
 
 describe("probeTelegram response body timeouts", () => {
+  let tokenIndex = 0;
+  const nextToken = () => `response-body-${++tokenIndex}`;
+
   afterEach(() => {
-    resetTelegramProbeFetcherCacheForTests();
     resolveTelegramTransport.mockReset();
     makeProxyFetch.mockReset();
     vi.useRealTimers();
@@ -107,7 +109,7 @@ describe("probeTelegram response body timeouts", () => {
     );
 
     vi.useFakeTimers();
-    const probePromise = probeTelegram("placeholder", 50, {
+    const probePromise = probeTelegram(nextToken(), 50, {
       includeWebhookInfo: false,
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -127,7 +129,7 @@ describe("probeTelegram response body timeouts", () => {
     vi.useFakeTimers();
     fetchMock.mockResolvedValueOnce(makeTricklingJsonResponse(cancel));
 
-    const probePromise = probeTelegram("placeholder", 100, {
+    const probePromise = probeTelegram(nextToken(), 100, {
       includeWebhookInfo: false,
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -155,7 +157,7 @@ describe("probeTelegram response body timeouts", () => {
     );
 
     vi.useFakeTimers();
-    const probePromise = probeTelegram("placeholder", 50);
+    const probePromise = probeTelegram(nextToken(), 50);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(60);
 

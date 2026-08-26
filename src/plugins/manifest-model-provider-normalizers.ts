@@ -4,7 +4,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
-import { normalizeStringRecord } from "./manifest-capability-normalizers.js";
+import { normalizeManifestStringRecord } from "./manifest-capability-normalizers.js";
 import type {
   PluginManifestModelIdNormalization,
   PluginManifestModelIdNormalizationProvider,
@@ -338,7 +338,7 @@ export function normalizeManifestSecretProviderIntegrations(
       rawIntegration.maxOutputBytes,
       MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
     );
-    const env = normalizeStringRecord(rawIntegration.env);
+    const env = normalizeManifestStringRecord(rawIntegration.env);
     const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
       maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
       pattern: ENV_SECRET_REF_ID_RE,
@@ -358,7 +358,6 @@ export function normalizeManifestSecretProviderIntegrations(
         : {}),
       ...(env ? { env } : {}),
       ...(passEnv ? { passEnv } : {}),
-      ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;

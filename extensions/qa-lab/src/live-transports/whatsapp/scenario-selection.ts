@@ -7,5 +7,9 @@ export function resolveWhatsAppQaScenarioIds(params: {
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {
-  return resolveLiveTransportQaScenarioIds({ channelId: "whatsapp", ...params });
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "whatsapp",
+    supportsModuleFlows: true,
+    ...params,
+  });
 }

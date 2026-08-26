@@ -1,9 +1,11 @@
 // Imessage tests cover monitor.watch subscribe retry plugin behavior.
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
+import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import {
   installIMessageFailingStateRuntimeForTest,
   installIMessageStateRuntimeForTest,
@@ -33,6 +35,7 @@ function createRuntime() {
   return {
     log: vi.fn(),
     error: vi.fn(),
+    exit: vi.fn(),
   };
 }
 
@@ -268,5 +271,61 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(diagnostics[0]).not.toContain("outbound-guid");
     expect(diagnostics[0]).not.toContain("private message text");
     expect(diagnostics[0]).not.toContain("+15550001111");
+  });
+
+  it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
+    vi.useRealTimers();
+    installIMessageStateRuntimeForTest();
+    const runtime = createRuntime();
+    const sender = "+15550002222";
+    const chatId = 456;
+    const scope = `default:chat_id:${chatId}`;
+    rememberPersistedIMessageEcho({ scope, text: "loop echo" });
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
+    const notify = async (id: number, text: string) => {
+      await onNotification?.({
+        method: "message",
+        params: {
+          message: {
+            id,
+            guid: `p:0/message-${id}`,
+            chat_id: chatId,
+            sender,
+            is_from_me: false,
+            is_group: true,
+            text,
+            created_at: new Date().toISOString(),
+          },
+        },
+      });
+    };
+    const client = createRpcClient({
+      waitForClose: async () => {
+        for (let id = 1; id <= 5; id += 1) {
+          await notify(id, "loop echo");
+        }
+        await notify(6, "legitimate inbound");
+      },
+    });
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return client;
+    });
+
+    await monitorIMessageProvider({
+      config: { channels: { imessage: { groupPolicy: "open" } } },
+      runtime,
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    const logs = runtime.log.mock.calls.map(([message]) => String(message));
+    const warning = logs.find((message) => message.includes("rate limiter tripped"));
+    expect(warning, `logs: ${JSON.stringify(logs)}`).toBeDefined();
+    expect(warning).toContain(`group:${redactIdentifier(`group:${chatId}`)}`);
+    expect(warning).not.toContain(sender);
   });
 });

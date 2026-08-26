@@ -3,14 +3,18 @@
  *
  * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
   formatToolDetailText,
   formatDetailKey,
-  normalizeToolName,
+  normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
@@ -54,7 +58,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolName(params.name);
+  const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
@@ -94,6 +98,17 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
   return formatToolDetailText(detailRaw);
 }
 
+/** Infers compact display metadata for a tool invocation from its arguments. */
+export function inferToolMetaFromArgsCore(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolDetailMode },
+): string | undefined {
+  return formatToolDetail(
+    resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode }),
+  );
+}
+
 /**
  * Shell-family tools render their command as the whole line instead of
  * "Label: detail". Backends spell the same tool differently — the Claude CLI
@@ -103,6 +118,15 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
 export function isShellToolDisplayName(name: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return normalized === "bash" || normalized === "exec" || normalized === "shell";
+}
+
+/** Provider-defined tool names are not enough: namespaced tools can carry executable commands. */
+export function isCommandBearingToolCall(name: string | undefined, args?: unknown): boolean {
+  if (isShellToolDisplayName(name)) {
+    return true;
+  }
+  const command = asOptionalObjectRecord(args)?.command;
+  return typeof command === "string" && normalizeOptionalString(command) !== undefined;
 }
 
 /** Builds the compact one-line summary shown in transcripts and logs. */

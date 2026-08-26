@@ -1,6 +1,6 @@
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
@@ -72,12 +72,7 @@ function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<stri
         if (!allowedActions.has(readToolAction(params))) {
           throw new ToolAuthorizationError(REPORT_ONLY_ERROR);
         }
-        return await Reflect.apply(target.execute, undefined, [
-          toolCallId,
-          params,
-          signal,
-          onUpdate,
-        ]);
+        return await target.execute(toolCallId, params, signal, onUpdate);
       };
     },
   });
@@ -96,7 +91,7 @@ export function applyDelegationCapability(
     return tools;
   }
   return tools.flatMap((tool) => {
-    const name = normalizeToolName(tool.name);
+    const name = normalizeToolPolicyName(tool.name);
     if (NEW_DELEGATION_TOOL_NAMES.has(name)) {
       return [];
     }

@@ -1,6 +1,11 @@
 /** Lazy store facade that keeps binding schema/auth code off plugin startup. */
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createCodexManagedThreadStore,
+  type CodexManagedThreadStore,
+  type StoredCodexManagedThread,
+} from "./managed-thread-store.js";
+import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
@@ -15,13 +20,21 @@ export function createLazyCodexAppServerBindingStore(
     PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
     "entries" | "lookup" | "update"
   >,
+  managedThreadState?: Pick<
+    PluginStateSyncKeyedStore<StoredCodexManagedThread>,
+    "entries" | "registerIfAbsent"
+  >,
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
     (resolved ??= import("./session-binding.js").then(({ createCodexAppServerBindingStore }) =>
       createCodexAppServerBindingStore(state),
     ));
+  const managedThreads: CodexManagedThreadStore | undefined = managedThreadState
+    ? createCodexManagedThreadStore(managedThreadState)
+    : undefined;
   return {
+    ...(managedThreads ? { managedThreads } : {}),
     read: async (identity) => (await store()).read(identity),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>
       (await store()).hasOtherThreadOwner(threadId, currentIdentity),

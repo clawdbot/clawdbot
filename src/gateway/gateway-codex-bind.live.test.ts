@@ -27,7 +27,7 @@ import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
-  getFreeGatewayPort,
+  getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
@@ -395,7 +395,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       const workspace = path.join(tempRoot, "workspace");
       const configPath = path.join(tempRoot, "openclaw.json");
       const token = `test-${randomUUID()}`;
-      const port = await getFreeGatewayPort();
+      const port = await getCliBackendPortBlock();
       const sessionKey = "main";
       const accountId = "default";
       const slackUserId = `U${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;

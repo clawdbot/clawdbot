@@ -32,7 +32,6 @@ export async function resolveTelegramMiniAppUrls(params: {
   const publishedHost = resolveTailscalePublishedHost({
     tailscaleMode: mode,
     tailnetHost,
-    serviceName: params.cfg.gateway?.tailscale?.serviceName,
   });
   if (!publishedHost) {
     throw new Error(TELEGRAM_MINIAPP_URL_ERROR);

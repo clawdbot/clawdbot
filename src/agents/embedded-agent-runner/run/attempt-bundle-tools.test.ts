@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setPluginToolMeta } from "../../../plugins/tools.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
+  filterRuntimeCompatibleTools: vi.fn(),
 }));
 
 vi.mock("../../agent-bundle-lsp-runtime.js", () => ({
@@ -26,7 +28,7 @@ vi.mock("../../local-model-lean.js", () => ({
 }));
 
 vi.mock("../../tool-schema-projection.js", () => ({
-  filterRuntimeCompatibleTools: vi.fn((tools: unknown[]) => ({ tools, diagnostics: [] })),
+  filterRuntimeCompatibleTools: mocks.filterRuntimeCompatibleTools,
 }));
 
 vi.mock("../effective-tool-policy.js", () => ({
@@ -44,6 +46,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
+    mocks.filterRuntimeCompatibleTools
+      .mockReset()
+      .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
   });
 
   function createInput(inheritedToolAllowlist: string[], toolsRaw: unknown[]) {
@@ -210,6 +215,39 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     expect(inheritedToolAllowlist).toEqual(["sessions_spawn", "server__read"]);
     expect(inheritedToolAllowlist).not.toContain("server__delete");
+  });
+
+  it("captures the post-quarantine creator cap with plugin ownership", async () => {
+    const coreTool = { name: "automations" };
+    const allowedMcpTool = { name: "mail__read" };
+    const quarantinedMcpTool = { name: "mail__broken" };
+    setPluginToolMeta(allowedMcpTool as never, { pluginId: "bundle-mcp", optional: false });
+    setPluginToolMeta(quarantinedMcpTool as never, {
+      pluginId: "bundle-mcp",
+      optional: false,
+    });
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [allowedMcpTool, quarantinedMcpTool],
+    });
+    mocks.filterRuntimeCompatibleTools.mockImplementation((tools: Array<{ name: string }>) => ({
+      tools: tools.filter((tool) => tool.name !== "mail__broken"),
+      diagnostics: [{ toolName: "mail__broken", violations: ["unsupported"] }],
+    }));
+    const input = createInput([], [coreTool]);
+    const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
+    input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = captureRef;
+
+    await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "automations" },
+      { name: "mail__read", pluginId: "bundle-mcp" },
+    ]);
+    expect(captureRef.value).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+    });
   });
 
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {

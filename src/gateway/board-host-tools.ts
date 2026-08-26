@@ -6,7 +6,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
-import { sessionsHandlers } from "./server-methods/sessions.js";
+import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
 
@@ -14,8 +14,9 @@ type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
 
 const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
-  "sessions.list": sessionsHandlers["sessions.list"]!,
-  "usage.status": usageHandlers["usage.status"]!,
+  "sessions.list": sessionReadHandlers["sessions.list"]!,
+  // Board reads are one-shot and cannot converge an incomplete marker.
+  "usage.status": (invocation) => usageHandlers["usage.status"]!({ ...invocation, client: null }),
   "usage.cost": usageHandlers["usage.cost"]!,
   "cron.list": cronHandlers["cron.list"]!,
   "cron.status": cronHandlers["cron.status"]!,

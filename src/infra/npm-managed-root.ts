@@ -1,15 +1,15 @@
 // Manages private npm package roots for plugin install flows.
-import type { Stats } from "node:fs";
+import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errors.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
-import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
+import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -65,16 +65,7 @@ type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
 function readDependencyRecord(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const dependencies: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string") {
-      dependencies[key] = raw;
-    }
-  }
-  return dependencies;
+  return filterStringRecord(value) ?? {};
 }
 
 function isSafePackageName(name: string): boolean {
@@ -539,7 +530,75 @@ type MissingRequiredPlatformPackage = {
   packagePath: string;
 };
 
-/** Lists explicitly required current-platform packages that npm recorded but did not materialize. */
+async function isRequiredPlatformPackageComplete(params: {
+  packagePath: string;
+  lockPackages: Record<string, unknown>;
+}): Promise<boolean> {
+  let manifest: unknown;
+  try {
+    manifest = await readJsonIfExists(path.join(params.packagePath, "package.json"));
+  } catch (error) {
+    if (error instanceof JsonFileReadError && error.reason === "parse") {
+      return false;
+    }
+    throw error;
+  }
+  if (!isRecord(manifest)) {
+    return false;
+  }
+  const packageName = readOptionalString(manifest.name);
+  if (!packageName || !isSafePackageName(packageName)) {
+    return false;
+  }
+  if (!Array.isArray(manifest.files) || !manifest.files.includes("vendor")) {
+    return true;
+  }
+
+  const executableName = packageName.split("/").at(-1);
+  const ownsNativeExecutable = Object.entries(params.lockPackages).some(
+    ([location, entry]) =>
+      readLockPackageLocationName(location) === packageName &&
+      isRecord(entry) &&
+      (typeof entry.bin === "string" ||
+        (isRecord(entry.bin) && typeof entry.bin[executableName ?? ""] === "string")),
+  );
+  if (!executableName || !ownsNativeExecutable) {
+    return true;
+  }
+
+  let vendorEntries: Dirent[];
+  try {
+    vendorEntries = await fs.readdir(path.join(params.packagePath, "vendor"), {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+  const executableFilename =
+    process.platform === "win32" ? `${executableName}.exe` : executableName;
+  for (const target of vendorEntries) {
+    if (!target.isDirectory()) {
+      continue;
+    }
+    try {
+      await fs.access(
+        path.join(params.packagePath, "vendor", target.name, "bin", executableFilename),
+        fsConstants.X_OK,
+      );
+      return true;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "EACCES")) {
+        throw error;
+      }
+    }
+  }
+  return false;
+}
+
+/** Lists explicitly required current-platform packages that npm left missing or incomplete. */
 export async function listMissingRequiredPlatformPackages(params: {
   npmRoot: string;
   requiredPackageNames: ReadonlySet<string> | readonly string[];
@@ -568,7 +627,12 @@ export async function listMissingRequiredPlatformPackages(params: {
     if (!name || !requiredPackageNames.has(name) || !isSafePackageName(name) || !packagePath) {
       continue;
     }
-    if (!(await pathExists(packagePath))) {
+    if (
+      !(await isRequiredPlatformPackageComplete({
+        packagePath,
+        lockPackages: parsed.packages,
+      }))
+    ) {
       missing.push({ name, packagePath });
     }
   }
@@ -747,6 +811,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, string>> {
   const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
   const dependencies = readDependencyRecord(manifest.dependencies);
@@ -787,6 +852,8 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     const npmPlanOptions = {
       cwd: tempRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
         npmConfigCwd: tempRoot,
@@ -900,6 +967,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   overrideOmissions?: ManagedNpmOverrideOmissions;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
@@ -910,6 +978,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     npmRoot: params.npmRoot,
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   const managedPeerDependencyNames = new Set(
     Object.keys(peerPins).filter(
@@ -977,6 +1046,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   packageRoot?: string | null;
   timeoutMs?: number;
+  signal?: AbortSignal;
   logger?: ManagedNpmRootLogger;
   runCommand?: ManagedNpmRootRunCommand;
 }): Promise<boolean> {
@@ -1034,6 +1104,8 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     const result = await command(npmArgs, {
       cwd: params.npmRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
         npmConfigCwd: params.npmRoot,

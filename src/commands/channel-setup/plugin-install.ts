@@ -9,7 +9,6 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
-import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -100,7 +99,7 @@ function loadChannelSetupPluginRegistry(params: {
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     cache: false,
-    logger: createPluginLoaderLogger(log),
+    logger: log,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
     forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,

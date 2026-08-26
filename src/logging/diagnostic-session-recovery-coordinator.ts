@@ -11,8 +11,6 @@ import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js"
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   recoveryOutcomeClearsQueuedSessionState,
-  recoveryOutcomeMutatesSessionState,
-  recoveryOutcomeReleasedCount,
   resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
@@ -70,13 +68,9 @@ function emitSessionRecoveryCompleted(params: {
     status: params.outcome.status,
     action: params.outcome.action,
     outcomeReason: "reason" in params.outcome ? params.outcome.reason : undefined,
-    released: recoveryOutcomeReleasedCount(params.outcome) || undefined,
+    released: "released" in params.outcome ? params.outcome.released || undefined : undefined,
     stale: params.stale,
   });
-}
-
-function recoveryRequestKey(request: StuckSessionRecoveryRequest): string | undefined {
-  return resolveStuckSessionRecoveryRef(request);
 }
 
 function isRecoveryPromiseLike(
@@ -85,10 +79,6 @@ function isRecoveryPromiseLike(
   return (
     typeof (value as Promise<void | StuckSessionRecoveryOutcome> | undefined)?.then === "function"
   );
-}
-
-function recoveryOutcomeHasQueuedLaneWork(outcome: StuckSessionRecoveryOutcome): boolean {
-  return outcome.status === "aborted" && (outcome.queuedCount ?? 0) > 0;
 }
 
 function applyRecoveryOutcomeToDiagnosticState(params: {
@@ -100,7 +90,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   if (!params.outcome) {
     return;
   }
-  if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
+  if (params.outcome.status !== "aborted" && params.outcome.status !== "released") {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }
@@ -154,7 +144,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
   const preserveQueuedIdleWork =
-    params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
+    params.request.expectedState === "idle" && (params.outcome.queuedCount ?? 0) > 0;
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
     ? 0
     : preserveQueuedIdleWork
@@ -173,10 +163,10 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   markActivity();
 }
 
-export function requestStuckSessionRecoveryOutcome(
+function requestStuckSessionRecoveryOutcome(
   params: RequestStuckSessionRecoveryParams,
 ): Promise<StuckSessionRecoveryOutcome | undefined> {
-  const inFlightKey = recoveryRequestKey(params.request);
+  const inFlightKey = resolveStuckSessionRecoveryRef(params.request);
   if (inFlightKey && recoveryRequestsInFlight.has(inFlightKey)) {
     const outcome: StuckSessionRecoveryOutcome = {
       status: "skipped",

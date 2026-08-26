@@ -54,15 +54,6 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(beacons.isEmpty)
     }
 
-    #if DEBUG
-    @Test func `reuses probe session across discovery passes`() {
-        let first = TailscaleServeGatewayDiscovery.probeSessionIdentifierForTesting()
-        let second = TailscaleServeGatewayDiscovery.probeSessionIdentifierForTesting()
-
-        #expect(first == second)
-    }
-    #endif
-
     @Test func `resolves bare executable from PATH`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

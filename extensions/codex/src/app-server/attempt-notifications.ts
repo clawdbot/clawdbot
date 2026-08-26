@@ -1,3 +1,4 @@
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Predicates and readers for Codex app-server notification envelopes.
  */
@@ -105,7 +106,8 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
   return Boolean(
     item &&
     readString(item, "type") === "agentMessage" &&
-    readString(item, "phase") !== "commentary",
+    readString(item, "phase") !== "commentary" &&
+    readString(item, "delivery") !== "async",
   );
 }
 
@@ -131,7 +133,7 @@ export function isAssistantCommentaryCompletionNotification(
   return Boolean(
     item &&
     readString(item, "type") === "agentMessage" &&
-    readString(item, "phase") === "commentary",
+    (readString(item, "phase") === "commentary" || readString(item, "delivery") === "async"),
   );
 }
 
@@ -388,11 +390,6 @@ function extractRawResponseItemText(item: JsonObject): string {
       return text ? [text] : [];
     })
     .join("");
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 /** Reads a typed Codex item from notification params when id/type are present. */

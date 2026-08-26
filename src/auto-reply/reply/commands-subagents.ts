@@ -1,11 +1,10 @@
 // Implements subagent commands for spawn, focus, routing, and status.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
-  stopWithText,
   type SubagentsCommandContext,
 } from "./commands-subagents-dispatch.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -82,7 +81,7 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
 
     const requesterKey = resolveRequesterSessionKey(params);
     if (!requesterKey) {
-      return stopWithText("⚠️ Missing session key.");
+      return commandReply("⚠️ Missing session key.");
     }
 
     const ctx: SubagentsCommandContext = {

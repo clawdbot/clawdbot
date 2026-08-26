@@ -2,6 +2,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createOutboundSendDeps } from "./outbound-send-deps.js";
 
 const runtimeFactories = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -93,6 +94,20 @@ describe("createDefaultDeps", () => {
     expect(deps.discordVoice).toBeUndefined();
     expect(deps.sendDiscordVoice).toBeUndefined();
     expect(runtimeFactories.discord).not.toHaveBeenCalled();
+  });
+
+  it("does not expose lazy channel senders as low-level outbound transports", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("outbound-transport-boundary");
+    const deps = createDefaultDeps();
+
+    const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
+    await sendTelegram("chat", "hello", { verbose: false });
+
+    const outbound = createOutboundSendDeps(deps);
+    expect(outbound.telegram).toBeUndefined();
+    expect(outbound.sendTelegram).toBeUndefined();
+    expect(runtimeFactories.telegram).toHaveBeenCalledOnce();
+    expect(sendFns.telegram).toHaveBeenCalledOnce();
   });
 
   it("reuses cached runtime send surfaces after first lazy load", async () => {

@@ -9,6 +9,7 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -32,7 +33,7 @@ import {
 } from "./interactive-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -42,16 +43,13 @@ import {
   listEmbeddingProviders,
   expectGlobalHookRunner,
   createDetachedTaskRuntimeStub,
+  loadRegistryFromSinglePlugin,
   updatePluginManifest,
   expectDiagnosticContaining,
   expectCachePartitionByPluginSource,
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -93,16 +91,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["duplicate-legacy-hook"],
-        },
-      },
-      onlyPluginIds: ["duplicate-legacy-hook"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["duplicate-legacy-hook"] },
+      options: { onlyPluginIds: ["duplicate-legacy-hook"] },
     });
 
     expect(
@@ -114,6 +106,77 @@ describe("loadOpenClawPlugins", () => {
         message: "hook already registered: shared-name (duplicate-legacy-hook)",
       }),
     );
+  });
+
+  it("warns when registerHook is used with a typed hook event name", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "typed-name-legacy-register",
+      filename: "typed-name-legacy-register.cjs",
+      body: `module.exports = {
+          id: "typed-name-legacy-register",
+          register(api) {
+            api.registerHook(["before_tool_call", "message_received"], () => {}, {
+              name: "typed-name-legacy-register",
+            });
+          },
+        };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["typed-name-legacy-register"] },
+      options: { onlyPluginIds: ["typed-name-legacy-register"] },
+    });
+
+    expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
+      "before_tool_call",
+      "message_received",
+    ]);
+    expect(
+      registry.diagnostics
+        .filter(
+          (diagnostic) =>
+            diagnostic.pluginId === "typed-name-legacy-register" &&
+            diagnostic.level === "warn" &&
+            diagnostic.message.includes("dispatched by the typed hook runner only"),
+        )
+        .map((diagnostic) => diagnostic.message),
+    ).toEqual([
+      expect.stringContaining('Use api.on("before_tool_call", ...)'),
+      expect.stringContaining('Use api.on("message_received", ...)'),
+    ]);
+  });
+
+  it("keeps legacy type:action events diagnostic-free in registerHook", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-type-action-register",
+      filename: "legacy-type-action-register.cjs",
+      body: `module.exports = {
+          id: "legacy-type-action-register",
+          register(api) {
+            api.registerHook("gateway:startup", () => {}, { name: "legacy-startup" });
+            api.registerHook("command:new", () => {}, { name: "legacy-command" });
+          },
+        };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["legacy-type-action-register"] },
+      options: { onlyPluginIds: ["legacy-type-action-register"] },
+    });
+
+    expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
+      "gateway:startup",
+      "command:new",
+    ]);
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("dispatched by the typed hook runner only"),
+      ),
+    ).toBe(false);
   });
 
   it("runs consecutive plugin hook handlers with shared mutable context but isolated plugin config", async () => {
@@ -210,7 +273,7 @@ describe("loadOpenClawPlugins", () => {
     clearInternalHooks();
   });
 
-  it("rolls back global side effects when registration fails", async () => {
+  it("preserves load diagnostics while rolling back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-side-effects",
@@ -270,21 +333,23 @@ describe("loadOpenClawPlugins", () => {
     clearPluginCommands();
     clearPluginInteractiveHandlers();
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-side-effects"],
-        },
-      },
-      onlyPluginIds: ["failing-side-effects"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-side-effects"] },
+      options: { onlyPluginIds: ["failing-side-effects"] },
     });
 
     const failedRecord = registry.plugins.find((entry) => entry.id === "failing-side-effects");
     expect(failedRecord?.status).toBe("error");
     expect(failedRecord?.providerIds).toStrictEqual([]);
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.pluginId === "failing-side-effects")
+        .map(({ level, message }) => ({ level, message })),
+    ).toEqual([
+      { level: "warn", message: "reload registration missing prefixes" },
+      { level: "error", message: "plugin failed during register: Error: boom" },
+    ]);
     expect(getRegisteredEventKeys()).toStrictEqual([]);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(registry.reloads).toStrictEqual([]);
@@ -320,16 +385,10 @@ describe("loadOpenClawPlugins", () => {
           },
         };`,
     });
-    const priorRegistry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: prior.dir,
-      config: {
-        plugins: {
-          load: { paths: [prior.file] },
-          allow: ["activation-prior"],
-        },
-      },
-      onlyPluginIds: ["activation-prior"],
+    const priorRegistry = loadRegistryFromSinglePlugin({
+      plugin: prior,
+      pluginConfig: { allow: ["activation-prior"] },
+      options: { onlyPluginIds: ["activation-prior"] },
     });
     const priorKey = getActivePluginRegistryKey();
     const priorMode = getActivePluginRuntimeSubagentMode();
@@ -399,16 +458,10 @@ describe("loadOpenClawPlugins", () => {
 
     clearInternalHooks();
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["nameless-hook"],
-        },
-      },
-      onlyPluginIds: ["nameless-hook"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["nameless-hook"] },
+      options: { onlyPluginIds: ["nameless-hook"] },
     });
 
     const record = registry.plugins.find((entry) => entry.id === "nameless-hook");
@@ -442,16 +495,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["invalid-memory-capability"],
-        },
-      },
-      onlyPluginIds: ["invalid-memory-capability"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["invalid-memory-capability"] },
+      options: { onlyPluginIds: ["invalid-memory-capability"] },
     });
 
     const record = registry.plugins.find((entry) => entry.id === "invalid-memory-capability");
@@ -468,7 +515,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("can scope bundled provider loads without hanging", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const scopedDir = path.join(bundledDir, "scoped-provider");
     mkdirSafe(scopedDir);
     fs.writeFileSync(
@@ -542,7 +589,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("allows bundled plugins to supply system.notify without opening the command to external plugins", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const bundledPluginDir = path.join(bundledDir, "notify-host");
     mkdirSafe(bundledPluginDir);
     fs.writeFileSync(
@@ -613,12 +660,43 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("reserves private worker supervisor commands from plugin registration", () => {
+    useNoBundledPlugins();
+    const commands = [...NODE_WORKER_PRIVATE_COMMANDS];
+    const plugin = writePlugin({
+      id: "private-worker-controls",
+      filename: "private-worker-controls.cjs",
+      body: `module.exports = {
+          id: "private-worker-controls",
+          register(api) {
+            for (const command of ${JSON.stringify(commands)}) {
+              api.registerNodeHostCommand({ command, handle: async () => "{}" });
+            }
+            api.registerNodeInvokePolicy({
+              commands: ${JSON.stringify(commands)},
+              handle: async () => ({ ok: true, payloadJSON: "{}" }),
+            });
+          },
+        };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["private-worker-controls"] },
+      options: { onlyPluginIds: ["private-worker-controls"] },
+    });
+
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
+    for (const command of commands) {
+      expect(registry.diagnostics.some((diagnostic) => diagnostic.message.includes(command))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
-    registerMemoryEmbeddingProvider({
-      id: "active",
-      create: async () => ({ provider: null }),
-    });
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
       get: async () => null,
@@ -652,10 +730,6 @@ describe("loadOpenClawPlugins", () => {
           id: "snapshot-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "snapshot",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["snapshot memory section"],
               flushPlanResolver: () => ({
@@ -671,7 +745,7 @@ describe("loadOpenClawPlugins", () => {
                   return { manager: null, error: "snapshot" };
                 },
                 resolveMemoryBackendConfig() {
-                  return { backend: "qmd", qmd: {} };
+                  return { backend: "builtin" };
                 },
               },
             });
@@ -679,18 +753,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-memory"],
-          slots: { memory: "snapshot-memory" },
-        },
-      },
-      onlyPluginIds: ["snapshot-memory"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-memory"], slots: { memory: "snapshot-memory" } },
+      options: { activate: false, onlyPluginIds: ["snapshot-memory"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
@@ -701,7 +767,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -728,17 +793,10 @@ describe("loadOpenClawPlugins", () => {
       contracts: { embeddingProviders: ["snapshot"] },
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-embedding"],
-        },
-      },
-      onlyPluginIds: ["snapshot-embedding"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-embedding"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-embedding"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-embedding")?.status).toBe(
@@ -775,17 +833,10 @@ describe("loadOpenClawPlugins", () => {
       contracts: { embeddingProviders: ["shared"] },
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-shared-embedding"],
-        },
-      },
-      onlyPluginIds: ["snapshot-shared-embedding"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-shared-embedding"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-shared-embedding"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-shared-embedding")?.status).toBe(
@@ -819,16 +870,10 @@ describe("loadOpenClawPlugins", () => {
       contracts: { embeddingProviders: ["failed"] },
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-embedding"],
-        },
-      },
-      onlyPluginIds: ["failing-embedding"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-embedding"] },
+      options: { onlyPluginIds: ["failing-embedding"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
@@ -848,10 +893,6 @@ describe("loadOpenClawPlugins", () => {
           id: "failing-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "failed",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["stale failure section"],
               flushPlanResolver: () => ({
@@ -882,17 +923,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-memory"],
-          slots: { memory: "failing-memory" },
-        },
-      },
-      onlyPluginIds: ["failing-memory"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-memory"], slots: { memory: "failing-memory" } },
+      options: { onlyPluginIds: ["failing-memory"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
@@ -901,7 +935,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {
@@ -930,17 +963,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-detached-runtime"],
-        },
-      },
-      onlyPluginIds: ["snapshot-detached-runtime"],
+    const scoped = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["snapshot-detached-runtime"] },
+      options: { activate: false, onlyPluginIds: ["snapshot-detached-runtime"] },
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
@@ -965,16 +991,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["detached-runtime-refresh"],
-        },
-      },
-      onlyPluginIds: ["detached-runtime-refresh"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["detached-runtime-refresh"] },
+      options: { onlyPluginIds: ["detached-runtime-refresh"] },
     });
 
     expect(registry.detachedTaskRuntimes).toHaveLength(1);
@@ -1007,16 +1027,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-detached-runtime"],
-        },
-      },
-      onlyPluginIds: ["failing-detached-runtime"],
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["failing-detached-runtime"] },
+      options: { onlyPluginIds: ["failing-detached-runtime"] },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-detached-runtime")?.status).toBe(
@@ -1204,7 +1218,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("restores cached memory capability public artifacts on cache hits", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const plugin = writePlugin({
@@ -1271,7 +1285,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const memoryPlugin = writePlugin({
@@ -1428,16 +1442,10 @@ describe("loadOpenClawPlugins", () => {
       contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
     });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["conversation-read-provenance-test"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["conversation-read-provenance-test"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toHaveLength(2);
@@ -1471,16 +1479,10 @@ describe("loadOpenClawPlugins", () => {
         };`,
     });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["undeclared-tool-owner"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["undeclared-tool-owner"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toStrictEqual([]);
@@ -1512,16 +1514,10 @@ describe("loadOpenClawPlugins", () => {
     });
     updatePluginManifest(plugin, { contracts: { tools: ["manifest_tool"] } });
 
-    const registry = loadOpenClawPlugins({
-      activate: false,
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["wrong-tool-owner"],
-        },
-      },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["wrong-tool-owner"] },
+      options: { activate: false },
     });
 
     expect(registry.tools).toStrictEqual([]);
@@ -1672,8 +1668,8 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached bundled plugin registries across env changes",
       pluginId: "cache-root",
       setup: () => {
-        const bundledA = makeTempDir();
-        const bundledB = makeTempDir();
+        const bundledA = makePluginLoaderTempDir();
+        const bundledB = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "cache-root",
           dir: path.join(bundledA, "cache-root"),
@@ -1724,10 +1720,10 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached load-path plugin registries across env home changes",
       pluginId: "demo",
       setup: () => {
-        const homeA = makeTempDir();
-        const homeB = makeTempDir();
-        const stateDir = makeTempDir();
-        const bundledDir = makeTempDir();
+        const homeA = makePluginLoaderTempDir();
+        const homeB = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
+        const bundledDir = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "demo",
           dir: path.join(homeA, "plugins", "demo"),

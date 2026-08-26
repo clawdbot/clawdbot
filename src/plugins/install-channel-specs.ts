@@ -1,6 +1,10 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
+} from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 
 type ChannelInstallSpecs = {
@@ -40,18 +44,27 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
 }): ChannelInstallSpecs {
-  if (params.updateChannel === "extended-stable") {
+  if (
+    params.updateChannel === "extended-stable" ||
+    (params.updateChannel === "stable" && params.versionBoundToCore)
+  ) {
     const target = resolveDefaultNpmSpec(params.spec);
     if (target && params.officialPackageName === target.name) {
       const coreVersion = params.coreVersion?.trim();
       if (!coreVersion || !isExactSemverVersion(coreVersion)) {
+        const policy =
+          params.updateChannel === "extended-stable" ? "Extended-stable" : "Version-bound";
         throw new Error(
-          `Extended-stable plugin resolution for ${target.name} requires an exact core version.`,
+          `${policy} plugin resolution for ${target.name} requires an exact core version.`,
         );
       }
+      const installVersion = params.versionBoundToCore
+        ? resolveOpenClawReleaseCohortVersion(coreVersion)
+        : coreVersion;
       return {
-        installSpec: `${target.name}@${coreVersion}`,
+        installSpec: `${target.name}@${installVersion}`,
         recordSpec: params.spec,
       };
     }

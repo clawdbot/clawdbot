@@ -1,3 +1,4 @@
+import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
@@ -6,10 +7,12 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../media-understanding/shared.js";
-import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { readProviderJsonResponse } from "./provider-http-errors.js";
+import {
+  createProviderErrorTextRedactor,
+  readProviderJsonResponse,
+} from "./provider-http-errors.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
@@ -161,17 +164,26 @@ export async function minimaxUnderstandImage(params: {
     auditContext: "minimax-vlm",
   });
   const res = guarded.response;
+  const redactErrorText = createProviderErrorTextRedactor({
+    headers,
+    request: params.request,
+    defaultAuthHeader: "Authorization",
+    defaultAuthPrefix: "Bearer ",
+  });
 
   try {
-    const traceId = res.headers.get("Trace-Id") ?? "";
+    // All response fields below are provider-controlled and may reflect the
+    // authenticated request, so sanitize them before any error branch uses them.
+    const traceId = redactErrorText(res.headers.get("Trace-Id") ?? "");
     if (!res.ok) {
       const body = await readResponseBodySnippet(res, {
         maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
         maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
+        redact: redactErrorText,
       });
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(
-        `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+        `MiniMax VLM request failed (${res.status} ${redactErrorText(res.statusText)}).${trace}${
           body ? ` Body: ${body}` : ""
         }`,
       );
@@ -189,7 +201,7 @@ export async function minimaxUnderstandImage(params: {
     const baseResp = isRecord(json.base_resp) ? (json.base_resp as MinimaxBaseResp) : {};
     const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
     if (code !== 0) {
-      const msg = (baseResp.status_msg ?? "").trim();
+      const msg = redactErrorText((baseResp.status_msg ?? "").trim());
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
     }

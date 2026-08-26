@@ -9,7 +9,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 
@@ -123,6 +123,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     const messageContextRuntime = createTelegramMessageContextRuntime({
       cfg: registrationCfg,
       accountId: "default",
+      ownerAgentId: "main",
       opts: {
         token: "test-token",
         botInfo: { id: 7, username: "bot", first_name: "Bot" },
@@ -209,6 +210,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     const messageContextRuntime = createTelegramMessageContextRuntime({
       cfg,
       accountId: "default",
+      ownerAgentId: "main",
       opts: {
         token: "test-token",
         botInfo: { id: 7, username: "bot", first_name: "Bot" },
@@ -346,6 +348,80 @@ describe("buildTelegramMessageContext prompt context", () => {
               is_reply_target: true,
               media_type: "image/png",
               media_path: "media://inbound/screenshot.png",
+            }),
+          ],
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps an explicit reply target while omitting cached context before the latest bot reply", async () => {
+    const historyKey = "-1001234567890";
+    const previousUserMessage = {
+      messageId: "10",
+      sender: "Pat",
+      timestamp: 1_700_000_000_000,
+      body: "failed turn already in the transcript",
+    };
+    const previousBotReply = {
+      messageId: "11",
+      sender: "OpenClaw (you)",
+      timestamp: 1_700_000_001_000,
+      body: "LLM request failed.",
+    };
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 12,
+        chat: { id: -1001234567890, type: "supergroup", title: "Room" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot recover",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories: new Map([[historyKey, [previousUserMessage, previousBotReply]]]),
+      promptContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: previousUserMessage.messageId,
+                sender: previousUserMessage.sender,
+                timestamp_ms: previousUserMessage.timestamp,
+                body: previousUserMessage.body,
+              },
+              {
+                message_id: previousBotReply.messageId,
+                sender: previousBotReply.sender,
+                timestamp_ms: previousBotReply.timestamp,
+                body: previousBotReply.body,
+              },
+              {
+                message_id: "9",
+                sender: "OpenClaw (you)",
+                timestamp_ms: 1_699_999_999_000,
+                body: "explicit reply target",
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
+      expect.objectContaining({
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              message_id: "9",
+              body: "explicit reply target",
+              is_reply_target: true,
             }),
           ],
         }),

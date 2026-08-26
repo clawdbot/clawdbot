@@ -734,7 +734,7 @@ export function registerBrowserAgentActRoutes(
                 ...(result.aborted ? { aborted: result.aborted } : {}),
                 ...(downloads ? { downloads } : {}),
               },
-              { resolveCurrentTarget: true },
+              { resolveCurrentTarget: result.aborted?.reason !== "closed" },
             );
           case "evaluate":
             return await jsonOk(
@@ -747,6 +747,7 @@ export function registerBrowserAgentActRoutes(
               resolveCurrentTarget: true,
             });
           case "resize":
+          case "close":
             return await jsonOk(downloads ? { downloads } : undefined);
           default:
             return await jsonOk(downloads ? { downloads } : undefined, {

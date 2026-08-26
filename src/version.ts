@@ -2,8 +2,6 @@
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
-declare const __OPENCLAW_VERSION__: string | undefined;
 const CORE_PACKAGE_NAME = "openclaw";
 
 const PACKAGE_JSON_CANDIDATES = [
@@ -47,6 +45,26 @@ function readVersionFromJsonCandidates(
   }
 }
 
+function readBuildIdFromJsonCandidates(moduleUrl: string): string | null {
+  try {
+    const require = createRequire(moduleUrl);
+    for (const candidate of BUILD_INFO_CANDIDATES) {
+      try {
+        const parsed = require(candidate) as { buildId?: unknown };
+        const buildId = normalizeOptionalString(parsed.buildId);
+        if (buildId && buildId.length <= 96) {
+          return buildId;
+        }
+      } catch {
+        // ignore missing or unreadable candidate
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const trimmed = normalizeOptionalString(value);
@@ -55,10 +73,6 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
     }
   }
   return undefined;
-}
-
-function readInjectedVersion(): string | undefined {
-  return typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined;
 }
 
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
@@ -71,6 +85,10 @@ export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string 
   return readVersionFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES);
 }
 
+export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+  return readBuildIdFromJsonCandidates(moduleUrl);
+}
+
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   return (
     readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
@@ -80,12 +98,10 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
 
 export function resolveBinaryVersion(params: {
   moduleUrl: string;
-  injectedVersion?: string;
   bundledVersion?: string;
   fallback?: string;
 }): string {
   return (
-    firstNonEmpty(params.injectedVersion) ||
     resolveVersionFromModuleUrl(params.moduleUrl) ||
     firstNonEmpty(params.bundledVersion) ||
     params.fallback ||
@@ -103,7 +119,7 @@ type RuntimeVersionPreference = "env-first" | "runtime-first";
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(version);
   // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
-  // Prefer explicit service/package markers in that edge case.
+  // Prefer explicit runtime/package markers in that edge case.
   if (!trimmed || trimmed === "0.0.0") {
     return undefined;
   }
@@ -121,11 +137,7 @@ function resolveVersionFromRuntimeSources(params: {
       ? [params.env["OPENCLAW_VERSION"], params.runtimeVersion]
       : [params.runtimeVersion, params.env["OPENCLAW_VERSION"]];
   return (
-    firstNonEmpty(
-      ...preferredCandidates,
-      params.env["OPENCLAW_SERVICE_VERSION"],
-      params.env["npm_package_version"],
-    ) ?? params.fallback
+    firstNonEmpty(...preferredCandidates, params.env["npm_package_version"]) ?? params.fallback
   );
 }
 
@@ -139,6 +151,14 @@ export function resolveRuntimeServiceVersion(
     fallback,
     preference: "env-first",
   });
+}
+
+// Generated build provenance is immutable for a process. Resolve it once so
+// handshakes never poll the filesystem on the connection hot path.
+const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
+
+export function resolveRuntimeServiceBuildId(): string | null {
+  return RUNTIME_SERVICE_BUILD_ID;
 }
 
 export function resolveCompatibilityHostVersion(
@@ -158,10 +178,9 @@ export function resolveCompatibilityHostVersion(
 }
 
 // Single source of truth for the current OpenClaw version.
-// - Embedded/bundled builds: injected define or env var.
+// - Embedded/bundled builds: bundled-version env var.
 // - Dev/npm builds: package.json.
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: readInjectedVersion(),
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });

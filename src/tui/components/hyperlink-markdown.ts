@@ -7,6 +7,14 @@ import type {
 } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
+import { isolateRtlRenderedLine, sanitizeMarkdownSource } from "../tui-formatters.js";
+
+function sanitizeMarkdownDisplayText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return sanitizeMarkdownSource(text) || "(no output)";
+}
 
 /**
  * Wrapper around pi-tui's Markdown component that adds OSC 8 terminal
@@ -16,6 +24,7 @@ import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
   private urls: string[];
+  private cachedRender?: { width: number; lines: string[] };
 
   constructor(
     text: string,
@@ -25,20 +34,31 @@ export class HyperlinkMarkdown implements Component {
     defaultTextStyle?: DefaultTextStyle,
     options?: MarkdownOptions,
   ) {
-    this.inner = new Markdown(text, paddingX, paddingY, theme, defaultTextStyle, options);
-    this.urls = extractUrls(text);
+    const displayText = sanitizeMarkdownDisplayText(text);
+    this.inner = new Markdown(displayText, paddingX, paddingY, theme, defaultTextStyle, options);
+    this.urls = extractUrls(displayText);
   }
 
   render(width: number): string[] {
-    return addOsc8Hyperlinks(this.inner.render(width), this.urls);
+    if (this.cachedRender?.width === width) {
+      return this.cachedRender.lines;
+    }
+    const lines = addOsc8Hyperlinks(this.inner.render(width), this.urls).map(
+      isolateRtlRenderedLine,
+    );
+    this.cachedRender = { width, lines };
+    return lines;
   }
 
   setText(text: string): void {
-    this.inner.setText(text);
-    this.urls = extractUrls(text);
+    const displayText = sanitizeMarkdownDisplayText(text);
+    this.inner.setText(displayText);
+    this.urls = extractUrls(displayText);
+    this.cachedRender = undefined;
   }
 
   invalidate(): void {
     this.inner.invalidate();
+    this.cachedRender = undefined;
   }
 }

@@ -1,19 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import {
   compactEmbeddedRunForRecovery,
   createEmbeddedRunCompactionRuntime,
+  type EmbeddedRunCompactionRecoveryInput,
 } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const completionMocks = vi.hoisted(() => ({
+  prepareSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  resolveSimpleCompletionSelectionForAgent: vi.fn(),
+}));
+
+vi.mock("../simple-completion-runtime.js", () => completionMocks);
+
 // Keep this dedicated leaf on the compaction composition boundary. Runtime/auth/lane policy is
 // covered at its direct owners so this shard never reloads the complete public runner graph.
 const baseRunParams = {
+  admittedRunContext: createTestAdmittedRunContext("run-1"),
   agentId: "main",
   sessionId: "session-1",
   sessionKey: "agent:main:session-1",
@@ -52,7 +66,84 @@ function makeContextEngine(compact = vi.fn()): ContextEngine {
   } as ContextEngine;
 }
 
+function makeRecoveryInput(
+  overrides: Partial<EmbeddedRunCompactionRecoveryInput> = {},
+): EmbeddedRunCompactionRecoveryInput {
+  const runParams = overrides.runParams ?? baseRunParams;
+  return {
+    runParams,
+    state: createEmbeddedRunContextRecoveryState(),
+    contextEngine: makeContextEngine(),
+    genericCompactionRecoveryAllowed: true,
+    attempt: makeAttempt(),
+    runtimeAuthPlan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    },
+    resolvedSessionKey: runParams.sessionKey ?? baseRunParams.sessionKey,
+    sessionAgentId: "main",
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
+    provider: "openai",
+    modelId: "gpt-5.5",
+    harnessRuntime: "openclaw",
+    thinkLevel: "off",
+    authProfileIdSource: "auto",
+    resolveContextEnginePluginId: () => undefined,
+    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
+      buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: "openai",
+        requestedModel: "gpt-5.5",
+        resolvedModel: "gpt-5.5",
+        promptTokenBudget: tokenBudget,
+        degradedReason,
+      }),
+    onCompactionHookMessages: vi.fn(async () => {}),
+    runOwnsCompactionBeforeHook: vi.fn(async () => {}),
+    runOwnsCompactionAfterHook: vi.fn(async () => {}),
+    adoptCompactionTranscript: vi.fn(async () => undefined),
+    getActiveSession: () => ({
+      id: "session-1",
+      file: runParams.sessionFile ?? runParams.sessionKey ?? runParams.sessionId,
+    }),
+    prepareCompactedTranscriptRetry: vi.fn(async () => {}),
+    armPostCompactionGuard: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("compactEmbeddedRunForRecovery", () => {
+  beforeEach(() => {
+    completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
+    completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
+    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
+    completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        api: "openai",
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 128_000,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+    });
+    completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      usage: { input: 1, output: 1, total: 2 },
+    });
+    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      agentDir: "/tmp/main",
+    });
+  });
+
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
     const compact = vi.fn(async () => ({
       ok: true as const,
@@ -72,45 +163,20 @@ describe("compactEmbeddedRunForRecovery", () => {
     } satisfies AgentRuntimeAuthPlan;
 
     const result = await compactEmbeddedRunForRecovery(
-      {
+      makeRecoveryInput({
         runParams: {
           ...baseRunParams,
           modelSelectionLocked: true,
           modelFallbacksOverride: [],
         },
-        state: createEmbeddedRunContextRecoveryState(),
         contextEngine,
         contextTokenBudget: 200_000,
-        genericCompactionRecoveryAllowed: true,
         attempt: makeAttempt({ promptCache }),
         runtimeAuthPlan,
-        resolvedSessionKey: baseRunParams.sessionKey,
-        sessionAgentId: "main",
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        modelId: "gpt-5.5",
-        harnessRuntime: "openclaw",
         thinkLevel: "ultra",
         authProfileId: "openai:work",
         authProfileIdSource: "user",
-        resolveContextEnginePluginId: () => undefined,
-        buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
-          buildContextEngineRuntimeSettings({
-            contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-            provider: "openai",
-            requestedModel: "gpt-5.5",
-            resolvedModel: "gpt-5.5",
-            promptTokenBudget: tokenBudget,
-            degradedReason,
-          }),
-        onCompactionHookMessages: vi.fn(async () => {}),
-        runOwnsCompactionBeforeHook: vi.fn(async () => {}),
-        runOwnsCompactionAfterHook: vi.fn(async () => {}),
-        adoptCompactionTranscript: vi.fn(async () => undefined),
-        getActiveSession: () => ({ id: "session-1", file: baseRunParams.sessionFile }),
-        armPostCompactionGuard: vi.fn(),
-      },
+      }),
       {
         tokenBudget: 200_000,
         trigger: "overflow",
@@ -143,6 +209,40 @@ describe("compactEmbeddedRunForRecovery", () => {
       },
     });
   });
+
+  it("does not trust the active run fallback during recovery compaction", async () => {
+    const compact = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      await params.runtimeContext?.llm?.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      });
+      return { ok: true as const, compacted: false as const };
+    });
+    const contextEngine = makeContextEngine(compact);
+    const runParams = {
+      ...baseRunParams,
+      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      sessionKey: "legacy-session",
+      sessionFile: "legacy-session",
+    } satisfies PreparedEmbeddedRunInput["runParams"];
+
+    await expect(
+      compactEmbeddedRunForRecovery(
+        makeRecoveryInput({
+          runParams,
+          contextEngine,
+          resolvedSessionKey: "legacy-session",
+        }),
+        {
+          tokenBudget: 200_000,
+          trigger: "overflow",
+          diagId: "diag-unbound",
+          attempt: 1,
+          maxAttempts: 3,
+        },
+      ),
+    ).rejects.toThrow("not bound to an active session agent");
+    expect(completionMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
 });
 
 describe("createEmbeddedRunCompactionRuntime", () => {
@@ -165,7 +265,10 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        storePath: "/tmp/openclaw.sqlite",
+        storePath: path.join(
+          tempDirs.make("openclaw-overflow-compaction-session-"),
+          "openclaw.sqlite",
+        ),
       },
       adoptSessionId: vi.fn((sessionId?: string) => {
         if (sessionId) {

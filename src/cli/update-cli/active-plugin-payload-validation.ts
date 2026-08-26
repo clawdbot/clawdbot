@@ -1,4 +1,8 @@
 // Boot-local plugin payload verification without repair, install, or catalog imports.
+import {
+  createPluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
@@ -29,7 +33,7 @@ export function filterRecordsToActive(params: {
   records: Record<string, PluginInstallRecord>;
 }): Record<string, PluginInstallRecord> {
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
-  const filtered: Record<string, PluginInstallRecord> = {};
+  const filtered = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(params.records)) {
     if (!record || typeof record !== "object") {
       continue;
@@ -41,7 +45,7 @@ export function filterRecordsToActive(params: {
       rootConfig: params.cfg,
     });
     if (enableState.enabled) {
-      filtered[pluginId] = record;
+      setPluginInstallRecordMapEntry(filtered, pluginId, record);
       continue;
     }
     // Trusted-source-linked official installs remain authoritative sync targets
@@ -49,7 +53,7 @@ export function filterRecordsToActive(params: {
     const officialNpm = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
     const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record });
     if (officialNpm || officialClawHub) {
-      filtered[pluginId] = record;
+      setPluginInstallRecordMapEntry(filtered, pluginId, record);
     }
   }
   return filtered;

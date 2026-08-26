@@ -254,11 +254,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
     label: "Microsoft Foundry",
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: PROVIDER_ID,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAI_IMAGE_MAX_RESULTS,

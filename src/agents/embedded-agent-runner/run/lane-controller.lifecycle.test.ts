@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  emitAgentEvent,
   getAgentEventLifecycleGeneration,
+  onAgentRuntimeEvent,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -48,9 +51,12 @@ function createController(options: {
   trigger?: LaneParams["trigger"];
   abortSignal?: AbortSignal;
   runId?: string;
+  params?: Pick<LaneParams, "agentId" | "sessionKey">;
 }) {
   let lifecycleGeneration = options.lifecycleGeneration;
+  const runId = options.runId ?? "run-1";
   let params: LaneParams = {
+    admittedRunContext: createTestAdmittedRunContext(runId),
     agentId: "main",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -58,11 +64,12 @@ function createController(options: {
     workspaceDir: "/tmp/workspace",
     prompt: "hello",
     timeoutMs: 30_000,
-    runId: options.runId ?? "run-1",
+    runId,
     lifecycleGeneration,
     trigger: options.trigger,
     enqueue: options.enqueue,
     abortSignal: options.abortSignal,
+    ...options.params,
   };
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
@@ -105,6 +112,31 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     await controller.enqueueSession(async () => undefined);
 
     expect(priorities).toEqual([expected]);
+  });
+
+  it("preserves the selected agent for sessionless admitted runtime events", async () => {
+    const runId = "sessionless-owned-run";
+    const { controller } = createController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task) => await task(),
+      runId,
+      params: { agentId: "research", sessionKey: undefined },
+    });
+    const events: Array<{ agentId?: string; sessionKey?: string }> = [];
+    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
+
+    try {
+      await controller.enqueueGlobal(async () => {
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "owned progress" } });
+        return completedResult;
+      });
+
+      expect(getAgentRunContext(runId)).toMatchObject({ agentId: "research" });
+      expect(getAgentRunContext(runId)?.sessionKey).toBeUndefined();
+      expect(events).toMatchObject([{ agentId: "research", sessionKey: undefined }]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("rebinds foreground work that was queued before lifecycle rotation", async () => {

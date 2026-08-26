@@ -1,13 +1,12 @@
 // Codex helper facade keeps the existing config import surface stable.
 export {
+  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config-contracts.js";
 export type {
-  CodexAppServerApprovalPolicy,
   CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexComputerUseConfig,
   CodexDynamicToolsLoading,
@@ -16,13 +15,14 @@ export type {
   CodexPluginDestructiveApprovalMode,
   CodexPluginMarketplaceName,
   CodexSupervisionEndpoint,
-  OpenClawExecPolicyForCodexAppServer,
   ResolvedCodexComputerUseConfig,
   ResolvedCodexPluginPolicy,
   ResolvedCodexPluginsPolicy,
 } from "./config-contracts.js";
 export { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy.js";
 export {
+  isCodexPairedNodeRemoteExecPlacementSandbox,
+  isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
@@ -32,7 +32,7 @@ export {
   resolveCodexAppServerUserHomeDir,
   resolveCodexModelBackedReviewerPolicyContext,
 } from "./config-reviewer.js";
-export { isCodexAppServerApprovalPolicyAllowedByRequirements } from "./config-requirements.js";
+export { readCodexRequirementsToml } from "./config-requirements.js";
 export {
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,

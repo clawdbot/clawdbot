@@ -1,7 +1,9 @@
 import { buildSandboxHostPath } from "../agents/sandbox-host.js";
 import type { BoardWidgetHtmlViewMetadata } from "../boards/board-store.js";
 
-type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState">;
+type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState"> & {
+  resourceOrigins?: readonly string[];
+};
 
 function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] | undefined {
   if (document.grantState !== "granted") {
@@ -17,6 +19,7 @@ export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata
     // Best-effort hardening for the documented WebRTC residual; the DOM guard
     // reduces fresh descendant realms but is not an authorization boundary.
     blockDescendantFrames: true,
+    ...(document.resourceOrigins?.length ? { resourceDomains: [...document.resourceOrigins] } : {}),
     ...(connectDomains ? { connectDomains } : {}),
   });
 }
@@ -26,11 +29,13 @@ export function buildBoardWidgetContentSecurityPolicy(
   document: BoardWidgetSandboxMetadata,
 ): string {
   const connectSources = grantedConnectOrigins(document)?.join(" ") ?? "'none'";
+  const resourceSources = document.resourceOrigins?.join(" ") ?? "";
   return [
     "default-src 'none'",
-    "script-src 'unsafe-inline'",
+    `script-src 'unsafe-inline' ${resourceSources}`.trim(),
     "style-src 'unsafe-inline'",
-    "img-src data:",
+    `img-src data: ${resourceSources}`.trim(),
+    `media-src data: ${resourceSources}`.trim(),
     `connect-src ${connectSources}`,
     "webrtc 'block'",
     "base-uri 'none'",

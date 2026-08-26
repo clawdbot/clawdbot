@@ -34,6 +34,9 @@ export function acceptsControlUiHtmlResponse(accept: string | undefined): boolea
 export function respondPlainText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  if (statusCode !== 204) {
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
+  }
   res.end(body);
 }
 

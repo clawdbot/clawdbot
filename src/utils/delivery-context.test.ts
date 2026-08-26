@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   deliveryContextKey,
   deliveryContextFromSession,
-  normalizeDeliveryContext,
-} from "./delivery-context.js";
-import {
   mergeDeliveryContext,
+  normalizeDeliveryContext,
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";
@@ -180,6 +178,17 @@ describe("delivery context helpers", () => {
         threadId: "177000.123",
         chatType: "channel",
       },
+    });
+
+    expect(
+      normalizeSessionDeliveryState({
+        route: { channel: "webchat", target: { to: "dashboard" } },
+        context: { channel: "room-chat", to: "room:ops" },
+      }),
+    ).toMatchObject({
+      kind: "external",
+      route: { channel: "room-chat", target: { to: "room:ops" } },
+      context: { channel: "room-chat", to: "room:ops" },
     });
   });
 

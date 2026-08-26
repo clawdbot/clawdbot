@@ -1,14 +1,18 @@
 // Managed proxy tests cover proxy server lifecycle with managed capture files.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import { startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
+
+vi.mock("./ca.js", () => ({
+  ensureDebugProxyCa: async () => ({ certPath: "test", keyPath: "test" }),
+}));
 
 let testRoot: string | undefined;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -32,9 +36,6 @@ async function cleanupTestDirs(): Promise<void> {
 async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   const certDir = join(testRoot, "certs");
-  await mkdir(certDir, { recursive: true });
-  await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
-  await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
   process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,

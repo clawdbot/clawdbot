@@ -118,25 +118,25 @@ struct ChatMessageUsagePresentation: Equatable {
         let cacheWrite = self.positive(usage.cacheWrite)
 
         if let input {
-            visualParts.append("↑\(self.tokens(input))")
+            visualParts.append("↑\(ChatCompactTokenCountFormatter.string(Double(input)))")
             accessibilityParts.append(String(
                 format: String(localized: "Input tokens: %@"),
                 input.formatted()))
         }
         if let output {
-            visualParts.append("↓\(self.tokens(output))")
+            visualParts.append("↓\(ChatCompactTokenCountFormatter.string(Double(output)))")
             accessibilityParts.append(String(
                 format: String(localized: "Output tokens: %@"),
                 output.formatted()))
         }
         if let cacheRead {
-            visualParts.append("R\(self.tokens(cacheRead))")
+            visualParts.append("R\(ChatCompactTokenCountFormatter.string(Double(cacheRead)))")
             accessibilityParts.append(String(
                 format: String(localized: "Cache read tokens: %@"),
                 cacheRead.formatted()))
         }
         if let cacheWrite {
-            visualParts.append("W\(self.tokens(cacheWrite))")
+            visualParts.append("W\(ChatCompactTokenCountFormatter.string(Double(cacheWrite)))")
             accessibilityParts.append(String(
                 format: String(localized: "Cache write tokens: %@"),
                 cacheWrite.formatted()))
@@ -196,25 +196,6 @@ struct ChatMessageUsagePresentation: Equatable {
     private static func positive(_ value: Int?) -> Int? {
         guard let value, value > 0 else { return nil }
         return value
-    }
-
-    private static func tokens(_ value: Int) -> String {
-        if value >= 1_000_000 {
-            return "\(self.trimmedDecimal(Double(value) / 1_000_000))M"
-        }
-        if value >= 1000 {
-            let thousands = Double(value) / 1000
-            if thousands >= 999.95 {
-                return "\(self.trimmedDecimal(Double(value) / 1_000_000))M"
-            }
-            return "\(self.trimmedDecimal(thousands))k"
-        }
-        return "\(value)"
-    }
-
-    private static func trimmedDecimal(_ value: Double) -> String {
-        String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), value)
-            .replacingOccurrences(of: ".0", with: "")
     }
 }
 

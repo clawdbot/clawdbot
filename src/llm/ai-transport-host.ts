@@ -1,18 +1,24 @@
-// Installs OpenClaw-owned policy ports before package providers or shared
-// transport helpers run. Direct transport imports need the same wiring as the
-// process-default stream facade.
+// Installs OpenClaw-owned transport and diagnostic policy before package helpers;
+// direct imports need the same wiring as the process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
+import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import {
+  redactModelVisibleSecrets,
+  redactSecrets,
+  redactToolPayloadText,
+} from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
+
+configureProviderErrorRedactor(redactSecrets);
 
 function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogger> {
   let log = transportLogBySubsystem.get(subsystem);
@@ -35,7 +41,7 @@ configureAiTransportHost({
     }
     return swapped.text;
   },
-  redactSecrets,
+  redactModelVisibleSecrets,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,

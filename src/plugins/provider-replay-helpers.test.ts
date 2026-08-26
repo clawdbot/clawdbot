@@ -128,25 +128,48 @@ describe("provider replay helpers", () => {
     );
   });
 
-  it("preserves thinking blocks for Claude Opus 4.5+ and Sonnet 4.5+ models", () => {
-    // These models should NOT drop thinking blocks
+  it("preserves thinking blocks only for Claude models with native history support", () => {
     for (const modelId of [
       "claude-fable-5",
       "claude-opus-4-5-20251101",
       "claude-opus-4-6",
-      "claude-sonnet-4-5-20250929",
       "claude-sonnet-4-6",
-      "claude-haiku-4-5-20251001",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-mythos-5",
+      "us.anthropic.claude-opus-5-20260101-v1:0",
     ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy).not.toHaveProperty("dropThinkingBlocks");
     }
 
-    // These legacy models SHOULD drop thinking blocks
-    for (const modelId of ["claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20240620"]) {
+    for (const modelId of [
+      "claude-opus-4-1",
+      "claude-sonnet-4-5-20250929",
+      "claude-haiku-4-5-20251001",
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-sonnet-20240620",
+      "claude-3-opus-20240229",
+      "claude-opus-50",
+      "claude-sonnet-50",
+      "claude-sonnet-4-60",
+    ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
     }
+  });
+
+  it("uses canonical deployment metadata for Claude replay policy", () => {
+    expect(
+      buildAnthropicReplayPolicyForModel("prod-opus", {
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).not.toHaveProperty("dropThinkingBlocks");
+    expect(
+      buildAnthropicReplayPolicyForModel("prod-sonnet", {
+        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
+      }),
+    ).toHaveProperty("dropThinkingBlocks", true);
   });
 
   it("builds native Anthropic replay policy with selective tool-call id preservation", () => {

@@ -16,13 +16,16 @@ import {
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./blocks-render.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 import {
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 type SlackActionInvoke = (
@@ -30,6 +33,12 @@ type SlackActionInvoke = (
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
+
+function readSlackForceDocument(params: Record<string, unknown>): boolean {
+  return (
+    readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false
+  );
+}
 
 function resolveSlackPresentationText(
   content: string | undefined,
@@ -52,9 +61,15 @@ function renderSlackActionPresentation(
   if (!presentation) {
     return { usesPresentationTextFallback: false };
   }
-  const renderedBlocks = canRenderSlackPresentation(presentation)
-    ? buildSlackPresentationBlocks(presentation)
-    : undefined;
+  const needsCompleteTextFallback = presentation.blocks.some(
+    (block) =>
+      (block.type === "text" || block.type === "context") &&
+      block.text.trim().length > SLACK_SECTION_TEXT_MAX,
+  );
+  const renderedBlocks =
+    !needsCompleteTextFallback && canRenderSlackPresentation(presentation)
+      ? buildSlackPresentationBlocks(presentation)
+      : undefined;
   const usesPresentationTextFallback = !renderedBlocks || renderedBlocks.length > SLACK_MAX_BLOCKS;
   const blocks = usesPresentationTextFallback ? undefined : renderedBlocks;
   return {
@@ -131,8 +146,9 @@ export async function handleSlackMessageAction(params: {
         to,
         content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         accountId,
-        threadTs: threadId ?? replyTo ?? undefined,
+        threadTs: resolveSlackThreadTsValue({ replyToId: replyTo, threadId }),
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
       },
@@ -172,15 +188,12 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     return await invoke(
       {
         action: "reactions",
         channelId: resolveChannelId(),
         messageId,
-        limit,
+        limit: actionParams.limit,
         accountId,
       },
       cfg,
@@ -189,13 +202,10 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "read") {
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     const readAction: Record<string, unknown> = {
       action: "readMessages",
       channelId: resolveChannelId(),
-      limit,
+      limit: actionParams.limit,
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
       messageId: readStringParam(actionParams, "messageId"),
@@ -223,11 +233,15 @@ export async function handleSlackMessageAction(params: {
       ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
       : resolveSlackPresentationText(content, presentation);
     if (
-      renderedPresentation.usesPresentationTextFallback &&
-      countSlackTextUtf8Bytes(accessibleContent) > SLACK_EDIT_TEXT_MAX_BYTES
+      !blocks &&
+      countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent)) >
+        SLACK_EDIT_TEXT_MAX_BYTES
     ) {
+      const editSubject = renderedPresentation.usesPresentationTextFallback
+        ? "Slack presentation fallback"
+        : "Slack edit";
       throw new Error(
-        `Slack presentation fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+        `${editSubject} exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
       );
     }
     if (!accessibleContent && !blocks) {
@@ -357,10 +371,15 @@ export async function handleSlackMessageAction(params: {
         initialComment:
           readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
           readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          // `media` is accepted as an alias for the file, so a send-shaped call
+          // arrives with its text in `caption`; without this alias that text is
+          // silently dropped instead of becoming the upload's first comment.
+          readStringParam(actionParams, "caption", { allowEmpty: true }) ??
           "",
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),
         threadTs: threadId ?? undefined,
+        ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         ...(topLevel ? { topLevel: true } : {}),
         accountId,
       },

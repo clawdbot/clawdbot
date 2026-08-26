@@ -86,6 +86,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
+    supportsProcessHomeIsolation: true,
     async list(params) {
       const search = params.search?.trim().toLowerCase();
       const sessions = (await store.list())

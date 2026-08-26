@@ -13,6 +13,7 @@ describe("QA Docker E2E lane fixture", () => {
     expect(listQaDockerE2eLaneNames()).toEqual(
       expect.arrayContaining([
         "agent-bundle-mcp-tools",
+        "cli-installer-distribution",
         "codex-on-demand",
         "system-agent-first-run",
         "gateway-network",
@@ -47,6 +48,9 @@ describe("QA Docker E2E lane fixture", () => {
   it("resolves lane-specific environment overlays at run time", () => {
     expect(resolveQaDockerE2eLane("codex-on-demand", {}).script).toBe(
       "scripts/e2e/codex-on-demand-docker.sh",
+    );
+    expect(resolveQaDockerE2eLane("cli-installer-distribution", {}).script).toBe(
+      "scripts/e2e/cli-installer-distribution-docker.sh",
     );
 
     const updateMigration = resolveQaDockerE2eLane("update-migration", {

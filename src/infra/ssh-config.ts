@@ -1,6 +1,6 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Reads effective SSH target config from the local ssh client.
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 

@@ -159,7 +159,7 @@ export function listMockCodexModelInfos(selectedModelRefs: readonly string[] = [
     upgrade: null,
     base_instructions: "You are Codex, a coding agent based on GPT-5.",
     include_skills_usage_instructions: false,
-    supports_reasoning_summaries: true,
+    supports_reasoning_summary_parameter: true,
     default_reasoning_summary: "none",
     support_verbosity: true,
     default_verbosity: "low",

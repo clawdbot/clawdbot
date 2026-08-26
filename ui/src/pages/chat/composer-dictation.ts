@@ -2,6 +2,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToG711Ulaw,
@@ -70,7 +71,7 @@ function messageFromError(error: unknown): string {
   if (error instanceof DOMException) {
     return describeRealtimeTalkInputError(error);
   }
-  return error instanceof Error ? error.message : String(error);
+  return formatUiError(error);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -305,9 +306,10 @@ class ComposerDictationSession {
     }
     if (payload.type === "error") {
       this.reportFailure(
-        typeof payload.message === "string" && payload.message.trim()
-          ? payload.message.trim()
-          : t("chat.composer.dictationFailed"),
+        formatUiExternalText(
+          typeof payload.message === "string" ? payload.message : undefined,
+          t("chat.composer.dictationFailed"),
+        ),
       );
       return;
     }
@@ -445,6 +447,16 @@ export class ComposerDictationController {
     const minutes = Math.floor(this.elapsedSeconds / 60);
     const seconds = String(this.elapsedSeconds % 60).padStart(2, "0");
     return `${minutes}:${seconds}`;
+  }
+
+  // Returns the stop promise so callers can sequence work (e.g. send) after
+  // the transcript lands in the draft.
+  finishActive(): Promise<boolean> {
+    return this.stop({ commit: true });
+  }
+
+  cancelActive(): void {
+    void this.stop({ commit: false });
   }
 
   update(options: ComposerDictationControllerOptions): void {
@@ -633,9 +645,9 @@ export class ComposerDictationController {
     }
   }
 
-  private async stop(options: { commit: boolean }): Promise<void> {
+  private async stop(options: { commit: boolean }): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopping") {
-      return;
+      return false;
     }
     const wasActive = this.active;
     this.clearGesture();
@@ -643,17 +655,22 @@ export class ComposerDictationController {
     const session = this.session;
     if (!session) {
       this.reset();
-      return;
+      return false;
     }
     this.setPhase("stopping");
     const transcript = options.commit ? await session.finish() : (await session.cancel(), "");
-    if (this.session === session) {
+    const ownsSession = this.session === session;
+    if (ownsSession) {
       this.session = null;
     }
-    if (options.commit && transcript && wasActive && !this.disposed) {
+    const committed = Boolean(
+      options.commit && transcript && wasActive && ownsSession && !this.disposed,
+    );
+    if (committed) {
       this.options.onCommit(transcript);
     }
     this.reset();
+    return committed;
   }
 
   private reset(): void {

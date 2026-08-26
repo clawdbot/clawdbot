@@ -1,6 +1,7 @@
 // Control UI view renders usage query screen content.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractQueryTerms } from "./helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
 
@@ -140,7 +141,7 @@ const buildQuerySuggestions = (
   if (!trimmed) {
     return [];
   }
-  const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
+  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
   const lastQueryWord = tokens.at(-1) ?? "";
   const [rawKey, rawValue] = lastQueryWord.includes(":")
     ? [
@@ -227,7 +228,7 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   if (!trimmed) {
     return `${suggestion} `;
   }
-  const tokens = trimmed.split(/\s+/);
+  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
   tokens[tokens.length - 1] = suggestion;
   return `${tokens.join(" ")} `;
 };
@@ -239,7 +240,7 @@ const addQueryToken = (query: string, token: string): string => {
   if (!trimmed) {
     return `${token} `;
   }
-  const tokens = trimmed.split(/\s+/);
+  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
   const last = tokens[tokens.length - 1] ?? "";
   const tokenKey = token.includes(":") ? token.split(":")[0] : null;
   const lastKey = last.includes(":") ? last.split(":")[0] : null;
@@ -254,7 +255,7 @@ const addQueryToken = (query: string, token: string): string => {
 };
 
 const removeQueryToken = (query: string, token: string): string => {
-  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const tokens = extractQueryTerms(query).map((term) => term.raw);
   const next = tokens.filter((entry) => entry !== token);
   return next.length ? `${next.join(" ")} ` : "";
 };

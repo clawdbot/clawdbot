@@ -7,8 +7,8 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
-  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isKimiK3ModelId } from "./provider-policy-api.js";
@@ -372,15 +372,9 @@ function createKimiThinkingWrapper(
   k3ThinkingConfig: { type: "disabled" } | { type: "adaptive"; effort: KimiK3ThinkingEffort },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const runtimeModel =
-      model.api === "anthropic-messages" && isKimiK3ModelId(model.id)
-        ? {
-            ...model,
-            compat: { ...model.compat, allowEmptySignature: true },
-          }
-        : model;
-    return streamWithPayloadPatch(underlying, runtimeModel, context, options, (payloadObj) => {
+  const payloadWrapper = createPayloadPatchStreamWrapper(
+    underlying,
+    ({ payload: payloadObj, model }) => {
       if (model.api === "anthropic-messages" && isKimiK3ModelId(model.id)) {
         const outputConfig = payloadObj.output_config;
         if (k3ThinkingConfig.type === "disabled") {
@@ -428,7 +422,17 @@ function createKimiThinkingWrapper(
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
       stripAnthropicCacheControlMarkers(payloadObj);
-    });
+    },
+  );
+  return (model, context, options) => {
+    const runtimeModel =
+      model.api === "anthropic-messages" && isKimiK3ModelId(model.id)
+        ? {
+            ...model,
+            compat: { ...model.compat, allowEmptySignature: true },
+          }
+        : model;
+    return payloadWrapper(runtimeModel, context, options);
   };
 }
 

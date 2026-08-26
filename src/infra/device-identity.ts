@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   generateStoredDeviceIdentity,
@@ -22,21 +22,13 @@ import {
   verifyEd25519Signature,
 } from "./ed25519-signature.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
 
 const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const NATIVE_CLAIM_SUFFIX = ".native-importing";
-
-class DeviceIdentityMigrationRequiredError extends Error {
-  constructor(filePath: string) {
-    super(
-      `Legacy device identity exists at ${filePath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
-    );
-    this.name = "DeviceIdentityMigrationRequiredError";
-  }
-}
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   return {
@@ -55,20 +47,13 @@ function pathMayExist(filePath: string): boolean {
   }
 }
 
-function resolveLegacyStateDir(options: DeviceIdentityStoreOptions): string {
-  if (options.env?.OPENCLAW_STATE_DIR?.trim()) {
-    return resolveStateDir(options.env);
-  }
-  if (options.path) {
-    const databaseDir = path.dirname(path.resolve(options.path));
-    return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
-  }
-  return resolveStateDir(options.env ?? process.env);
-}
-
 /** Exact retired file owned by Doctor migration code. */
 function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
-  return path.join(resolveLegacyStateDir(options), LEGACY_DEVICE_IDENTITY_RELATIVE_PATH);
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  return path.join(
+    resolveOpenClawStateDirForDatabasePath(databasePath),
+    LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
+  );
 }
 
 function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
@@ -83,7 +68,9 @@ function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): voi
     pathMayExist(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
     pathMayExist(legacyPath)
   ) {
-    throw new DeviceIdentityMigrationRequiredError(legacyPath);
+    throw new Error(
+      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
+    );
   }
 }
 
@@ -100,20 +87,28 @@ function withDeviceIdentityCoordinator<T>(
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({ databasePath: resolved.databasePath });
+  const coordinator = acquireDeviceIdentityCoordinator({
+    databasePath: resolved.databasePath,
+    stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
+  });
   let result: T;
   try {
     result = operation(resolved, resolvedOptions);
   } catch (operationError) {
+    let releaseFailed = false;
+    let releaseError: unknown;
     try {
       coordinator.release();
-    } catch (releaseError) {
-      const aggregateError = new AggregateError(
+    } catch (error) {
+      releaseFailed = true;
+      releaseError = error;
+    }
+    if (releaseFailed) {
+      throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "device identity operation and coordinator release both failed",
-        { cause: releaseError },
+        operationError,
       );
-      throw aggregateError;
     }
     throw operationError;
   }
@@ -122,11 +117,14 @@ function withDeviceIdentityCoordinator<T>(
 }
 
 function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
-  assertNoPendingLegacyIdentity(options);
-  const existing = readStoredDeviceIdentity(options);
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  // A downgrade can recreate retired JSON after SQLite migration. Once this profile has
+  // a canonical row, keep it authoritative and leave the retired source for Doctor.
+  const existing = pathMayExist(databasePath) ? readStoredDeviceIdentity(options) : null;
   if (existing) {
     return toDeviceIdentity(existing);
   }
+  assertNoPendingLegacyIdentity(options);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
@@ -151,7 +149,6 @@ export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
   return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
-    assertNoPendingLegacyIdentity(resolvedOptions);
     const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
     const cached = processDeviceIdentities.get(cacheKey);
     if (cached) {
@@ -168,11 +165,12 @@ export function loadOrCreateProcessDeviceIdentity(
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
-    assertNoPendingLegacyIdentity(resolvedOptions);
-    const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);
-    return stored ? toDeviceIdentity(stored) : null;
-  });
+  const stored = readStoredDeviceIdentityReadOnly(options);
+  if (stored) {
+    return toDeviceIdentity(stored);
+  }
+  assertNoPendingLegacyIdentity(options);
+  return null;
 }
 
 /** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */

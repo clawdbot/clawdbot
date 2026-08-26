@@ -1,4 +1,5 @@
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -31,11 +32,13 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  // Process-local only: persisted restart requests cannot delegate successor ownership.
+  successorOwner?: {
+    kind: "managed-update-handoff";
+    handoffId: string;
+    installRoot: string;
+  };
 };
-
-function normalizeRestartIntentPid(pid: number | undefined): number | null {
-  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-}
 
 export function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
   const normalized = reason?.trim();
@@ -48,7 +51,7 @@ export function writeGatewayRestartIntentSync(opts: {
   intent?: GatewayRestartIntent;
   reason?: string;
 }): boolean {
-  const targetPid = normalizeRestartIntentPid(opts.targetPid);
+  const targetPid = asPositiveSafeInteger(opts.targetPid) ?? null;
   if (targetPid === null) {
     return false;
   }

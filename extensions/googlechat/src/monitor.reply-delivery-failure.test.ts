@@ -7,6 +7,7 @@
 // The service account key is a throwaway RSA key generated in-process; no real
 // credentials or network access are involved.
 import { generateKeyPairSync } from "node:crypto";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -39,7 +40,7 @@ const CHUNKS = [
   "First chunk of the assistant reply.",
   "Second chunk of the assistant reply.",
   "Third chunk of the assistant reply.",
-];
+] as const;
 
 const core = {
   channel: {
@@ -92,9 +93,13 @@ function createStubHandler(params: { failCreateIndexes: Set<number>; patchStatus
       const messageMatch = url.pathname.match(/^\/v1\/(spaces\/[^/]+\/messages\/[^/]+)$/);
       if (req.method === "PATCH" && messageMatch?.[1]) {
         patchAttempts.push(messageMatch[1]);
-        json(params.patchStatus ?? 200, {
-          error: { code: 404, message: "stub: message not found", status: "NOT_FOUND" },
-        });
+        const status = params.patchStatus ?? 200;
+        json(
+          status,
+          status === 200
+            ? { name: messageMatch[1] }
+            : { error: { code: status, message: "stub: message not found", status: "NOT_FOUND" } },
+        );
         return;
       }
       json(400, { error: { code: 400, message: "stub: unhandled request" } });
@@ -174,6 +179,17 @@ async function runDelivery(params: {
   }
 }
 
+function expectPartialDelivery(
+  error: unknown,
+  deliveryResult: { messageIds: string[]; content: string; visibleReplySent: true },
+) {
+  expect(isChannelPartialDeliveryError(error)).toBe(true);
+  if (!isChannelPartialDeliveryError(error)) {
+    throw new Error("expected partial delivery error");
+  }
+  expect(error.deliveryResult).toEqual(deliveryResult);
+}
+
 describe("Google Chat reply delivery failure propagation (integration)", () => {
   let fetchControl: ReturnType<typeof stubGoogleHostsFetch>;
 
@@ -195,6 +211,11 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
       expect(result.deliverError).toBeInstanceOf(Error);
       expect((result.deliverError as Error).message).toContain("Google Chat API 500");
       expect((result.deliverError as Error).message).toContain("stub: backend unavailable");
+      expectPartialDelivery(result.deliverError, {
+        messageIds: ["spaces/AAA/messages/stub-m1"],
+        content: CHUNKS[0],
+        visibleReplySent: true,
+      });
       expect(result.onErrorCalls).toHaveLength(1);
       // The failing create rejects the whole delivery: the third chunk is never attempted.
       expect(stub.createAttempts.map((attempt) => attempt.status)).toEqual([200, 500]);
@@ -213,6 +234,23 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
     });
   });
 
+  it("preserves a successful typing-placeholder update when a later create fails", async () => {
+    const stub = createStubHandler({ failCreateIndexes: new Set([1]) });
+    await withServer(stub.handler, async (baseUrl) => {
+      fetchControl.pointAtStub(baseUrl);
+      const result = await runDelivery({ withTypingMessage: true });
+
+      expect(result.outcome).toBe("failed-deliver");
+      expectPartialDelivery(result.deliverError, {
+        messageIds: ["spaces/AAA/messages/typing"],
+        content: CHUNKS[0],
+        visibleReplySent: true,
+      });
+      expect(stub.patchAttempts).toEqual(["spaces/AAA/messages/typing"]);
+      expect(stub.createAttempts.map((attempt) => attempt.status)).toEqual([500]);
+    });
+  });
+
   it("rejects when the resend after a typing-placeholder update failure also fails", async () => {
     const stub = createStubHandler({ failCreateIndexes: new Set([1]), patchStatus: 404 });
     await withServer(stub.handler, async (baseUrl) => {
@@ -220,6 +258,7 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
       const result = await runDelivery({ withTypingMessage: true });
 
       expect(result.outcome).toBe("failed-deliver");
+      expect(isChannelPartialDeliveryError(result.deliverError)).toBe(false);
       expect((result.deliverError as Error).message).toContain("Google Chat API 500");
       expect(result.onErrorCalls).toHaveLength(1);
       expect(stub.patchAttempts).toEqual(["spaces/AAA/messages/typing"]);

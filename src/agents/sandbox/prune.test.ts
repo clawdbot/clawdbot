@@ -11,6 +11,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const backendMocks = vi.hoisted(() => ({
+  getSandboxBackendManager: vi.fn(),
   removeRuntime: vi.fn(),
 }));
 
@@ -38,7 +39,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("./backend.js", () => ({
-  getSandboxBackendManager: vi.fn(() => backendMocks),
+  getSandboxBackendManager: backendMocks.getSandboxBackendManager,
 }));
 
 vi.mock("./docker-backend.js", () => ({
@@ -109,6 +110,7 @@ describe("maybePruneSandboxes", () => {
   beforeEach(async () => {
     vi.resetModules();
     configMocks.getRuntimeConfig.mockReset();
+    backendMocks.getSandboxBackendManager.mockReset().mockReturnValue(backendMocks);
     backendMocks.removeRuntime.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
     registryMocks.readRegistry.mockReset();
@@ -153,6 +155,28 @@ describe("maybePruneSandboxes", () => {
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     expect(runtimeMocks.error).toHaveBeenCalledWith(
       "Sandbox prune failed to remove sandbox-1: docker rm failed",
+    );
+  });
+
+  it("keeps the registry entry when its sandbox backend plugin is unavailable", async () => {
+    backendMocks.getSandboxBackendManager.mockReturnValueOnce(null);
+    registryMocks.readRegistry.mockResolvedValueOnce({
+      entries: [
+        {
+          containerName: "openshell-1",
+          backendId: "openshell",
+          createdAtMs: Date.now() - 4 * 60 * 60 * 1000,
+          lastUsedAtMs: Date.now() - 2 * 60 * 60 * 1000,
+          image: "openclaw",
+        },
+      ],
+    });
+
+    await maybePruneSandboxes(buildPruneConfig());
+
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+    expect(runtimeMocks.error).toHaveBeenCalledWith(
+      'Sandbox prune failed to remove openshell-1: Sandbox backend "openshell" is unavailable; enable its plugin before removing this runtime.',
     );
   });
 

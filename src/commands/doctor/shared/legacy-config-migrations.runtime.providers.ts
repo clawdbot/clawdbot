@@ -9,7 +9,7 @@ import { isRecord } from "./legacy-config-record-shared.js";
 import {
   migrateLegacyXSearchConfig,
   resolveLegacyXSearchModelTarget,
-} from "./legacy-x-search-migrate.js";
+} from "./legacy-web-tools-migrate.js";
 
 const LEGACY_OPENAI_CODEX_PLUGIN_ID = "openai-codex";
 const OPENAI_PLUGIN_ID = "openai";

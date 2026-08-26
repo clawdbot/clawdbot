@@ -391,19 +391,6 @@ actor VoicePushToTalk {
             sendChime: state.voiceWakeSendChime)
     }
 
-    // MARK: - Test helpers
-
-    static func _testDelta(committed: String, current: String) -> String {
-        VoiceOverlayTextFormatting.delta(after: committed, current: current)
-    }
-
-    static func _testAttributedColors(isFinal: Bool) -> (NSColor, NSColor) {
-        let sample = VoiceOverlayTextFormatting.makeAttributed(committed: "a", volatile: "b", isFinal: isFinal)
-        let committedColor = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
-        let volatileColor = sample.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor ?? .clear
-        return (committedColor, volatileColor)
-    }
-
     private static func join(_ prefix: String, _ suffix: String) -> String {
         if prefix.isEmpty { return suffix }
         if suffix.isEmpty { return prefix }

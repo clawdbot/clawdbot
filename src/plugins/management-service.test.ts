@@ -1,5 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configSnapshot,
+  emptyMetadataSnapshot,
+  hostedDiffsEntry,
+  hostedFeedDiffsEntry,
+  metadataSnapshot,
+} from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -107,77 +114,6 @@ const {
   uninstallManagedPlugin,
 } = await import("./management-service.js");
 
-function configSnapshot(config: Record<string, unknown> = {}) {
-  return {
-    snapshot: {
-      valid: true,
-      parsed: {},
-      path: "/tmp/openclaw.json",
-      sourceConfig: config,
-      hash: "base-hash",
-    },
-    writeOptions: {
-      expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json": "include-hash" },
-      includeFileTargetsForWrite: { "/tmp/plugins.json": "/tmp/plugins.json" },
-    },
-  };
-}
-
-function metadataSnapshot(params: {
-  enabled: boolean;
-  id?: string;
-  name?: string;
-  origin?: "bundled" | "global";
-  installRecord?: Record<string, unknown>;
-  icon?: string;
-}) {
-  const id = params.id ?? "workboard";
-  const manifest = {
-    id,
-    name: params.name ?? "Workboard",
-    description: "Coordinate agent work in a shared board.",
-    catalog: { featured: true, order: 10 },
-    ...(params.icon ? { icon: params.icon } : {}),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: params.origin ?? "bundled",
-    rootDir: `/tmp/${id}`,
-    source: `/tmp/${id}/index.ts`,
-    manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-  };
-  return {
-    index: {
-      plugins: [
-        {
-          pluginId: id,
-          packageName: `@openclaw/${id}`,
-          origin: params.origin ?? "bundled",
-          enabled: params.enabled,
-        },
-      ],
-      installRecords: params.installRecord ? { [id]: params.installRecord } : {},
-    },
-    byPluginId: new Map([[id, manifest]]),
-    plugins: [manifest],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
-
-function emptyMetadataSnapshot() {
-  return {
-    index: { plugins: [], installRecords: {} },
-    byPluginId: new Map(),
-    plugins: [],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
-
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
     source: "hosted",
@@ -202,36 +138,6 @@ function mockClawHubInstall(pluginId: string, packageName: string, targetDir?: s
     },
   });
 }
-
-const hostedDiffsEntry = {
-  name: "@openclaw/diffs",
-  version: "2.0.0",
-  description: "Hosted description",
-  openclaw: {
-    plugin: { id: "diffs", label: "Hosted Diffs" },
-    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
-  },
-};
-
-// Mirrors the current default ClawHub feed shape: package identity lives in a
-// source candidate while runtime/editorial metadata remains local.
-const hostedFeedDiffsEntry = {
-  id: "@openclaw/diffs",
-  title: "Diffs",
-  state: "available",
-  featured: true,
-  publisher: { id: "openclaw", trust: "official" },
-  install: {
-    candidates: [
-      {
-        sourceRef: "public-clawhub",
-        package: "@openclaw/diffs",
-        version: "2026.6.11",
-        integrity: `sha256:${"a".repeat(64)}`,
-      },
-    ],
-  },
-};
 
 describe("plugin management service", () => {
   beforeEach(() => {
@@ -797,6 +703,68 @@ describe("plugin management service", () => {
     );
   });
 
+  it("approves every install-policy warning in an acknowledged Gateway install", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mocks.clawhubInstall.mockImplementation(async (params: unknown) => {
+      const callback = expectDefined(
+        (
+          params as {
+            onInstallPolicyWarning?: (request: {
+              targetName: string;
+              targetType: "plugin";
+              requestMode: "install";
+              reason: string;
+            }) => Promise<{ status: "approved" | "declined" }>;
+          }
+        ).onInstallPolicyWarning,
+        "install policy acknowledgement callback",
+      );
+      await expect(
+        callback({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review package metadata",
+        }),
+      ).resolves.toEqual({ status: "approved" });
+      await expect(
+        callback({
+          targetName: "diffs",
+          targetType: "plugin",
+          requestMode: "install",
+          reason: "Review installed dependencies",
+        }),
+      ).resolves.toEqual({ status: "approved" });
+      return {
+        ok: true,
+        pluginId: "diffs",
+        targetDir: "/tmp/extensions/diffs",
+        extensions: ["index.js"],
+        packageName: "@openclaw/diffs",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/diffs",
+          clawhubFamily: "code-plugin",
+        },
+      };
+    });
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    await installManagedPlugin({
+      request: {
+        source: "official",
+        pluginId: "diffs",
+        acknowledgeInstallPolicyWarning: true,
+      },
+      env: {},
+    });
+  });
+
   it("removes only the newly installed managed target after persistence conflicts", async () => {
     const env = { HOME: "/tmp/openclaw-managed-install-conflict-home" };
     const conflict = new Error("config changed during plugin install");
@@ -818,8 +786,7 @@ describe("plugin management service", () => {
         env,
       }),
     ).rejects.toBe(conflict);
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(mocks.planUninstall).toHaveBeenCalledWith({
+    expect(mocks.planUninstall.mock.calls[0]?.[0]).toMatchObject({
       config: {
         plugins: {
           installs: {
@@ -833,7 +800,6 @@ describe("plugin management service", () => {
       },
       pluginId: "demo",
       deleteFiles: true,
-      extensionsDir: expect.any(String),
     });
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
   });
@@ -913,6 +879,7 @@ describe("plugin management service", () => {
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
@@ -1050,7 +1017,6 @@ describe("plugin management service", () => {
         writeOptions: prepared.writeOptions,
       }),
     );
-    // Transient install records never persist into the written config document.
     expect(
       expectDefined(
         mocks.commitRecords.mock.calls[0],

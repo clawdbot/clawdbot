@@ -10,7 +10,7 @@ import {
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
-import { createQaBusWaiterStore } from "./bus-waiters.js";
+import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
 import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
   QaBusAttachment,
@@ -86,6 +86,7 @@ export function createQaBusState() {
   const events: QaBusEvent[] = [];
   const acknowledgedPollCursors = new Map<string, number>();
   let cursor = 0;
+  let assertWritable = () => {};
   const waiters = createQaBusWaiterStore(() =>
     buildQaBusSnapshot({
       cursor,
@@ -125,6 +126,7 @@ export function createQaBusState() {
   const requireActiveMessageForAccount = (
     input: Pick<QaBusReadMessageInput, "accountId" | "messageId">,
   ): QaBusMessage => {
+    assertWritable();
     const message = requireQaBusMessageForAccount({ messages, input });
     if (message.deleted) {
       throw new Error(`qa-bus message was deleted: ${input.messageId}`);
@@ -135,10 +137,12 @@ export function createQaBusState() {
   const createMessage = (params: {
     direction: QaBusMessage["direction"];
     accountId: string;
+    messageId?: string;
     conversation: QaBusConversation;
     senderId: string;
     senderName?: string;
     text: string;
+    isError?: boolean;
     timestamp?: number;
     threadId?: string;
     threadTitle?: string;
@@ -147,6 +151,7 @@ export function createQaBusState() {
     nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
+    assertWritable();
     const thread = params.threadId ? threads.get(params.threadId) : undefined;
     if (
       thread &&
@@ -161,7 +166,8 @@ export function createQaBusState() {
     const storedConversation = ensureConversation(params.accountId, params.conversation);
     const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
-      id: randomUUID(),
+      // Adopt native identity before indexing or publishing any message clone.
+      id: params.messageId ?? randomUUID(),
       accountId: params.accountId,
       direction: params.direction,
       conversation: {
@@ -172,6 +178,7 @@ export function createQaBusState() {
       senderId: params.senderId,
       senderName: params.senderName,
       text: params.text,
+      ...(params.isError === true ? { isError: true } : {}),
       timestamp: params.timestamp ?? Date.now(),
       threadId: params.threadId,
       threadTitle: params.threadTitle,
@@ -181,19 +188,22 @@ export function createQaBusState() {
       ...(toolCalls ? { toolCalls } : {}),
       reactions: [],
     };
-    messages.set(message.id, message);
+    // Provider IDs are conversation-local and must never replace another chat's message.
+    const { accountId, conversation, id } = message;
+    messages.set(JSON.stringify([accountId, conversation.kind, conversation.id, id]), message);
     return message;
   };
 
   return {
-    reset() {
+    reset(terminal = false) {
+      assertWritable = terminal ? throwQaBusClosed : assertWritable;
       conversations.clear();
       threads.clear();
       messages.clear();
       events.length = 0;
       // Keep the cursor monotonic across resets so long-poll clients do not
-      // miss fresh events and retained restart acknowledgements remain valid.
-      waiters.reset();
+      // miss events; terminal reset also fences late waiter timers.
+      waiters.reset(undefined, terminal);
     },
     getSnapshot() {
       return buildQaBusSnapshot({
@@ -204,11 +214,12 @@ export function createQaBusState() {
         events,
       });
     },
-    addInboundMessage(input: QaBusInboundMessageInput) {
+    addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
       const accountId = normalizeAccountId(input.accountId);
       const message = createMessage({
         direction: "inbound",
         accountId,
+        messageId,
         // `dm:` is the canonical target spelling and is also used by manual
         // QA-bus clients. Normalize its matching ingress alias before routing
         // so a DM can never silently acquire group/channel privacy semantics.
@@ -241,6 +252,7 @@ export function createQaBusState() {
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
         senderName: input.senderName?.trim() || DEFAULT_BOT_NAME,
         text: input.text,
+        isError: input.isError,
         timestamp: input.timestamp,
         threadId: input.threadId ?? threadId,
         replyToId: input.replyToId,
@@ -255,6 +267,7 @@ export function createQaBusState() {
       return cloneMessage(message);
     },
     createThread(input: QaBusCreateThreadInput) {
+      assertWritable();
       const accountId = normalizeAccountId(input.accountId);
       const thread: QaBusThread = {
         id: `thread-${randomUUID()}`,
@@ -332,11 +345,15 @@ export function createQaBusState() {
       return searchQaBusMessages({ messages, input });
     },
     resolvePollCursor(input: QaBusPollInput = {}) {
+      assertWritable();
       const accountId = normalizeAccountId(input.accountId);
       const requestedCursor = input.cursor ?? 0;
       const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
-      if (requestedCursor > acknowledgedCursor && requestedCursor <= cursor) {
-        acknowledgedPollCursors.set(accountId, requestedCursor);
+      // Fetch progress and completed work are separate facts. Missing
+      // acknowledgement means the consumer has not recorded new completion.
+      const completedCursor = input.acknowledgedCursor ?? 0;
+      if (completedCursor > acknowledgedCursor && completedCursor <= cursor) {
+        acknowledgedPollCursors.set(accountId, completedCursor);
       }
       // A restarted channel consumer begins at zero. Resume its account cursor
       // so retained events are not replayed, while still returning unacked work.

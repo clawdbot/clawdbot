@@ -248,6 +248,68 @@ describe("message action media helpers", () => {
     }
   });
 
+  maybeIt.each([
+    "mediaUrl",
+    "media_url",
+    "path",
+    "filePath",
+    "file_path",
+    "fileUrl",
+    "file_url",
+    "url",
+  ])("rejects an out-of-sandbox %s hidden behind valid attachment media", async (shadowKey) => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-sandbox-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-host-"));
+    try {
+      await expect(
+        normalizeSandboxMediaParams({
+          args: {
+            attachments: [
+              {
+                media: "/workspace/allowed.png",
+                [shadowKey]: path.join(outsideRoot, "restricted.png"),
+              },
+            ],
+          },
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot,
+          },
+          structuredAttachments: "all",
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes every allowed source in one structured attachment", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-multi-source-"));
+    try {
+      const attachment: Record<string, unknown> = {
+        media: "/workspace/allowed.png",
+        file_path: "/workspace/allowed-file.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args: { attachments: [attachment] },
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        structuredAttachments: "all",
+      });
+
+      expect(attachment).toEqual({
+        media: path.join(sandboxRoot, "allowed.png"),
+        file_path: path.join(sandboxRoot, "allowed-file.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
   it("collects host media source hints from the shared media-source key set", () => {
     expect(
       collectActionMediaSourceHints(

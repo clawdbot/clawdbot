@@ -123,7 +123,6 @@ function createPlan(
         commandBody: "show me the result",
       },
     },
-    rememberSentText: vi.fn(),
     replyLogger: replyLogger as never,
     replyPipeline: {},
     replyResolver: (async () => undefined) as never,

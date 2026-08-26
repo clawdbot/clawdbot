@@ -11,6 +11,47 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 
 describe("chat pane session access", () => {
+  it("opens the resolved parent from the header breadcrumb", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const parent = {
+      key: "agent:main:parent",
+      kind: "direct",
+      label: "Release prep",
+      updatedAt: 1,
+    } satisfies GatewaySessionRow;
+    const child = {
+      key: "agent:main:child",
+      kind: "direct",
+      label: "Implementation",
+      parentSessionKey: parent.key,
+      updatedAt: 2,
+    } satisfies GatewaySessionRow;
+    state.sessionsResult = { sessions: [parent, child] } as NonNullable<
+      typeof state.sessionsResult
+    >;
+    pane.paneId = "pane-child";
+    pane.onPaneSessionChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        child,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+    container.querySelector<HTMLButtonElement>(".chat-pane__parent-session")?.click();
+
+    expect(pane.onPaneSessionChange).toHaveBeenCalledExactlyOnceWith("pane-child", parent.key);
+  });
+
   it("refuses ordinary session creation without operator.write", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -151,12 +192,32 @@ describe("chat pane session access", () => {
       features: { methods: ["sessions.patch"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
 
-    await pane.restoreArchivedSession(state.sessionKey);
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
 
     expect(state.chatError).toBeTruthy();
     expect(state.lastError).toBe(state.chatError);
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("restores the exact durable session observed by the composer", async () => {
+    const patch = vi.fn(async () => ({ ok: true }));
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.patch"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
+
+    expect(patch).toHaveBeenCalledWith(
+      state.sessionKey,
+      { archived: false },
+      { agentId: "main", expectedSessionId: "session-a" },
+    );
   });
 
   it("keeps sharing hidden when legacy Gateways omit method metadata", () => {
@@ -179,7 +240,7 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -213,7 +274,7 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         session,
         false,
         undefined,

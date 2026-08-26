@@ -46,6 +46,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     # Filter by runtime or status
     openclaw tasks list --runtime acp
     openclaw tasks list --status running
+    openclaw tasks list --status blocked
     ```
 
   </Tab>
@@ -62,6 +63,14 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
     # Change notification policy for a task
     openclaw tasks notify <lookup> state_changes
+    ```
+
+  </Tab>
+  <Tab title="Recover delivery">
+    ```bash
+    # Retry or dismiss up to 10 blocked completion deliveries
+    openclaw tasks retry <lookup> [lookup...]
+    openclaw tasks dismiss <lookup> [lookup...]
     ```
 
   </Tab>
@@ -100,7 +109,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   <Accordion title="Notify defaults for automations and media">
     Automation tasks (main-session and isolated) use `silent` notify policy - they create records for tracking but do not generate task notifications of their own; the scheduler owns its delivery path.
 
-    Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. The requester agent follows its normal visible-reply contract: automatic final reply when configured, or `message(action="send")` plus `NO_REPLY` when the session requires message-tool replies. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
+    Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake. The requester agent follows its current visible-reply contract: successful completion includes a short user-facing caption and every structured generated attachment from the completion event, while failure produces a concise visible failure. Internal task and session details stay private. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
 
   </Accordion>
   <Accordion title="Concurrent media-generation guardrail">
@@ -141,6 +150,16 @@ stateDiagram-v2
 
 Transitions happen automatically - agent run lifecycle events (start, end, error) update the task status; you do not manage it manually.
 
+Execution and result delivery are separate. A subagent task can remain
+`succeeded` while its `deliveryStatus` is `session_queued` or `failed`. The
+terminal outcome is `succeeded` after delivery and `blocked` when the work
+finished but the result could not be handed back. This preserves the completed
+result instead of misreporting the child execution as failed.
+
+Use `openclaw tasks list --status blocked` to find these tasks. They also remain
+in `--status succeeded` results because the underlying execution succeeded, and
+JSON output preserves the stored status plus the `blocked` terminal outcome.
+
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
 `lost` is runtime-aware:
@@ -157,6 +176,14 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 **Direct delivery** - if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Discord, Slack, Telegram, etc.). Group and channel task completions are instead routed through the requester session so the parent agent can write the visible reply. For subagent completions, OpenClaw also preserves bound thread/topic routing when available and can fill a missing `to` / account from the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) before giving up on direct delivery.
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
+
+Durable subagent completion handoffs retry for up to 30 minutes with capped
+exponential backoff. A queued handoff is not reported as delivered until the
+queue settles. If delivery reaches its deadline or fails permanently, the task
+shows a blocked terminal outcome and retains its canonical result for 7 days.
+Use `openclaw tasks retry` to create a fenced new delivery generation, or
+`openclaw tasks dismiss` to record intentional non-delivery. Retry can duplicate
+a visible result when an earlier provider acknowledgement was ambiguous.
 
 <Tip>
 Session-queued task completions trigger an immediate heartbeat wake, so you see the result quickly - you do not have to wait for the next scheduled heartbeat tick.
@@ -205,6 +232,18 @@ openclaw tasks notify <lookup> state_changes
     ```
 
     For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+
+  </Accordion>
+  <Accordion title="tasks retry | dismiss">
+    ```bash
+    openclaw tasks retry <lookup> [lookup...]
+    openclaw tasks dismiss <lookup> [lookup...]
+    ```
+
+    These commands recover blocked subagent completion deliveries. Each request
+    accepts 1-10 task lookups. Retry preserves the canonical result and starts a
+    new fenced queue generation; dismiss keeps the task blocked and records that
+    the operator intentionally stopped delivery.
 
   </Accordion>
   <Accordion title="tasks notify">
@@ -291,7 +330,7 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 
 ### Control UI
 
-The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, or cancel queued and running tasks.
+The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying.
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
@@ -327,7 +366,7 @@ Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles four things:
+A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway start) and handles five things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -341,6 +380,9 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
+  </Step>
+  <Step title="Task Flow retention">
+    Deletes terminal Task Flow records after 7 days. A `blocked` flow is terminal only when it has `endedAt`; resumable managed `blocked` flows remain registered.
   </Step>
 </Steps>
 
@@ -371,8 +413,16 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
     A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
-    A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
-  </Accordion>
+A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
+
+When execution identity collection is enabled, OpenClaw also binds the exact
+admitted `contextId` and `executionId` to Gateway CLI, ACP, and automation task
+rows and their mirrored flow rows. This is inspection provenance only: `runId`
+remains correlation, task/flow status remains authoritative, and a missing or
+mismatched binding never changes execution or settlement. `openclaw audit
+--execution <id> --explain` adapts the existing rows without copying task or
+flow content into the generic decision-fact table.
+</Accordion>
 </AccordionGroup>
 
 ## Related

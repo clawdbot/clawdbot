@@ -1,0 +1,107 @@
+title: Telegram partial failure recovery
+
+scenario:
+  id: telegram-partial-failure-recovery
+  surface: channels
+  category: channels.conversation-routing-and-delivery
+  coverage:
+    primary:
+      - channels.streaming-final-reply
+  regressionRefs:
+    - openclaw/openclaw#120626
+  objective: Verify Telegram recovers provider failures in one logical message whether or not a streaming preview became visible.
+  successCriteria:
+    - A visible partial is retained and the terminal recovery edits the same Telegram message.
+    - A failure before any visible partial produces one fallback Telegram message.
+  codeRefs:
+    - extensions/telegram/src/bot-message-dispatch-turn.ts
+    - extensions/telegram/src/draft-stream.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
+    channels:
+      telegram:
+        streaming:
+          mode: partial
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Inject provider failures before and after Telegram accepts a streaming preview, then verify one logical recovery message remains.
+    config:
+      requiredProviderMode: mock-openai
+      partialMarker: TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE
+
+flow:
+  steps:
+    - name: preserves a visible partial in one recovered message
+      actions:
+        - assert:
+            expr: env.providerMode === config.requiredProviderMode
+            message: this Telegram recovery scenario requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: visibleOutboundStart
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-partial-failure-room, kind: group }
+            senderId: qa-telegram-recovery-operator
+            senderName: Telegram Recovery Operator
+            text: "@openclaw Telegram visible partial failure QA check"
+        - waitForOutbound:
+            conversation: { id: telegram-partial-failure-room, kind: group }
+            sinceIndex: { ref: visibleOutboundStart }
+            textIncludes: { ref: config.partialMarker }
+            timeoutMs: 75000
+          saveAs: visiblePartial
+        - set: visiblePartialText
+          value:
+            expr: "visiblePartial.text"
+        - call: sleep
+          args: [4000]
+        - set: visibleMessages
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(visibleOutboundStart)"
+        - assert:
+            expr: "visibleMessages.length === 1 && visiblePartialText.includes(config.partialMarker) && visibleMessages[0].text !== visiblePartialText && visibleMessages[0].text.trim().length > 0"
+            message:
+              expr: "`expected one Telegram message edited away from the visible partial; saw ${visibleMessages.length}: initial=${visiblePartialText} final=${visibleMessages.map((message) => message.text).join(' | ')}`"
+      detailsExpr: "JSON.stringify({ count: visibleMessages.length, initialText: visiblePartialText, finalText: visibleMessages.map((message) => message.text).join(' | ') })"
+
+    - name: sends one fallback when no partial became visible
+      actions:
+        - resetTransport: true
+        - set: unsentOutboundStart
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-partial-failure-room, kind: group }
+            senderId: qa-telegram-recovery-operator
+            senderName: Telegram Recovery Operator
+            text: "@openclaw Telegram unsent failure QA check"
+        - waitForOutbound:
+            conversation: { id: telegram-partial-failure-room, kind: group }
+            sinceIndex: { ref: unsentOutboundStart }
+            timeoutMs: 75000
+          saveAs: unsentReply
+        - call: sleep
+          args: [4000]
+        - set: unsentMessages
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(unsentOutboundStart)"
+        - assert:
+            expr: "unsentMessages.length === 1 && unsentReply.text.trim().length > 0 && unsentMessages[0].text.trim().length > 0 && !unsentMessages[0].text.includes(config.partialMarker)"
+            message:
+              expr: "`expected one non-empty Telegram fallback without partial text; saw ${unsentMessages.length}: ${unsentMessages.map((message) => message.text).join(' | ')}`"
+      detailsExpr: "JSON.stringify({ count: unsentMessages.length, text: unsentMessages.map((message) => message.text).join(' | ') })"

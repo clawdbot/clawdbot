@@ -24,7 +24,6 @@ type Harness = {
   request: ReturnType<typeof vi.fn>;
   requestPermission: ReturnType<typeof vi.fn>;
   runId: string;
-  sessionStore: ReturnType<typeof createInMemorySessionStore>;
 };
 
 function createApprovalEvent(params: {
@@ -152,14 +151,12 @@ async function createHarness(
     request,
     requestPermission,
     runId: runId!,
-    sessionStore,
   };
 }
 
 async function cleanupHarness(harness: Harness): Promise<void> {
   await harness.agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
   await harness.promptPromise;
-  harness.sessionStore.clearAllSessionsForTest();
 }
 
 function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
@@ -386,7 +383,6 @@ describe("ACP translator permission relay", () => {
     await agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
     await agent.cancel({ sessionId: SECOND_SESSION_ID } as CancelNotification);
     await Promise.all([firstPrompt, secondPrompt]);
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("allows approval relay retry when Gateway resolution fails", async () => {

@@ -204,20 +204,20 @@ export function renderConfig(props: ConfigProps) {
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">
-        ${allCategories.map(
-          (category) => html`
+        ${allCategories.map((category) => {
+          const expanded = category.sections.some((section) => section.key === props.activeSection);
+          const panelId = `config-accordion-panel-${category.id}`;
+          return html`
             <div class="config-accordion-group">
               <button
-                class="config-accordion-group__header ${props.activeSection != null &&
-                category.sections.some((section) => section.key === props.activeSection)
+                class="config-accordion-group__header ${expanded
                   ? "config-accordion-group__header--active"
                   : ""}"
+                aria-expanded=${expanded ? "true" : "false"}
+                aria-controls=${panelId}
                 @click=${(event: Event) => {
                   const firstKey = category.sections[0]?.key ?? null;
-                  const isCurrentlyInGroup = category.sections.some(
-                    (section) => section.key === props.activeSection,
-                  );
-                  props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                  props.onSectionChange(expanded ? null : firstKey);
                   resetContentScroll(event.currentTarget);
                 }}
               >
@@ -226,9 +226,7 @@ export function renderConfig(props: ConfigProps) {
                 </span>
                 <span>${category.label}</span>
                 <svg
-                  class="config-accordion-group__chevron ${category.sections.some(
-                    (section) => section.key === props.activeSection,
-                  )
+                  class="config-accordion-group__chevron ${expanded
                     ? "config-accordion-group__chevron--open"
                     : ""}"
                   viewBox="0 0 24 24"
@@ -241,29 +239,27 @@ export function renderConfig(props: ConfigProps) {
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
-              ${category.sections.some((section) => section.key === props.activeSection)
-                ? html`<div class="config-accordion-group__items">
-                    ${category.sections.map(
-                      (section) => html`<button
-                        class="config-accordion-group__item ${props.activeSection === section.key
-                          ? "config-accordion-group__item--active"
-                          : ""}"
-                        @click=${(event: Event) => {
-                          props.onSectionChange(section.key);
-                          resetContentScroll(event.currentTarget);
-                        }}
-                      >
-                        <span class="config-accordion-group__item-icon">
-                          ${getSectionIcon(section.key)}
-                        </span>
-                        ${section.label}
-                      </button>`,
-                    )}
-                  </div>`
-                : nothing}
+              <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>
+                ${category.sections.map(
+                  (section) => html`<button
+                    class="config-accordion-group__item ${props.activeSection === section.key
+                      ? "config-accordion-group__item--active"
+                      : ""}"
+                    @click=${(event: Event) => {
+                      props.onSectionChange(section.key);
+                      resetContentScroll(event.currentTarget);
+                    }}
+                  >
+                    <span class="config-accordion-group__item-icon">
+                      ${getSectionIcon(section.key)}
+                    </span>
+                    ${section.label}
+                  </button>`,
+                )}
+              </div>
             </div>
-          `,
-        )}
+          `;
+        })}
       </div>
     `;
   }
@@ -290,7 +286,8 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
-  const canRawSave = props.connected && !configBusy && hasRawChanges;
+  const mutationAllowed = props.mutationAllowed !== false;
+  const canRawSave = props.connected && mutationAllowed && !configBusy && hasRawChanges;
   const showAppearanceOnRoot =
     includeVirtualSections &&
     formMode === "form" &&
@@ -483,7 +480,7 @@ export function renderConfig(props: ConfigProps) {
                       value: props.formValue,
                       embedded: props.embeddedEditor === true,
                       rawAvailable,
-                      disabled: configBusy || !props.formValue,
+                      disabled: configBusy || !props.formValue || !mutationAllowed,
                       unsupportedPaths: analysis.unsupportedPaths,
                       onPatch: props.onFormPatch,
                       onRemove: props.onFormRemove,
@@ -512,6 +509,7 @@ export function renderConfig(props: ConfigProps) {
                               ${t("configView.peek")}
                             </button>`
                           : undefined,
+                      sectionPrelude: props.sectionPrelude,
                       revealSensitive: props.activeSection === "env" ? envSensitiveVisible : false,
                       isSensitivePathRevealed: (path) => isSensitivePathRevealed(viewState, path),
                       onToggleSensitivePath: (path) => {
@@ -533,7 +531,7 @@ export function renderConfig(props: ConfigProps) {
                   <div class="settings-group">
                     <div class="settings-row settings-row--stacked">
                       <div class="config-raw-actions">
-                        ${props.onOpenFile
+                        ${props.onOpenFile && props.openFileAllowed !== false
                           ? html`<button class="btn btn--sm" @click=${props.onOpenFile}>
                               ${icons.fileText} ${t("configView.open")}
                             </button>`
@@ -606,7 +604,7 @@ export function renderConfig(props: ConfigProps) {
                           : html`<textarea
                               placeholder=${t("configView.rawConfig")}
                               .value=${props.raw}
-                              ?disabled=${configBusy}
+                              ?disabled=${configBusy || !mutationAllowed}
                               @input=${(event: Event) => {
                                 props.onRawChange((event.target as HTMLTextAreaElement).value);
                               }}

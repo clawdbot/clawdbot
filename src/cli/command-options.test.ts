@@ -139,6 +139,17 @@ describe("inheritOptionFromParent", () => {
     expect(inheritOptionFromParent<string>(run, "token")).toBe("gateway-env-token");
   });
 
+  it("can restrict inherited values to an explicit CLI source", () => {
+    const gateway = new Command().option("--token <token>", "Gateway token");
+    const run = gateway.command("run").option("--token <token>", "Run token");
+
+    gateway.setOptionValueWithSource("token", "gateway-env-token", "env");
+    expect(inheritOptionFromParent<string>(run, "token", "cli")).toBeUndefined();
+
+    gateway.setOptionValueWithSource("token", "gateway-cli-token", "cli");
+    expect(inheritOptionFromParent<string>(run, "token", "cli")).toBe("gateway-cli-token");
+  });
+
   it("skips default-valued ancestor options and keeps traversing", async () => {
     const program = new Command().option("--token <token>", "Root token");
     const gateway = program

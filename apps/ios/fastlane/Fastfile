@@ -15,6 +15,7 @@ APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
 DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
 DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
   {
+    key: "iphone",
     label: "iPhone",
     patterns: [
       /\AiPhone .* Pro Max\z/,
@@ -23,6 +24,7 @@ DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
     ]
   },
   {
+    key: "ipad-13",
     label: "13-inch iPad",
     patterns: [
       /\AiPad Pro 13-inch/,
@@ -170,8 +172,16 @@ end
 
 def default_snapshot_devices
   names = available_simulator_devices.map { |device| device["name"].to_s }.reject(&:empty?).uniq
+  requested_family = ENV["OPENCLAW_SNAPSHOT_DEVICE_FAMILY"].to_s.strip
+  families = DEFAULT_SNAPSHOT_DEVICE_FAMILIES
+  unless requested_family.empty?
+    family = families.find { |candidate| candidate.fetch(:key) == requested_family }
+    supported = families.map { |candidate| candidate.fetch(:key) }.join(", ")
+    UI.user_error!("Unsupported screenshot device family '#{requested_family}'. Expected one of: #{supported}.") if family.nil?
+    families = [family]
+  end
 
-  DEFAULT_SNAPSHOT_DEVICE_FAMILIES.map do |family|
+  families.map do |family|
     match = family.fetch(:patterns).filter_map do |pattern|
       names.find { |name| name.match?(pattern) }
     end.first
@@ -1617,6 +1627,37 @@ def archive_snapshot_test_result!(result_bundle_path:, archive_directory:, devic
   FileUtils.mv(result_bundle_path, archive_path)
 end
 
+def write_release_ios_screenshot_attempts!(attempts:, output_path:)
+  temporary_path = "#{output_path}.tmp"
+  File.write(
+    temporary_path,
+    "#{JSON.pretty_generate({ "schemaVersion" => 1, "attempts" => attempts })}\n"
+  )
+  FileUtils.mv(temporary_path, output_path)
+ensure
+  FileUtils.rm_f(temporary_path) if defined?(temporary_path)
+end
+
+def record_release_ios_screenshot_attempt!(
+  attempts:,
+  output_path:,
+  device:,
+  screenshot_name:,
+  attempt:,
+  capture_outcome:
+)
+  attempts << {
+    "deviceName" => device,
+    "screenshotName" => screenshot_name,
+    "attempt" => attempt,
+    "captureOutcome" => capture_outcome
+  }
+  write_release_ios_screenshot_attempts!(
+    attempts: attempts,
+    output_path: output_path
+  )
+end
+
 def capture_release_ios_screenshot!(
   project:,
   device:,
@@ -1624,6 +1665,8 @@ def capture_release_ios_screenshot!(
   output_directory:,
   result_bundle_path:,
   result_bundle_archive_directory:,
+  capture_attempts:,
+  capture_attempts_path:,
   derived_data_path:,
   clear_previous_screenshots:
 )
@@ -1635,7 +1678,8 @@ def capture_release_ios_screenshot!(
     FileUtils.rm_f(expected_screenshot_path)
     FileUtils.rm_rf(result_bundle_path)
     begin
-      # Keep retry ownership outside Snapshot. Every action call creates a new
+      # OpenClaw owns retries of the whole capture action; Fastlane may still
+      # retry simulator launch internally. Each action call creates a new
       # xcodebuild/TestManager session and reboots the selected simulator.
       capture_ios_screenshots(
         project: project,
@@ -1668,6 +1712,14 @@ def capture_release_ios_screenshot!(
         screenshot_name: screenshot_name,
         attempt: attempt
       )
+      record_release_ios_screenshot_attempt!(
+        attempts: capture_attempts,
+        output_path: capture_attempts_path,
+        device: device,
+        screenshot_name: screenshot_name,
+        attempt: attempt,
+        capture_outcome: "failed"
+      )
       raise if attempt == 2
 
       UI.important(
@@ -1683,6 +1735,14 @@ def capture_release_ios_screenshot!(
       device: device,
       screenshot_name: screenshot_name,
       attempt: attempt
+    )
+    record_release_ios_screenshot_attempt!(
+      attempts: capture_attempts,
+      output_path: capture_attempts_path,
+      device: device,
+      screenshot_name: screenshot_name,
+      attempt: attempt,
+      capture_outcome: "succeeded"
     )
     return
   end
@@ -2112,9 +2172,15 @@ platform :ios do
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
     result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")
     derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
+    capture_attempts = []
+    write_release_ios_screenshot_attempts!(
+      attempts: capture_attempts,
+      output_path: capture_attempts_path
+    )
     FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
@@ -2140,6 +2206,8 @@ platform :ios do
           output_directory: output_directory,
           result_bundle_path: result_bundle_path,
           result_bundle_archive_directory: result_bundle_archive_directory,
+          capture_attempts: capture_attempts,
+          capture_attempts_path: capture_attempts_path,
           derived_data_path: derived_data_path,
           clear_previous_screenshots: capture_index.zero?
         )
@@ -2155,11 +2223,13 @@ platform :ios do
     # evidence in build/ so Deliver sees only locale directories during validation.
     FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
-    watch_screenshot(
-      release_version: release_version,
-      app_store_revision: app_store_revision,
-      build_number: build_number
-    )
+    unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
+      watch_screenshot(
+        release_version: release_version,
+        app_store_revision: app_store_revision,
+        build_number: build_number
+      )
+    end
   end
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"

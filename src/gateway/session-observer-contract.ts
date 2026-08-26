@@ -21,6 +21,6 @@ export type SessionObserverService = {
   handleEvent: (event: SessionObserverEvent) => void;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
-  getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
+  getCompanionSnapshot: (sessionKey: string, agentId?: string) => SessionObserverCompanionSnapshot;
   dispose: () => void;
 };

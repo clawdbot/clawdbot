@@ -4,6 +4,11 @@ import type { CronJob } from "./types.js";
 
 const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
 
+/** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
+export function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {
+  return declarationKey?.startsWith(HEARTBEAT_TASK_DECLARATION_PREFIX) === true;
+}
+
 /** Stable declaration identity; duplicate names add their deterministic occurrence ordinal. */
 export function heartbeatTaskDeclarationKey(
   agentId: string,
@@ -27,7 +32,7 @@ export function isHeartbeatTaskCronJob(job: CronJob): job is CronJob & {
   sessionTarget: "main";
 } {
   return (
-    job.declarationKey?.startsWith(HEARTBEAT_TASK_DECLARATION_PREFIX) === true &&
+    isHeartbeatTaskDeclarationKey(job.declarationKey) &&
     job.payload.kind === "systemEvent" &&
     job.sessionTarget === "main"
   );

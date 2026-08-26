@@ -17,9 +17,11 @@ type QaSuiteScenarioResult = {
     details?: string;
   }>;
   details?: string;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaFlowApi = Record<string, unknown> & {
+  signal?: AbortSignal;
   state: QaTransportState;
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
@@ -36,6 +38,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./errors.js": () => import("./errors.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
@@ -195,7 +198,34 @@ function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   return parent ? value.bind(parent) : value;
 }
 
-async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) {
+type QaFlowActionOptions = { allowAfterAbort?: boolean };
+
+function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
+  if (!options.allowAfterAbort) {
+    api.signal?.throwIfAborted();
+  }
+}
+
+async function runFlowAction(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions = {},
+) {
+  throwIfFlowAborted(api, options);
+  try {
+    await runFlowActionBody(action, api, vars, options);
+  } finally {
+    throwIfFlowAborted(api, options);
+  }
+}
+
+async function runFlowActionBody(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions,
+) {
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
@@ -204,6 +234,8 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const args = Array.isArray(action.args)
       ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
       : [];
+    // Value resolution may cross the deadline, so fence every callable at invocation time.
+    throwIfFlowAborted(api, options);
     const result = await callable(...args);
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
@@ -219,7 +251,9 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
   ] as const) {
     if (name in action) {
       const callable = resolveCallable(`transport.${name}`, api, vars);
-      const result = await callable(await resolveValue(action[name], api, vars));
+      const input = await resolveValue(action[name], api, vars);
+      throwIfFlowAborted(api, options);
+      const result = await callable(input);
       if (typeof action.saveAs === "string" && action.saveAs.trim()) {
         vars[action.saveAs.trim()] = result;
       }
@@ -228,6 +262,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
     await reset();
     return;
   }
@@ -285,7 +320,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const passed = Boolean(await evalExpr(ifAction.expr, api, vars));
     const branch = passed ? ifAction.then : (ifAction.else ?? []);
     for (const nested of branch) {
-      await runFlowAction(nested, api, vars);
+      await runFlowAction(nested, api, vars, options);
     }
     return;
   }
@@ -306,7 +341,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
         vars[forEachAction.index] = index;
       }
       for (const nested of forEachAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     }
     return;
@@ -320,7 +355,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     };
     try {
       for (const nested of tryAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     } catch (error) {
       if (!tryAction.catch && !tryAction.finally) {
@@ -331,7 +366,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
       }
       if (tryAction.catch) {
         for (const nested of tryAction.catch) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, options);
         }
       } else {
         throw error;
@@ -339,7 +374,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     } finally {
       if (tryAction.finally) {
         for (const nested of tryAction.finally) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, { allowAfterAbort: true });
         }
       }
     }
@@ -364,9 +399,16 @@ export async function runScenarioFlow(params: {
       if (!step.detailsExpr) {
         return undefined;
       }
-      const details = await evalExpr(step.detailsExpr, params.api, vars);
-      return formatFlowDetails(details);
+      throwIfFlowAborted(params.api);
+      try {
+        return formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars));
+      } finally {
+        throwIfFlowAborted(params.api);
+      }
     },
   }));
-  return await params.api.runScenario(params.scenarioTitle, steps);
+  const result = await params.api.runScenario(params.scenarioTitle, steps);
+  return isPlainObject(vars.modelSwitchEvidence)
+    ? { ...result, modelSwitchEvidence: vars.modelSwitchEvidence }
+    : result;
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type {
-  CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
+  CodexAppServerManagedApprovalPolicy,
   CodexAppServerSandboxMode,
   OpenClawExecMode,
 } from "./config-contracts.js";
@@ -10,24 +10,6 @@ import { readNonEmptyString } from "./config-utils.js";
 
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
-
-export function isCodexAppServerApprovalPolicyAllowedByRequirements(
-  policy: CodexAppServerApprovalPolicy,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    requirementsToml?: string | null;
-    requirementsPath?: string;
-    readRequirementsFile?: (path: string) => string | undefined;
-    platform?: NodeJS.Platform;
-  } = {},
-): boolean {
-  const content = readCodexRequirementsToml(params);
-  if (content === undefined) {
-    return true;
-  }
-  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
-}
 
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
@@ -77,14 +59,14 @@ export function parseAllowedSandboxModesFromCodexRequirements(
 
 export function parseAllowedApprovalPoliciesFromCodexRequirements(
   content: string,
-): Set<CodexAppServerApprovalPolicy> | undefined {
+): Set<CodexAppServerManagedApprovalPolicy> | undefined {
   const values = parseTopLevelRequirementsStringArray(content, "allowed_approval_policies");
   if (values === undefined) {
     return undefined;
   }
   const normalizedPolicies = values
     .map((entry) => normalizeRequirementsApprovalPolicy(entry))
-    .filter((entry): entry is CodexAppServerApprovalPolicy => entry !== undefined);
+    .filter((entry): entry is CodexAppServerManagedApprovalPolicy => entry !== undefined);
   return normalizedPolicies.length > 0 ? new Set(normalizedPolicies) : undefined;
 }
 
@@ -313,12 +295,15 @@ function globPatternMatches(value: string, pattern: string): boolean {
 
 function normalizeRequirementsApprovalPolicy(
   value: string,
-): CodexAppServerApprovalPolicy | undefined {
+): CodexAppServerManagedApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
   // Codex still accepts this alias in persisted requirements, while its
   // app-server exposes only the canonical on-request value.
   if (normalized === "on-failure") {
     return "on-request";
+  }
+  if (normalized === "untrusted") {
+    return normalized;
   }
   return resolveApprovalPolicy(normalized);
 }
@@ -331,19 +316,19 @@ function normalizeRequirementsApprovalsReviewer(
 }
 
 export function selectGuardianApprovalPolicy(
-  allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
+  allowedApprovalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined,
   execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">,
-): CodexAppServerApprovalPolicy {
+): CodexAppServerManagedApprovalPolicy {
   if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
     return "on-request";
+  }
+  if (allowedApprovalPolicies.has("untrusted")) {
+    return "untrusted";
   }
   if (execModeRequiringPromptingApprovals) {
     throw new Error(
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
     );
-  }
-  if (allowedApprovalPolicies.has("untrusted")) {
-    return "untrusted";
   }
   if (allowedApprovalPolicies.has("never")) {
     return "never";

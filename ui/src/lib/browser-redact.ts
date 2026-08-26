@@ -14,6 +14,30 @@ const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) => {
   const flags = patternFlags.includes("g") ? patternFlags : `${patternFlags}g`;
   return new RegExp(patternSource, flags);
 });
+const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\n\r]+/gi, "$1: [redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]"],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)"(?:\\.|[^"\\\r\n])*"/gi,
+    '$1$2$3"[redacted]"',
+  ],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)'(?:\\.|[^'\\\r\n])*'/gi,
+    "$1$2$3'[redacted]'",
+  ],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(\s*[:=]\s*)["']?[^"',\s}]+/gi,
+    "$1$2[redacted]",
+  ],
+  [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    "[redacted private key]",
+  ],
+  [
+    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
+    "$1[redacted path]",
+  ],
+];
 
 function redactToken(value: string): string {
   if (value.length <= 10) {
@@ -78,7 +102,10 @@ export function redactToolDetail(detail: string): string {
       return redactMatch(match, groups, offset < 0 ? "" : input.slice(offset + match.length));
     });
   }
-  return redacted;
+  return SENSITIVE_TEXT_PATTERNS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    redacted,
+  );
 }
 
 export const redactToolPayloadText = redactToolDetail;

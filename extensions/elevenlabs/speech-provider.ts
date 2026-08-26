@@ -17,7 +17,6 @@ import type {
 import {
   asBoolean,
   asFiniteNumber,
-  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -30,6 +29,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -109,6 +109,24 @@ function normalizeElevenLabsLatencyTier(value: unknown): number | undefined {
     : undefined;
 }
 
+const ELEVENLABS_OUTPUT_FAMILIES = new Set(["opus", "mp3", "pcm", "ulaw", "alaw", "wav"]);
+
+function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+} {
+  const outputFormat =
+    trimToUndefined(req.providerOverrides?.outputFormat) ??
+    (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+  const family = outputFormat.trim().toLowerCase().split("_", 1)[0];
+  return {
+    outputFormat,
+    fileExtension: family && ELEVENLABS_OUTPUT_FAMILIES.has(family) ? `.${family}` : ".bin",
+    voiceCompatible: family === "opus",
+  };
+}
+
 function normalizeVoiceSettings(
   rawVoiceSettings: Record<string, unknown> | undefined,
 ): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
@@ -134,9 +152,9 @@ function normalizeVoiceSettings(
 function normalizeElevenLabsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): ElevenLabsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.elevenlabs) ?? asObject(rawConfig.elevenlabs);
-  const rawVoiceSettings = asObject(raw?.voiceSettings);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
+  const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -162,7 +180,7 @@ function normalizeElevenLabsProviderConfig(
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
   const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asObject(config.voiceSettings);
+  const voiceSettings = asOptionalRecord(config.voiceSettings);
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
@@ -205,7 +223,7 @@ function mergeVoiceSettingsOverride(
   return {
     ...ctx.currentOverrides,
     voiceSettings: {
-      ...asObject(ctx.currentOverrides?.voiceSettings),
+      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
   };
@@ -215,7 +233,7 @@ function resolveVoiceSettingsOverride(
   base: ElevenLabsProviderConfig["voiceSettings"],
   overrides: unknown,
 ): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asObject(overrides);
+  const voiceSettings = asOptionalRecord(overrides);
   return {
     ...base,
     ...normalizeVoiceSettings(voiceSettings),
@@ -450,7 +468,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
-      const talkVoiceSettings = asObject(talkProviderConfig.voiceSettings);
+      const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
       const resolvedTalkApiKey = resolveElevenLabsTalkApiKey(talkProviderConfig);
       return {
         ...base,
@@ -549,38 +567,30 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
-      const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
-        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+      const outputPlan = resolveElevenLabsOutputPlan(req);
       const audioBuffer = await elevenLabsTTS(
         resolveElevenLabsTtsRequest(req, {
-          outputFormat,
+          outputFormat: outputPlan.outputFormat,
           latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
         }),
       );
       return {
         audioBuffer,
-        outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
-        voiceCompatible: req.target === "voice-note",
+        ...outputPlan,
       };
     },
     streamSynthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
-      const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
-        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+      const outputPlan = resolveElevenLabsOutputPlan(req);
       const stream = await elevenLabsTTSStream(
         resolveElevenLabsTtsRequest(req, {
-          outputFormat,
+          outputFormat: outputPlan.outputFormat,
           latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
         }),
       );
       return {
         audioStream: stream.audioStream,
-        outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
-        voiceCompatible: req.target === "voice-note",
+        ...outputPlan,
         release: stream.release,
       };
     },

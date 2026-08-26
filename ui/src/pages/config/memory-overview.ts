@@ -251,7 +251,13 @@ function renderEngineHealth(payload: DoctorMemoryStatusPayload, props: MemoryOve
               [
                 payload.embeddingRuntime.engine,
                 payload.embeddingRuntime.backend,
-                payload.embeddingRuntime.deviceNames?.join(", "),
+                payload.embeddingRuntime.buildInfo,
+                payload.embeddingRuntime.model?.id,
+                payload.embeddingRuntime.endpoints
+                  ? Object.entries(payload.embeddingRuntime.endpoints)
+                      .map(([name, state]) => `${name}=${state}`)
+                      .join(" ")
+                  : undefined,
               ]
                 .filter(Boolean)
                 .join(" · "),

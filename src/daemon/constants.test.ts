@@ -110,7 +110,7 @@ describe("resolveGatewayProfileSuffix", () => {
 });
 
 describe("resolveGatewayServiceDescription", () => {
-  it("returns default description when no profile/version", () => {
+  it("returns default description when no profile", () => {
     expect(resolveGatewayServiceDescription({ env: {} })).toBe("OpenClaw Gateway");
   });
 
@@ -120,35 +120,19 @@ describe("resolveGatewayServiceDescription", () => {
     );
   });
 
-  it("includes version when set", () => {
+  it("ignores legacy install-time version metadata", () => {
     expect(
       resolveGatewayServiceDescription({ env: { OPENCLAW_SERVICE_VERSION: "2026.1.10" } }),
-    ).toBe("OpenClaw Gateway (v2026.1.10)");
+    ).toBe("OpenClaw Gateway");
   });
 
-  it("includes profile and version when set", () => {
-    expect(
-      resolveGatewayServiceDescription({
-        env: { OPENCLAW_PROFILE: "dev", OPENCLAW_SERVICE_VERSION: "1.2.3" },
-      }),
-    ).toBe("OpenClaw Gateway (profile: dev, v1.2.3)");
-  });
   it("prefers explicit description override", () => {
     expect(
       resolveGatewayServiceDescription({
-        env: { OPENCLAW_PROFILE: "work", OPENCLAW_SERVICE_VERSION: "1.0.0" },
+        env: { OPENCLAW_PROFILE: "work" },
         description: "Custom",
       }),
     ).toBe("Custom");
-  });
-
-  it("resolves version from explicit environment map", () => {
-    expect(
-      resolveGatewayServiceDescription({
-        env: { OPENCLAW_PROFILE: "work", OPENCLAW_SERVICE_VERSION: "local" },
-        environment: { OPENCLAW_SERVICE_VERSION: "remote" },
-      }),
-    ).toBe("OpenClaw Gateway (profile: work, vremote)");
   });
 });
 

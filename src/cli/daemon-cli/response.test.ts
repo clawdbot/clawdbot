@@ -52,10 +52,29 @@ describe("daemon action JSON hints", () => {
       }),
     );
   });
+
+  it.each([
+    "openclaw --profile work gateway install",
+    "openclaw --container demo gateway install",
+    "openclaw node install",
+    "openclaw --profile work node install",
+    "openclaw --container demo node install",
+  ])("classifies scoped Gateway and node service install hints: %s", (hint) => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+    createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
+
+    expect(writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
+    );
+  });
 });
 
 describe("daemon install verification", () => {
-  function createInstallParams(isLoaded: GatewayService["isLoaded"]) {
+  function createInstallParams(
+    isLoaded: GatewayService["isLoaded"],
+    onVerified?: () => Promise<void>,
+  ) {
     const service = {
       label: "systemd user",
       loadedText: "enabled",
@@ -69,6 +88,7 @@ describe("daemon install verification", () => {
       emit: vi.fn(),
       fail: vi.fn(),
       install: vi.fn(async () => {}),
+      onVerified,
     };
   }
 
@@ -112,5 +132,37 @@ describe("daemon install verification", () => {
         service: expect.objectContaining({ loaded: true }),
       }),
     );
+  });
+
+  it("runs onVerified after verification succeeds and before the success emit", async () => {
+    const onVerified = vi.fn(async () => {});
+    const params = createInstallParams(
+      vi.fn(async () => true),
+      onVerified,
+    );
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(params.fail).not.toHaveBeenCalled();
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, result: "installed" }),
+    );
+  });
+
+  it("fails with no success emit when onVerified throws", async () => {
+    const params = createInstallParams(
+      vi.fn(async () => true),
+      async () => {
+        throw new Error("post-check boom");
+      },
+    );
+
+    await installDaemonServiceAndEmit(params);
+
+    expect(params.fail).toHaveBeenCalledWith(
+      "Gateway post-install check failed: Error: post-check boom",
+    );
+    expect(params.emit).not.toHaveBeenCalled();
   });
 });

@@ -25,6 +25,7 @@ scenario:
     kind: flow
     summary: Capture a raw natural C-3PO character transcript for later quality grading.
     config:
+      requiredProviderMode: live-frontier
       conversationId: alice
       senderName: Alice
       workspaceFiles:
@@ -81,6 +82,8 @@ flow:
                   - expr: "path.join(env.gateway.workspaceDir, String(workspaceFile[0]))"
                   - expr: "`${String(workspaceFile[1] ?? '').trimEnd()}\\n`"
                   - utf8
+        - set: assistantReplyCount
+          value: 0
         - forEach:
             items:
               ref: config.turns
@@ -100,6 +103,8 @@ flow:
                     ref: config.senderName
                   text:
                     expr: turn.text
+              - set: latestOutbound
+                value: null
               - try:
                   actions:
                     - call: waitForOutboundMessage
@@ -112,13 +117,31 @@ flow:
                         - expr: resolveQaLiveTurnTimeoutMs(env, 45000)
                         - sinceIndex:
                             ref: beforeOutboundCount
+                  catchAs: turnError
+                  catch:
+                    - if:
+                        expr: "!(turnError instanceof Error) || turnError.message !== `timed out after ${resolveQaLiveTurnTimeoutMs(env, 45000)}ms`"
+                        then:
+                          - throw:
+                              expr: turnError
+                    - set: latestTurnError
+                      value:
+                        ref: turnError
+              - if:
+                  expr: latestOutbound != null
+                  then:
                     - assert:
                         expr: "!config.forbiddenNeedles.some((needle) => normalizeLowercaseStringOrEmpty(latestOutbound.text).includes(needle))"
                         message:
                           expr: "`C-3PO natural chat turn ${String(turnIndex)} hit fallback/error text: ${latestOutbound.text}`"
-                  catchAs: turnError
-                  catch:
-                    - set: latestTurnError
+                    - set: assistantReplyCount
                       value:
-                        ref: turnError
-      detailsExpr: "formatConversationTranscript(state, { conversationId: config.conversationId })"
+                        expr: assistantReplyCount + 1
+        - set: conversationTranscript
+          value:
+            expr: "formatConversationTranscript(state, { conversationId: config.conversationId })"
+        - assert:
+            expr: assistantReplyCount >= 1
+            message:
+              expr: "`C-3PO natural chat produced no assistant replies; transcript: ${conversationTranscript}`"
+      detailsExpr: conversationTranscript

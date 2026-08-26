@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { loadJsonFile, saveJsonFile } from "./json-file.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { loadJsonFileThroughSymlink, writeJsonTarget } from "./json-file.js";
 
 const SAVED_PAYLOAD = { enabled: true, count: 2 };
 const PREVIOUS_JSON = '{"enabled":false}\n';
@@ -19,7 +19,7 @@ function writeExistingJson(pathname: string) {
 async function withJsonPath<T>(
   run: (params: { root: string; pathname: string }) => Promise<T> | T,
 ): Promise<T> {
-  return withTempDir({ prefix: "openclaw-json-file-" }, async (root) =>
+  return withTestDir({ prefix: "openclaw-json-file-" }, async (root) =>
     run({ root, pathname: path.join(root, "config.json") }),
   );
 }
@@ -32,7 +32,7 @@ async function withJsonSymlink<T>(
     linkPath: string;
   }) => Promise<T> | T,
 ): Promise<T> {
-  return withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+  return withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
     const targetDir = path.join(root, "target");
     return run({
       root,
@@ -45,8 +45,8 @@ async function withJsonSymlink<T>(
 
 function expectSavedPayloadThroughSymlink(linkPath: string, targetPath: string) {
   expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-  expect(loadJsonFile(targetPath)).toEqual(SAVED_PAYLOAD);
-  expect(loadJsonFile(linkPath)).toEqual(SAVED_PAYLOAD);
+  expect(loadJsonFileThroughSymlink(targetPath)).toEqual(SAVED_PAYLOAD);
+  expect(loadJsonFileThroughSymlink(linkPath)).toEqual(SAVED_PAYLOAD);
 }
 
 describe("json-file helpers", () => {
@@ -74,18 +74,18 @@ describe("json-file helpers", () => {
   ])("returns undefined for $name", async ({ setup }) => {
     await withJsonPath(({ pathname }) => {
       setup(pathname);
-      expect(loadJsonFile(pathname)).toBeUndefined();
+      expect(loadJsonFileThroughSymlink(pathname)).toBeUndefined();
     });
   });
 
   it("creates parent dirs, writes a trailing newline, and loads the saved object", async () => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
       const pathname = path.join(root, "nested", "config.json");
-      saveJsonFile(pathname, SAVED_PAYLOAD);
+      writeJsonTarget(pathname, SAVED_PAYLOAD);
 
       const raw = fs.readFileSync(pathname, "utf8");
       expect(raw.endsWith("\n")).toBe(true);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
 
       const fileMode = fs.statSync(pathname).mode & 0o777;
       const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
@@ -110,8 +110,8 @@ describe("json-file helpers", () => {
   ])("writes the latest payload for $name", async ({ setup }) => {
     await withJsonPath(({ pathname }) => {
       setup(pathname);
-      saveJsonFile(pathname, SAVED_PAYLOAD);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      writeJsonTarget(pathname, SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
 
@@ -120,12 +120,12 @@ describe("json-file helpers", () => {
       writeExistingJson(pathname);
       const renameSpy = vi.spyOn(fs, "renameSync");
 
-      saveJsonFile(pathname, SAVED_PAYLOAD);
+      writeJsonTarget(pathname, SAVED_PAYLOAD);
 
       const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
       expect(renameCall?.[0]).toMatch(new RegExp(`^${escapeRegExp(pathname)}\\..+\\.tmp$`));
       expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
 
@@ -137,7 +137,7 @@ describe("json-file helpers", () => {
         writeExistingJson(targetPath);
         fs.symlinkSync(targetPath, linkPath);
 
-        saveJsonFile(linkPath, SAVED_PAYLOAD);
+        writeJsonTarget(linkPath, SAVED_PAYLOAD);
 
         expectSavedPayloadThroughSymlink(linkPath, targetPath);
       });
@@ -151,7 +151,7 @@ describe("json-file helpers", () => {
         fs.mkdirSync(targetDir, { recursive: true });
         fs.symlinkSync(targetPath, linkPath);
 
-        saveJsonFile(linkPath, SAVED_PAYLOAD);
+        writeJsonTarget(linkPath, SAVED_PAYLOAD);
 
         expectSavedPayloadThroughSymlink(linkPath, targetPath);
       });
@@ -161,7 +161,7 @@ describe("json-file helpers", () => {
   it.runIf(process.platform !== "win32")(
     "does not create missing target directories through an existing symlink",
     async () => {
-      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
         const missingTargetDir = path.join(root, "missing-target");
         const targetPath = path.join(missingTargetDir, "config.json");
         const linkPath = path.join(root, "config-link.json");
@@ -169,12 +169,12 @@ describe("json-file helpers", () => {
 
         let saveError: unknown;
         try {
-          saveJsonFile(linkPath, SAVED_PAYLOAD);
+          writeJsonTarget(linkPath, SAVED_PAYLOAD);
         } catch (error) {
           saveError = error;
         }
         if (saveError === undefined) {
-          throw new Error("Expected saveJsonFile to fail");
+          throw new Error("Expected writeJsonTarget to fail");
         }
         expect((saveError as { code?: unknown }).code).toBe("ENOENT");
         expect(fs.existsSync(missingTargetDir)).toBe(false);
@@ -192,10 +192,10 @@ describe("json-file helpers", () => {
         throw err;
       });
 
-      saveJsonFile(pathname, SAVED_PAYLOAD);
+      writeJsonTarget(pathname, SAVED_PAYLOAD);
 
       expect(renameSpy).toHaveBeenCalled();
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
       expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });
   });

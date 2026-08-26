@@ -13,8 +13,10 @@ import { resolvePluginInstallSourcePlan } from "./plugin-install-plan.js";
 
 export type RunPluginInstallCommandParams = {
   raw: string;
+  allowInstallPolicyWarningPrompt: boolean;
   opts: InstallSafetyOverrides & {
     acknowledgeClawHubRisk?: boolean;
+    acknowledgeInstallPolicyWarning?: boolean;
     expectedIntegrity?: string;
     expectedPluginId?: string;
     force?: boolean;

@@ -7,6 +7,19 @@ const createReplyPrefixContextMock = vi.hoisted(() => vi.fn());
 const createCommentTypingReactionLifecycleMock = vi.hoisted(() => vi.fn());
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
+const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
+  vi.fn(async (hostname: string) => {
+    if (hostname === "private.example.test") {
+      throw new Error("Blocked: resolves to private/internal/special-use IP address");
+    }
+    return { hostname, addresses: ["93.184.216.34"], lookup: vi.fn() };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+}));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: resolveFeishuRuntimeAccountMock,
@@ -50,6 +63,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
     vi.doUnmock("./comment-reaction.js");
     vi.doUnmock("./drive.js");
     vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
   });
 
@@ -165,6 +179,97 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send whitespace-only comment replies without attachments", async () => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver({ text: "  \n\t " }, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ visibleReplySent: false });
+  });
+
+  it.each([
+    [
+      "media-only singular",
+      { mediaUrl: "https://example.com/only.png" },
+      "https://example.com/only.png",
+    ],
+    [
+      "caption and multiple ordered attachments",
+      {
+        text: "see attachments",
+        mediaUrls: [" https://example.com/first.png ", "", "https://example.com/second.png"],
+      },
+      "see attachments\n\nhttps://example.com/first.png\n\nhttps://example.com/second.png",
+    ],
+    [
+      "singular fallback when plural entries are blank",
+      { mediaUrls: [" "], mediaUrl: "https://example.com/fallback.png" },
+      "https://example.com/fallback.png",
+    ],
+  ])("delivers %s as safe plain-text comment links", async (_label, payload, expected) => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver(payload, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: expected }),
+    );
+    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
+  });
+
+  it.each([
+    ["local path", "/private/tmp/voice.mp3"],
+    ["loopback URL", "http://127.0.0.1:3000/voice.mp3"],
+    ["private DNS", "https://private.example.test/voice.mp3"],
+    ["credentialed URL", "https://operator:secret@example.com/voice.mp3"],
+  ])("does not disclose a %s in comment reply media fallbacks", async (_label, mediaUrl) => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver({ mediaUrl }, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: "Media upload failed. Please try again." }),
+    );
+    expect(result).toMatchObject({
+      content: "Media upload failed. Please try again.",
+      visibleReplySent: true,
+    });
+    expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).not.toContain(mediaUrl);
+  });
+
+  it("chunks the transformed comment text including attachment links", async () => {
+    const chunkTextWithMode = vi.fn((text: string) =>
+      Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
+        text.slice(index * 12, (index + 1) * 12),
+      ),
+    );
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 12),
+          resolveChunkMode: vi.fn(() => "line"),
+          chunkTextWithMode,
+        },
+      },
+    });
+    const expected = "caption\n\nhttps://example.com/file.png";
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver(
+      { text: "caption", mediaUrl: "https://example.com/file.png" },
+      { kind: "final" },
+    );
+
+    expect(chunkTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
+    expect(
+      deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
+    ).toBe(true);
+    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
   });
 
   it("retains the accepted comment reply id and text when a later chunk fails", async () => {

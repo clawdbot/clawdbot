@@ -7,6 +7,8 @@ import type {
   MemorySearchConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
@@ -169,12 +171,9 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  closeAllMemorySearchManagers,
-  getMemorySearchManager,
-  type MemoryIndexManager,
-} from "./index.js";
+import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 describe("memory watcher config", () => {
@@ -211,6 +210,10 @@ describe("memory watcher config", () => {
     await closeAllMemorySearchManagers();
     clearRegistry();
     restoreWatcherStateDir();
+    // The agent close releases its leases through shared state and reopens it, so the
+    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
+    resetPluginStateStoreForTests();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -317,6 +320,40 @@ describe("memory watcher config", () => {
     expect(
       ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
     ).toBe(false);
+  });
+
+  it("filters patterned extra path file events while watching the directory root", async () => {
+    await setupWatcherWorkspace({ name: "seed.md", contents: "seed" });
+    await fs.mkdir(path.join(extraDir, "notes"), { recursive: true });
+    await fs.mkdir(path.join(extraDir, "drafts"), { recursive: true });
+    await fs.writeFile(path.join(extraDir, "notes", "keep.md"), "keep");
+    await fs.writeFile(path.join(extraDir, "drafts", "skip.md"), "skip");
+    const cfg = createWatcherConfig({
+      extraPaths: [{ path: extraDir, pattern: "notes/**/*.md" }],
+    });
+
+    await expectWatcherManager(cfg);
+    const extraWatcher = createdNativeWatchers.find(
+      (watcher) => watcher.dir === extraDir && watcher.recursive,
+    );
+    expect(extraWatcher).toBeDefined();
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    extraWatcher?.emit("change", path.join("drafts", "skip.md"));
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    expect(syncSpy).not.toHaveBeenCalled();
+
+    extraWatcher?.emit("change", path.join("notes", "keep.md"));
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
   it("does not start watchers for one-shot CLI managers", async () => {

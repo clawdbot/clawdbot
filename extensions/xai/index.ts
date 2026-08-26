@@ -6,14 +6,18 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  buildXaiImageGenerationProvider,
-  normalizeXaiModelId,
-  resolveXaiTransport,
-} from "./api.js";
-import {
   buildMissingCodeExecutionApiKeyPayload,
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
+import {
+  createLazyXaiImageGenerationProvider,
+  createLazyXaiMediaUnderstandingProvider,
+  createLazyXaiRealtimeTranscriptionProvider,
+  createLazyXaiRealtimeVoiceProvider,
+  createLazyXaiSpeechProvider,
+  createLazyXaiVideoGenerationProvider,
+} from "./lazy-capability-providers.js";
+import { normalizeNativeXaiModelId } from "./model-compat.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildLiveXaiOAuthProvider,
@@ -27,9 +31,7 @@ import {
   resolveXaiForwardCompatModel,
 } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
-import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
-import { buildXaiSpeechProvider } from "./speech-provider.js";
+import { resolveXaiTransport } from "./provider-routing.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
@@ -41,8 +43,6 @@ import {
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
-import { buildXaiMediaUnderstandingProvider } from "./stt.js";
-import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
   buildMissingXSearchApiKeyPayload,
@@ -52,12 +52,12 @@ import {
   createXaiDeviceCodeAuthMethod,
   createXaiOAuthAuthMethod,
   refreshXaiOAuthCredential,
-} from "./xai-oauth.js";
+} from "./xai-oauth-entry.js";
 
 const PROVIDER_ID = "xai";
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
-  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+  /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
@@ -157,8 +157,10 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     return null;
   }
 
-  return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
+  return createXSearchToolDefinition(async (toolCallId, args, signal) => {
+    signal?.throwIfAborted();
     const { createXSearchTool } = await loadXSearchModule();
+    signal?.throwIfAborted();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -167,7 +169,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
     }
-    return await tool.execute(toolCallId, args);
+    return await tool.execute(toolCallId, args, signal);
   });
 }
 
@@ -276,7 +278,7 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
-    normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
+    normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     refreshOAuth: refreshXaiOAuthCredential,
     resolveThinkingProfile,
@@ -285,12 +287,12 @@ export default defineSingleProviderPluginEntry({
   }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
-    api.registerMediaUnderstandingProvider(buildXaiMediaUnderstandingProvider());
-    api.registerVideoGenerationProvider(buildXaiVideoGenerationProvider());
-    api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
-    api.registerSpeechProvider(buildXaiSpeechProvider());
-    api.registerRealtimeTranscriptionProvider(buildXaiRealtimeTranscriptionProvider());
-    api.registerRealtimeVoiceProvider(buildXaiRealtimeVoiceProvider());
+    api.registerMediaUnderstandingProvider(createLazyXaiMediaUnderstandingProvider());
+    api.registerVideoGenerationProvider(createLazyXaiVideoGenerationProvider());
+    api.registerImageGenerationProvider(createLazyXaiImageGenerationProvider());
+    api.registerSpeechProvider(createLazyXaiSpeechProvider());
+    api.registerRealtimeTranscriptionProvider(createLazyXaiRealtimeTranscriptionProvider());
+    api.registerRealtimeVoiceProvider(createLazyXaiRealtimeVoiceProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

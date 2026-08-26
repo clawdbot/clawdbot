@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
-  applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
@@ -53,21 +52,51 @@ async function writePluginPackage(
   }
 }
 
-async function writeBaileysMediaFile(packageRoot: string, text: string) {
-  const mediaFile = path.join(
-    packageRoot,
-    "node_modules",
-    "baileys",
-    "lib",
-    "Utils",
-    "messages-media.js",
-  );
-  await fs.mkdir(path.dirname(mediaFile), { recursive: true });
-  await fs.writeFile(mediaFile, text);
-  return mediaFile;
-}
-
 describe("bundled plugin postinstall", () => {
+  it("resolves TypeScript from NODE_PATH during external modules-dir installs", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-node-path-");
+    const scriptRoot = path.join(packageRoot, "scripts");
+    const externalModulesDir = path.join(packageRoot, "external-node-modules");
+    await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+    await fs.mkdir(externalModulesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
+    );
+    for (const relativePath of [
+      "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/guard-inventory-utils.mjs",
+    ]) {
+      await fs.copyFile(
+        fileURLToPath(new URL(`../../${relativePath}`, import.meta.url)),
+        path.join(packageRoot, relativePath),
+      );
+    }
+    await fs.symlink(
+      fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+      path.join(externalModulesDir, "typescript"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptRoot, "postinstall-bundled-plugins.mjs")],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: [externalModulesDir, process.env.NODE_PATH]
+            .filter(Boolean)
+            .join(path.delimiter),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -158,118 +187,6 @@ describe("bundled plugin postinstall", () => {
       }
     },
   );
-
-  it("patches the Baileys upload helper dispatcher guard", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
-    const mediaFile = await writeBaileysMediaFile(
-      packageRoot,
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        await encFinishPromise;",
-        "        await originalFinishPromise;",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
-        "    const nodeStream = createReadStream(filePath);",
-        "    const webStream = Readable.toWeb(nodeStream);",
-        "    const response = await fetch(url, {",
-        "        dispatcher: agent,",
-        "        method: 'POST',",
-        "        body: webStream,",
-        "        headers,",
-        "        duplex: 'half',",
-        "        signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined",
-        "    });",
-        "};",
-        "",
-      ].join("\n"),
-    );
-
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
-      applied: true,
-      reason: "patched",
-      targetPath: mediaFile,
-    });
-    const patchedText = await fs.readFile(mediaFile, "utf8");
-    expect(patchedText).toContain(
-      "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
-    );
-    expect(patchedText).not.toContain("        dispatcher: agent,");
-  });
-
-  it("recognizes already patched Baileys upload helpers", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
-    await writeBaileysMediaFile(
-      packageRoot,
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        await encFinishPromise;",
-        "        await originalFinishPromise;",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
-        "    const response = await fetch(url, {",
-        "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
-        "        method: 'POST',",
-        "    });",
-        "};",
-        "",
-      ].join("\n"),
-    );
-
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
-      applied: false,
-      reason: "already_patched",
-    });
-  });
-
-  it("recognizes Baileys upload helpers with a prepared dispatcher", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
-    await writeBaileysMediaFile(
-      packageRoot,
-      [
-        "import { once } from 'events';",
-        "const encryptedStream = async () => {",
-        "        encFileWriteStream.write(mac);",
-        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-        "        encFileWriteStream.end();",
-        "        originalFileStream?.end?.();",
-        "        stream.destroy();",
-        "        await encFinishPromise;",
-        "        await originalFinishPromise;",
-        "        logger?.debug('encrypted data successfully');",
-        "};",
-        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
-        "    const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
-        "    const response = await fetch(url, {",
-        "        ...(dispatcher ? { dispatcher } : {}),",
-        "        method: 'POST',",
-        "    });",
-        "};",
-        "",
-      ].join("\n"),
-    );
-
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
-      applied: false,
-      reason: "already_patched",
-    });
-  });
 
   it("does not classify published packages with source files as source checkouts", () => {
     const packageRoot = "/pkg";
@@ -766,6 +683,13 @@ describe("bundled plugin postinstall", () => {
   it("prunes stale private QA files without restoring compat sidecars", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
+    const currentManifest = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "example",
+      "openclaw.plugin.json",
+    );
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
     const staleManifest = path.join(
       packageRoot,
@@ -775,7 +699,9 @@ describe("bundled plugin postinstall", () => {
       "openclaw.plugin.json",
     );
     await fs.mkdir(path.dirname(stalePackage), { recursive: true });
+    await fs.mkdir(path.dirname(currentManifest), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
+    await fs.writeFile(currentManifest, "{}\n");
     await writePackageDistInventory(packageRoot);
     await fs.writeFile(stalePackage, "{}\n");
     await fs.writeFile(staleManifest, "{}\n");
@@ -785,6 +711,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
+    await expectPathExists(currentManifest);
     await expectPathMissing(stalePackage);
     await expectPathMissing(staleManifest);
     await expectPathMissing(

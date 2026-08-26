@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
 } from "../../secrets/runtime-web-tools-state.js";
@@ -58,6 +62,11 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
       },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "whatsapp" },
+      },
       payload: {
         kind: "agentTurn",
         message: "check allowed tools",
@@ -98,6 +107,7 @@ function requireEmbeddedAgentCall(): {
     mode: "account";
     ownerSessionKey: string;
     ownerAccountId: string;
+    ownerOrigin: { kind: "external"; channel: string } | { kind: "local" } | { kind: "unknown" };
   };
 } {
   const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
@@ -109,6 +119,10 @@ function requireEmbeddedAgentCall(): {
           mode: "account";
           ownerSessionKey: string;
           ownerAccountId: string;
+          ownerOrigin:
+            | { kind: "external"; channel: string }
+            | { kind: "local" }
+            | { kind: "unknown" };
         };
       }
     | undefined;
@@ -132,9 +146,9 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       accountId: undefined,
       error: undefined,
     });
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      const result = await runInitialModelFallbackAttempt(params);
+      return { result, provider: params.provider, model: params.model, attempts: [] };
     });
   });
 
@@ -190,6 +204,30 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
         mode: "account",
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
+        ownerOrigin: { kind: "external", channel: "whatsapp" },
+      });
+    },
+  );
+
+  it(
+    "preserves explicit local scheduled-tool provenance",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithDefaultToolsAllow(["transcripts"]);
+      (params.job as { toolsAllowProvenance?: unknown }).toolsAllowProvenance = {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+      };
+
+      await runCronIsolatedAgentTurn(params);
+
+      expect(requireEmbeddedAgentCall().scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+        ownerOrigin: { kind: "local" },
       });
     },
   );

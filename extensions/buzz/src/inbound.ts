@@ -23,6 +23,7 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
   const { account, cfg, bus, message, signal } = params;
@@ -59,9 +60,15 @@ export async function handleBuzzInbound(params: {
       id: channelId,
       threadId: message.threadId,
     },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
     mentionFacts: { canDetectMention: true, wasMentioned },
-    groupPolicy: account.config.groupPolicy,
-    groupAllowFrom: account.config.groupAllowFrom,
+    groupPolicy: groupConfig?.groupPolicy ?? account.config.groupPolicy,
+    groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
     policy: {
       activation: {
         requireMention: groupConfig?.requireMention ?? true,
@@ -87,7 +94,8 @@ export async function handleBuzzInbound(params: {
     timestamp: new Date(message.createdAt * 1000),
     body: textForAgent,
   });
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: access,
     channel: "buzz",
     accountId: route.accountId ?? account.accountId,
     messageId: message.id,
@@ -130,6 +138,11 @@ export async function handleBuzzInbound(params: {
       BuzzEventKind: message.kind,
     },
   });
+  const replyTarget = {
+    channelId,
+    threadId: message.threadId,
+    replyToId: message.threadId ?? message.id,
+  };
 
   await runtime.channel.inbound.dispatch({
     cfg,
@@ -150,12 +163,7 @@ export async function handleBuzzInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await bus.sendText({
-          channelId,
-          text,
-          threadId: message.threadId,
-          replyToId: message.id,
-        });
+        await bus.sendText({ ...replyTarget, text });
       },
       onError: (error) => {
         throw error instanceof Error ? error : new Error(String(error));
@@ -167,11 +175,7 @@ export async function handleBuzzInbound(params: {
     replyPipeline: {
       typing: {
         start: async () => {
-          await bus.sendTyping({
-            channelId,
-            threadId: message.threadId,
-            replyToId: message.id,
-          });
+          await bus.sendTyping(replyTarget);
         },
         keepaliveIntervalMs: 3_000,
         onStartError: (error: unknown) => {

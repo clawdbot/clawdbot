@@ -1,5 +1,5 @@
 // Control UI module implements select options behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type SelectOption = {
   value: string;

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const scriptPath = path.resolve("scripts/check-workflows.mjs");
+const scriptPath = path.resolve("scripts/check-workflows.mts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("check-workflows", () => {
   it("prints an actionable diagnostic when actionlint and go are unavailable", () => {
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -59,7 +59,7 @@ describe("check-workflows", () => {
       writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -111,7 +111,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -122,7 +122,7 @@ describe("check-workflows", () => {
 
     expect(result.status).toBe(0);
     const pythonArgs = readFileSync(markerPath, "utf8");
-    expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.2.0");
+    expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
     expect(pythonArgs).toContain(
       "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
     );
@@ -152,7 +152,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -163,7 +163,7 @@ describe("check-workflows", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("python venv unavailable");
     expect(result.stderr).toContain("missing pre-commit runtime for actionlint");
-    expect(result.stderr).toContain("Python venv support for pre-commit 4.2.0");
+    expect(result.stderr).toContain("Python venv support for pre-commit 4.6.2");
   });
 
   it("cleans the temporary Python venv before exiting on hook failure", () => {
@@ -196,7 +196,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,

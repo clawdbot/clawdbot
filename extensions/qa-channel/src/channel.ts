@@ -68,6 +68,7 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     accountId: ctx.accountId,
     to: ctx.to,
     text,
+    isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
@@ -224,6 +225,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendTextOnlyErrorPayloads: true,
       sendPayload: async (ctx) => {
         const result = await sendQaChannelMessagePayload(ctx);
         return { channel: QA_CHANNEL_ID, messageId: result.messageId };

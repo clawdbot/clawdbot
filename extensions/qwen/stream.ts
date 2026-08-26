@@ -9,6 +9,7 @@ import {
   normalizeOpenAICompatibleReasoningReplay,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalRecord as asPayloadRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isQwenTokenPlanDeepSeekV4ModelId,
   isQwenTokenPlanGlmModelId,
@@ -25,12 +26,6 @@ type QwenTokenPlanThinkingContract =
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
-
-function asPayloadRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function resolveQwenThinkingLevel(
   thinkingLevel: QwenThinkingLevel,

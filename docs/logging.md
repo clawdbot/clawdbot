@@ -239,12 +239,14 @@ Available flags:
 - `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
   payloads, capped per event.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
-  including when native provider tools are hidden because code mode owns the
-  tool surface.
+  including bounded activation facts, the final visible surface, and names of
+  provider-native tools filtered because code mode owns the tool surface.
 
 These flags log through normal OpenClaw logging, so `openclaw logs --follow`
-and the Control UI Logs tab show them. Without the flags, the same diagnostics
-remain available at `debug` level.
+and the Control UI Logs tab show them. For backward compatibility,
+`OPENCLAW_DEBUG_CODE_MODE` also promotes general model-transport diagnostics to
+`info`; dedicated code-mode diagnostics are emitted only when that flag is
+enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
@@ -312,6 +314,15 @@ File logs and session transcripts stay JSONL, but matching secret values are
 masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+Model-visible tool-result text uses narrower assignment matching so source code
+remains intact. Registered secrets and explicit credential forms, including
+structured fields, authorization headers, URL credentials, and known token
+formats, remain masked. Direct reads of `.env` files apply
+broader assignment masking before their content becomes a tool result. Other
+config and source reads preserve opaque values; register actual secrets instead
+of relying on key-name matching. Bare source assignments such as
+`token = timeObserverToken` remain unchanged.
 
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential

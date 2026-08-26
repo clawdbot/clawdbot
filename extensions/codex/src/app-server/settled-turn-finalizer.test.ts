@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -23,7 +23,11 @@ vi.mock("./transcript-mirror.js", () => ({
 
 const { runCodexSettledTurnFinalization } = await import("./settled-turn-finalizer.js");
 
-function createAttempt(): EmbeddedRunAttemptParams {
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+
+function createAttempt(): SettledTurnFinalizationAttemptParams {
   return {
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
@@ -43,7 +47,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
-  } as EmbeddedRunAttemptParams;
+  } as SettledTurnFinalizationAttemptParams;
 }
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {
@@ -105,7 +109,14 @@ describe("runCodexSettledTurnFinalization", () => {
       text: "The update was sent successfully.",
       items: [],
       model: "gpt-5.4",
-      usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        reasoningTokens: 3,
+        total: 12,
+      },
     });
     mocks.mirror.mockReset();
     mocks.mirror.mockImplementation(
@@ -175,7 +186,14 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
-      usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        reasoningTokens: 3,
+        total: 12,
+      },
       assistant: {
         role: "assistant",
         content: [{ type: "text", text: "The update was sent successfully." }],
@@ -191,9 +209,10 @@ describe("runCodexSettledTurnFinalization", () => {
       cacheWrite: 1,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
   });
 
-  it("rejects an empty final answer before transcript mutation", async () => {
+  it("returns an empty completed final answer for lifecycle classification", async () => {
     mocks.runBounded.mockResolvedValue({ text: " ", items: [], model: "gpt-5.4" });
 
     await expect(
@@ -201,7 +220,7 @@ describe("runCodexSettledTurnFinalization", () => {
         { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
         {},
       ),
-    ).rejects.toThrow("completed without a visible answer");
+    ).resolves.toMatchObject({ assistant: { content: [{ type: "text", text: "" }] } });
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 

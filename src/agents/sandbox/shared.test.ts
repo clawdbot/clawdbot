@@ -79,4 +79,19 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
     expect(createLayout("shared", workspaceA).scopeKey).toBe("shared");
     expect(createLayout("shared", workspaceB).scopeKey).toBe("shared");
   });
+
+  it("uses the prepared agent owner for a bare agent-scoped session key", () => {
+    const layout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: {
+        scope: "agent",
+        workspaceAccess: "rw",
+        workspaceRoot: "/tmp/openclaw-sandboxes",
+      },
+      rawSessionKey: "global",
+      agentId: "research",
+      workspaceDir: workspaceA,
+    });
+
+    expect(layout.scopeKey).toMatch(/^agent:research:workspace:[a-f0-9]{32}$/);
+  });
 });

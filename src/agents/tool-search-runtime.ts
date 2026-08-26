@@ -4,8 +4,13 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "../security/external-content.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
+  getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -15,16 +20,22 @@ import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
+import {
   compactToolSearchCatalogEntry,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
+import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogSource,
@@ -38,7 +49,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
+import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -65,30 +76,6 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
   return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
-}
-
-/** Collects property names and descriptions from a JSON-Schema-shaped value. */
-function readParameterText(parameters: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(parameters)) {
-    return "";
-  }
-  const parts: string[] = [];
-  const description = parameters.description;
-  if (typeof description === "string") {
-    parts.push(description);
-  }
-  const properties = parameters.properties;
-  if (isRecord(properties)) {
-    for (const [name, child] of Object.entries(properties)) {
-      parts.push(name);
-      parts.push(readParameterText(child, depth + 1));
-    }
-  }
-  const items = parameters.items;
-  if (items !== undefined) {
-    parts.push(readParameterText(items, depth + 1));
-  }
-  return parts.filter(Boolean).join(" ");
 }
 
 function tokenizeLookupValue(input: string): Set<string> {
@@ -145,8 +132,8 @@ function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "code-mode"
       ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : options.recoverySurface === "tools"
-        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+      : options.recoverySurface === "catalog"
+        ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
         : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
@@ -192,39 +179,20 @@ function findEntryByExactId(
   return entry;
 }
 
+const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
+
+function readToolSearchSelector(params: Record<string, unknown>): string | undefined {
+  const value = params.id ?? params.toolId ?? params.name;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export function readToolSearchId(args: unknown): string {
   const params = asToolParamsRecord(args);
-  const value = params.id ?? params.toolId ?? params.name;
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readToolSearchSelector(params);
+  if (value === undefined) {
     throw new ToolInputError("id must be a non-empty string.");
   }
   return value.trim();
-}
-
-function readToolSearchLimit(value: unknown, config: ToolSearchConfig): number {
-  if (value === undefined) {
-    return config.searchDefaultLimit;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new ToolInputError("limit must be a positive integer.");
-  }
-  return Math.min(value, config.maxSearchLimit);
-}
-
-export function readToolSearchArgs(
-  args: unknown,
-  config: ToolSearchConfig,
-): { query: string; limit: number } {
-  const params = asToolParamsRecord(args);
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
-  const options = isRecord(params.options) ? params.options : undefined;
-  return {
-    query,
-    limit: readToolSearchLimit(params.limit ?? options?.limit, config),
-  };
 }
 
 export function readToolSearchCallArgs(
@@ -232,14 +200,21 @@ export function readToolSearchCallArgs(
   catalog?: ToolSearchCatalogSession,
 ): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
+  const dottedInput = Object.fromEntries(
+    Object.entries(params)
+      .filter(([key]) => key.startsWith("args.") && key.length > 5)
+      .map(([key, value]) => [key.slice(5), value]),
+  );
   const nestedInput = params.args ?? params.input;
   if (nestedInput != null) {
-    return { id: readToolSearchId(params), input: nestedInput };
+    return {
+      id: readToolSearchId(params),
+      input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
+    };
   }
 
-  const selectorKeys = ["id", "toolId", "name"] as const;
   const matchingSelectors = catalog
-    ? selectorKeys.flatMap((key) => {
+    ? TOOL_SEARCH_SELECTOR_KEYS.flatMap((key) => {
         const value = params[key];
         if (typeof value !== "string") {
           return [];
@@ -259,7 +234,7 @@ export function readToolSearchCallArgs(
     );
   }
   const matchingSelector = matchingSelectors[0]?.key;
-  const selector = matchingSelector ?? selectorKeys.find((key) => params[key] != null);
+  const selector = matchingSelector ?? TOOL_SEARCH_SELECTOR_KEYS.find((key) => params[key] != null);
   const id = readToolSearchId(selector ? { [selector]: params[selector] } : params);
 
   // Remove every alias that actually identifies the selected catalog tool;
@@ -270,10 +245,27 @@ export function readToolSearchCallArgs(
     ...matchingSelectors.map(({ key }) => key),
     ...(matchingSelector ? [] : [selector ?? "id"]),
   ]);
+  const targetInputEntries = Object.entries(params).filter(([key]) => !wrapperKeys.has(key));
   const flattenedInput = Object.fromEntries(
-    Object.entries(params).filter(([key]) => !wrapperKeys.has(key)),
+    targetInputEntries.filter(([key]) => !(key.startsWith("args.") && key.length > 5)),
   );
-  return { id, input: flattenedInput };
+  return { id, input: { ...dottedInput, ...flattenedInput } };
+}
+
+export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
+  if (!isRecord(args) || TOOL_SEARCH_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
+    return args;
+  }
+  const nestedInput = args.args ?? args.input;
+  if (!isRecord(nestedInput)) {
+    return args;
+  }
+  const selectorValue = readToolSearchSelector(nestedInput);
+  if (selectorValue === undefined) {
+    return args;
+  }
+  const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
+  return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
 function getTelemetry(catalog: ToolSearchCatalogSession) {
@@ -307,6 +299,10 @@ type CachedToolSearchIndex = {
   >;
   index: ReturnType<typeof buildLexicalIndex<ToolSearchCatalogEntry>>;
 };
+type ToolSearchIndexCache = Map<
+  boolean | NonNullable<CatalogVisibilityOptions["allowedIds"]>,
+  CachedToolSearchIndex
+>;
 
 function matchesCachedToolSearchIndex(
   cached: CachedToolSearchIndex,
@@ -459,15 +455,14 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   private callSequence = 0;
-  private readonly searchIndexes = new WeakMap<
-    ToolSearchCatalogSession,
-    Map<boolean, CachedToolSearchIndex>
-  >();
+  private readonly terminalTargetBatchByParent = new Map<string, boolean>();
+  private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
+  private readonly searchIndexes = new WeakMap<ToolSearchCatalogSession, ToolSearchIndexCache>();
 
   constructor(
     private readonly ctx: ToolSearchToolContext,
     private readonly config: ToolSearchConfig,
-    private readonly options: { validateInput?: boolean } = {},
+    private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
   ) {}
 
   search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
@@ -486,13 +481,13 @@ export class ToolSearchRuntime {
     if (limit === 1 && exactMatches.length === 1) {
       return exactMatches.slice(0, limit).map((entry) => compactToolSearchCatalogEntry(entry));
     }
-    const includeMcp = options?.includeMcp !== false;
+    const indexKey = options?.allowedIds ?? options?.includeMcp !== false;
     let catalogIndexes = this.searchIndexes.get(catalog);
     if (!catalogIndexes) {
       catalogIndexes = new Map();
       this.searchIndexes.set(catalog, catalogIndexes);
     }
-    let cachedIndex = catalogIndexes.get(includeMcp);
+    let cachedIndex = catalogIndexes.get(indexKey);
     if (!cachedIndex || !matchesCachedToolSearchIndex(cachedIndex, entries)) {
       const indexedEntries = entries.map((entry) => ({
         entry,
@@ -513,7 +508,7 @@ export class ToolSearchRuntime {
           })),
         ),
       };
-      catalogIndexes.set(includeMcp, cachedIndex);
+      catalogIndexes.set(indexKey, cachedIndex);
     }
     const ranked = scoreLexical(cachedIndex.index, tokenizeQuery(query))
       .toSorted(
@@ -574,6 +569,22 @@ export class ToolSearchRuntime {
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
     unwrapToolResultValue((await this.call(id, input, options)).result);
 
+  hasNetworkContent(parentToolCallId?: string): boolean {
+    return parentToolCallId
+      ? this.networkInvocations.has(parentToolCallId)
+      : this.networkInvocations.size > 0;
+  }
+
+  takeTerminalTargetBatch(parentToolCallId?: string): boolean {
+    const parent =
+      parentToolCallId ??
+      (this.terminalTargetBatchByParent.size === 1
+        ? (this.terminalTargetBatchByParent.keys().next().value ?? "")
+        : "");
+    const terminal = this.terminalTargetBatchByParent.get(parent) === true;
+    return this.terminalTargetBatchByParent.delete(parent) && terminal;
+  }
+
   isReplaySafeExactId = (id: string): boolean => {
     let entry: ToolSearchCatalogEntry;
     try {
@@ -621,8 +632,11 @@ export class ToolSearchRuntime {
         );
         return await params.acceptResultBeforeProjection(result);
       });
+    let preExecutionBlocked = false;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       if (isPreExecutionBlockedToolResult(candidate)) {
+        // The JSON-safe snapshot drops the private blocked-result marker.
+        preExecutionBlocked = true;
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
@@ -630,23 +644,61 @@ export class ToolSearchRuntime {
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
+    const prepareInput =
+      this.options.prepareInput &&
+      entry.source === "openclaw" &&
+      "prepareBeforeToolCallParams" in entry.tool &&
+      typeof entry.tool.prepareBeforeToolCallParams === "function";
     const executionTool =
-      validateInput && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
+      (prepareInput || validateInput) && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
         ? wrapToolWithBeforeToolCallHook(entry.tool as never)
         : entry.tool;
-    const runExecution = async () =>
-      await executeTool({
-        tool: executionTool,
-        toolName: entry.name,
-        source: entry.source,
-        sourceName: entry.sourceName,
-        toolCallId,
-        parentToolCallId: options?.parentToolCallId,
-        input: normalizedInput,
-        signal: options?.signal ?? this.ctx.abortSignal,
-        onUpdate: options?.onUpdate,
-        acceptResultBeforeProjection,
-      });
+    const runExecution = async () => {
+      const parentToolCallId = options?.parentToolCallId ?? toolCallId;
+      const signal = options?.signal ?? this.ctx.abortSignal;
+      const networkInvocation =
+        entry.tool.resultContentSource === "network"
+          ? (this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false })
+          : undefined;
+      if (networkInvocation) {
+        networkInvocation.active += 1;
+        this.networkInvocations.set(parentToolCallId, networkInvocation);
+      }
+      try {
+        const result = await executeTool({
+          tool: executionTool,
+          toolName: entry.name,
+          source: entry.source,
+          sourceName: entry.sourceName,
+          toolCallId,
+          parentToolCallId: options?.parentToolCallId,
+          input: normalizedInput,
+          signal,
+          onUpdate: options?.onUpdate,
+          acceptResultBeforeProjection,
+        });
+        if (networkInvocation && !preExecutionBlocked) {
+          networkInvocation.observed = true;
+        }
+        return result;
+      } catch (error) {
+        if (
+          networkInvocation &&
+          !preExecutionBlocked &&
+          getBeforeToolCallFailureDisposition(error) === undefined &&
+          !isTrustedToolExecutionPreflightError(error) &&
+          !(signal?.aborted && error === signal.reason)
+        ) {
+          // Guest code can catch page-controlled errors and return their text.
+          networkInvocation.observed = true;
+        }
+        throw error;
+      } finally {
+        if (networkInvocation && --networkInvocation.active === 0 && !networkInvocation.observed) {
+          this.networkInvocations.delete(parentToolCallId);
+        }
+      }
+    };
     const result = validateInput
       ? await runWithToolExecutionValidation(
           toolCallId,
@@ -655,12 +707,62 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
+    const parentToolCallId = options?.parentToolCallId;
+    if (parentToolCallId) {
+      this.terminalTargetBatchByParent.set(
+        parentToolCallId,
+        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+          acceptedResult.terminate === true,
+      );
+    }
     return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+/** Preserve programmatic values while protecting the model-facing control output. */
+export function formatToolSearchControlResult<T>(
+  payload: T,
+  runtime: ToolSearchRuntime | undefined,
+  parentToolCallId?: string,
+  terminalBatchStatus?: "waiting" | "completed" | "failed",
+): AgentToolResult<T> {
+  let result: AgentToolResult<T> = jsonResult(payload);
+  const content = result.content[0];
+  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
+    const bounded = truncateSanitizedExternalContent(content.text, 20_000);
+    const modelText = bounded.truncated
+      ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
+      : bounded.text;
+    const text = wrapExternalContent(modelText, { source: "api" });
+    result = { ...result, content: [{ ...content, text }] };
+  }
+  const terminal =
+    terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+  // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
+  return terminal ? { ...result, terminate: true } : result;
+}
+
+/** Keep dynamic failures rejected without exposing network-controlled error text. */
+export function formatToolSearchControlError(
+  error: unknown,
+  runtime: ToolSearchRuntime | undefined,
+  parentToolCallId?: string,
+  signal?: AbortSignal,
+): unknown {
+  if (
+    !runtime?.hasNetworkContent(parentToolCallId) ||
+    getBeforeToolCallFailureDisposition(error) !== undefined ||
+    isTrustedToolExecutionPreflightError(error) ||
+    (signal?.aborted && error === signal.reason)
+  ) {
+    return error;
+  }
+  return protectNetworkToolExecutionError(error, "Tool Search call failed.", signal);
 }
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {

@@ -130,7 +130,12 @@ async function createStreamHarness(options: StreamHarnessOptions = {}) {
   });
   const downstream = await Promise.resolve(
     wrapper(
-      options.model ?? ({ provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel),
+      options.model ??
+        ({
+          api: "openai-completions",
+          provider: "opencode-go",
+          id: "deepseek-v4-flash",
+        } as ProviderModel),
       {} as ProviderContext,
       options.callOptions ?? ({} as ProviderCallOptions),
     ),
@@ -400,7 +405,13 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
   });
 
   it("aborts and releases the underlying stream when no first event arrives", async () => {
-    const { downstream, getReturnCalls, capturedSignals, wasAborted } = await createStreamHarness();
+    const { downstream, getReturnCalls, capturedSignals, wasAborted } = await createStreamHarness({
+      model: asProviderModel({
+        api: "openai-responses",
+        provider: "opencode-go",
+        id: "gpt-5.6-luna",
+      }),
+    });
     expect(downstream).toBeDefined();
     if (!downstream) {
       return;
@@ -414,9 +425,40 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     expect(capturedSignals).toHaveLength(1);
     expect(wasAborted()).toBe(true);
     expect(getReturnCalls()).toBe(1);
-    expect(received.some((event) => event.type === "error" && event.reason === "error")).toBe(true);
+    const error = received.find((event): event is ErrorEvent => event.type === "error");
+    expect(error?.error).toMatchObject({
+      api: "openai-responses",
+      provider: "opencode-go",
+      model: "gpt-5.6-luna",
+    });
 
     await consumer;
+  });
+
+  it("preserves Anthropic model identity when a stream ends before its first event", async () => {
+    const { controller, downstream } = await createStreamHarness({
+      model: asProviderModel({
+        api: "anthropic-messages",
+        provider: "opencode-go",
+        id: "qwen3.8-max",
+      }),
+    });
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const received: AnyEvent[] = [];
+    const consumer = consumeStream(downstream, received);
+    controller.end();
+    await consumer;
+
+    const error = received.find((event): event is ErrorEvent => event.type === "error");
+    expect(error?.error).toMatchObject({
+      api: "anthropic-messages",
+      provider: "opencode-go",
+      model: "qwen3.8-max",
+    });
   });
 
   it("aborts stream creation when the upstream stream promise never resolves", async () => {

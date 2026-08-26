@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,
@@ -16,6 +16,7 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
@@ -68,7 +69,7 @@ class McpServersCard extends OpenClawLightDomElement {
           .catch((error: unknown) => {
             this.message = {
               kind: "error",
-              text: error instanceof Error ? error.message : String(error),
+              text: formatUiError(error),
             };
           });
         return runtimeConfig.subscribe(() => this.syncRows());

@@ -270,30 +270,43 @@ describe("applyPluginAutoEnable core", () => {
     ).toBe("google auth configured");
   });
 
-  it("auto-enables external speech providers selected by TTS config", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        tts: { provider: "gradium" },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "gradium",
-          channels: [],
-          contracts: { speechProviders: ["gradium"] },
-          origin: "global",
+  it.each([
+    ["TTS", { tts: { provider: "gradium" } }, "gradium", "gradium", "speechProviders"],
+    [
+      "sole Talk speech alias",
+      { talk: { providers: { "gradium-voice": {} } } },
+      "gradium-voice",
+      "gradium",
+      "speechProviders",
+    ],
+    [
+      "Talk realtime alias",
+      { talk: { realtime: { provider: "grok-voice", providers: { "grok-voice": {} } } } },
+      "grok-voice",
+      "xai",
+      "realtimeVoiceProviders",
+    ],
+  ] as const)(
+    "auto-enables the manifest owner selected by %s",
+    (_surface, config, id, owner, key) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          ...config,
+          plugins: { allow: ["telegram"] },
         },
-      ]),
-    });
+        env,
+        manifestRegistry: makeRegistry([
+          { id: owner, channels: [], contracts: { [key]: [owner, id] }, origin: "global" },
+        ]),
+      });
 
-    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
-    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
-    expect(result.autoEnabledReasons).toEqual({
-      gradium: ["gradium speech provider selected"],
-    });
-    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
-  });
+      const reason = `${id} ${key === "speechProviders" ? "speech" : "realtime voice"} provider selected`;
+      expect(result.config.plugins?.allow).toEqual(["telegram", owner]);
+      expect(result.config.plugins?.entries?.[owner]).toEqual({ enabled: true });
+      expect(result.autoEnabledReasons).toEqual({ [owner]: [reason] });
+      expect(result.changes).toContain(`${reason}, enabled automatically.`);
+    },
+  );
 
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
@@ -674,35 +687,6 @@ describe("applyPluginAutoEnable core", () => {
                 },
               },
             },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai"] },
-        {
-          id: "codex",
-          channels: [],
-          providers: ["codex"],
-          activation: { onAgentHarnesses: ["codex"] },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toEqual([
-      "openai/gpt-5.5 model configured, enabled automatically.",
-      "codex agent runtime configured, enabled automatically.",
-    ]);
-  });
-
-  it("auto-enables Codex when OpenAI agent models use the implicit runtime default", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
           },
         },
       },

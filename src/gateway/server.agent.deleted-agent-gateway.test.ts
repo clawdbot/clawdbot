@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
-import { agentCommand, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { agentCommandMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
@@ -35,7 +35,7 @@ test("agent RPC rejects deleted-agent session keys before dispatch", async () =>
     },
   });
 
-  vi.mocked(agentCommand).mockClear();
+  vi.mocked(agentCommandMock).mockClear();
   const { ws } = await openClient();
   try {
     const blocked = await rpcReq(ws, "agent", {
@@ -48,7 +48,7 @@ test("agent RPC rejects deleted-agent session keys before dispatch", async () =>
       code: ErrorCodes.INVALID_REQUEST,
       message: 'Agent "deleted-agent" no longer exists in configuration',
     });
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
   } finally {
     ws.close();
     resetSessionStoreFixture();
@@ -69,7 +69,7 @@ test("agent RPC rejects archived session keys before dispatch", async () => {
     },
   });
 
-  vi.mocked(agentCommand).mockClear();
+  vi.mocked(agentCommandMock).mockClear();
   const { ws } = await openClient();
   try {
     const blocked = await rpcReq(ws, "agent", {
@@ -83,7 +83,7 @@ test("agent RPC rejects archived session keys before dispatch", async () => {
       message:
         'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
     });
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
   } finally {
     ws.close();
     resetSessionStoreFixture();
@@ -103,7 +103,7 @@ test("agent RPC still dispatches for configured-agent session keys", async () =>
     },
   });
 
-  vi.mocked(agentCommand).mockClear();
+  vi.mocked(agentCommandMock).mockClear();
   const { ws } = await openClient();
   try {
     const accepted = await rpcReq(ws, "agent", {
@@ -114,7 +114,7 @@ test("agent RPC still dispatches for configured-agent session keys", async () =>
     expect(accepted.ok).toBe(true);
     expect(accepted.payload?.status).toBe("accepted");
     expect(accepted.payload?.runId).toBe("proof-main-agent");
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalled());
   } finally {
     ws.close();
     resetSessionStoreFixture();

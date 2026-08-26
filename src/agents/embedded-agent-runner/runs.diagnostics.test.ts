@@ -69,7 +69,7 @@ describe("active run injection diagnostics", () => {
     expect(queuedDepths).toEqual([1, 1]);
   });
 
-  it("does not retain reply-run steering as idle session backlog", () => {
+  it("does not treat a CLI cancellation backend as message injection", () => {
     setDiagnosticsEnabledForProcess(true);
     const queuedDepths: Array<number | undefined> = [];
     const unsubscribe = onDiagnosticEvent((event) => {
@@ -86,17 +86,13 @@ describe("active run injection diagnostics", () => {
       kind: "cli",
       cancel: () => {},
       isStreaming: () => true,
-      queueMessage: async () => {},
     });
     operation.setPhase("running");
     try {
       startDiagnosticTurn("session-reply-steer-diagnostics");
       expect(
-        queueEmbeddedAgentMessageWithOutcome("session-reply-steer-diagnostics", "first").queued,
-      ).toBe(true);
-      expect(
-        queueEmbeddedAgentMessageWithOutcome("session-reply-steer-diagnostics", "second").queued,
-      ).toBe(true);
+        queueEmbeddedAgentMessageWithOutcome("session-reply-steer-diagnostics", "first"),
+      ).toMatchObject({ queued: false, reason: "no_active_run" });
     } finally {
       operation.complete();
       finishDiagnosticTurn("session-reply-steer-diagnostics");
@@ -106,6 +102,6 @@ describe("active run injection diagnostics", () => {
     expect(
       getDiagnosticSessionState({ sessionId: "session-reply-steer-diagnostics" }).queueDepth,
     ).toBe(0);
-    expect(queuedDepths).toEqual([1, 1]);
+    expect(queuedDepths).toEqual([]);
   });
 });

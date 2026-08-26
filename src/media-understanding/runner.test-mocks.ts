@@ -18,7 +18,7 @@ export function createAvailableModelAuthMockModule() {
   // Keep the mock shape aligned with available-model-auth runtime imports.
   return {
     hasAvailableAuthForProvider: vi.fn(() => true),
-    resolveApiKeyForProvider: vi.fn(async () => ({
+    resolveApiKeyForProviderCore: vi.fn(async () => ({
       apiKey: "test-key",
       source: "test",
       mode: "api-key",

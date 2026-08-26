@@ -29,6 +29,7 @@ export async function createBrowserRuntimeState(
     profiles: new Map(),
   };
   const stopTrackedTabCleanup = startTrackedBrowserTabCleanupTimer({
+    getResolvedBrowserConfig: () => state.resolved,
     onWarn: params.onWarn,
   });
   trackedTabCleanupDisposers.set(state, stopTrackedTabCleanup);

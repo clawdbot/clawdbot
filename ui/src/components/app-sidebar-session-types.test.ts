@@ -2,10 +2,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadStoredCollapsedSessionSections,
   loadStoredHiddenSessionCatalogIds,
+  loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
-  storeHiddenSessionCatalogIds,
+  loadStoredSidebarSessionsShowPreview,
+  setStoredSessionCatalogHidden,
+  storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
+  storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
 // getSafeLocalStorage only accepts an own value property under Vitest, so the
@@ -57,10 +62,52 @@ describe("sidebar session status preference", () => {
   });
 });
 
+describe("sidebar session sort preference", () => {
+  it("defaults absent and unknown stored values to created", () => {
+    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+    localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "unexpected");
+    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+  });
+
+  it("round-trips updated and people modes", () => {
+    expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
+    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
+    expect(storeSidebarSessionSortMode("people", true)).toBe("people");
+    expect(loadStoredSidebarSessionSortMode()).toBe("people");
+  });
+
+  it("stores created instead of a people sort the gateway denied", () => {
+    expect(storeSidebarSessionSortMode("people", false)).toBe("created");
+    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+  });
+});
+
+describe("collapsed sidebar sections preference", () => {
+  it("defaults Coding to compact while Online remains expanded", () => {
+    expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
+  });
+});
+
+describe("sidebar session preview preference", () => {
+  it("defaults to showing previews and round-trips the stored choice", () => {
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+
+    storeSidebarSessionsShowPreview(false);
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+
+    storeSidebarSessionsShowPreview(true);
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+  });
+});
+
 describe("hidden session catalog preference", () => {
-  it("round-trips catalog ids", () => {
-    storeHiddenSessionCatalogIds(new Set(["codex", "claude"]));
+  it("round-trips catalog ids and reverses one hide at a time", () => {
+    setStoredSessionCatalogHidden("codex", true);
+    setStoredSessionCatalogHidden("claude", true);
     expect([...loadStoredHiddenSessionCatalogIds()]).toEqual(["codex", "claude"]);
+
+    setStoredSessionCatalogHidden("codex", false);
+    expect([...loadStoredHiddenSessionCatalogIds()]).toEqual(["claude"]);
   });
 
   it.each(["not-json", JSON.stringify({ catalog: "codex" })])(

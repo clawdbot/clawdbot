@@ -5,7 +5,10 @@ import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
+import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
+import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import {
@@ -13,7 +16,30 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./load-context.js";
 
-export type PluginRegistryScope = "configured-channels" | "channels" | "all";
+export type PluginRegistryScope = "configured-channels" | "channels" | "memory" | "all";
+
+function resolveMemoryPluginIds(
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>,
+): string[] {
+  const configuredProviderIds = [
+    ...collectConfiguredMemoryEmbeddingProviderIds(context.activationSourceConfig),
+  ];
+  const pluginIds = new Set<string>();
+  if (context.metadataSnapshot) {
+    createInstalledPluginIndexScopeLookup(
+      context.metadataSnapshot.index,
+    ).addProviderContributionOwners(pluginIds, configuredProviderIds);
+  } else {
+    for (const providerId of configuredProviderIds) {
+      pluginIds.add(providerId);
+    }
+  }
+  const memoryPluginId = normalizePluginsConfig(context.config.plugins).slots.memory?.trim();
+  if (memoryPluginId) {
+    pluginIds.add(memoryPluginId);
+  }
+  return [...pluginIds].toSorted();
+}
 
 function resolveScopePluginIds(params: {
   scope: PluginRegistryScope;
@@ -33,6 +59,11 @@ function resolveScopePluginIds(params: {
       workspaceDir: params.context.workspaceDir,
       env: params.context.env,
     });
+  }
+  if (params.scope === "memory") {
+    // Memory CLI commands must use the same backend and embedding adapters as
+    // Gateway, without activating unrelated explicitly enabled plugins.
+    return resolveMemoryPluginIds(params.context);
   }
   return resolveEffectivePluginIds({
     config: params.context.rawConfig,
@@ -56,8 +87,10 @@ export function ensurePluginRegistryLoaded(options?: {
     ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
     : context.config;
   const activationSourceConfig = activateConfigured
-    ? (withActivatedPluginIds({ config: context.activationSourceConfig, pluginIds }) ??
-      context.activationSourceConfig)
+    ? (withActivatedPluginIds({
+        config: context.activationSourceConfig,
+        pluginIds,
+      }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
   loadOpenClawPlugins(
     buildPluginRuntimeLoadOptionsFromValues(
@@ -65,6 +98,7 @@ export function ensurePluginRegistryLoaded(options?: {
       {
         throwOnLoadError: true,
         ...(scope === "configured-channels" ||
+        scope === "memory" ||
         scope === "all" ||
         hasNonEmptyPluginIdScope(pluginIds)
           ? { onlyPluginIds: pluginIds }

@@ -149,17 +149,20 @@ function publicRequest(params: {
   }
   const metadata = params.request.meta
     ? Object.fromEntries(
-        Object.entries(params.request.meta).filter(([key, value]) => key !== "accountId" && value),
+        Object.entries(params.request.meta).filter(
+          ([key, value]) => key !== "accountId" && key !== "senderId" && value,
+        ),
       )
     : undefined;
   const createdAtMs = Date.parse(params.request.createdAt);
+  const senderId = params.request.meta?.senderId ?? params.request.id;
   return {
     requestId: resolveChannelPairingRequestId(params.account.plugin.id, params.request),
     channel: params.account.plugin.id,
     channelLabel: params.account.plugin.meta.label,
     accountId: params.account.accountId,
     ...(params.account.accountLabel ? { accountLabel: params.account.accountLabel } : {}),
-    senderId: params.request.id,
+    senderId,
     senderLabel: adapter.idLabel,
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     createdAt: params.request.createdAt,
@@ -315,6 +318,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
               id: approved.id,
               cfg,
               pairingAdapter: account.plugin.pairing,
+              ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
             });
             notification = "sent";
           } catch (error) {
@@ -330,7 +334,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         true,
         {
           requestId: parsed.requestId,
-          senderId: approved.id,
+          senderId: approved.entry.meta?.senderId ?? approved.id,
           notification,
           commandOwnerBootstrap,
         },
@@ -383,7 +387,14 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { requestId: parsed.requestId, senderId: dismissed.id }, undefined);
+      respond(
+        true,
+        {
+          requestId: parsed.requestId,
+          senderId: dismissed.entry.meta?.senderId ?? dismissed.id,
+        },
+        undefined,
+      );
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
     }

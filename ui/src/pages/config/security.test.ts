@@ -46,7 +46,6 @@ function createProps(overrides: Partial<SecurityViewProps> = {}): SecurityViewPr
     security: {
       gatewayAuth: "token",
       execPolicy: "allowlist",
-      deviceAuth: true,
       browserEnabled: true,
       browserEnabledOverridden: true,
       toolProfile: "coding",
@@ -74,7 +73,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: false,
             browserEnabledOverridden: true,
             toolProfile: "messaging",
@@ -120,7 +118,7 @@ describe("renderSecurity", () => {
     expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("shows gateway auth and device auth as dot statuses, not pills", () => {
+  it("shows gateway auth as a dot status, not a pill", () => {
     const container = document.createElement("div");
 
     render(
@@ -129,7 +127,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "none",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
             toolProfile: "full",
@@ -144,8 +141,6 @@ describe("renderSecurity", () => {
     const authStatus = authRow.querySelector(".settings-status");
     expect(authStatus?.textContent?.trim()).toBe("none");
     expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-    const deviceRow = expectRowByTitle(container, "Device auth");
-    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
   });
 
   it("opens mobile pairing from the overview", () => {
@@ -154,8 +149,8 @@ describe("renderSecurity", () => {
 
     render(renderSecurity(createProps({ onPairMobile })), container);
 
-    expectRowByTitle(container, "OpenClaw mobile");
-    const button = expectButtonByText(container, "Pair mobile device");
+    expectRowByTitle(container, "Pair a device");
+    const button = expectButtonByText(container, "Pair device");
     expect(button.disabled).toBe(false);
     button.click();
     expect(onPairMobile).toHaveBeenCalledOnce();
@@ -183,7 +178,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: false,
             toolProfile: "full",
@@ -214,7 +208,6 @@ describe("renderSecurity", () => {
           security: {
             gatewayAuth: "token",
             execPolicy: "allowlist",
-            deviceAuth: true,
             browserEnabled: true,
             browserEnabledOverridden: true,
             toolProfile: "full",

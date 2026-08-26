@@ -174,6 +174,35 @@ describe("Google Chat webhook routing", () => {
     vi.resetModules();
   });
 
+  it("rejects a foreign route collision instead of storing an unreachable target", () => {
+    const registry = createEmptyPluginRegistry();
+    const existingRoute = {
+      path: "/googlechat",
+      match: "exact" as const,
+      auth: "plugin" as const,
+      handler: () => {},
+      pluginId: "other-plugin",
+      source: "other-webhook",
+    };
+    registry.httpRoutes.push(existingRoute);
+    setActivePluginRegistry(registry);
+
+    expect(() =>
+      registerGoogleChatWebhookTarget({
+        account: baseAccount("A"),
+        config: {},
+        runtime: { log: vi.fn() },
+        core: {} as PluginRuntime,
+        path: "/googlechat",
+        statusSink: vi.fn(),
+        mediaMaxMb: 5,
+        ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
+      }),
+    ).toThrow("route replacement denied");
+
+    expect(registry.httpRoutes).toEqual([existingRoute]);
+  });
+
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
 

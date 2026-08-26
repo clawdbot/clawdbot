@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { analyzeConfigSchema, type ConfigSchemaAnalysis } from "../../components/config-form.ts";
@@ -30,7 +31,7 @@ function scopeSchemaSections(
 }
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
   return value as JsonSchema;

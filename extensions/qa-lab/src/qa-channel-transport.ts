@@ -1,18 +1,15 @@
 // Qa Lab plugin module implements qa channel transport behavior.
-import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
-import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
 import {
   QaStateBackedTransportAdapter,
+  waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
 import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
-  QaTransportGatewayClient,
   QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
   QaTransportPolicy,
@@ -23,66 +20,6 @@ const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
 export const QA_CHANNEL_REQUIRED_PLUGIN_IDS = Object.freeze([QA_CHANNEL_ID]);
 export const QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY = 4;
-
-async function waitForQaChannelReady(params: {
-  gateway: QaTransportGatewayClient;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-}) {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const pollIntervalMs = params.pollIntervalMs ?? 500;
-  const startedAt = Date.now();
-  let lastAccountStatus = "no qa-channel accounts reported";
-  let lastProbeError: string | null = null;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const payload = (await params.gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            running?: boolean;
-            restartPending?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
-      const account = accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID);
-      lastProbeError = null;
-      lastAccountStatus = account
-        ? JSON.stringify({
-            accountId: account.accountId ?? null,
-            running: account.running ?? null,
-            restartPending: account.restartPending ?? null,
-          })
-        : accounts.length > 0
-          ? `qa-channel account "${QA_CHANNEL_ACCOUNT_ID}" not reported; available accounts: ${accounts
-              .map((entry) => entry.accountId ?? "unknown")
-              .join(", ")}`
-          : "no qa-channel accounts reported";
-      if (account?.running && account.restartPending !== true) {
-        return;
-      }
-    } catch (error) {
-      lastProbeError = formatErrorMessage(error);
-    }
-    await sleep(pollIntervalMs);
-  }
-
-  throw new QaSuiteInfraError(
-    "transport_ready_timeout",
-    [
-      `timed out after ${timeoutMs}ms waiting for qa-channel ready`,
-      `last status: ${lastAccountStatus}`,
-      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
-    ].join("; "),
-  );
-}
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
@@ -171,7 +108,12 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
 
   createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
     createQaChannelGatewayConfig({ baseUrl, transportPolicy: this.#transportPolicy });
-  waitReady = waitForQaChannelReady;
+  waitReady = (params: Parameters<QaStateBackedTransportAdapter["waitReady"]>[0]) =>
+    waitForQaTransportAccountReady({
+      ...params,
+      accountId: QA_CHANNEL_ACCOUNT_ID,
+      channel: QA_CHANNEL_ID,
+    });
   buildAgentDelivery = ({ target }: { target: string }) => ({
     channel: QA_CHANNEL_ID,
     replyChannel: QA_CHANNEL_ID,
@@ -182,7 +124,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     await this.sendInbound({
       ...message,
       text: `/${command}`,
-      nativeCommand: { name: command },
+      nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
     });
   }
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {

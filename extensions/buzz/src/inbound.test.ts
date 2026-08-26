@@ -1,3 +1,5 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,6 +14,22 @@ import {
 } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    buildChannelInboundEventContext: vi.fn(actual.buildChannelInboundEventContext),
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    resolveStableChannelMessageIngress: vi.fn(actual.resolveStableChannelMessageIngress),
+  };
+});
 
 const ROOM_ID = "b25b8e40-eb1a-43a4-b56b-30a4e16df586";
 const BOT_PUBLIC_KEY = "a".repeat(64);
@@ -112,6 +130,11 @@ describe("handleBuzzInbound", () => {
       GroupSubject: ROOM_ID,
     });
     expect(firstDispatch(runtime).ctxPayload.GroupChannel).toBeUndefined();
+    const resolverResult = await vi.mocked(resolveStableChannelMessageIngress).mock.results[0]
+      ?.value;
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
+      resolverResult,
+    );
   });
 
   it("uses current Buzz labels without changing the stable sender identity", async () => {
@@ -230,6 +253,74 @@ describe("handleBuzzInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "restricts an otherwise open account to the room allowlist",
+      accountPolicy: "open",
+      accountAllowFrom: undefined,
+      room: { groupPolicy: "allowlist", groupAllowFrom: [OTHER_PUBLIC_KEY] },
+      dispatches: false,
+    },
+    {
+      name: "opens one room without changing the account allowlist",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [OTHER_PUBLIC_KEY],
+      room: { groupPolicy: "open" },
+      dispatches: true,
+    },
+    {
+      name: "inherits the account policy with a room-specific allowlist",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [OTHER_PUBLIC_KEY],
+      room: { groupAllowFrom: [SENDER_PUBLIC_KEY] },
+      dispatches: true,
+    },
+    {
+      name: "keeps an explicitly empty room allowlist fail-closed",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [SENDER_PUBLIC_KEY],
+      room: { groupAllowFrom: [] },
+      dispatches: false,
+    },
+    {
+      name: "inherits the account allowlist when a room only sets its policy",
+      accountPolicy: "open",
+      accountAllowFrom: [SENDER_PUBLIC_KEY],
+      room: { groupPolicy: "allowlist" },
+      dispatches: true,
+    },
+    {
+      name: "disables one room without changing the account policy",
+      accountPolicy: "open",
+      accountAllowFrom: undefined,
+      room: { groupPolicy: "disabled" },
+      dispatches: false,
+    },
+  ] as const)("$name", async ({ accountPolicy, accountAllowFrom, room, dispatches }) => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+
+    await handleBuzzInbound({
+      account: createAccount({
+        groupPolicy: accountPolicy,
+        groupAllowFrom: accountAllowFrom ? [...accountAllowFrom] : undefined,
+        groups: {
+          [ROOM_ID]: {
+            requireMention: false,
+            ...room,
+            groupAllowFrom: room.groupAllowFrom ? [...room.groupAllowFrom] : undefined,
+          },
+        },
+      }),
+      cfg: {} satisfies OpenClawConfig,
+      bus: createBus(),
+      message: createMessage(),
+      signal: createSignal(),
+    });
+
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(dispatches ? 1 : 0);
+  });
+
   it("authorizes commands from an allowlisted room sender", async () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
@@ -239,7 +330,8 @@ describe("handleBuzzInbound", () => {
     await handleBuzzInbound({
       account: createAccount({
         groupPolicy: "allowlist",
-        groupAllowFrom: [SENDER_PUBLIC_KEY],
+        groupAllowFrom: [OTHER_PUBLIC_KEY],
+        groups: { [ROOM_ID]: { requireMention: true, groupAllowFrom: [SENDER_PUBLIC_KEY] } },
       }),
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),
@@ -273,7 +365,7 @@ describe("handleBuzzInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("preserves Buzz thread and reply identifiers for agent replies", async () => {
+  it("anchors Buzz agent replies and typing to the original thread root", async () => {
     const runtime = createPluginRuntimeMock();
     setBuzzRuntime(runtime);
     const bus = createBus();
@@ -306,7 +398,7 @@ describe("handleBuzzInbound", () => {
       channelId: ROOM_ID,
       text: "threaded reply to @Alice",
       threadId: "event-root",
-      replyToId: "event-reply",
+      replyToId: "event-root",
     });
 
     const typing = dispatch.replyPipeline?.typing;
@@ -315,7 +407,7 @@ describe("handleBuzzInbound", () => {
     expect(bus.sendTyping).toHaveBeenCalledWith({
       channelId: ROOM_ID,
       threadId: "event-root",
-      replyToId: "event-reply",
+      replyToId: "event-root",
     });
   });
 

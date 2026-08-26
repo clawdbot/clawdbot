@@ -96,6 +96,7 @@ export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
   guardianProbe: boolean;
   imageProbe: boolean;
   mcpProbe: boolean;
+  multiSessionProbe: boolean;
   resumeStress: boolean;
   subagentProbe: boolean;
 }): boolean {
@@ -107,6 +108,7 @@ export function shouldUseCodexHarnessSubagentOnlyFastPath(params: {
     !params.guardianProbe &&
     !params.imageProbe &&
     !params.mcpProbe &&
+    !params.multiSessionProbe &&
     !params.resumeStress &&
     !params.explicitOptOut
   );

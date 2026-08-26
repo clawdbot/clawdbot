@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OpenClaw",
-  "version": "2.1.0",
-  "description": "Let OpenClaw agents browse with you. Tabs shared with OpenClaw live in a colored tab group; drag a tab out to revoke access.",
+  "version": "2.2.0",
+  "description": "Securely relay eligible signed-in Chrome tabs to the local OpenClaw browser automation service.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -15,17 +15,8 @@
     "tabGroups",
     "storage",
     "alarms",
-    "sidePanel",
-    "contextMenus",
-    "scripting",
-    "activeTab"
+    "nativeMessaging"
   ],
-  "commands": {
-    "send-page": {
-      "suggested_key": { "default": "Alt+Shift+S" },
-      "description": "Send this page to OpenClaw"
-    }
-  },
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "OpenClaw",
@@ -36,6 +27,10 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "minimum_chrome_version": "125"
 }

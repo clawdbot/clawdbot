@@ -462,10 +462,12 @@ openclaw_live_init_docker_run_args() {
     return 127
   fi
   quoted_timeout="$(printf '%q' "$timeout_value")"
+  # Provider CLIs can leave orphaned tooling grandchildren; Docker init reaps
+  # them so sequential Vitest process groups can join after teardown.
   if openclaw_live_timeout_supports_kill_after "$timeout_bin"; then
-    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run)"
+    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run --init)"
   else
-    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
+    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run --init)"
   fi
   openclaw_live_docker_run_resource_args resource_args || return $?
   openclaw_live_append_array "$target_array" resource_args

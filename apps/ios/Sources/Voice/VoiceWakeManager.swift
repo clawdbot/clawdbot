@@ -1,7 +1,6 @@
 import AVFAudio
 import Foundation
 import Observation
-import OpenClawKit
 import Speech
 import SwabbleKit
 
@@ -279,7 +278,7 @@ final class VoiceWakeManager: NSObject {
 
         self.statusText = String(localized: "Requesting permissions…")
 
-        let micOk = await Self.requestMicrophonePermission()
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "VoiceWake")
         guard micOk else {
             self.statusText = Self.microphonePermissionMessage(
                 kind: String(localized: "Microphone"))
@@ -287,9 +286,9 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        let speechOk = await Self.requestSpeechPermission()
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "VoiceWake")
         guard speechOk else {
-            self.statusText = Self.permissionMessage(
+            self.statusText = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.isListening = false
@@ -525,6 +524,7 @@ final class VoiceWakeManager: NSObject {
             .allowBluetoothHFP,
             .defaultToSpeaker,
         ])
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true, options: [])
     }
 
@@ -548,91 +548,11 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    private nonisolated static func requestMicrophonePermission() async -> Bool {
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            break
-        @unknown default:
-            return false
-        }
-
-        return await self.requestPermissionWithTimeout { completion in
-            AVAudioApplication.requestRecordPermission(completionHandler: completion)
-        }
-    }
-
     private nonisolated static func microphonePermissionMessage(kind: String) -> String {
         let status = AVAudioApplication.shared.recordPermission
         return self.deniedByDefaultPermissionMessage(
             kind: kind,
             isUndetermined: status == .undetermined)
-    }
-
-    private nonisolated static func requestSpeechPermission() async -> Bool {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        switch status {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            break
-        @unknown default:
-            return false
-        }
-
-        return await self.requestPermissionWithTimeout { completion in
-            SFSpeechRecognizer.requestAuthorization { authStatus in
-                completion(authStatus == .authorized)
-            }
-        }
-    }
-
-    private nonisolated static func requestPermissionWithTimeout(
-        _ operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
-    {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: 8,
-                onTimeout: { NSError(domain: "VoiceWake", code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "permission request timed out",
-                ]) },
-                operation: { await PermissionRequestBridge.awaitRequest(operation) })
-        } catch {
-            return false
-        }
-    }
-
-    private static func permissionMessage(
-        kind: String,
-        status: SFSpeechRecognizerAuthorizationStatus) -> String
-    {
-        switch status {
-        case .denied:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
-        case .restricted:
-            return String(
-                format: String(localized: "%@ permission restricted"),
-                kind)
-        case .notDetermined:
-            return String(
-                format: String(localized: "%@ permission not granted"),
-                kind)
-        case .authorized:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
-        @unknown default:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
-        }
     }
 
     private nonisolated static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {

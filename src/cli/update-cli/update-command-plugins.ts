@@ -476,11 +476,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
         channels: structuredClone(params.restoredAuthoredChannels) as OpenClawConfig["channels"],
       };
     }
+    // Installed plugin metadata can own migrations that this process has not loaded yet.
+    // Finalization runs fresh doctor plus strict validation before the update can complete.
     await commitPluginInstallRecordsWithConfig({
       previousInstallRecords: pluginInstallRecords,
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
+      writeOptions: { skipPluginValidation: true },
     });
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,

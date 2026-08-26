@@ -91,6 +91,7 @@ describe("resolveRequesterToolPolicies", () => {
       config: config(),
       agentId: "main",
       sessionKey: childSessionKey,
+      conversationPolicy: { deny: ["exec"] },
     });
 
     expect(result.delegated).toBe(true);

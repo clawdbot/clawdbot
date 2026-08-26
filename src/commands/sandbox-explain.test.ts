@@ -23,6 +23,56 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("sandbox explain command", () => {
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["blank", "", "--agent must not be blank"],
+  ])("rejects an explicit %s agent", async (_label, agent, message) => {
+    mockCfg = {
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    await expect(
+      sandboxExplainCommand({ json: true, agent }, {
+        log: () => {},
+        error: () => {},
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]),
+    ).rejects.toThrow(message);
+  });
+
+  it("honors an explicit agent in an ownerless multi-agent fleet", async () => {
+    mockCfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sandbox: { mode: "off" } },
+        list: [
+          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
+          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
+        ],
+      },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, agent: "research" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.agentId).toBe("research");
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-research-workspace"),
+    );
+  });
+
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = state.statePath(
@@ -127,7 +177,7 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "image"]);
+    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",
@@ -436,6 +486,7 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "non-main" },
         },
+        list: [{ id: "main" }, { id: "builder" }],
       },
     };
 

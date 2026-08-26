@@ -4,12 +4,30 @@ import os from "node:os";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
+import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
+
+async function readFilesystemEntryOrMissing<T>(
+  filePath: string,
+  read: () => Promise<T>,
+): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    throw new Error(`${shortenHomePath(filePath)}: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+}
 
 function isLegacyUsageCostCacheTempName(name: string): boolean {
   return (
@@ -28,7 +46,10 @@ async function detectLegacyUsageCostCacheFiles(params?: {
   const stateDir = resolveStateDir(params?.env ?? process.env, params?.homedir ?? os.homedir);
   const sessionDirs = [path.join(stateDir, "sessions")];
   const agentsDir = path.join(stateDir, "agents");
-  const agentEntries = await fs.readdir(agentsDir, { withFileTypes: true }).catch(() => []);
+  const agentEntries =
+    (await readFilesystemEntryOrMissing(agentsDir, () =>
+      fs.readdir(agentsDir, { withFileTypes: true }),
+    )) ?? [];
   for (const entry of agentEntries) {
     if (entry.isDirectory()) {
       sessionDirs.push(path.join(agentsDir, entry.name, "sessions"));
@@ -36,7 +57,10 @@ async function detectLegacyUsageCostCacheFiles(params?: {
   }
   const files: string[] = [];
   for (const sessionDir of sessionDirs) {
-    const entries = await fs.readdir(sessionDir, { withFileTypes: true }).catch(() => []);
+    const entries =
+      (await readFilesystemEntryOrMissing(sessionDir, () =>
+        fs.readdir(sessionDir, { withFileTypes: true }),
+      )) ?? [];
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
@@ -47,7 +71,7 @@ async function detectLegacyUsageCostCacheFiles(params?: {
         continue;
       }
       if (isLegacyUsageCostCacheTempName(entry.name)) {
-        const stats = await fs.stat(filePath).catch(() => null);
+        const stats = await readFilesystemEntryOrMissing(filePath, () => fs.stat(filePath));
         if (stats && Date.now() - stats.mtimeMs >= LEGACY_USAGE_COST_TEMP_GRACE_MS) {
           files.push(filePath);
         }
@@ -62,7 +86,22 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<void> {
-  const files = await detectLegacyUsageCostCacheFiles(params);
+  const files = await detectLegacyUsageCostCacheFiles(params).catch((error: unknown) => {
+    const command = params.shouldRepair ? "openclaw doctor --fix" : "openclaw doctor";
+    const action = params.shouldRepair ? "scan and cleanup" : "scan";
+    note(
+      [
+        `Legacy usage-cost cache ${action} could not be completed; ${params.shouldRepair ? "no sidecar files were removed" : "cache state may remain uninspected"}.`,
+        `- ${formatErrorMessage(error)}`,
+        `Resolve the filesystem error and rerun \`${command}\`.`,
+      ].join("\n"),
+      "Usage cost cache",
+    );
+    return null;
+  });
+  if (!files) {
+    return;
+  }
   if (files.length === 0) {
     return;
   }

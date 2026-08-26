@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun } from "./execute.js";
 import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
@@ -61,6 +62,7 @@ function createRunContext(params: {
 
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(params.runId),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",
@@ -92,6 +94,7 @@ function createRunContext(params: {
     normalizedModel: "test-model",
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+    claudeSkillsPluginArgs: [],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
   };
@@ -229,6 +232,31 @@ describe("local CLI pending process cancellation", () => {
       ),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(spawn).not.toHaveBeenCalled();
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+  });
+
+  it("passes plugin-owned system prompts without writing temporary files or exposing prompt argv", async () => {
+    const writeCliSystemPromptFile = vi.spyOn(executeDeps, "writeCliSystemPromptFile");
+    const context = createRunContext({ runId: "plugin-native-system-prompt" });
+    context.preparedBackend.backend.command = "/bin/sh";
+    context.preparedBackend.backend.output = "jsonl";
+    context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+    context.preparedBackend.backend.systemPromptFileArg = "--append-system-prompt-file";
+    context.preparedBackend.backend.systemPromptArg = "--append-system-prompt";
+    let executionArgs: readonly string[] | undefined;
+    let executionPrompt: string | undefined;
+    context.preparedBackend.execute = async function* (execution) {
+      executionArgs = execution.args;
+      executionPrompt = execution.systemPrompt;
+      yield { type: "result", subtype: "success", result: "completed" };
+    };
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "completed" });
+
+    expect(executionPrompt).toBe("system");
+    expect(executionArgs).not.toContain("--append-system-prompt-file");
+    expect(executionArgs).not.toContain("--append-system-prompt");
+    expect(writeCliSystemPromptFile).not.toHaveBeenCalled();
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 

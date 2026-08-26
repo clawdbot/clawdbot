@@ -4,10 +4,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../../utils/delivery-context.shared.js";
@@ -21,11 +21,16 @@ function projectSessionEntry(entry: SessionEntry): ProjectedSessionEntry {
 }
 
 export const initSessionState = async (
-  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx" | "commandAuthorized"> & {
     ctx: Record<string, unknown>;
+    commandAuthorized?: boolean;
   },
 ) => {
-  const result = await initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
+  const result = await initSessionStateRaw({
+    ...params,
+    commandAuthorized: params.commandAuthorized ?? true,
+    ctx: finalizeInboundContext(params.ctx),
+  });
   return { ...result, sessionEntry: projectSessionEntry(result.sessionEntry) };
 };
 
@@ -40,14 +45,14 @@ export async function writeSessionStore(
     if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
       await replaceSessionEntry({ storePath, sessionKey }, canonical);
     } else {
-      await upsertSessionEntry({ storePath, sessionKey }, canonical);
+      await upsertSessionEntryCore({ storePath, sessionKey }, canonical);
     }
   }
 }
 
 export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
   const entries = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       projectSessionEntry(entry),
     ]),

@@ -229,28 +229,12 @@ export function updateMigrationManifestTarget(
   writeSessionSqliteMigrationManifest(activeRun);
 }
 
-export function recordPlannedMigrationMove(
-  activeRun: ActiveSessionSqliteMigrationRun | undefined,
-  target: SessionSqliteMigrationTargetInput,
-  move: SessionSqliteMigrationMove,
-): void {
-  recordPlannedMigrationMoves(activeRun, target, [move]);
-}
-
 export function recordPlannedMigrationMoves(
   activeRun: ActiveSessionSqliteMigrationRun | undefined,
   target: SessionSqliteMigrationTargetInput,
   moves: readonly SessionSqliteMigrationMove[],
 ): void {
   recordMigrationMoves(activeRun, target, "plannedMoves", moves);
-}
-
-export function recordCompletedMigrationMove(
-  activeRun: ActiveSessionSqliteMigrationRun | undefined,
-  target: SessionSqliteMigrationTargetInput,
-  move: SessionSqliteMigrationMove,
-): void {
-  recordCompletedMigrationMoves(activeRun, target, [move]);
 }
 
 export function recordCompletedMigrationMoves(

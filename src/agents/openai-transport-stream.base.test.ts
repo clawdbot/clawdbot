@@ -5,17 +5,13 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "@openclaw/ai/transports";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveAzureOpenAIApiVersion,
   type OpenAIResponsesOutput,
   type CapturedStreamEvent,
-  makeCompletionsModel,
   makeResponsesModel,
-  createDeepSeekCompletionsModel,
-  createAssistantOutput,
   createResponsesAssistantOutput,
   createAzureResponsesModel,
   neverYieldsStream,
@@ -47,33 +43,6 @@ describe("openai transport stream", () => {
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
         model,
-        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
-      );
-      const rejection = expect(resultPromise).rejects.toThrow(
-        /did not deliver a first SSE event within 5ms after streaming headers/,
-      );
-
-      await vi.advanceTimersByTimeAsync(5);
-      await rejection;
-      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
-      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
-    vi.useFakeTimers();
-    try {
-      const model = createDeepSeekCompletionsModel();
-      const abortFirstEventStream = vi.fn();
-      const onFirstEventTimeout = vi.fn();
-      const resultPromise = testing.processOpenAICompletionsStream(
-        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
-        createAssistantOutput(model),
-        model,
-        { push: vi.fn() },
         { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
       );
       const rejection = expect(resultPromise).rejects.toThrow(
@@ -1213,71 +1182,6 @@ describe("openai transport stream", () => {
     expect(
       testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
     ).toBeUndefined();
-  });
-
-  it("moves Azure OpenAI completions api-version headers into default query params", () => {
-    const config = testing.buildOpenAICompletionsClientConfig(
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        api: "openai-completions",
-        provider: "azure-custom",
-        baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
-        headers: {
-          "api-key": "azure-key",
-          "api-version": "2024-10-21",
-          "X-Tenant": "acme",
-        },
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 4096,
-      } as unknown as Model<"openai-completions">,
-      { systemPrompt: "", messages: [] } as never,
-    );
-
-    expect(config).toEqual({
-      baseURL: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini",
-      defaultHeaders: {
-        "api-key": "azure-key",
-        "X-Tenant": "acme",
-      },
-      defaultQuery: {
-        existing: "1",
-        "api-version": "2024-10-21",
-      },
-    });
-  });
-
-  it("preserves configured base URL query params without moving non-Azure headers", () => {
-    const config = testing.buildOpenAICompletionsClientConfig(
-      makeCompletionsModel({
-        id: "proxy-model",
-        name: "Proxy Model",
-        provider: "custom-proxy",
-        baseUrl: "https://proxy.example.com/v1?tenant=acme",
-        headers: {
-          "api-version": "proxy-header",
-          "X-Tenant": "acme",
-        },
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-      }),
-      { systemPrompt: "", messages: [] } as never,
-    );
-
-    expect(config).toEqual({
-      baseURL: "https://proxy.example.com/v1",
-      defaultHeaders: {
-        "api-version": "proxy-header",
-        "X-Tenant": "acme",
-      },
-      defaultQuery: {
-        tenant: "acme",
-      },
-    });
   });
 
   it("builds boundary-aware stream shapers for supported default agent transports", () => {

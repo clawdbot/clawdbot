@@ -9,16 +9,18 @@ import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
   FailoverError,
   buildFailoverRemediationHint,
   describeFailoverError,
+  isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
+  type FallbackAttemptRecord,
 } from "./failover-error.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { MissingAgentHarnessError, isAgentHarnessPreflightError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
@@ -27,7 +29,11 @@ import {
   logModelFallbackDecision,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
-import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelCandidate,
+  ModelFallbackAttemptProvenance,
+} from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
@@ -44,36 +50,34 @@ type FailoverAttribution = {
   lane?: string;
 };
 
-class FallbackSummaryError extends Error {
-  readonly attempts: FallbackAttempt[];
+type FallbackSummaryAttempt = FallbackAttempt & FallbackAttemptRecord;
+type FallbackSummaryError = FailoverError & {
+  readonly attempts: readonly FallbackSummaryAttempt[];
   readonly soonestCooldownExpiry: number | null;
-  readonly sessionId?: string;
-  readonly lane?: string;
-
-  constructor(
-    message: string,
-    attempts: FallbackAttempt[],
-    soonestCooldownExpiry: number | null,
-    cause?: Error,
-    attribution?: FailoverAttribution,
-  ) {
-    super(message, { cause });
-    this.name = "FallbackSummaryError";
-    this.attempts = attempts;
-    this.soonestCooldownExpiry = soonestCooldownExpiry;
-    this.sessionId = attribution?.sessionId;
-    this.lane = attribution?.lane;
-  }
-}
+};
 
 export function isFallbackSummaryError(err: unknown): err is FallbackSummaryError {
-  return err instanceof FallbackSummaryError;
+  return (
+    isFailoverError(err) && Array.isArray(err.attempts) && err.soonestCooldownExpiry !== undefined
+  );
 }
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
 };
+
+export function resolveFallbackAuthScope(params: {
+  userLockedAuthProfileId?: string;
+  profileIds?: readonly string[];
+}): string | undefined {
+  if (params.userLockedAuthProfileId) {
+    return params.userLockedAuthProfileId;
+  }
+  // resolveAuthProfileOrder places the profile selected for this model first.
+  return params.profileIds?.find((id) => id.trim())?.trim();
+}
 
 type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;
@@ -567,18 +571,19 @@ export function appendFailedCandidateAttempt(params: {
   });
 }
 
-export function findLiveSessionModelSwitchRedirectIndex(params: {
+export function resolveLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
-    if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return params.currentIndex + 1 + offset;
-    }
+  const targetIndex = params.candidates.findIndex(
+    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
+  );
+  if (targetIndex === -1) {
+    throw params.error;
   }
-  return null;
+  return targetIndex > params.currentIndex ? targetIndex : null;
 }
 
 export function hasDifferentLiveSessionRuntimeSelection(params: {
@@ -604,6 +609,7 @@ export function throwFallbackFailureSummary(params: {
   soonestCooldownExpiry?: number | null;
   attribution?: FailoverAttribution;
   cfg?: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
@@ -612,9 +618,9 @@ export function throwFallbackFailureSummary(params: {
   if (params.attribution?.sessionId) {
     void suspendSession({
       cfg: params.cfg,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       sessionId: params.attribution.sessionId,
-      laneId: params.attribution.lane,
       reason: "circuit_open",
       failedProvider: params.attempts.at(-1)?.provider ?? "unknown",
       failedModel: params.attempts.at(-1)?.model ?? "unknown",
@@ -626,13 +632,23 @@ export function throwFallbackFailureSummary(params: {
   const message = remediation
     ? `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}. ${remediation}`
     : `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`;
-  throw new FallbackSummaryError(
-    message,
-    params.attempts,
-    params.soonestCooldownExpiry ?? null,
-    params.lastError instanceof Error ? params.lastError : undefined,
-    params.attribution,
-  );
+  const attempts = params.attempts.map((attempt) => ({
+    ...attempt,
+    reason: attempt.reason ?? "unknown",
+  }));
+  const lastAttempt = attempts.at(-1);
+  throw new FailoverError(message, {
+    reason: lastAttempt?.reason ?? "unknown",
+    provider: lastAttempt?.provider,
+    model: lastAttempt?.model,
+    status: lastAttempt?.status,
+    code: lastAttempt?.code,
+    cause: params.lastError instanceof Error ? params.lastError : undefined,
+    sessionId: params.attribution?.sessionId,
+    lane: params.attribution?.lane,
+    attempts,
+    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+  });
 }
 
 export function resolveFallbackSoonestCooldownExpiry(params: {

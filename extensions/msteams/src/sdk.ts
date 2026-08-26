@@ -297,7 +297,8 @@ async function createMSTeamsApp(
   };
 
   if (creds.type === "federated") {
-    return await createFederatedApp(creds, App, appOptions);
+    // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
+    return await createFederatedApp(creds, App, { clientSecret: "", ...appOptions });
   }
   return new App({
     clientId: creds.appId,
@@ -332,11 +333,8 @@ async function createFederatedApp(
   let privateKey: string;
   try {
     privateKey = await readSecretFile(creds.certificatePath, "Microsoft Teams certificate");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
-      cause: err,
-    });
+  } catch {
+    throw new Error("Failed to read certificate file: the configured credential is unavailable.");
   }
 
   return createCertificateApp(creds, privateKey, App, appOptions);

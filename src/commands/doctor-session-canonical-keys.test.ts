@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
   loadExactSessionEntryReadOnly,
@@ -9,6 +9,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../session-cards/progress-card-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -20,6 +24,14 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+
+function openSessionDatabase(agentId: string, env: NodeJS.ProcessEnv, storePath: string) {
+  return openOpenClawAgentDatabase({
+    agentId,
+    env,
+    path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env }).path,
+  });
+}
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
@@ -43,7 +55,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-delivery-alias-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -122,7 +134,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-batches-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -164,7 +176,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-fresh-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -182,11 +194,7 @@ describe("doctor canonical session-key repair", () => {
         foundGroups: 0,
         repairedGroups: 0,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run(
@@ -228,7 +236,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-global-heartbeat-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "historian2", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "historian2", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "historian2" }] },
         session: { scope: "global", store: storeTemplate },
@@ -277,7 +285,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-recovery-owner-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -336,7 +344,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-empty-key-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -349,11 +357,7 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('empty-key-conversation', 'webchat', 'default', 'direct', 'empty', 'empty', '{}', 10, 10)",
@@ -408,7 +412,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-rehome-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { mainKey: "work", store: storeTemplate },
@@ -425,11 +429,7 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run(JSON.stringify({ sessionId: "older", subject: "preserved" }), "agent:main:main");
@@ -458,7 +458,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-members-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { mainKey: "work", store: storeTemplate },
@@ -474,16 +474,15 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       const insertMember = database.db.prepare(
         "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
       );
       insertMember.run("agent:main:work", "canonical-member");
       insertMember.run("agent:main:main", "winner-member");
+      writeSessionProgressCard(database.db, "agent:main:work", { markdown: "Already completed" });
+      writeSessionProgressCard(database.db, "agent:main:work", {});
+      writeSessionProgressCard(database.db, "agent:main:main", { markdown: "Do not resurrect" });
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('same-store-conversation', 'webchat', 'default', 'direct', 'peer', 'peer', '{}', 10, 10)",
@@ -505,6 +504,11 @@ describe("doctor canonical session-key repair", () => {
       ]);
       expect(
         database.db
+          .prepare("SELECT markdown, revision, session_key FROM session_progress_cards")
+          .all(),
+      ).toEqual([{ markdown: null, revision: 2, session_key: "agent:main:work" }]);
+      expect(
+        database.db
           .prepare(
             "SELECT source_session_key FROM conversation_deliveries WHERE operation_id = 'same-store-operation'",
           )
@@ -517,7 +521,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-suggestions-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { mainKey: "work", store: storeTemplate },
@@ -533,16 +537,17 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES ('alias-suggestion', 'agent:main:main', 'operator', 'keep me', 10, 'pending')",
         )
         .run();
+      const insertMember = database.db.prepare(
+        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, 'owner', 10)",
+      );
+      insertMember.run("agent:main:work", "canonical-member");
+      insertMember.run("agent:main:main", "stale-alias-member");
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -554,6 +559,9 @@ describe("doctor canonical session-key repair", () => {
           .prepare("SELECT session_key FROM session_suggestions WHERE id = 'alias-suggestion'")
           .get(),
       ).toEqual({ session_key: "agent:main:work" });
+      expect(database.db.prepare("SELECT identity_id FROM session_members").all()).toEqual([
+        { identity_id: "canonical-member" },
+      ]);
     });
   });
 
@@ -561,8 +569,8 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-sentinels-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
         session: { store: storeTemplate },
@@ -614,7 +622,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-lineage-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
@@ -668,11 +676,7 @@ describe("doctor canonical session-key repair", () => {
         foundGroups: 0,
         repairedGroups: 0,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
         .run("Agent:Main:Parent ", "agent:main:child");
@@ -690,16 +694,26 @@ describe("doctor canonical session-key repair", () => {
           .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
           .get("agent:main:child") as { entry_json: string }
       ).entry_json;
-      database.db
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(
-          JSON.stringify({ ...(JSON.parse(canonicalJson) as object), spawnedBy: null }),
-          "agent:main:child",
-        );
-      expect(await repairCanonicalSessionKeys({ apply: false, cfg, env })).toMatchObject({
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          ...(JSON.parse(canonicalJson) as object),
+          icon: "archive",
+          spawnedBy: null,
+        }),
+        "agent:main:child",
+      );
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
-        repairedGroups: 0,
+        repairedGroups: 1,
       });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:child",
+          storePath,
+        })?.entry,
+      ).not.toHaveProperty("icon");
     });
   });
 
@@ -707,7 +721,7 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-single-alias-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }] },
         session: { mainKey: "work", store: storeTemplate },
@@ -719,16 +733,12 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main ",
         storePath,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-      });
+      const database = openSessionDatabase("main", env, storePath);
       database.db
         .prepare(
           `UPDATE session_nodes
              SET entry_json = 'not-json', archived_at = 30, category = 'investigation',
-                 icon = 'archive', label = 'Recovered metadata', last_activity_at = 29,
+                 icon = '🦞', label = 'Recovered metadata', last_activity_at = 29,
                  last_interaction_at = 28, last_read_at = 27, parent_session_key = 'agent:main:parent',
                  pinned_at = 26, spawned_by = 'agent:main:controller', status = 'failed',
                  display_name = 'Projected display name'
@@ -808,8 +818,8 @@ describe("doctor canonical session-key repair", () => {
         category: "investigation",
         chatType: "group",
         endedAt: 24,
-        icon: "archive",
         label: "Recovered metadata",
+        icon: "🦞",
         displayName: "Projected display name",
         lastActivityAt: 29,
         lastInteractionAt: 28,
@@ -858,8 +868,8 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-wrong-store-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
         session: { mainKey: "work", store: storeTemplate },
@@ -877,6 +887,18 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:misplaced",
         storePath: opsStore,
       });
+      const sourceDatabase = openSessionDatabase("ops", env, opsStore);
+      const destinationDatabase = openSessionDatabase("main", env, mainStore);
+      writeSessionProgressCard(sourceDatabase.db, "agent:main:misplaced", {
+        markdown: "Preserve this cross-store task",
+        steps: [{ step: "Finish the migration", status: "in_progress" }],
+      });
+      destinationDatabase.db.exec("DROP TABLE session_progress_cards");
+      expect(
+        destinationDatabase.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_progress_cards'")
+          .get(),
+      ).toBeUndefined();
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -895,6 +917,14 @@ describe("doctor canonical session-key repair", () => {
         sessionId: "misplaced",
         spawnedBy: "agent:main:controller",
       });
+      expect(readSessionProgressCard(destinationDatabase.db, "agent:main:misplaced")).toMatchObject(
+        {
+          markdown: "Preserve this cross-store task",
+          revision: 1,
+          sessionKey: "agent:main:misplaced",
+          steps: [{ step: "Finish the migration", status: "in_progress" }],
+        },
+      );
       expect(
         loadExactSessionEntryReadOnly({
           agentId: "ops",
@@ -929,8 +959,8 @@ describe("doctor canonical session-key repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-tied-stores-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
         session: { mainKey: "shared", store: storeTemplate },
@@ -951,12 +981,20 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "agent:main:main ",
         storePath: opsStore,
       });
+      const destinationDatabase = openSessionDatabase("main", env, mainStore);
+      const progressCardTable = () =>
+        destinationDatabase.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_progress_cards'")
+          .get();
+      destinationDatabase.db.exec("DROP TABLE session_progress_cards");
+      expect(progressCardTable()).toBeUndefined();
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
         removedRows: 1,
         repairedGroups: 1,
       });
+      expect(progressCardTable()).toBeUndefined();
       expect(
         loadExactSessionEntryReadOnly({
           agentId: "main",

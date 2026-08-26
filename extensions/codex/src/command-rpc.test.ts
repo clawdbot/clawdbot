@@ -73,8 +73,8 @@ describe("Codex command RPC helpers", () => {
 
     await codexControlRequest(
       {},
-      "thread/compact/start",
-      { threadId: "thread-1" },
+      "thread/list",
+      { archived: false },
       {
         authProfileId: null,
       },

@@ -33,7 +33,7 @@
   padding: 7px 12px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 10px;
   font-weight: 650;
   list-style: none;
@@ -59,7 +59,7 @@
   align-items: flex-start;
   gap: 9px;
   min-width: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .memory-import__collection-choice input {
@@ -284,7 +284,7 @@
   font-size: 10px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .memory-import__backfill-dates,
   .memory-import__backfill-actions {
     justify-content: flex-start;

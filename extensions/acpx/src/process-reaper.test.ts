@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 }));
 
 import {
+  cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
@@ -194,6 +195,118 @@ describe("process reaper", () => {
     expect(killed).toStrictEqual([]);
   });
 
+  it("recovers a pending lease only from its exact wrapper and gateway identity", async () => {
+    const { deps, killed } = cleanupDeps([
+      { pid: 120, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+      {
+        pid: 121,
+        ppid: 1,
+        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`,
+      },
+      { pid: 122, ppid: 120, command: "node adapter-child.js" },
+    ]);
+
+    const result = await cleanupOpenClawOwnedAcpxPendingLease({
+      leaseId: "lease-1",
+      gatewayInstanceId: "gateway-1",
+      wrapperRoot: WRAPPER_ROOT,
+      wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+      deps,
+    });
+
+    expect(result).toMatchObject({ inspectedPids: [120, 122] });
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 122, signal: "SIGTERM" },
+      { pid: 120, signal: "SIGTERM" },
+    ]);
+    expect(killed.some((entry) => entry.pid === 121)).toBe(false);
+  });
+
+  it("fails closed when pending lease evidence is ambiguous or unavailable", async () => {
+    const duplicateCommand = CODEX_WRAPPER_COMMAND_WITH_LEASE;
+    const { deps, killed } = cleanupDeps([
+      { pid: 130, ppid: 1, command: duplicateCommand },
+      { pid: 131, ppid: 1, command: duplicateCommand },
+    ]);
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+        deps,
+      }),
+    ).resolves.toEqual({
+      inspectedPids: [130, 131],
+      terminatedPids: [],
+      skippedReason: "ambiguous-root",
+    });
+    expect(killed).toEqual([]);
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+        deps: {
+          listProcesses: vi.fn(async () => {
+            throw new Error("ps unavailable");
+          }),
+        },
+      }),
+    ).resolves.toMatchObject({ skippedReason: "process-list-unavailable" });
+  });
+
+  it("does not claim a pending wrapper leased by another gateway", async () => {
+    const { deps, killed } = cleanupDeps([
+      {
+        pid: 135,
+        ppid: 1,
+        command: `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-foreign`,
+      },
+    ]);
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+        deps,
+      }),
+    ).resolves.toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "missing-root",
+    });
+    expect(killed).toEqual([]);
+  });
+
+  it("keeps pending leases untouched when process evidence is unsupported", async () => {
+    const listProcesses = vi.fn(async () => [
+      { pid: 140, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+    ]);
+    const killProcess = vi.fn();
+
+    await expect(
+      cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: "lease-1",
+        gatewayInstanceId: "gateway-1",
+        wrapperRoot: WRAPPER_ROOT,
+        wrapperPath: `${WRAPPER_ROOT}/codex-acp-wrapper.mjs`,
+        deps: { platform: "win32", listProcesses, killProcess },
+      }),
+    ).resolves.toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "unsupported-platform",
+    });
+    expect(listProcesses).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
   it("skips recorded pid cleanup when process listing is unavailable", async () => {
     const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     const result = await cleanupOpenClawOwnedAcpxProcessTree({
@@ -284,6 +397,7 @@ describe("process reaper", () => {
       { pid: 404, ppid: 403, command: "node claude-child.js" },
       { pid: 405, ppid: 1, command: PLUGIN_DEPS_CODEX_COMMAND },
       { pid: 406, ppid: 1, command: "node /tmp/other/codex-acp-wrapper.mjs" },
+      { pid: 407, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
     ]);
 
     const result = await reapStaleOpenClawOwnedAcpxOrphans({

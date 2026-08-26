@@ -177,10 +177,19 @@ export async function runMediaUnderstandingFile(
     scopeContext: params.scopeContext,
   });
   const attachments = normalizeMediaAttachments(ctx);
+  const decisionBase = {
+    capability: params.capability,
+    attachments: [],
+    ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
+  };
   if (attachments.length === 0) {
     return {
       text: undefined,
-      decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
+      decision: {
+        ...decisionBase,
+        outcome: "no-attachment",
+        attachmentDispositions: {},
+      },
     };
   }
   const config = cfg.tools?.media?.[params.capability];
@@ -190,10 +199,18 @@ export async function runMediaUnderstandingFile(
       provider: undefined,
       model: undefined,
       output: undefined,
-      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
+      decision: {
+        ...decisionBase,
+        outcome: "disabled",
+        attachmentDispositions: Object.fromEntries(
+          attachments.map((attachment) => [
+            attachment.index,
+            { kind: "capability-disabled" as const },
+          ]),
+        ),
+      },
     };
   }
-
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const agentDir =
     params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);

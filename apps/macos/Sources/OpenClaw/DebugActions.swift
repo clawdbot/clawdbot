@@ -60,8 +60,8 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+    static func sendTestNotification() async -> TestNotificationOutcome {
+        await TestNotificationAction.send()
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -108,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }
@@ -159,12 +158,12 @@ enum DebugActions {
     }
 
     static var verboseLoggingEnabledMain: Bool {
-        UserDefaults.standard.bool(forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.bool(forKey: self.verboseDefaultsKey)
     }
 
     static func toggleVerboseLoggingMain() async -> Bool {
         let newValue = !self.verboseLoggingEnabledMain
-        UserDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
         _ = try? await ControlChannel.shared.request(
             method: "system-event",
             params: ["text": AnyHashable("verbose-main:\(newValue ? "on" : "off")")])
@@ -177,15 +176,25 @@ enum DebugActions {
         let task = Process()
         // Relaunch shortly after this instance exits so we get a true restart even in debug.
         task.launchPath = "/bin/sh"
-        task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
+        if let profile = AppProfile.current.name {
+            task.arguments = [
+                "-c",
+                "sleep 0.2; open -n --env OPENCLAW_PROFILE=\"$2\" \"$1\"",
+                "_",
+                url.path,
+                profile,
+            ]
+        } else {
+            task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
+        }
         try? task.run()
         NSApp.terminate(nil)
     }
 
     @MainActor
     static func restartOnboarding() {
-        UserDefaults.standard.set(false, forKey: self.onboardingSeenKey)
-        UserDefaults.standard.set(0, forKey: onboardingVersionKey)
+        AppDefaults.standard.set(false, forKey: self.onboardingSeenKey)
+        AppDefaults.standard.set(0, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = false
         OnboardingController.shared.restart()
     }

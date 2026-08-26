@@ -1,10 +1,11 @@
 import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
+  throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { throwIfOAuthLoginAborted } from "./openai-chatgpt-oauth-abort.runtime.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -29,12 +30,15 @@ type TokenRequestOptions = {
   timeoutMs?: number;
 };
 
-function formatMissingTokenResponseFields(json: TokenResponseJson): string {
+function formatMissingTokenResponseFields(
+  json: TokenResponseJson,
+  existingRefreshToken?: string,
+): string {
   const missing: string[] = [];
   if (!json.access_token) {
     missing.push("access_token");
   }
-  if (!json.refresh_token) {
+  if (!json.refresh_token && !existingRefreshToken) {
     missing.push("refresh_token");
   }
   if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
@@ -99,6 +103,50 @@ async function postTokenForm(
   }
 }
 
+async function readOpenAITokenResponse(
+  response: Response,
+  operation: "exchange" | "refresh",
+  existingRefreshToken?: string,
+): Promise<TokenResult> {
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    return {
+      type: "failed",
+      status: response.status,
+      message: `OpenAI Codex token ${operation} failed (${response.status}): ${text || response.statusText}`,
+    };
+  }
+  let json: TokenResponseJson;
+  try {
+    json = (await response.json()) as TokenResponseJson;
+  } catch {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+    };
+  }
+  if (!isRecord(json)) {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} failed: expected JSON object response`,
+    };
+  }
+  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
+  const refreshToken = json.refresh_token || existingRefreshToken;
+  if (!json.access_token || !refreshToken || expires === undefined) {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} response missing fields: ${formatMissingTokenResponseFields(json, existingRefreshToken)}`,
+    };
+  }
+  return {
+    type: "success",
+    access: json.access_token,
+    refresh: refreshToken,
+    expires,
+  };
+}
+
 export async function exchangeOpenAIAuthorizationCode(
   code: string,
   verifier: string,
@@ -124,36 +172,15 @@ export async function exchangeOpenAIAuthorizationCode(
       message: formatTokenRequestError("exchange", error, timeoutMs, options.signal),
     };
   }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    return {
-      type: "failed",
-      status: response.status,
-      message: `OpenAI Codex token exchange failed (${response.status}): ${text || response.statusText}`,
-    };
-  }
-  const json = (await response.json()) as TokenResponseJson;
-  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  if (!json.access_token || !json.refresh_token || expires === undefined) {
-    return {
-      type: "failed",
-      message: `OpenAI Codex token exchange response missing fields: ${formatMissingTokenResponseFields(json)}`,
-    };
-  }
-  return {
-    type: "success",
-    access: json.access_token,
-    refresh: json.refresh_token,
-    expires,
-  };
+  return await readOpenAITokenResponse(response, "exchange");
 }
 
 export async function refreshOpenAIAccessToken(
   refreshToken: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
+  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   try {
-    const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
     const response = await postTokenForm(
       new URLSearchParams({
         grant_type: "refresh_token",
@@ -162,37 +189,11 @@ export async function refreshOpenAIAccessToken(
       }),
       { signal: options.signal, timeoutMs },
     );
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      return {
-        type: "failed",
-        status: response.status,
-        message: `OpenAI Codex token refresh failed (${response.status}): ${text || response.statusText}`,
-      };
-    }
-    const json = (await response.json()) as TokenResponseJson;
-    const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-    if (!json.access_token || !json.refresh_token || expires === undefined) {
-      return {
-        type: "failed",
-        message: `OpenAI Codex token refresh response missing fields: ${formatMissingTokenResponseFields(json)}`,
-      };
-    }
-    return {
-      type: "success",
-      access: json.access_token,
-      refresh: json.refresh_token,
-      expires,
-    };
+    return await readOpenAITokenResponse(response, "refresh", refreshToken);
   } catch (error) {
     return {
       type: "failed",
-      message: formatTokenRequestError(
-        "refresh",
-        error,
-        options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS,
-        options.signal,
-      ),
+      message: formatTokenRequestError("refresh", error, timeoutMs, options.signal),
     };
   }
 }

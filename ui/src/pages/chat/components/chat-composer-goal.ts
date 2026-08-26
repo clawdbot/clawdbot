@@ -1,6 +1,7 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { SessionGoal } from "../../../api/types.ts";
+import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -13,6 +14,9 @@ import {
 import type { ChatComposerState } from "./chat-composer-types.ts";
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
+const goalIcon = strokeIcon(svg` <path d="M12 13V2l8 4-8 4" />
+  <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
+  <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />`);
 
 function clearGoalElapsedTimer(el: HTMLElement) {
   const timer = goalElapsedTimers.get(el);
@@ -35,6 +39,7 @@ function createGoalElapsedRef(goal: SessionGoal) {
       return;
     }
     bound = element;
+    element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
     const timer = setInterval(() => {
       // Tests and detached renders can drop the pill without a final ref call.
       if (!element.isConnected) {
@@ -98,14 +103,17 @@ export function renderChatGoal(
   return html`
     <div
       class="agent-chat__goal agent-chat__goal--${goal.status}"
+      data-expanded=${String(expanded)}
       role="group"
       aria-label=${formatGoalDetail(goal)}
     >
       <div class="agent-chat__goal-row">
-        <span class="agent-chat__goal-icon">${icons.target}</span>
-        <span class="agent-chat__goal-label">${formatGoalStatusLabel(goal.status)}</span>
-        <span class="agent-chat__goal-objective">${goal.objective}</span>
-        <span class="agent-chat__goal-elapsed" ${ref(createGoalElapsedRef(goal))}>${elapsed}</span>
+        <span class="agent-chat__goal-icon">${goalIcon}</span>
+        <span class="agent-chat__goal-copy">
+          <span class="agent-chat__goal-label">${formatGoalStatusLabel(goal.status)}</span>
+          <span class="agent-chat__goal-objective">${goal.objective}</span>
+        </span>
+        <span class="agent-chat__goal-elapsed" ${ref(createGoalElapsedRef(goal))}></span>
         <span class="agent-chat__goal-actions">
           ${showActions && actions.onGoalEdit && goal.status !== "complete"
             ? renderChatGoalActionButton({
@@ -150,19 +158,22 @@ export function renderChatGoal(
           </button>
         </span>
       </div>
-      ${expanded
-        ? html`
-            <div class="agent-chat__goal-detail">
-              <div class="agent-chat__goal-detail-objective">${goal.objective}</div>
-              ${goal.lastStatusNote
-                ? html`<div class="agent-chat__goal-detail-note">${goal.lastStatusNote}</div>`
-                : nothing}
-              <div class="agent-chat__goal-detail-meta">
-                ${usage ? `${usage} · ${elapsed}` : elapsed}
-              </div>
-            </div>
-          `
-        : nothing}
+      <div
+        class="agent-chat__goal-detail"
+        data-expanded=${String(expanded)}
+        aria-hidden=${String(!expanded)}
+        ?inert=${!expanded}
+      >
+        <div class="agent-chat__goal-detail-content">
+          <div class="agent-chat__goal-detail-objective">${goal.objective}</div>
+          ${goal.lastStatusNote
+            ? html`<div class="agent-chat__goal-detail-note">${goal.lastStatusNote}</div>`
+            : nothing}
+          <div class="agent-chat__goal-detail-meta">
+            ${usage ? `${usage} · ${elapsed}` : elapsed}
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }

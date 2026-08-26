@@ -43,6 +43,8 @@ export type RunSystemAgentOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
+  /** Selected first-agent name for the onboarding setup proposal. */
+  setupAgentName?: string;
   onReady?: () => void;
   deps?: SystemAgentCommandDeps;
   formatOverview?: (overview: SystemAgentOverview) => string;

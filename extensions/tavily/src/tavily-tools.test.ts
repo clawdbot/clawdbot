@@ -136,6 +136,33 @@ describe("tavily tools", () => {
     });
   });
 
+  it.each(["runtime", "public contract"] as const)(
+    "forwards cancellation through the %s provider registration",
+    async (registration) => {
+      const provider =
+        registration === "runtime"
+          ? createTavilyWebSearchProvider()
+          : createTavilyContractWebSearchProvider();
+      const tool = provider.createTool({ config: { test: true } } as never);
+      expect(tool).not.toBeNull();
+      const controller = new AbortController();
+
+      await tool!.execute({ query: registration }, { signal: controller.signal });
+
+      expect(runTavilySearch).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      const reason = new Error(`${registration} cancelled`);
+      controller.abort(reason);
+      runTavilySearch.mockClear();
+      await expect(
+        tool!.execute({ query: registration }, { signal: controller.signal }),
+      ).rejects.toBe(reason);
+      expect(runTavilySearch).not.toHaveBeenCalled();
+    },
+  );
+
   it("normalizes generic Tavily search count before dispatch", async () => {
     const provider = createTavilyWebSearchProvider();
     const tool = provider.createTool({
@@ -214,6 +241,34 @@ describe("tavily tools", () => {
     });
   });
 
+  it.each(["search", "extract"] as const)(
+    "forwards exact standalone Tavily %s cancellation into its network owner",
+    async (operation) => {
+      const tool =
+        operation === "search"
+          ? createTavilySearchTool(fakeApi())
+          : createTavilyExtractTool(fakeApi());
+      const args =
+        operation === "search"
+          ? { query: "standalone cancellation" }
+          : { urls: ["https://example.com"] };
+      const controller = new AbortController();
+
+      await tool.execute("call-cancel", args, controller.signal);
+
+      const networkOwner = operation === "search" ? runTavilySearch : runTavilyExtract;
+      expect(networkOwner).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      controller.abort(new Error(`${operation} preflight aborted`));
+      await expect(tool.execute("call-preflight", args, controller.signal)).rejects.toBe(
+        controller.signal.reason,
+      );
+      expect(networkOwner).toHaveBeenCalledOnce();
+    },
+  );
+
   it("late-binds dedicated tools to the resolved runtime config snapshot", async () => {
     const rawConfig = {
       plugins: {
@@ -275,6 +330,8 @@ describe("tavily tools", () => {
     if (Array.isArray(searchTool) || !searchTool || Array.isArray(extractTool) || !extractTool) {
       throw new Error("Expected single Tavily tool definitions");
     }
+    expect(searchTool.resultContentSource).toBe("network");
+    expect(extractTool.resultContentSource).toBe("network");
 
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });

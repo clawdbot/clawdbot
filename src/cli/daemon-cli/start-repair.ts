@@ -10,7 +10,12 @@ import {
   resolveStateDir,
 } from "../../config/paths.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
-import type { GatewayServiceEnv } from "../../daemon/service-types.js";
+import {
+  hasGatewayServiceEnvironmentDifference,
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceEnv,
+} from "../../daemon/service-types.js";
 import type {
   GatewayService,
   GatewayServiceStartRepairIssue,
@@ -143,12 +148,22 @@ export async function repairLoadedGatewayServiceForStart(
   loaded: boolean;
 }> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
+  if (
+    hasGatewayServiceLauncherOverride(params.state.command) ||
+    hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
+  ) {
+    const unitName = path.basename(params.state.command?.sourcePath ?? "<unit>");
+    throw new Error(
+      `Refusing to repair the managed Gateway service because a systemd drop-in overrides its command, working directory, or Gateway target environment. Inspect the unit with \`systemctl --user cat ${unitName}\`, then update or remove the operator-owned drop-in before retrying.`,
+    );
+  }
+  const managedCommand = resolveManagedGatewayServiceCommand(params.state.command);
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-  const existingEnvironment = params.state.command?.environment;
-  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
-  const installedPort = parseTcpPortFromArgs(params.state.command?.programArguments);
+  const existingEnvironment = managedCommand?.environment;
+  const existingEnvironmentValueSources = managedCommand?.environmentValueSources;
+  const installedPort = parseTcpPortFromArgs(managedCommand?.programArguments);
   const port = assertGatewayRepairTargetMatches({
     action: params.action ?? "start",
     config: cfg,

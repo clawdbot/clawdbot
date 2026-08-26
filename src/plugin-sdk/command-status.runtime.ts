@@ -8,7 +8,7 @@ import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-han
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadSessionEntryReadOnly } from "../gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -35,7 +35,7 @@ export type ResolveDirectStatusReplyForSessionParams = {
  * Unauthorized requesters may see the session exists, but configured reasoning
  * state is masked so private agent/session defaults are not leaked.
  */
-export async function resolveDirectStatusReplyForSession(
+export async function resolveDirectStatusReplyForSessionCore(
   params: ResolveDirectStatusReplyForSessionParams,
 ): Promise<ReplyPayload | undefined> {
   const requestedSessionKey = params.sessionKey.trim();
@@ -43,7 +43,7 @@ export async function resolveDirectStatusReplyForSession(
     return undefined;
   }
 
-  const statusLoaded = loadSessionEntryReadOnly(requestedSessionKey);
+  const statusLoaded = loadGatewaySessionEntryReadOnly(requestedSessionKey);
   const statusCfg = statusLoaded.cfg ?? params.cfg;
   const statusSessionKey = statusLoaded.canonicalKey;
   const statusEntry = statusLoaded.entry;

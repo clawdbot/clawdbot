@@ -117,9 +117,9 @@ export async function resolveInitialApplicationLocation(params: {
   if (!isDefaultChatLanding(params.location, params.basePath, routeIdFromPath)) {
     return params.location;
   }
-  // Explicit routes must start immediately; only the implicit persisted-session
-  // landing needs gateway defaults before its agent can be made authoritative.
-  if (params.sessionKey.trim() && !parseAgentSessionKey(params.sessionKey)) {
+  // Explicit routes must start immediately; only the implicit session landing
+  // needs gateway defaults before its key and agent can be made authoritative.
+  if (!parseAgentSessionKey(params.sessionKey)) {
     await waitForGatewayClient(params.gateway, params.signal);
   }
   const defaults = {
@@ -129,7 +129,7 @@ export async function resolveInitialApplicationLocation(params: {
   return normalizeInitialApplicationLocation(
     params.location,
     params.basePath,
-    params.sessionKey,
+    params.sessionKey.trim() || params.gateway.snapshot.sessionKey,
     resolveUiDefaultAgentId(defaults),
     resolveUiConfiguredMainKey(defaults),
   );

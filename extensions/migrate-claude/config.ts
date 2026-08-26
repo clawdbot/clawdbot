@@ -8,7 +8,8 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { childRecord, isRecord, readJsonObject, sanitizeName } from "./helpers.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { childRecord, readJsonObject, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
 
 type MappedMcpSource = {

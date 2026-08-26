@@ -276,7 +276,7 @@ describe("exec SecretRef id parity", () => {
 
   function planAcceptsExecRefForSample(params: {
     type: string;
-    configFile: "openclaw.json" | "auth-profiles.json";
+    configFile: "openclaw.json" | "auth-profile-store";
     pathSegments: string[];
     id: string;
   }): boolean {
@@ -291,7 +291,7 @@ describe("exec SecretRef id parity", () => {
           path: params.pathSegments.join("."),
           pathSegments: params.pathSegments,
           ref: { source: "exec", provider: "vault", id: params.id },
-          ...(params.configFile === "auth-profiles.json" ? { agentId: "main" } : {}),
+          ...(params.configFile === "auth-profile-store" ? { agentId: "main" } : {}),
         },
       ],
     });

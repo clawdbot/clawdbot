@@ -2,7 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { describe, expect, test } from "vitest";
 import {
   createMemoryLanceDbStateMigrations,
@@ -69,6 +69,54 @@ describe("memory-lancedb doctor migration", () => {
     const migratedTable = await migratedConnection.openTable("memories");
     await expect(migratedTable.countRows("agentId = 'owner-agent'")).resolves.toBe(1);
     await expect(migratedTable.countRows("agentId = 'other'")).resolves.toBe(0);
+    migratedTable.close();
+    migratedConnection.close();
+  });
+
+  test("assigns explicit-roster legacy rows to the configured system agent", async () => {
+    const connection = await lancedb.connect(getDbPath());
+    const table = await connection.createTable("memories", [
+      {
+        id: "12121212-1212-4121-8121-121212121212",
+        text: "legacy system memory",
+        vector: [1, 0],
+        importance: 0.7,
+        category: "fact",
+        createdAt: 1,
+      },
+    ]);
+    table.close();
+    connection.close();
+
+    const params = {
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { systemAgent: { agentId: "Main Agent" } },
+          entries: { "Main Agent": {}, helper: {}, third: {} },
+        },
+        plugins: {
+          entries: { "memory-lancedb": { config: { dbPath: getDbPath() } } },
+        },
+      },
+      env: { ...process.env, HOME: getTmpDir() },
+      stateDir: getTmpDir(),
+      oauthDir: path.join(getTmpDir(), "oauth"),
+      context: unusedDoctorContext,
+    };
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("system agent main-agent")],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: ["Assigned 1 legacy Memory LanceDB row to system agent main-agent"],
+      warnings: [],
+    });
+
+    const migratedConnection = await lancedb.connect(getDbPath());
+    const migratedTable = await migratedConnection.openTable("memories");
+    await expect(migratedTable.countRows("agentId = 'main-agent'")).resolves.toBe(1);
     migratedTable.close();
     migratedConnection.close();
   });

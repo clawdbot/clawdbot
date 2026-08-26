@@ -4,7 +4,7 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 // IRC's nested streaming schema is delivery-only ({chunkMode, block}); it has
 // no preview mode, so only the delivery flat aliases are legal legacy input.

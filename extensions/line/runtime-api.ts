@@ -42,7 +42,6 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
-export { hasLineDirectives, parseLineDirectives } from "./src/reply-payload-transform.js";
 export {
   listLineAccountIds,
   normalizeAccountId,

@@ -52,7 +52,7 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .onboarding-memory-import__provider input {

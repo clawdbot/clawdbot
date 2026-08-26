@@ -88,7 +88,7 @@ describe("telegram reply parameters", () => {
     });
   });
 
-  it("keeps direct-message topic scope for Telegram DM topics", () => {
+  it("keeps message_thread_id for Telegram bot-private topics", () => {
     expect(
       buildTelegramThreadReplyParams({
         thread: resolveTelegramSendThreadSpec({
@@ -99,6 +99,23 @@ describe("telegram reply parameters", () => {
       }),
     ).toEqual({
       message_thread_id: 5,
+      reply_to_message_id: 42,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("keeps direct_messages_topic_id independent from reply parameters", () => {
+    expect(
+      buildTelegramThreadReplyParams({
+        thread: resolveTelegramSendThreadSpec({
+          targetDirectMessagesTopicId: 77,
+          targetMessageThreadId: 999,
+          chatType: "group",
+        }),
+        replyToMessageId: 42,
+      }),
+    ).toEqual({
+      direct_messages_topic_id: 77,
       reply_to_message_id: 42,
       allow_sending_without_reply: true,
     });

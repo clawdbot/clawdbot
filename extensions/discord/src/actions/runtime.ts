@@ -54,8 +54,6 @@ const guildActions = new Set([
 
 const moderationActions = new Set(["timeout", "kick", "ban"]);
 
-const presenceActions = new Set(["setPresence"]);
-
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -74,8 +72,8 @@ export async function handleDiscordAction(
   if (moderationActions.has(action)) {
     return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
-  if (presenceActions.has(action)) {
-    return await handleDiscordPresenceAction(action, params, isActionEnabled);
+  if (action === "setPresence") {
+    return await handleDiscordPresenceAction(action, params, isActionEnabled, cfg);
   }
   throw new Error(`Unknown action: ${action}`);
 }

@@ -28,6 +28,7 @@
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
@@ -35,7 +36,6 @@ import {
   scheduleFollowupDrain,
 } from "../queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
@@ -59,8 +59,8 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const calls: FollowupRun[] = [];
 
-    const gate = createDeferred<void>();
-    const firstEntered = createDeferred<void>();
+    const gate = createDeferred();
+    const firstEntered = createDeferred();
     const runFollowup = async (run: FollowupRun) => {
       if (calls.length === 0) {
         firstEntered.resolve();
@@ -116,49 +116,5 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     expect(q2?.items[0]?.prompt).toBe("msg2");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("msg1");
-  });
-
-  it("keeps each inbound admission callback when it joins an active drain", async () => {
-    const key = `test-drain-callback-${Date.now()}-${Math.random()}`;
-    keysToCleanup.push(key);
-    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const gate = createDeferred<void>();
-    const firstEntered = createDeferred<void>();
-    const firstCallback = () => {};
-    const secondCallback = () => {};
-    const callbacks: Array<FollowupRun["onReplyAdmissionWaitChange"]> = [];
-    const firstRunner = async (run: FollowupRun) => {
-      callbacks.push(run.onReplyAdmissionWaitChange);
-      if (callbacks.length === 1) {
-        firstEntered.resolve();
-        await gate.promise;
-      }
-    };
-    const secondRunner = async () => {
-      throw new Error("active drain must retain its current runner");
-    };
-
-    enqueueFollowupRun(
-      key,
-      { ...createRun({ prompt: "msg1" }), onReplyAdmissionWaitChange: firstCallback },
-      settings,
-      "message-id",
-      firstRunner,
-    );
-    scheduleFollowupDrain(key, firstRunner);
-    await firstEntered.promise;
-
-    enqueueFollowupRun(
-      key,
-      { ...createRun({ prompt: "msg2" }), onReplyAdmissionWaitChange: secondCallback },
-      settings,
-      "message-id",
-      secondRunner,
-    );
-    scheduleFollowupDrain(key, secondRunner);
-    gate.resolve();
-
-    await expect.poll(() => callbacks.length).toBe(2);
-    expect(callbacks).toEqual([firstCallback, secondCallback]);
   });
 });

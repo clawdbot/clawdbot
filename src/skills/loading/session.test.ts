@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
+import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,18 +74,19 @@ disable-model-invocation: true
     );
 
     const result = loadSkillsFromPath(tempDir);
-    const frontmatter = parseFrontmatter(await fs.readFile(skillFile, "utf-8"));
+    const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile, "utf-8"));
 
     expect(result.diagnostics).toEqual([]);
     expect(result.skills).toEqual([
       expect.objectContaining({
         name: "json5-metadata",
+        displayName: "JSON5 Metadata",
         description: "Skill with JSON5-style metadata.",
         disableModelInvocation: true,
         filePath: skillFile,
       }),
     ]);
-    expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+    expect(resolveSkillManifestMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {

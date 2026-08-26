@@ -1,18 +1,27 @@
 // Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
-import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigSnapshot, ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import type {
+  ConfigSnapshot,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../api/types.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
+import {
+  requestProviderUsage,
+  type ProviderUsageRequestResult,
+} from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
-import { loadModels } from "../chat/models.ts";
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;
@@ -20,18 +29,24 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
-  catalogModels: ModelCatalogEntry[] | null;
+  providerOutcomes: ModelCatalogProviderOutcome[];
+  catalogError: string | null;
   config: Record<string, unknown> | null;
-  providerUsage: UsageSummary | null;
+  providerUsage: ProviderUsageRequestResult | null;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
 };
 
+type ModelProvidersCatalogResult = {
+  providerOutcomes?: ModelCatalogProviderOutcome[];
+};
+
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
-  catalogModels: null,
+  providerOutcomes: [],
+  catalogError: null,
   config: null,
   providerUsage: null,
   costByProvider: null,
@@ -49,15 +64,12 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("model providers");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
   const request = <T>(method: string, params?: unknown): Promise<T> =>
     opts?.signal
@@ -65,23 +77,37 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
+  const catalogRefresh = opts?.refresh
+    ? request<ModelProvidersCatalogResult>("models.list", {
+        view: "all",
+        agentId: opts.agentId,
+        refresh: true,
+      })
+        .then((result) => ({ ok: true as const, result: result ?? null }))
+        .catch((error: unknown) => ({ ok: false as const, error }))
+    : Promise.resolve({ ok: true as const, result: null });
+  const modelsLoad = catalogRefresh.then((catalogResult) =>
+    loadModels(client, {
+      agentId: opts.agentId,
+      ...(opts.refresh && catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
+      rejectOnFailure: true,
+    }).then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
+  );
+  const [authStatus, models, catalogResult, config, providerUsageFetch, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
         (error: unknown) => ({ ok: false as const, error }),
       ),
-      loadModels(client, opts).catch(() => null),
-      request<{ models?: ModelCatalogEntry[] }>("models.list", {
-        view: "all",
-        includeProviderCapabilities: true,
-      })
-        .then((result) => result?.models ?? null)
-        .catch(() => null),
+      modelsLoad,
+      catalogRefresh,
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      request<UsageSummary>("usage.status").catch(() => null),
+      requestProviderUsage(client, opts.signal ? { signal: opts.signal } : undefined),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
@@ -94,10 +120,15 @@ export async function loadModelProvidersData(
   return {
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
-    models,
-    catalogModels,
+    models: models.ok ? models.result : null,
+    providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
+    catalogError: !catalogResult.ok
+      ? errorMessage(catalogResult.error)
+      : !models.ok
+        ? errorMessage(models.error)
+        : null,
     config,
-    providerUsage,
+    providerUsage: providerUsageFetch,
     costByProvider,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one

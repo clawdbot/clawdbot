@@ -1086,8 +1086,6 @@ export interface ContextEventResult {
   messages?: AgentMessage[];
 }
 
-type BeforeProviderRequestEventResult = unknown;
-
 export interface ToolCallEventResult {
   /** Block tool execution. To modify arguments, mutate `event.input` in place instead. */
   block?: boolean;
@@ -1225,7 +1223,7 @@ export interface ExtensionAPI {
   on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
   on(
     event: "before_provider_request",
-    handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+    handler: ExtensionHandler<BeforeProviderRequestEvent, unknown>,
   ): void;
   on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
   on(

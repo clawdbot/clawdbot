@@ -2,9 +2,10 @@
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 
 type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
@@ -14,6 +15,7 @@ function createParams(): EmbeddedRunAttemptParams {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     agentId: "main",
+    hostCapabilities: createCopilotTestHostCapabilities(),
     timeoutMs: 75_000,
     onBlockReply: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;

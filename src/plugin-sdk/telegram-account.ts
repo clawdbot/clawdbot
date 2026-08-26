@@ -1,6 +1,6 @@
 // Telegram account helpers resolve Telegram plugin account config and display metadata.
 import type { OpenClawConfig } from "./config-contracts.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 
 /**
  * @deprecated Compatibility type for the `openclaw/plugin-sdk/telegram-account` facade.
@@ -31,7 +31,7 @@ type TelegramAccountFacadeModule = {
 };
 
 function loadTelegramAccountFacadeModule(): TelegramAccountFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<TelegramAccountFacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<TelegramAccountFacadeModule>({
     dirName: "telegram",
     artifactBasename: "api.js",
   });

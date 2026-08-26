@@ -9,12 +9,33 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runPreflightCompactionIfNeeded as runPreflightCompactionIfNeededRaw } from "./agent-runner-memory.js";
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
-import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
+import {
+  createTestFollowupRun,
+  withTestModelContextTokens,
+  writeTestSessionStore,
+} from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
+
+type PreflightCompactionTestParams = Parameters<typeof runPreflightCompactionIfNeededRaw>[0] & {
+  modelContextTokens?: number;
+};
+
+async function runPreflightCompactionIfNeeded(params: PreflightCompactionTestParams) {
+  const { modelContextTokens, ...runParams } = params;
+  return await runPreflightCompactionIfNeededRaw({
+    ...runParams,
+    cfg: withTestModelContextTokens({
+      cfg: runParams.cfg,
+      followupRun: runParams.followupRun,
+      defaultModel: runParams.defaultModel,
+      contextTokens: modelContextTokens,
+    }),
+  });
+}
 
 function createReplyOperation(): ReplyOperation {
   return {
@@ -91,7 +112,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
         sessionKey: "agent:main:main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
+      modelContextTokens: 100_000,
       sessionEntry,
       sessionStore: { "agent:main:main": sessionEntry },
       sessionKey: "agent:main:main",
@@ -140,6 +161,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       updatedAt: Date.now(),
       totalTokens: 200_000,
       totalTokensFresh: true,
+      totalTokensVersion: 1,
     };
     await writeTestSessionStore(
       path.join(rootDir, "sessions.json"),
@@ -201,6 +223,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
         updatedAt: Date.now(),
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       };
       await writeTestSessionStore(storePath, "main", sessionEntry);
 
@@ -220,7 +243,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
           model,
         }),
         defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 100_000,
+        modelContextTokens: 100_000,
         sessionEntry,
         sessionStore: { main: sessionEntry },
         sessionKey: "main",

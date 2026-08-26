@@ -25,7 +25,7 @@ export interface ShellNavigationHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
-  lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null;
+  lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
@@ -87,14 +87,14 @@ export class ShellNavigationOwner {
     );
   }
 
-  replaceChatWithCurrentSession(): void {
+  replaceChatWithCurrentSession(): boolean {
     const context = this.host.context;
     const sessionKey = this.host.activeSessionKey.trim();
-    if (
-      !context ||
-      (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected")
-    ) {
-      return;
+    if (!context) {
+      return true;
+    }
+    if (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected") {
+      return false;
     }
     const face = this.host.routeState.routeId === "dashboard" ? "dashboard" : "chat";
     const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
@@ -138,7 +138,7 @@ export class ShellNavigationOwner {
     // Gateway rejects deletion of a live main session. If an orphaned event
     // still names that fallback, replacing the same route would retry forever.
     if (sessionWasDeleted && replacementSessionKey === sessionKey) {
-      return;
+      return true;
     }
     if (replacementSessionKey !== sessionKey) {
       // Commit the replacement to both selection owners before navigating;
@@ -154,6 +154,7 @@ export class ShellNavigationOwner {
       face,
       sessionNavigationTarget({ context, face, sessionKey: replacementSessionKey }).options,
     );
+    return true;
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void {
@@ -259,12 +260,13 @@ export class ShellNavigationOwner {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
         search: routeState.location?.search ?? "",
+        hash: routeState.location?.hash ?? "",
       };
     }
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
     if (this.host.routeState.routeId !== "new-session") {
       return "";
     }
@@ -280,10 +282,8 @@ export class ShellNavigationOwner {
   exitSettings(): void {
     const previous = this.host.lastWorkspaceLocation;
     if (previous) {
-      this.navigate(previous.routeId, {
-        pathname: previous.pathname,
-        ...(previous.search ? { search: previous.search } : {}),
-      });
+      const { routeId, ...location } = previous;
+      this.navigate(routeId, location);
       return;
     }
     this.navigate("chat");

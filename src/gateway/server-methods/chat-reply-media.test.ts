@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.js";
+import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
@@ -174,7 +174,9 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
-    expect(requireString(payload?.text, "suppressed media text")).toBe("⚠️ Media failed.");
+    expect(requireString(payload?.text, "suppressed media text")).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
   });
 
   it("does not stage sensitive media before display suppression", async () => {
@@ -200,6 +202,28 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toEqual([dataUrl]);
     await expectOutboundMediaMissing(stateDir);
+  });
+
+  it("projects bounded retry guidance when managed media preparation fails", async () => {
+    const source = "data:audio/mpeg;base64,not-valid!";
+    const errors: string[] = [];
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [{ mediaUrls: [source] }],
+      onManagedMediaPrepareError: (message) => errors.push(message),
+    });
+
+    expect(content).toEqual([
+      {
+        type: "text",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      },
+    ]);
+    expect(errors).toEqual(["Invalid image data URL"]);
+    expect(JSON.stringify(content)).not.toContain(source);
+    expect(Buffer.byteLength(JSON.stringify(content))).toBeLessThan(256);
   });
 
   it("preserves local audio paths for WebChat audio embedding", async () => {
@@ -342,7 +366,13 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       managedMediaLocalRoots: [workspaceDir],
     });
 
-    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+    expect(content).toEqual([
+      expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
+      {
+        type: "text",
+        text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      },
+    ]);
   });
 
   it("preserves media order across interleaved trust classes", async () => {
@@ -384,7 +414,9 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toBeUndefined();
-    expect(requireString(payload?.text, "suppressed media text")).toBe("⚠️ Media failed.");
+    expect(requireString(payload?.text, "suppressed media text")).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
     await expectOutboundMediaMissing(stateDir);
   });
 
@@ -407,16 +439,78 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(blocks).toHaveLength(2);
   });
 
-  it("does not add a failure warning when a mixed inline image survives", async () => {
+  it.each([
+    {
+      label: "before the inline image",
+      mediaUrls: (imagePath: string, dataUrl: string) => [imagePath, dataUrl],
+    },
+    {
+      label: "after the inline image",
+      mediaUrls: (imagePath: string, dataUrl: string) => [dataUrl, imagePath],
+    },
+  ])("keeps a sanitized failure receipt when unreadable media is $label", async ({ mediaUrls }) => {
     const dataUrl = dataImageUrl();
-    const { stateDir, payload } = await normalizeCodexHomeImage({
+    const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
       allowRead: false,
-      payload: (imagePath) => ({ mediaUrls: [imagePath, dataUrl] }),
+      payload: (imagePath) => ({ mediaUrls: mediaUrls(imagePath, dataUrl) }),
     });
 
-    expect(payload?.text).toBeUndefined();
+    expect(payload?.text).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
+    expect(payload?.text).not.toContain(sourcePath);
+    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
     expect(payload?.mediaUrl).toBe(dataUrl);
     expect(payload?.mediaUrls).toEqual([dataUrl]);
     await expectOutboundMediaMissing(stateDir);
+  });
+
+  it.each([
+    {
+      label: "a missing attachment before the staged attachment",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        missingPath,
+        imagePath,
+        dataUrl,
+      ],
+    },
+    {
+      label: "a missing attachment after the staged attachment",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        imagePath,
+        missingPath,
+        dataUrl,
+      ],
+    },
+    {
+      label: "multiple missing attachments around surviving media",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        missingPath,
+        imagePath,
+        dataUrl,
+        path.join(path.dirname(imagePath), "private customer report.png"),
+      ],
+    },
+  ])("keeps exactly one failure receipt for $label", async ({ mediaUrls }) => {
+    const dataUrl = dataImageUrl();
+    const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
+      allowRead: true,
+      payload: (imagePath) => ({
+        text: "Here is the surviving attachment",
+        mediaUrls: mediaUrls(path.join(path.dirname(imagePath), "missing.png"), imagePath, dataUrl),
+      }),
+    });
+    const normalizedLocalPath = requireString(payload?.mediaUrls?.[0], "normalized local media");
+
+    expect(payload?.text).toBe(
+      "Here is the surviving attachment\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
+    expect(payload?.text).not.toContain(sourcePath);
+    expect(payload?.text).not.toContain("private customer report.png");
+    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
+    expect(payload?.mediaUrl).toBe(normalizedLocalPath);
+    expect(payload?.mediaUrls).toEqual([normalizedLocalPath, dataUrl]);
+    expect(normalizedLocalPath).not.toBe(sourcePath);
+    expect(normalizedLocalPath.startsWith(path.join(stateDir, "media"))).toBe(true);
   });
 });

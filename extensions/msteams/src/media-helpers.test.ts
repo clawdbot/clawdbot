@@ -164,6 +164,7 @@ describe("msteams media-helpers", () => {
     it("returns true for file:// URLs", () => {
       expect(isLocalPath("file:///tmp/image.png")).toBe(true);
       expect(isLocalPath("file://localhost/tmp/image.png")).toBe(true);
+      expect(isLocalPath("FILE:///C:/Users/test/image.png")).toBe(true);
     });
 
     it("returns true for absolute paths", () => {

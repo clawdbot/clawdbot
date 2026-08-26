@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FileChooser, Page } from "playwright-core";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
@@ -31,6 +34,43 @@ import {
   planAnnotations,
   type RawAnnotationInput,
 } from "./screenshot-annotate.js";
+
+const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
+const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+
+type PlaywrightFilePayload = {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+  lastModifiedMs?: number;
+};
+
+async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
+  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
+  const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
+    throw new Error(
+      "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
+    );
+  }
+  return await Promise.all(
+    paths.map(async (filePath, index) => {
+      const buffer = await fs.readFile(filePath);
+      return {
+        name: path.basename(filePath),
+        mimeType: (await detectMime({ buffer, filePath })) ?? DEFAULT_UPLOAD_MIME_TYPE,
+        buffer,
+        lastModifiedMs: stats[index]?.mtimeMs,
+      };
+    }),
+  );
+}
+
+function shouldUsePlaywrightFilePayloads(
+  opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
+): boolean {
+  return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
+}
 
 type BrowserWaitPredicateState = {
   document: unknown;
@@ -402,9 +442,18 @@ export async function setFileChooserFilesViaPlaywright(
     timeoutMs: number;
   },
 ): Promise<void> {
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+  if (!resolvedResult.ok) {
+    throw new Error(resolvedResult.error);
+  }
+  const resolvedPaths = resolvedResult.paths;
+  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
+    ? await toPlaywrightFilePayloads(resolvedPaths)
+    : resolvedPaths;
+
   await awaitNavigationGuardedInteraction({
     action: async () => {
-      await opts.fileChooser.setFiles(opts.paths, { timeout: opts.timeoutMs });
+      await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs });
     },
     cdpUrl: opts.cdpUrl,
     page: opts.page,
@@ -441,11 +490,14 @@ export async function setInputFilesViaPlaywright(
     throw new Error(resolvedResult.error);
   }
   const resolvedPaths = resolvedResult.paths;
+  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
+    ? await toPlaywrightFilePayloads(resolvedPaths)
+    : resolvedPaths;
 
   try {
     await awaitNavigationGuardedInteraction({
       action: async () => {
-        await locator.setInputFiles(resolvedPaths);
+        await locator.setInputFiles(resolvedFiles);
       },
       cdpUrl: opts.cdpUrl,
       page,

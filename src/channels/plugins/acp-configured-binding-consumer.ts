@@ -15,8 +15,8 @@ import {
 } from "../../acp/persistent-bindings.types.js";
 import {
   resolveAgentConfig,
+  resolveAgentExplicitModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -58,11 +58,8 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   if (explicitAgentWorkspace) {
     return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
-  if (params.agentId === resolveDefaultAgentId(params.cfg)) {
-    const defaultWorkspace = normalizeText(params.cfg.agents?.defaults?.workspace);
-    if (defaultWorkspace) {
-      return resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    }
+  if (normalizeText(params.cfg.agents?.defaults?.workspace)) {
+    return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
   return undefined;
 }
@@ -74,6 +71,7 @@ function buildConfiguredAcpSpec(params: {
   agentId: string;
   acpAgentId?: string;
   mode: "persistent" | "oneshot";
+  model?: string;
   cwd?: string;
   backend?: string;
   label?: string;
@@ -86,6 +84,7 @@ function buildConfiguredAcpSpec(params: {
     agentId: params.agentId,
     acpAgentId: params.acpAgentId,
     mode: params.mode,
+    model: params.model,
     cwd: params.cwd,
     backend: params.backend,
     label: params.label,
@@ -109,6 +108,8 @@ function buildAcpTargetFactory(params: {
   });
   const bindingOverrides = normalizeBindingConfig(params.binding.acp);
   const mode = normalizeMode(bindingOverrides.mode ?? runtimeDefaults.mode);
+  // Every ACP binding uses its owner's explicit model, regardless of the owner's runtime type.
+  const model = resolveAgentExplicitModelPrimary(params.cfg, params.agentId);
   const cwd =
     bindingOverrides.cwd ??
     runtimeDefaults.cwd ??
@@ -132,6 +133,7 @@ function buildAcpTargetFactory(params: {
         agentId: params.agentId,
         acpAgentId,
         mode,
+        model,
         cwd,
         backend,
         label,

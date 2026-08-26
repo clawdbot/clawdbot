@@ -8,8 +8,8 @@ const gatewayMocks = vi.hoisted(() => ({
 }));
 
 const nodeUtilsMocks = vi.hoisted(() => ({
-  resolveNodeId: vi.fn(async () => "node-1"),
-  resolveNode: vi.fn(async () => ({
+  resolveAgentNodeId: vi.fn(async () => "node-1"),
+  resolveAgentNode: vi.fn(async () => ({
     nodeId: "node-1",
     remoteIp: "127.0.0.1",
     platform: undefined as string | undefined,
@@ -91,8 +91,8 @@ vi.mock("./gateway.js", () => ({
 }));
 
 vi.mock("./nodes-utils.js", () => ({
-  resolveNodeId: nodeUtilsMocks.resolveNodeId,
-  resolveNode: nodeUtilsMocks.resolveNode,
+  resolveAgentNodeId: nodeUtilsMocks.resolveAgentNodeId,
+  resolveAgentNode: nodeUtilsMocks.resolveAgentNode,
 }));
 
 vi.mock("../../cli/nodes-camera.js", () => ({
@@ -170,8 +170,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
     gatewayMocks.callGatewayTool.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReturnValue({});
-    nodeUtilsMocks.resolveNodeId.mockClear();
-    nodeUtilsMocks.resolveNode.mockClear();
+    nodeUtilsMocks.resolveAgentNodeId.mockClear();
+    nodeUtilsMocks.resolveAgentNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
     screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
@@ -306,7 +306,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
       'node required for describe; call nodes with action="status" to list nodes, then retry with node',
     );
-    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(nodeUtilsMocks.resolveAgentNodeId).not.toHaveBeenCalled();
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -316,7 +316,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
     await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
 
-    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(nodeUtilsMocks.resolveAgentNodeId).toHaveBeenCalledWith({}, "Office Mac");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.describe",
       {},
@@ -658,7 +658,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("captures one unknown-position snap for Linux facing requests", async () => {
-    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+    nodeUtilsMocks.resolveAgentNode.mockResolvedValueOnce({
       nodeId: "linux-node",
       remoteIp: "127.0.0.1",
       platform: "linux",
@@ -684,7 +684,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("captures an unknown-position clip on Linux without forwarding facing", async () => {
-    nodeUtilsMocks.resolveNode.mockResolvedValueOnce({
+    nodeUtilsMocks.resolveAgentNode.mockResolvedValueOnce({
       nodeId: "linux-node",
       remoteIp: "127.0.0.1",
       platform: "linux",

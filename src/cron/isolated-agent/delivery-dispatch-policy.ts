@@ -15,7 +15,7 @@ import {
   loadDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
 } from "../../infra/delivery-queue-sqlite.js";
-import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
@@ -24,10 +24,10 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
-import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
@@ -36,27 +36,6 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
-
-/** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
-export async function cleanupDirectCronSession(params: {
-  job: CronJob;
-  agentSessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string;
-  sessionUpdatedAt: number;
-  beforeSessionDelete?: () => void;
-  retireReason: string;
-}): Promise<void> {
-  await cleanupCronRunSessionAfterRun({
-    job: params.job,
-    agentSessionKey: params.agentSessionKey,
-    sessionId: params.sessionId,
-    lifecycleRevision: params.lifecycleRevision,
-    sessionUpdatedAt: params.sessionUpdatedAt,
-    beforeDelete: params.beforeSessionDelete,
-    reason: params.retireReason,
-  });
-}
 
 export function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -124,32 +103,89 @@ const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
 );
 
-async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
-  return await deliveryLoggerRuntimeLoader.load();
-}
+const subagentFollowupRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-followup.runtime.js"),
+);
 
-async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
-  return await ttsRuntimeLoader.load();
-}
+/** Descendant-run outcome that decides which text cron delivery finalizes. */
+type DescendantSubagentFollowup = {
+  /** Descendant reply that replaces the interim cron text; undefined keeps the original. */
+  finalReply: string | undefined;
+  activeSubagentRuns: number;
+  hadDescendants: boolean;
+};
 
-export async function loadDeliverySubagentRegistryRuntime(): Promise<
-  typeof import("./delivery-subagent-registry.runtime.js")
-> {
-  return await deliverySubagentRegistryRuntimeLoader.load();
+/** Resolves whether descendant subagent output should replace the interim cron text. */
+export async function resolveDescendantSubagentFollowup(params: {
+  sessionKey: string;
+  runStartedAt: number;
+  timeoutMs: number;
+  deliveryBestEffort: boolean;
+  spawnOnlyHandoff: boolean;
+  initialSynthesizedText: string;
+}): Promise<DescendantSubagentFollowup> {
+  const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
+  const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
+  let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+  const shouldCheckCompletedDescendants =
+    activeSubagentRuns === 0 &&
+    (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
+  const needsFollowupRuntime =
+    shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedFollowup;
+  const followupRuntime = needsFollowupRuntime
+    ? await subagentFollowupRuntimeLoader.load()
+    : undefined;
+  // Also check for already-completed descendants. If the subagent finished
+  // before delivery-dispatch runs, activeSubagentRuns is 0 and
+  // expectedFollowup may be false (e.g. cron said "on it" which doesn't
+  // match the narrow hint list). We still need to use the descendant's
+  // output instead of the interim cron text.
+  const completedDescendantReply = shouldCheckCompletedDescendants
+    ? await followupRuntime?.readDescendantSubagentFallbackReply({
+        sessionKey: params.sessionKey,
+        runStartedAt: params.runStartedAt,
+      })
+    : undefined;
+  const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+  if (
+    (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
+    (activeSubagentRuns > 0 || expectedFollowup)
+  ) {
+    let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
+      sessionKey: params.sessionKey,
+      initialReply: params.initialSynthesizedText,
+      timeoutMs: params.timeoutMs,
+      observedActiveDescendants: activeSubagentRuns > 0 || expectedFollowup,
+    });
+    activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+    if (!finalReply && activeSubagentRuns === 0) {
+      finalReply = await followupRuntime?.readDescendantSubagentFallbackReply({
+        sessionKey: params.sessionKey,
+        runStartedAt: params.runStartedAt,
+      });
+    }
+    // Apply only once every descendant settled; a live run still owns the turn.
+    return {
+      finalReply: finalReply && activeSubagentRuns === 0 ? finalReply : undefined,
+      activeSubagentRuns,
+      hadDescendants,
+    };
+  }
+  return { finalReply: completedDescendantReply, activeSubagentRuns, hadDescendants };
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
-  const { logWarn } = await loadDeliveryLoggerRuntime();
+  const { logWarn } = await deliveryLoggerRuntimeLoader.load();
   logWarn(message);
 }
 
 export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await loadDeliveryLoggerRuntime();
+  const { logError } = await deliveryLoggerRuntimeLoader.load();
   logError(message);
 }
 
 export function logCronDeliveryErrorDeferred(message: string): void {
-  void loadDeliveryLoggerRuntime().then(({ logError }) => {
+  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
     logError(message);
   });
 }
@@ -191,7 +227,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
   ) {
     return params.payloads;
   }
-  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  const { maybeApplyTtsToPayload } = await ttsRuntimeLoader.load();
   return await Promise.all(
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({
@@ -284,6 +320,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
+  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
+    return false;
+  }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {
     return false;
@@ -291,7 +330,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   if (PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
     return false;
   }
-  return isProvenDeliveryNotSentError(error);
+  return deliveryRecovery.isProvenDeliveryNotSentError(error);
 }
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];

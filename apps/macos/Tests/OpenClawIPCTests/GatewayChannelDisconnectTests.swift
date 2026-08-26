@@ -110,6 +110,7 @@ struct GatewayChannelDisconnectTests {
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { reason, _ in await disconnects.record(reason) })
 
         try await channel.connect()
@@ -164,6 +165,7 @@ struct GatewayChannelDisconnectTests {
                     await snapshots.record()
                 }
             },
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { reason, _ in
                 await disconnects.record(reason)
                 await cleanupGate.wait()
@@ -271,6 +273,7 @@ struct GatewayChannelDisconnectTests {
                     await snapshots.record()
                 }
             },
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { _, _ in })
 
         try await channel.connect()
@@ -318,6 +321,7 @@ struct GatewayChannelDisconnectTests {
                     await seqGapGate.wait()
                 }
             },
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { _, _ in })
 
         try await channel.connect()
@@ -353,6 +357,7 @@ struct GatewayChannelDisconnectTests {
                     await snapshots.record()
                 }
             },
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { _, _ in })
 
         try await channel.connect()
@@ -406,6 +411,7 @@ struct GatewayChannelDisconnectTests {
                     await snapshots.record()
                 }
             },
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
             disconnectHandler: { reason, _ in
                 await disconnects.record(reason)
                 await cleanupGate.wait()

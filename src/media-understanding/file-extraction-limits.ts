@@ -1,4 +1,5 @@
 // Resolves inbound attachment text-extraction limits for media-understanding.
+import { asPositiveFiniteNumber as positiveExtractionLimit } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   type InputFileLimits,
@@ -27,10 +28,6 @@ type InboundFileExtractionDefaults = {
 export type FileExtractionLimits = InputFileLimits & {
   allowedMimesConfigured: boolean;
 };
-
-function positiveExtractionLimit(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 function resolveInboundFileExtractionMaxBytes(
   defaults: InboundFileExtractionDefaults | undefined,

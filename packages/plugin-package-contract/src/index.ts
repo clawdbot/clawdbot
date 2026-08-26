@@ -1,4 +1,6 @@
 // External code plugin package.json compatibility and validation contracts.
+import { isRecord } from "../../normalization-core/src/record-coerce.js";
+import { normalizeOptionalString } from "../../normalization-core/src/string-coerce.js";
 
 /** JSON object shape accepted by package contract helpers. */
 export type JsonObject = Record<string, unknown>;
@@ -28,20 +30,6 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.compat.pluginApi",
   "openclaw.build.openclawVersion",
 ] as const;
-
-/** Narrow unknown values to plain records. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Normalize optional package metadata strings. */
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 /** Read OpenClaw package.json blocks without trusting caller input shape. */
 function readOpenClawBlock(packageJson: unknown) {

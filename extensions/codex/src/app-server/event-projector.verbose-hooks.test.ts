@@ -22,7 +22,7 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("emits verbose tool summaries through onToolResult", async () => {
+  it("hides command details from ordinary verbose tool summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -50,7 +50,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ `run tests (workspace)`",
+      text: "🛠️ Bash",
     });
   });
 
@@ -58,7 +58,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       toolProgressDetail: "raw",
       onToolResult,
     });
@@ -90,7 +90,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       toolProgressDetail: "raw",
       onToolResult,
     });
@@ -146,6 +146,34 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🧩 Lcm Grep: `inProgress text`",
     });
+  });
+
+  it("hides command arguments from dynamic tool summaries unless verbose is full", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-command-1",
+          namespace: null,
+          tool: "server.exec",
+          arguments: { command: "cat /private/operator-file" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
+    expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
   it("emits completed tool output only when verbose full is enabled", async () => {

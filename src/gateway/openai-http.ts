@@ -9,13 +9,16 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,6 +33,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -54,7 +58,10 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -63,13 +70,19 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  isFailedOpenAiAgentRun,
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+} from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
   toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -78,6 +91,7 @@ type OpenAiHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type OpenAiChatMessage = {
@@ -89,25 +103,26 @@ type OpenAiChatMessage = {
   stopReason?: unknown;
 };
 
-type OpenAiChatCompletionRequest = {
-  model?: unknown;
-  stream?: unknown;
-  // Naming/style reference: src/agents/openai-transport-stream.ts:1262-1273
-  stream_options?: unknown;
-  tools?: unknown;
-  tool_choice?: unknown;
-  messages?: unknown;
-  user?: unknown;
-  max_tokens?: unknown;
-  max_completion_tokens?: unknown;
-  temperature?: unknown;
-  top_p?: unknown;
-  response_format?: unknown;
-  frequency_penalty?: unknown;
-  presence_penalty?: unknown;
-  seed?: unknown;
-  stop?: unknown;
-};
+const OpenAiChatCompletionRequestSchema = z.object({
+  model: z.string().optional(),
+  stream: z.boolean().nullish(),
+  stream_options: z.object({ include_usage: z.boolean().optional() }).passthrough().nullish(),
+  tools: z.array(z.unknown()).optional(),
+  tool_choice: z.unknown().optional(),
+  messages: z.array(z.unknown()).optional(),
+  user: z.string().optional(),
+  max_tokens: z.number().int().positive().nullish(),
+  max_completion_tokens: z.number().int().positive().nullish(),
+  temperature: z.number().nullish(),
+  top_p: z.number().nullish(),
+  response_format: z.unknown().optional(),
+  frequency_penalty: z.number().nullish(),
+  presence_penalty: z.number().nullish(),
+  seed: z.number().nullish(),
+  stop: z.union([z.string(), z.array(z.string())]).nullish(),
+});
+
+type OpenAiChatCompletionRequest = z.infer<typeof OpenAiChatCompletionRequestSchema>;
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
@@ -268,11 +283,13 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
   throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
-function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
+type ChatCompletionStreamIdentity = { runId: string; model: string; created: number };
+
+function writeAssistantRoleChunk(res: ServerResponse, params: ChatCompletionStreamIdentity) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
   });
@@ -280,12 +297,12 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string },
+  params: ChatCompletionStreamIdentity & { content: string },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [
       {
@@ -299,12 +316,12 @@ function writeAssistantContentChunk(
 
 function writeAssistantFinishChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; finishReason: "stop" | "tool_calls" },
+  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "tool_calls" },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [
       {
@@ -336,9 +353,7 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
 
 function writeAssistantToolCallsIncrementalChunks(
   res: ServerResponse,
-  params: {
-    runId: string;
-    model: string;
+  params: ChatCompletionStreamIdentity & {
     toolCalls: Array<{ id: string; name: string; arguments: string }>;
   },
 ) {
@@ -346,7 +361,7 @@ function writeAssistantToolCallsIncrementalChunks(
     writeSse(res, {
       id: params.runId,
       object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
+      created: params.created,
       model: params.model,
       choices: [
         {
@@ -370,7 +385,7 @@ function writeAssistantToolCallsIncrementalChunks(
       writeSse(res, {
         id: params.runId,
         object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
+        created: params.created,
         model: params.model,
         choices: [
           {
@@ -393,16 +408,14 @@ function writeAssistantToolCallsIncrementalChunks(
 
 function writeUsageChunk(
   res: ServerResponse,
-  params: {
-    runId: string;
-    model: string;
+  params: ChatCompletionStreamIdentity & {
     usage: OpenAiChatCompletionsUsage;
   },
 ) {
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
+    created: params.created,
     model: params.model,
     choices: [],
     usage: params.usage,
@@ -640,12 +653,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
@@ -730,13 +737,6 @@ function buildAgentPrompt(
     message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
   };
-}
-
-function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
-  if (!val || typeof val !== "object") {
-    return {};
-  }
-  return val as OpenAiChatCompletionRequest;
 }
 
 function resolveAgentResponseText(result: unknown): string {
@@ -892,8 +892,19 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-  const payload = coerceRequest(handled.body);
-  const stream = Boolean(payload.stream);
+  const parsed = OpenAiChatCompletionRequestSchema.safeParse(handled.body);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    sendJson(res, 400, {
+      error: {
+        message: issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
+  const payload = parsed.data;
+  const stream = payload.stream === true;
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
@@ -989,13 +1000,41 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
       return true;
     }
     throw err;
+  }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
+      ? { actor: { kind: "system" as const } }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
+  }
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId,
+    sessionKey,
+    requestAuth: handled.requestAuth,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
+    return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
@@ -1056,6 +1095,8 @@ export async function handleOpenAiHttpRequest(
   }
 
   const runId = `chatcmpl_${randomUUID()}`;
+  const created = Math.floor(Date.now() / 1000);
+  const streamIdentity = { runId, model, created };
   const deps = createDefaultDeps();
   const abortController = new AbortController();
   const mergedExtraSystemPrompt = [prompt.extraSystemPrompt, toolChoicePrompt]
@@ -1076,18 +1117,33 @@ export async function handleOpenAiHttpRequest(
     abortSignal: abortController.signal,
     streamParams,
   });
+  const gatewayCommandInput = opts.resolveGatewayContext
+    ? {
+        ...commandInput,
+        onAdmittedRunContext: (context: AdmittedRunContext) =>
+          bindGatewayContextResolver(context, opts.resolveGatewayContext),
+      }
+    : commandInput;
 
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
 
       if (abortController.signal.aborted) {
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (isFailedOpenAiAgentRun(result)) {
+        throw new Error("agent run failed");
+      }
       const usage = resolveChatCompletionUsage(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // `tool_choice` is an HTTP client-tool contract. The provider may still
@@ -1114,7 +1170,7 @@ export async function handleOpenAiHttpRequest(
         sendJson(res, 200, {
           id: runId,
           object: "chat.completion",
-          created: Math.floor(Date.now() / 1000),
+          created,
           model,
           choices: [
             {
@@ -1140,7 +1196,7 @@ export async function handleOpenAiHttpRequest(
       sendJson(res, 200, {
         id: runId,
         object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
+        created,
         model,
         choices: [
           {
@@ -1191,6 +1247,7 @@ export async function handleOpenAiHttpRequest(
   let resultResolved = false;
   let closed = false;
   let observedTerminalLifecycle = false;
+  let terminalStreamError: { message: string; type: string; code?: string } | undefined;
   let terminalLifecyclePhase: "end" | "error" = "end";
   let stopWatchingDisconnect = () => {};
 
@@ -1211,15 +1268,19 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
       closed = true;
       stopWatchingDisconnect();
       unsubscribe();
       if (!wroteStopChunk) {
-        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        writeAssistantFinishChunk(res, { ...streamIdentity, finishReason: finalizeFinishReason });
         wroteStopChunk = true;
       }
       if (streamIncludeUsage && finalUsage) {
-        writeUsageChunk(res, { runId, model, usage: finalUsage });
+        writeUsageChunk(res, { ...streamIdentity, usage: finalUsage });
       }
       writeDone(res);
       res.end();
@@ -1257,6 +1318,20 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // SSE deltas cannot retract bytes already delivered to the OpenAI client.
+      if (
+        replace &&
+        typeof text === "string" &&
+        !toolChoiceConstraint &&
+        !text.startsWith(streamedAssistantText)
+      ) {
+        terminalStreamError ??= {
+          message: "Assistant output cannot be represented as an append-only response stream.",
+          type: "api_error",
+        };
+        return;
+      }
+
       // Snapshots include prefixes held during tag-boundary filtering; the raw
       // delta alone can omit a literal leading less-than.
       const content =
@@ -1278,13 +1353,12 @@ export async function handleOpenAiHttpRequest(
 
       if (!wroteRole) {
         wroteRole = true;
-        writeAssistantRoleChunk(res, { runId, model });
+        writeAssistantRoleChunk(res, streamIdentity);
       }
 
       sawAssistantDelta = true;
       writeAssistantContentChunk(res, {
-        runId,
-        model,
+        ...streamIdentity,
         content,
       });
       return;
@@ -1297,10 +1371,28 @@ export async function handleOpenAiHttpRequest(
       }
       if (phase === "end" || phase === "error") {
         observedTerminalLifecycle = true;
+        if (phase === "error" && terminalLifecyclePhase !== "error") {
+          terminalStreamError ??= {
+            message: normalizeOptionalString(evt.data?.error) ?? "Agent run failed",
+            type: "api_error",
+          };
+        }
         requestFinalize();
       }
     }
   });
+
+  const finishStreamWithError = (error: { message: string; type: string; code?: string }) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    writeSse(res, { error });
+    writeDone(res);
+    res.end();
+  };
 
   // Agent cleanup and deferred SSE delivery have independent lifetimes;
   // shutdown must wait until both have settled, whichever finishes last.
@@ -1321,14 +1413,30 @@ export async function handleOpenAiHttpRequest(
   });
 
   wroteRole = true;
-  writeAssistantRoleChunk(res, { runId, model });
+  writeAssistantRoleChunk(res, streamIdentity);
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
       resultResolved = true;
 
       if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        finishStreamWithError({ message: "internal error", type: "api_error" });
+        return;
+      }
+
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
         return;
       }
 
@@ -1346,24 +1454,17 @@ export async function handleOpenAiHttpRequest(
           pendingToolCalls,
         })
       ) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: {
-            message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
-            type: "api_error",
-          },
+        finishStreamWithError({
+          message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
+          type: "api_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         if (!wroteRole) {
           wroteRole = true;
-          writeAssistantRoleChunk(res, { runId, model });
+          writeAssistantRoleChunk(res, streamIdentity);
         }
         if (!sawAssistantDelta) {
           const commentary =
@@ -1373,15 +1474,13 @@ export async function handleOpenAiHttpRequest(
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
-              runId,
-              model,
+              ...streamIdentity,
               content: commentary,
             });
           }
         }
         writeAssistantToolCallsIncrementalChunks(res, {
-          runId,
-          model,
+          ...streamIdentity,
           toolCalls: pendingToolCalls,
         });
         requestFinalize("tool_calls");
@@ -1391,7 +1490,7 @@ export async function handleOpenAiHttpRequest(
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
-          writeAssistantRoleChunk(res, { runId, model });
+          writeAssistantRoleChunk(res, streamIdentity);
         }
 
         const content =
@@ -1402,8 +1501,7 @@ export async function handleOpenAiHttpRequest(
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
-          runId,
-          model,
+          ...streamIdentity,
           content,
         });
       }
@@ -1416,38 +1514,22 @@ export async function handleOpenAiHttpRequest(
       terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, {
-          error: { message: "invalid tool configuration", type: "invalid_request_error" },
+        finishStreamWithError({
+          message: "invalid tool configuration",
+          type: "invalid_request_error",
         });
-        writeDone(res);
-        res.end();
         return;
       }
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeSse(res, { error: mapped.error });
-        writeDone(res);
-        res.end();
+        finishStreamWithError(mapped.error);
         return;
       }
-      const content = "Error: internal error";
-      writeAssistantContentChunk(res, {
-        runId,
-        model,
-        content,
-      });
-      finalUsage = {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      };
-      requestFinalize();
+      if (terminalStreamError) {
+        finishStreamWithError(terminalStreamError);
+        return;
+      }
+      finishStreamWithError({ message: "internal error", type: "api_error" });
     } finally {
       releaseAgentRootWork?.();
       // The provider owns observed terminals; a second end would erase a failed session.

@@ -1,12 +1,12 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
-import { createDeferred } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -116,12 +116,16 @@ describe("session upstream monitor", () => {
     });
 
     expect(checkUpstreamActivity).toHaveBeenCalledTimes(2);
-    expect(checkUpstreamActivity.mock.calls[0]?.[0]).toEqual([
-      expect.objectContaining({ sessionKey: watched, marker: { offset: 0 } }),
-    ]);
-    expect(checkUpstreamActivity.mock.calls[1]?.[0]).toEqual([
-      expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } }),
-    ]);
+    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
+      1,
+      [expect.objectContaining({ sessionKey: watched, marker: { offset: 0 } })],
+      { allowProcessHomeFallback: false },
+    );
+    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
+      2,
+      [expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } })],
+      { allowProcessHomeFallback: false },
+    );
     const events = listSessionStateEventsSince(watched, "main", 0, 20, database).events;
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual(
@@ -655,7 +659,9 @@ describe("session upstream monitor", () => {
       loadOwnRecentUserTexts: async () => [],
     });
 
-    expect(check).toHaveBeenCalledWith([expect.objectContaining({ marker: { offset: 0 } })]);
+    expect(check).toHaveBeenCalledWith([expect.objectContaining({ marker: { offset: 0 } })], {
+      allowProcessHomeFallback: false,
+    });
   });
 
   it("defers activity when a run starts during the provider scan", async () => {
@@ -785,7 +791,7 @@ describe("session upstream monitor", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:provenance";
     const sessionId = "session-provenance";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, env: database.env },
       { sessionId, updatedAt: 1 },
     );
@@ -820,9 +826,10 @@ describe("session upstream monitor", () => {
       isRunActive: () => false,
     });
 
-    expect(check).toHaveBeenCalledWith([
-      expect.objectContaining({ ownRecentUserTexts: ["exact decorated prompt"] }),
-    ]);
+    expect(check).toHaveBeenCalledWith(
+      [expect.objectContaining({ ownRecentUserTexts: ["exact decorated prompt"] })],
+      { allowProcessHomeFallback: false },
+    );
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
   });
 
@@ -830,7 +837,7 @@ describe("session upstream monitor", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:catalog-import";
     const sessionId = "session-catalog-import";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, env: database.env },
       { sessionId, updatedAt: 1 },
     );
@@ -865,7 +872,9 @@ describe("session upstream monitor", () => {
       isRunActive: () => false,
     });
 
-    expect(check).toHaveBeenCalledWith([expect.objectContaining({ ownRecentUserTexts: [] })]);
+    expect(check).toHaveBeenCalledWith([expect.objectContaining({ ownRecentUserTexts: [] })], {
+      allowProcessHomeFallback: false,
+    });
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([
       expect.objectContaining({ kind: "human_direct_message", summary: "human message via pi" }),
     ]);

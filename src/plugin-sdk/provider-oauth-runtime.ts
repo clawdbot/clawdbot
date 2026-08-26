@@ -260,11 +260,13 @@ export async function generatePKCE(): Promise<{ verifier: string; challenge: str
 }
 
 /** Generates a random base64url OAuth state value for CSRF protection. */
-export function generateOAuthState(): string {
+function generateBase64UrlOAuthState(): string {
   const stateBytes = new Uint8Array(32);
   crypto.getRandomValues(stateBytes);
   return base64urlEncode(stateBytes);
 }
+
+export { generateBase64UrlOAuthState as generateOAuthState };
 
 /**
  * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.

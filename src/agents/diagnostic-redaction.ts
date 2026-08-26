@@ -1,6 +1,6 @@
 import { redactSecrets } from "../logging/redact.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 
-export function redactAgentDiagnosticPayload<T>(value: T): T {
-  return redactSecrets(sanitizeDiagnosticPayload(value)) as T;
+export function redactAgentDiagnosticPayload(value: unknown): unknown {
+  return redactSecrets(sanitizeDiagnosticPayload(value));
 }

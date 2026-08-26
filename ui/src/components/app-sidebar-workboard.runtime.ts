@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForWorkboardBoard } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { workboardBoardLabel } from "../lib/workboard/board-presentation.ts";
 import { normalizeBoardsPayload } from "../lib/workboard/normalization.ts";
 import { getWorkboardState } from "../lib/workboard/runtime.ts";
@@ -191,14 +192,7 @@ export const renderSidebarWorkboardEntry: SidebarWorkboardRenderers["renderEntry
       class="nav-item nav-item--workboard-board ${params.active ? "nav-item--active" : ""}"
       aria-current=${params.active ? "page" : undefined}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();

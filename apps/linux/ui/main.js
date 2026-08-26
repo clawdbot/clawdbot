@@ -63,8 +63,48 @@ function renderAction(options, action) {
   show(elements.actionControls, true);
 }
 
+function formatInstallLine(line) {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return line;
+  }
+  if (!event || typeof event !== "object" || !event.event) {
+    return line;
+  }
+  if (event.event === "done" && event.ok === true) {
+    return `✓ Installed${event.version ? ` ${event.version}` : ""}`;
+  }
+  if (event.event !== "step" || !event.name) {
+    return line;
+  }
+
+  const name =
+    {
+      node: "Node runtime",
+      git: "Git checkout",
+      openclaw: "OpenClaw CLI",
+      "gateway-service": "Gateway service",
+      "control-ui": "Control UI build",
+      "cli-build": "CLI build",
+    }[event.name] || event.name;
+  switch (event.status) {
+    case "start":
+      return `→ ${name}${event.version ? ` ${event.version}` : ""}…`;
+    case "ok":
+      return `✓ ${name}`;
+    case "skip":
+      return `– ${name} skipped${event.reason ? ` (${event.reason})` : ""}`;
+    case "warn":
+      return `! ${name}${event.reason ? `: ${event.reason}` : ""}`;
+    default:
+      return line;
+  }
+}
+
 function appendLog(line) {
-  elements.installLog.textContent += `${line}\n`;
+  elements.installLog.textContent += `${formatInstallLine(line)}\n`;
   elements.installLog.scrollTop = elements.installLog.scrollHeight;
 }
 
@@ -235,13 +275,13 @@ async function install() {
     await invoke("install_cli", { channel: elements.channel.value });
     elements.logStatus.textContent = "COMPLETE";
   } catch (error) {
+    const message = friendlyError(error);
     elements.logStatus.textContent = "FAILED";
-    appendLog(friendlyError(error));
+    appendLog(message);
     render({
-      description:
-        "Installation did not finish. Review the final log lines, choose a release channel, then retry.",
+      description: message,
       dot: "error",
-      eyebrow: "INSTALLATION ISSUE",
+      eyebrow: "SETUP ISSUE",
       showInstall: true,
       title: "OpenClaw needs attention",
     });
@@ -273,6 +313,9 @@ function renderRetry(message) {
       description: message,
       dot: "error",
       eyebrow: "CONNECTION ISSUE",
+      // A broken managed CLI can only be replaced by reinstalling; retry alone
+      // must never be the sole exit from a connection failure.
+      showInstall: true,
       title: "OpenClaw needs attention",
     },
     connect,

@@ -4,11 +4,13 @@ import {
   createContractsVitestConfig,
 } from "./vitest.contracts-shared.ts";
 
-export default createContractsVitestConfig(
-  channelSessionContractPatterns,
-  process.env,
-  process.argv,
-  {
+export function createContractsChannelSessionVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+  argv: string[] = process.argv,
+) {
+  return createContractsVitestConfig(channelSessionContractPatterns, env, argv, {
     name: "contracts-channel-session",
-  },
-);
+  });
+}
+
+export default createContractsChannelSessionVitestConfig();

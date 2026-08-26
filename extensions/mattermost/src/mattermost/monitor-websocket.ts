@@ -1,6 +1,7 @@
 // Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -335,28 +336,22 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
+          const raw = rawDataToString(data);
           captureWsEvent({
             url: opts.wsUrl,
             direction: "inbound",
             kind: "ws-frame",
             flowId,
-            payload: Buffer.from(rawDataToString(data)),
+            payload: Buffer.from(raw),
             meta: { subsystem: "mattermost-websocket" },
           });
-          const raw = rawDataToString(data);
           const payload = parseMattermostEventPayload(raw);
           if (!payload) {
             return;
           }
 
           if (payload.status === "OK" && payload.seq_reply === authenticationSeq) {
-            opts.statusSink?.({
-              connected: true,
-              lifecycle: "ready",
-              lastConnectedAt: Date.now(),
-              lastError: null,
-              terminalDisconnect: undefined,
-            });
+            opts.statusSink?.(channelReadyPatch());
             return;
           }
 

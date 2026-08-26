@@ -30,6 +30,7 @@ export type GatewayEventLoopHealth = {
 type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
   persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
   stop: () => void;
 };
 
@@ -177,6 +178,15 @@ export function createGatewayEventLoopHealthMonitor(
     return health;
   };
 
+  const reset = () => {
+    monitor?.reset();
+    lastWallAt = nowMs();
+    lastCpuUsage = readCpuUsage();
+    lastEventLoopUtilization = readEventLoopUtilization();
+    lastSnapshot = undefined;
+    firstDegradedAtMs = null;
+  };
+
   return {
     snapshot,
     // The diagnostic heartbeat is the timer owner. This filtered pull keeps
@@ -188,6 +198,7 @@ export function createGatewayEventLoopHealthMonitor(
         ? current
         : undefined;
     },
+    reset,
     stop: () => {
       monitor?.disable();
       monitor = null;

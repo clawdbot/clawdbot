@@ -1,5 +1,6 @@
 // HTML-island → typed block mapping tests: this is the agent authoring contract
 // the core system prompt advertises for rich-enabled Telegram accounts.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
@@ -136,6 +137,40 @@ describe("block HTML islands", () => {
     expect(block.cells[1]?.[0]).toMatchObject({ colspan: 2, align: "center" });
   });
 
+  it.each([
+    ["malformed suffix", "2x", "3y"],
+    ["plus sign", "+2", "+3"],
+    ["minus sign", "-2", "-3"],
+    ["decimal", "2.5", "3.5"],
+    ["exponent", "2e1", "3e1"],
+    ["hexadecimal", "0x10", "0x20"],
+    ["unsafe integer", "9007199254740993", "9007199254740993"],
+  ])("ignores malformed raw HTML table spans: %s", (_label, colspan, rowspan) => {
+    const block = single(
+      `<table><tr><td colspan="${colspan}" rowspan="${rowspan}">bad span</td><td>next</td></tr></table>`,
+    );
+    expect(block.type).toBe("table");
+    if (block.type !== "table") {
+      return;
+    }
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+  });
+
+  it.each([
+    ["unquoted decimal", "colspan=2 rowspan=3"],
+    ["single-quoted decimal", "colspan='2' rowspan='3'"],
+    ["double-quoted decimal", 'colspan="2" rowspan="3"'],
+    ["whitespace-padded decimal", 'colspan=" 2 " rowspan=" 3 "'],
+  ])("preserves valid raw HTML table spans: %s", (_label, attrs) => {
+    const block = single(`<table><tr><td ${attrs}>wide</td></tr></table>`);
+    expect(block.type).toBe("table");
+    if (block.type !== "table") {
+      return;
+    }
+    expect(block.cells[0]?.[0]).toMatchObject({ text: "wide", colspan: 2, rowspan: 3 });
+  });
+
   it("keeps surrounding markdown on the paragraph path", () => {
     const blocks = blocksFor("**before**\n\n<hr/>\n\nafter");
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);
@@ -238,6 +273,38 @@ describe("block HTML islands", () => {
     const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
     const block = single(`<table><tr>${wideRow}</tr></table>`);
     expect(block.type).toBe("pre");
+  });
+
+  it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
+    const header = [
+      '<th colspan="2">Name</th>',
+      ...Array.from({ length: 19 }, (_value, index) => `<th>H${index + 3}</th>`),
+    ].join("");
+    const values = [
+      "小明",
+      "✅",
+      "⌚",
+      "⚽",
+      "👨‍👩‍👧",
+      "🇨🇳",
+      "1⃣",
+      "1️⃣",
+      "❤",
+      "❤️",
+      "©",
+      "©️",
+      "cafe\u0301",
+      ...Array.from({ length: 8 }, (_value, index) => String(index + 14)),
+    ];
+    const row = values.map((value) => `<td>${value}</td>`).join("");
+    const block = single(`<table><tr>${header}</tr><tr>${row}</tr></table>`);
+    expect(block.type).toBe("pre");
+    if (block.type !== "pre") {
+      return;
+    }
+    const lines = block.text.split("\n");
+    expect(lines.every((line) => line.split("|").length === 23)).toBe(true);
+    expect(new Set(lines.map((line) => stringWidth(line))).size).toBe(1);
   });
 
   it("emits anchor_link nodes for fragment hrefs", () => {

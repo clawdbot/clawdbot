@@ -1,5 +1,6 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
+import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -188,9 +189,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       const ownsGeneration = () => generation === this.connectionGeneration;
       const ownsSocket = () => ownsGeneration() && this.ws === socket;
 
-      const normalizeError = (error: unknown) =>
-        error instanceof Error ? error : new Error(String(error));
-
       const clearConnectTimeout = () => {
         if (connectTimeout) {
           clearTimeout(connectTimeout);
@@ -218,11 +216,16 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           finishClosedConnect();
           return;
         }
-        settled = true;
-        clearConnectTimeout();
         this.ready = true;
         this.readySinceMs = Date.now();
-        this.flushQueuedAudio(transport);
+        try {
+          this.flushQueuedAudio(transport);
+        } catch (error) {
+          failConnect(toErrorObject(error, "Realtime audio send failed"));
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
         resolve();
       };
 
@@ -297,7 +300,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         try {
           connection = await this.resolveConnection();
         } catch (error) {
-          failConnect(normalizeError(error));
+          failConnect(toStringifiedError(error));
           return;
         }
         if (settled) {
@@ -319,7 +322,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           this.ws = socket;
           this.transport = transport;
         } catch (error) {
-          failConnect(normalizeError(error));
+          failConnect(toStringifiedError(error));
           return;
         }
 
@@ -336,7 +339,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
               finishConnect();
             }
           } catch (error) {
-            failConnect(normalizeError(error));
+            failConnect(toStringifiedError(error));
           }
         });
 
@@ -361,7 +364,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (!ownsSocket()) {
             return;
           }
-          const normalized = normalizeError(error);
+          const normalized = toStringifiedError(error);
           this.captureError(normalized);
           if (!opened || !settled) {
             failConnect(normalized);
@@ -470,11 +473,14 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private flushQueuedAudio(transport: RealtimeTranscriptionWebSocketTransport): void {
-    for (let index = this.queuedAudioHead; index < this.queuedAudio.length; index += 1) {
-      const audio = this.queuedAudio[index];
+    while (this.queuedAudioHead < this.queuedAudio.length) {
+      const audio = this.queuedAudio[this.queuedAudioHead];
       if (audio) {
         this.options.sendAudio(audio, transport);
+        this.queuedBytes -= audio.byteLength;
       }
+      this.queuedAudio[this.queuedAudioHead] = undefined;
+      this.queuedAudioHead += 1;
     }
     this.clearQueuedAudio();
   }

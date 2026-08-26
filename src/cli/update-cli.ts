@@ -2,9 +2,12 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
 import type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
@@ -25,6 +28,14 @@ export type {
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
+}
+
+function handleUpdateCommandError(error: unknown): void {
+  if (isJsonOutputModeActive(process.argv)) {
+    throw error;
+  }
+  defaultRuntime.error(formatErrorMessage(error));
+  defaultRuntime.exit(1);
 }
 
 function inheritedUpdateTimeout(
@@ -66,10 +77,11 @@ function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
     return false;
   }
 
-  defaultRuntime.error(
-    `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+  handleUpdateCommandError(
+    new Error(
+      `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+    ),
   );
-  defaultRuntime.exit(1);
   return true;
 }
 
@@ -114,12 +126,12 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
           restart: false,
+          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 }
@@ -155,7 +167,6 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
-        ["openclaw update --tag main", "One-off package update from GitHub main"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
@@ -177,7 +188,7 @@ ${theme.heading("Switch channels:")}
   - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
-  - Use --tag main for a one-off package update from GitHub main
+  - Use --channel dev for the moving GitHub main checkout; package installs reject --tag main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
@@ -209,8 +220,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 
@@ -235,8 +245,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: inheritedUpdateTimeout(opts, command),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 
@@ -265,8 +274,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: inheritedUpdateTimeout(opts, command),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 }

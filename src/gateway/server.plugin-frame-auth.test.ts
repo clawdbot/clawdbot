@@ -17,7 +17,7 @@ import {
   dispatchRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
-import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -61,7 +61,7 @@ function createRuntimeScopeRecorderHandler(params: {
   match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({
+    registry: createGatewayTestRegistry({
       httpRoutes: [
         {
           pluginId: params.pluginId,
@@ -196,7 +196,7 @@ describe("control ui plugin frame auth route boundaries", () => {
   test("does not broaden an exact-route grant to child paths", async () => {
     const childHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "exact-plugin",
@@ -242,7 +242,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const outerHandler = vi.fn(async () => true);
     const adminHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "same-plugin",
@@ -488,7 +488,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const outerHandler = vi.fn(async () => true);
     const nestedHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "outer-plugin",
@@ -588,7 +588,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const nestedHandler = vi.fn(async () => true);
     const outerHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "outer-plugin",
@@ -653,7 +653,7 @@ describe("control ui plugin frame auth route boundaries", () => {
     const nestedHandler = vi.fn(async () => false);
     const outerHandler = vi.fn(async () => true);
     const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
+      registry: createGatewayTestRegistry({
         httpRoutes: [
           {
             pluginId: "nested-plugin",

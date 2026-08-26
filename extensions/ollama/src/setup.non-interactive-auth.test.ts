@@ -34,6 +34,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 function createOllamaFetchMock(params: {
   tags: string[];
+  tagModels?: Array<{ name: string; size?: number }>;
   show?: Record<string, number | undefined>;
   capabilities?: Record<string, string[] | undefined>;
   pullResponse?: Response;
@@ -41,7 +42,9 @@ function createOllamaFetchMock(params: {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = requestUrl(input);
     if (url.endsWith("/api/tags")) {
-      return jsonResponse({ models: params.tags.map((name) => ({ name })) });
+      return jsonResponse({
+        models: params.tagModels ?? params.tags.map((name) => ({ name })),
+      });
     }
     if (url.endsWith("/api/show")) {
       const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
@@ -137,7 +140,8 @@ describe("Ollama non-interactive onboarding", () => {
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
       "http://127.0.0.1:11434/api/pull",
     );
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("keeps an installed suggested local model first in non-interactive setup", async () => {
@@ -162,7 +166,43 @@ describe("Ollama non-interactive onboarding", () => {
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
       "http://127.0.0.1:11434/api/pull",
     );
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledTimes(1);
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+  });
+
+  it("uses the smallest capable discovered model as the non-interactive default", async () => {
+    const fetchMock = createOllamaFetchMock({
+      tags: [],
+      tagModels: [
+        { name: "qwen3:4b-instruct", size: 2_497_293_803 },
+        { name: "gemma4:latest", size: 9_608_350_718 },
+        { name: "llama3.2:latest", size: 2_019_393_189 },
+      ],
+      show: {
+        "qwen3:4b-instruct": 262_144,
+        "gemma4:latest": 131_072,
+        "llama3.2:latest": 131_072,
+      },
+      capabilities: {
+        "qwen3:4b-instruct": ["completion", "tools", "thinking"],
+        "gemma4:latest": ["completion", "tools", "thinking"],
+        "llama3.2:latest": ["completion", "tools"],
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createRuntime();
+
+    const result = await configureOllamaNonInteractive({
+      nextConfig: {},
+      opts: { customBaseUrl: "http://127.0.0.1:11434" },
+      runtime,
+    });
+
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
+      "http://127.0.0.1:11434/api/pull",
+    );
+    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
+    expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: llama3.2:latest");
   });
 
   it("preserves the capabilities of an explicitly selected model beyond the discovery limit", async () => {

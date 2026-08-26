@@ -63,7 +63,7 @@ describe("sessions page archived deletion", () => {
       expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
     );
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 2 archived threads and their transcripts?",
+      message: "Delete 2 archived sessions and their transcripts?",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -171,7 +171,7 @@ describe("sessions page archived deletion", () => {
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 3 archived threads and their transcripts?",
+      message: "Delete 3 archived sessions and their transcripts?",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -236,7 +236,7 @@ describe("sessions page archived deletion", () => {
 
     expect(list).toHaveBeenCalledTimes(3);
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 3 archived threads and their transcripts?",
+      message: "Delete 3 archived sessions and their transcripts?",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -350,7 +350,7 @@ describe("sessions page archived deletion", () => {
         expect(options).not.toHaveProperty("agentId");
       }
       expect(showConfirmDialog).toHaveBeenCalledWith({
-        message: "Delete 2 archived threads and their transcripts?",
+        message: "Delete 2 archived sessions and their transcripts?",
         confirmLabel: "Delete",
         danger: true,
       });

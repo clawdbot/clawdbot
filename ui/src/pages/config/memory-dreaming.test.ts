@@ -121,6 +121,14 @@ describe("renderDreamingSettings", () => {
     const row = rowFor(container, "Dreaming model");
 
     expect(row.textContent).toContain("Default: openai/gpt-5.6");
+    expect(row.querySelector('wa-option[value="anthropic/claude-sonnet"]')).not.toBeNull();
+    const custom = row.querySelector<HTMLInputElement>(".model-picker__custom");
+    expect(custom?.hidden).toBe(false);
+    if (custom) {
+      custom.value = "vendor/model with spaces";
+      custom.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");
     row.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
     expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 

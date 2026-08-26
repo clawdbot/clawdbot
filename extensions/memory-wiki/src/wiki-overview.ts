@@ -1,4 +1,5 @@
 // Memory Wiki plugin module implements the memory wiki overview.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown, type WikiPageKind } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";
@@ -62,14 +63,6 @@ function createEmptyOverviewPageCounts(): MemoryWikiOverviewPageCounts {
   };
 }
 
-function normalizeTimestamp(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function extractSnippet(body: string): string | undefined {
   for (const rawLine of body.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -114,13 +107,13 @@ export async function listMemoryWikiOverview(
   const items = pages
     .map((page) => {
       const parsed = parseWikiMarkdown(page.raw);
+      const updatedAt = normalizeOptionalString(page.updatedAt);
+      const sourceType = normalizeOptionalString(page.sourceType);
       return Object.assign(
         { pagePath: page.relativePath, title: page.title, kind: page.kind },
         page.id ? { id: page.id } : {},
-        normalizeTimestamp(page.updatedAt) ? { updatedAt: normalizeTimestamp(page.updatedAt) } : {},
-        typeof page.sourceType === `string` && page.sourceType.trim().length > 0
-          ? { sourceType: page.sourceType.trim() }
-          : {},
+        updatedAt ? { updatedAt } : {},
+        sourceType ? { sourceType } : {},
         {
           claimCount: page.claims.length,
           questionCount: page.questions.length,

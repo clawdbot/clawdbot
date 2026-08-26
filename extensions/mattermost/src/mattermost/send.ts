@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -26,6 +27,7 @@ import {
   fetchMattermostUserByUsername,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
+  parseMattermostApiStatus,
   uploadMattermostFile,
   type MattermostUser,
   type CreateDmChannelRetryOptions,
@@ -59,8 +61,6 @@ type MattermostSendOpts = {
   attachmentText?: string;
   /** Retry options for DM channel creation */
   dmRetryOptions?: CreateDmChannelRetryOptions;
-  /** Observe the bounded cache-miss DM channel resolution lifecycle. */
-  onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   /** Report the provider-finalized send before later fallible bookkeeping. */
   onDeliveryResult?: (result: MattermostSendResult) => Promise<void> | void;
 };
@@ -233,8 +233,10 @@ async function resolveChannelIdByName(params: {
         );
         return channel.id;
       }
-    } catch {
-      // Channel not found in this team, try next
+    } catch (error) {
+      if (parseMattermostApiStatus(error) !== 404) {
+        throw error;
+      }
     }
   }
   throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
@@ -246,7 +248,6 @@ type ResolveTargetChannelIdParams = {
   token: string;
   allowPrivateNetwork?: boolean;
   dmRetryOptions?: CreateDmChannelRetryOptions;
-  onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 };
 
@@ -307,7 +308,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
     allowPrivateNetwork: params.allowPrivateNetwork,
   });
 
-  const resolution = createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
+  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
     ...params.dmRetryOptions,
     onRetry: (attempt, delayMs, error) => {
       // Call user's onRetry if provided
@@ -320,8 +321,6 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
       }
     },
   });
-  params.onDmChannelResolution?.(resolution);
-  const channel = await resolution;
   cacheOutboundEntry(dmChannelCache, dmKey, channel.id, MATTERMOST_TARGET_CACHE_MAX_ENTRIES);
   return channel.id;
 }
@@ -394,7 +393,6 @@ async function resolveMattermostSendContext(
     token,
     allowPrivateNetwork,
     dmRetryOptions,
-    onDmChannelResolution: opts.onDmChannelResolution,
     logger: core.logging.shouldLogVerbose() ? logger : undefined,
   });
 
@@ -450,7 +448,7 @@ export async function sendMessageMattermost(
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
         buffer: media.buffer,
-        fileName: media.fileName ?? "upload",
+        fileName: media.fileName ?? `upload${extensionForMime(media.contentType) ?? ""}`,
         contentType: media.contentType ?? undefined,
       });
       fileIds = [fileInfo.id];

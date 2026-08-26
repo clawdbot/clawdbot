@@ -10,7 +10,7 @@ import type {
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
-import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { DmScope, GroupScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
@@ -62,6 +62,7 @@ export type AgentRouteBinding = {
   session?: {
     /** Optional session scoping override for conversations matched by this binding. */
     dmScope?: DmScope;
+    groupScope?: GroupScope;
   };
 };
 
@@ -82,6 +83,7 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
+  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
   default?: boolean;
   name?: string;
   /** Optional human-authored agent description. */
@@ -137,7 +139,6 @@ export type AgentConfig = {
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
   /** Optional per-agent overrides for selected context/token-heavy limits. */
   contextLimits?: AgentContextLimitsConfig;
-  contextTokens?: number;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: Omit<NonNullable<AgentDefaultsConfig["heartbeat"]>, "agentId">;
   identity?: IdentityConfig;
@@ -171,6 +172,7 @@ export type AgentConfig = {
 export type AgentEntryConfig = Omit<AgentConfig, "id">;
 
 export type AgentsConfig = {
+  ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */

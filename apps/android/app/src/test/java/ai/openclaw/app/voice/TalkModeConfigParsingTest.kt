@@ -1,13 +1,37 @@
 package ai.openclaw.app.voice
 
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+
+@Serializable
+private data class TalkConfigContractFixture(
+  val selectionCases: List<SelectionCase>,
+  val timeoutCases: List<TimeoutCase>,
+) {
+  @Serializable
+  data class SelectionCase(
+    val id: String,
+    val talk: JsonObject,
+  )
+
+  @Serializable
+  data class TimeoutCase(
+    val id: String,
+    val fallback: Long,
+    val expectedTimeoutMs: Long,
+    val talk: JsonObject,
+  )
+}
 
 class TalkModeConfigParsingTest {
   private val json = Json { ignoreUnknownKeys = true }
@@ -37,6 +61,33 @@ class TalkModeConfigParsingTest {
     assertEquals("de-DE", parsed.speechLocale)
     assertEquals(true, parsed.interruptOnSpeech)
     assertEquals(1800L, parsed.silenceTimeoutMs)
+  }
+
+  @Test
+  fun selectionFixtures() {
+    for (fixture in loadContractFixtures().selectionCases) {
+      val parsed = parseTalkConfig(fixture.talk)
+
+      assertNull("${fixture.id}: speechLocale", parsed.speechLocale)
+      assertNull("${fixture.id}: interruptOnSpeech", parsed.interruptOnSpeech)
+      assertEquals(
+        "${fixture.id}: silenceTimeoutMs",
+        TalkDefaults.defaultSilenceTimeoutMs,
+        parsed.silenceTimeoutMs,
+      )
+    }
+  }
+
+  @Test
+  fun timeoutFixtures() {
+    for (fixture in loadContractFixtures().timeoutCases) {
+      val parsed = parseTalkConfig(fixture.talk)
+
+      assertNull("${fixture.id}: speechLocale", parsed.speechLocale)
+      assertNull("${fixture.id}: interruptOnSpeech", parsed.interruptOnSpeech)
+      assertEquals("${fixture.id}: fallback", fixture.fallback, TalkDefaults.defaultSilenceTimeoutMs)
+      assertEquals("${fixture.id}: silenceTimeoutMs", fixture.expectedTimeoutMs, parsed.silenceTimeoutMs)
+    }
   }
 
   @Test
@@ -107,31 +158,18 @@ class TalkModeConfigParsingTest {
     )
   }
 
-  @Test
-  fun defaultsSilenceTimeoutMsWhenMissing() {
-    assertEquals(
-      TalkDefaults.defaultSilenceTimeoutMs,
-      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(null),
-    )
-  }
+  private fun parseTalkConfig(talk: JsonObject): TalkModeGatewayConfigState = TalkModeGatewayConfigParser.parse(buildJsonObject { put("talk", talk) })
 
-  @Test
-  fun defaultsSilenceTimeoutMsWhenInvalid() {
-    val talk = buildJsonObject { put("silenceTimeoutMs", 0) }
+  private fun loadContractFixtures(): TalkConfigContractFixture = json.decodeFromString(findContractFixture().readText())
 
-    assertEquals(
-      TalkDefaults.defaultSilenceTimeoutMs,
-      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
-    )
-  }
-
-  @Test
-  fun defaultsSilenceTimeoutMsWhenString() {
-    val talk = buildJsonObject { put("silenceTimeoutMs", "1500") }
-
-    assertEquals(
-      TalkDefaults.defaultSilenceTimeoutMs,
-      TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
-    )
+  private fun findContractFixture(): File {
+    val startDir = System.getProperty("user.dir") ?: error("user.dir unavailable")
+    var current = File(startDir).absoluteFile
+    while (true) {
+      val candidate = File(current, "test/fixtures/talk-config-contract.json")
+      if (candidate.isFile) return candidate
+      current = current.parentFile ?: break
+    }
+    error("test/fixtures/talk-config-contract.json not found from $startDir")
   }
 }

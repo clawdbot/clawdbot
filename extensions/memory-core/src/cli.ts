@@ -18,6 +18,7 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
+import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
@@ -126,6 +127,9 @@ function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): nu
 }
 
 export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRuntimeHost) {
+  if (hostOptions?.openKeyedStore) {
+    configureMemoryCoreDreamingState(hostOptions.openKeyedStore);
+  }
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")

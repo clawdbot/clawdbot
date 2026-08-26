@@ -14,26 +14,6 @@ import type {
   ChannelPlugin,
 } from "./types.js";
 
-// These bundled adapters have host-reviewed provider-side current/configured
-// gates. Other bundled adapters retain the exact-current compatibility limit.
-const BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES: ReadonlySet<string> = new Set([
-  "discord",
-  "feishu",
-  "matrix",
-  "msteams",
-  "slack",
-]);
-
-// Telegram owns exact topic/account binding for message mutations only. Other
-// Telegram reads retain the host gate, including targetless sticker cache reads.
-const BUNDLED_PROVIDER_READ_GATE_ACTIONS: ReadonlyMap<
-  string,
-  ReadonlySet<ChannelMessageActionName>
-> = new Map([
-  ["mattermost", new Set<ChannelMessageActionName>(["read"])],
-  ["telegram", new Set<ChannelMessageActionName>(["react", "edit", "delete"])],
-]);
-
 declare const serverOwnedConversationReadOrigin: unique symbol;
 
 type ServerOwnedConversationReadOrigin = ReturnType<
@@ -156,13 +136,13 @@ type MessageActionReadEnforcement =
 
 function resolveMessageActionReadEnforcement(params: {
   action: ChannelMessageActionName;
-  channel: string;
+  actions: ChannelPlugin["actions"];
   pluginOrigin: string | undefined;
 }): MessageActionReadEnforcement {
+  const providerOwnedReadGates = params.actions?.providerOwnedReadGates;
   if (
     params.pluginOrigin === "bundled" &&
-    (BUNDLED_CHANNELS_WITH_PROVIDER_READ_GATES.has(params.channel) ||
-      BUNDLED_PROVIDER_READ_GATE_ACTIONS.get(params.channel)?.has(params.action) === true)
+    (providerOwnedReadGates === true || providerOwnedReadGates?.includes(params.action) === true)
   ) {
     return { kind: "provider-owned" };
   }
@@ -571,7 +551,7 @@ function prepareMessageActionReadContext(
     actionPolicy,
     enforcement: resolveMessageActionReadEnforcement({
       action,
-      channel: actionContext.channel,
+      actions: registration.plugin.actions,
       pluginOrigin: registration.origin,
     }),
   };

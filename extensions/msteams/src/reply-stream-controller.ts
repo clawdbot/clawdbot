@@ -11,6 +11,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { extractMessageId } from "./media-helpers.js";
@@ -280,9 +281,7 @@ export function createTeamsReplyStreamController(params: {
         canceledLocally = true;
         return;
       }
-      params.log?.debug?.(
-        `stream informative update failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.log?.debug?.(`stream informative update failed: ${coerceErrorMessage(err)}`);
     }
   };
 
@@ -371,7 +370,7 @@ export function createTeamsReplyStreamController(params: {
         // cumulative prefix Teams accepted; failed emits prove no delivery.
         streamFailed = true;
         params.log?.warn?.(
-          `msteams stream emit failed, falling back to block delivery: ${err instanceof Error ? err.message : String(err)}`,
+          `msteams stream emit failed, falling back to block delivery: ${coerceErrorMessage(err)}`,
         );
       }
     },
@@ -500,7 +499,7 @@ export function createTeamsReplyStreamController(params: {
           streamFailed = true;
           replacementEmitFailed = true;
           params.log?.warn?.(
-            `msteams stream replacement failed, falling back to block delivery: ${err instanceof Error ? err.message : String(err)}`,
+            `msteams stream replacement failed, falling back to block delivery: ${coerceErrorMessage(err)}`,
           );
           // Retain ownership until finalize so payloads held before this
           // failed replacement cannot be overtaken by this or later blocks.
@@ -549,9 +548,7 @@ export function createTeamsReplyStreamController(params: {
           }
           // Non-cancel emit failure: fall through to block delivery as a
           // safety net so the user still sees the final reply.
-          params.log?.debug?.(
-            `progress-mode finalize failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          params.log?.debug?.(`progress-mode finalize failed: ${coerceErrorMessage(err)}`);
         }
       }
       return payload;
@@ -669,9 +666,7 @@ export function createTeamsReplyStreamController(params: {
         // the reply pipeline after the user already saw the response.
         streamFailed = true;
         streamFinalizationPending = false;
-        params.log?.warn?.(
-          `msteams stream finalize failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        params.log?.warn?.(`msteams stream finalize failed: ${coerceErrorMessage(err)}`);
         const fallback = pendingFinalPayload;
         pendingFinalPayload = undefined;
         const replacementFallback =

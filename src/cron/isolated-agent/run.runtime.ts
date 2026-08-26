@@ -3,7 +3,6 @@ export {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 export { resolveCronStyleNow } from "../../agents/current-time.js";
 export { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";

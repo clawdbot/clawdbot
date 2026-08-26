@@ -7,9 +7,7 @@ import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { copyPluginToolMeta } from "../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../before-tool-call-metadata.js";
-import { copyChannelAgentToolMeta } from "../channel-tools.js";
+import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -19,7 +17,6 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
-import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -71,10 +68,7 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source.outputSchema !== undefined) {
     target.outputSchema = source.outputSchema;
   }
-  copyPluginToolMeta(source as never, target as never);
-  copyChannelAgentToolMeta(source as never, target as never);
-  copyBeforeToolCallHookMarker(source as never, target as never);
-  copyToolTerminalPresentation(source as never, target as never);
+  copyAgentToolMetadata(source as never, target as never);
 }
 
 // Duplicate names cannot be matched by map lookup alone, so same-index matches

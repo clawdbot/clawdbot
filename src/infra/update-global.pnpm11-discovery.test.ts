@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   detectGlobalInstallManagerForRoot,
   listActivePnpmIsolatedGlobalPackages,
@@ -44,7 +44,7 @@ async function writePnpmIsolatedPackage(params: {
 
 describe("pnpm 11 global install discovery", () => {
   it("detects isolated global installs from the active project link", async () => {
-    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-root-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-pnpm-isolated-root-" }, async (base) => {
       const npmRoot = path.join(base, "npm", "lib", "node_modules");
       const pnpmGlobalDir = path.join(base, "pnpm-home", "global");
       const pnpmGlobalRoot = path.join(pnpmGlobalDir, "v11");
@@ -110,7 +110,7 @@ describe("pnpm 11 global install discovery", () => {
   });
 
   it("prefers the invoking project when multiple installs are active", async () => {
-    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-owner-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-pnpm-isolated-owner-" }, async (base) => {
       const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");
       const otherPackageRoot = await writePnpmIsolatedPackage({
         globalRoot: pnpmGlobalRoot,
@@ -158,7 +158,7 @@ describe("pnpm 11 global install discovery", () => {
   });
 
   it("does not adopt another pnpm project through a shared-store package symlink", async () => {
-    await withTempDir({ prefix: "openclaw-update-pnpm-shared-store-owner-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-pnpm-shared-store-owner-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const activeInstallRoot = path.join(globalRoot, "active");
       const orphanInstallRoot = path.join(globalRoot, "orphan");
@@ -215,7 +215,7 @@ describe("pnpm 11 global install discovery", () => {
   });
 
   it("preserves pnpm 11 ownership when the invoking project is orphaned", async () => {
-    await withTempDir({ prefix: "openclaw-update-pnpm-isolated-orphan-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-pnpm-isolated-orphan-" }, async (base) => {
       const pnpmGlobalRoot = path.join(base, "pnpm-home", "global", "v11");
       const orphanPackageRoot = path.join(pnpmGlobalRoot, "orphan", "node_modules", "openclaw");
       await fs.mkdir(orphanPackageRoot, { recursive: true });
@@ -269,7 +269,7 @@ describe("pnpm 11 global install discovery", () => {
   });
 
   it("keeps npm ownership when its prefix is named like a pnpm layout", async () => {
-    await withTempDir({ prefix: "openclaw-update-npm-v11-prefix-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-npm-v11-prefix-" }, async (base) => {
       const npmPrefix = path.join(base, "v11");
       const npmGlobalRoot = path.join(npmPrefix, "lib", "node_modules");
       const packageRoot = path.join(npmGlobalRoot, "openclaw");
@@ -279,6 +279,9 @@ describe("pnpm 11 global install discovery", () => {
         const command = argv.join(" ");
         if (command === "npm root -g") {
           return { stdout: `${npmGlobalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (command === "npm --version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
         }
         if (command === "pnpm root -g") {
           return {
@@ -307,12 +310,16 @@ describe("pnpm 11 global install discovery", () => {
         command: "npm",
         globalRoot: npmGlobalRoot,
         packageRoot,
+        npmOwner: {
+          version: "12.0.0",
+          lifecyclePolicy: "allow-scripts",
+        },
       });
     });
   });
 
   it("does not infer pnpm ownership without pnpm node_modules metadata", async () => {
-    await withTempDir({ prefix: "openclaw-update-pnpm-shape-only-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-pnpm-shape-only-" }, async (base) => {
       const customGlobalDir = path.join(base, "custom-pnpm");
       const customGlobalRoot = path.join(customGlobalDir, "5", "node_modules");
       const pkgRoot = path.join(customGlobalRoot, "openclaw");

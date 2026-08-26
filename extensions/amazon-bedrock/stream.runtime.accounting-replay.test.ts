@@ -8,7 +8,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
-import { streamTesting as testing } from "./test-support.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
   return {
@@ -59,6 +58,28 @@ function streamBedrockForTest(
   options: BedrockOptions = {},
 ) {
   return streamSimpleBedrock(model, context, options as never);
+}
+
+async function captureMessages(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Parameters<typeof streamSimpleBedrock>[1],
+  options: BedrockOptions = {},
+): Promise<Array<{ content?: unknown; role?: unknown }>> {
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents([
+      { messageStart: { role: ConversationRole.ASSISTANT } },
+      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+    ]),
+  } as never);
+  await streamBedrockForTest(model, context, options).result();
+  const command = send.mock.calls.at(-1)?.[0] as {
+    input?: { messages?: Array<{ content?: unknown; role?: unknown }> };
+  };
+  if (!command.input || !Array.isArray(command.input.messages)) {
+    throw new Error("expected ConverseStreamCommand messages");
+  }
+  return command.input.messages;
 }
 
 afterEach(() => {
@@ -125,16 +146,15 @@ describe("Bedrock reasoning replay", () => {
     ]);
   });
 
-  it("preserves signed reasoning for Claude profile descriptors", () => {
+  it("preserves signed reasoning for Claude profile descriptors", async () => {
     const modelId =
       "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
+    const messages = await captureMessages(
       bedrockModel({
         id: modelId,
         name: "Claude Sonnet application profile",
       }),
-      "none",
+      signedThinkingContext(modelId),
     );
 
     expect(messages[0]?.content).toEqual([
@@ -149,12 +169,11 @@ describe("Bedrock reasoning replay", () => {
     ]);
   });
 
-  it("replays signed reasoning as plain text for non-Claude models", () => {
+  it("replays signed reasoning as plain text for non-Claude models", async () => {
     const modelId = "amazon.nova-micro-v1:0";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
+    const messages = await captureMessages(
       bedrockModel({ id: modelId, name: "Nova Micro" }),
-      "none",
+      signedThinkingContext(modelId),
     );
 
     expect(messages[0]?.content).toEqual([{ text: "privatereasoning" }]);
@@ -162,31 +181,27 @@ describe("Bedrock reasoning replay", () => {
 
   it.each(["3q2+7w==", undefined])(
     "drops opaque Claude reasoning when switching to an unsupported model (signature: %s)",
-    (thinkingSignature) => {
+    async (thinkingSignature) => {
       const modelId = "amazon.nova-micro-v1:0";
-      const messages = testing.convertMessages(
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: "bedrock-converse-stream",
-              provider: "amazon-bedrock",
-              model: "anthropic.claude-haiku-4-5-20251001-v1:0",
-              content: [
-                {
-                  type: "thinking",
-                  thinking: "[Reasoning redacted]",
-                  thinkingSignature,
-                  redacted: true,
-                },
-                { type: "text", text: "Safe visible response" },
-              ],
-            },
-          ],
-        } as never,
-        bedrockModel({ id: modelId, name: "Nova Micro" }),
-        "none",
-      );
+      const messages = await captureMessages(bedrockModel({ id: modelId, name: "Nova Micro" }), {
+        messages: [
+          {
+            role: "assistant",
+            api: "bedrock-converse-stream",
+            provider: "amazon-bedrock",
+            model: "anthropic.claude-haiku-4-5-20251001-v1:0",
+            content: [
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature,
+                redacted: true,
+              },
+              { type: "text", text: "Safe visible response" },
+            ],
+          },
+        ],
+      } as never);
 
       expect(messages[0]?.content).toEqual([{ text: "Safe visible response" }]);
     },
@@ -194,9 +209,10 @@ describe("Bedrock reasoning replay", () => {
 
   it.each(["3q2+7w==", undefined])(
     "drops model-bound opaque reasoning when switching between Claude models (signature: %s)",
-    (thinkingSignature) => {
+    async (thinkingSignature) => {
       const targetModelId = "anthropic.claude-sonnet-4-5-20250929-v1:0";
-      const messages = testing.convertMessages(
+      const messages = await captureMessages(
+        bedrockModel({ id: targetModelId, name: "Claude Sonnet 4.5" }),
         {
           messages: [
             {
@@ -216,37 +232,31 @@ describe("Bedrock reasoning replay", () => {
             },
           ],
         } as never,
-        bedrockModel({ id: targetModelId, name: "Claude Sonnet 4.5" }),
-        "none",
       );
 
       expect(messages[0]?.content).toEqual([{ text: "Safe visible response" }]);
     },
   );
 
-  it("preserves signature-only Fable reasoning blocks", () => {
+  it("preserves signature-only Fable reasoning blocks", async () => {
     const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: " sig-fable ",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
+    const messages = await captureMessages(bedrockModel({ id: modelId, name: "Claude Fable 5" }), {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: modelId,
+          content: [
+            {
+              type: "thinking",
+              thinking: "",
+              thinkingSignature: " sig-fable ",
+            },
+          ],
+        },
+      ],
+    } as never);
 
     expect(messages[0]?.content).toEqual([
       {
@@ -260,29 +270,25 @@ describe("Bedrock reasoning replay", () => {
     ]);
   });
 
-  it("drops synthetic reasoning placeholders from Claude replay", () => {
+  it("drops synthetic reasoning placeholders from Claude replay", async () => {
     const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "hidden compatibility reasoning",
-                thinkingSignature: "reasoning_content",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
+    const messages = await captureMessages(bedrockModel({ id: modelId, name: "Claude Fable 5" }), {
+      messages: [
+        {
+          role: "assistant",
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          model: modelId,
+          content: [
+            {
+              type: "thinking",
+              thinking: "hidden compatibility reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+          ],
+        },
+      ],
+    } as never);
 
     expect(messages).toEqual([]);
   });
@@ -292,8 +298,9 @@ describe("Bedrock prompt cache ownership", () => {
   const model = () =>
     bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0", name: "Claude Haiku 4.5" });
 
-  it("anchors prompt caching on the last stable user turn instead of transient runtime context", () => {
-    const messages = testing.convertMessages(
+  it("anchors prompt caching on the last stable user turn instead of transient runtime context", async () => {
+    const messages = await captureMessages(
+      model(),
       {
         messages: [
           { role: "user", content: "stable operator request", timestamp: 0 },
@@ -305,8 +312,7 @@ describe("Bedrock prompt cache ownership", () => {
           },
         ],
       },
-      model(),
-      "short",
+      { cacheRetention: "short" },
     );
 
     expect(messages).toEqual([
@@ -318,8 +324,9 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
   });
 
-  it("does not cache a runtime-context carrier when no stable user turn exists", () => {
-    const messages = testing.convertMessages(
+  it("does not cache a runtime-context carrier when no stable user turn exists", async () => {
+    const messages = await captureMessages(
+      model(),
       {
         messages: [
           {
@@ -330,8 +337,7 @@ describe("Bedrock prompt cache ownership", () => {
           },
         ],
       },
-      model(),
-      "short",
+      { cacheRetention: "short" },
     );
 
     expect(messages).toEqual([
@@ -339,8 +345,9 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
   });
 
-  it("never includes a runtime-context carrier in the cached prefix of a later user turn", () => {
-    const messages = testing.convertMessages(
+  it("never includes a runtime-context carrier in the cached prefix of a later user turn", async () => {
+    const messages = await captureMessages(
+      model(),
       {
         messages: [
           { role: "user", content: "stable operator request", timestamp: 0 },
@@ -360,8 +367,7 @@ describe("Bedrock prompt cache ownership", () => {
           },
         ],
       } as never,
-      model(),
-      "long",
+      { cacheRetention: "long" },
     );
 
     expect(messages[0]?.content).toEqual([
@@ -380,8 +386,9 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
   });
 
-  it("does not cache a later stable turn when volatile context starts the prefix", () => {
-    const messages = testing.convertMessages(
+  it("does not cache a later stable turn when volatile context starts the prefix", async () => {
+    const messages = await captureMessages(
+      model(),
       {
         messages: [
           {
@@ -393,8 +400,7 @@ describe("Bedrock prompt cache ownership", () => {
           { role: "user", content: "later stable operator request", timestamp: 1 },
         ],
       },
-      model(),
-      "long",
+      { cacheRetention: "long" },
     );
 
     expect(messages).toEqual([

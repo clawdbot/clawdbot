@@ -41,6 +41,8 @@ type RegisteredRoute = {
   path?: string;
   pluginId?: string;
   replaceExisting?: boolean;
+  source?: string;
+  throwOnFailure?: boolean;
 };
 
 type RegisteredTarget = {
@@ -88,7 +90,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     ...actual,
     danger: (value: unknown) => String(value),
     logVerbose: vi.fn(),
-    waitForAbortSignal: vi.fn(),
   };
 });
 
@@ -184,9 +185,10 @@ describe("monitorLineProvider lifecycle", () => {
         ? params.target.path
         : `/${params.target.path}`;
       const key =
-        withLeadingSlash.length > 1 && withLeadingSlash.endsWith("/")
-          ? withLeadingSlash.slice(0, -1)
-          : withLeadingSlash;
+        withLeadingSlash
+          .replace(/\/{2,}/g, "/")
+          .replace(/\/+$/, "")
+          .toLowerCase() || "/";
       const normalizedTarget = { ...params.target, path: key };
       const existing = params.targetsByPath.get(key) ?? [];
       params.targetsByPath.set(key, [...existing, normalizedTarget]);
@@ -238,8 +240,10 @@ describe("monitorLineProvider lifecycle", () => {
 
     expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledTimes(1);
     expect(requireWebhookRegistration().route.auth).toBe("plugin");
-    expect(statusSink).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle: "ready", connected: true }),
+    await vi.waitFor(() =>
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "ready", connected: true }),
+      ),
     );
     expect(resolved).toBe(false);
 
@@ -266,6 +270,8 @@ describe("monitorLineProvider lifecycle", () => {
     expect(registration.route.accountId).toBe("work");
     expect(registration.route.auth).toBe("plugin");
     expect(registration.route.pluginId).toBe("line");
+    expect(registration.route.source).toBe("line-webhook");
+    expect(registration.route.throwOnFailure).toBe(true);
     expect(registration.route).not.toHaveProperty("path");
     expect(registration.route).not.toHaveProperty("replaceExisting");
     await monitor.stop();
@@ -342,6 +348,29 @@ describe("monitorLineProvider lifecycle", () => {
     ).rejects.toThrow("line bot startup failed");
 
     expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("stops the bot and rejects startup when the webhook route cannot bind", async () => {
+    const statusSink = vi.fn();
+    registerWebhookTargetWithPluginRouteMock.mockImplementationOnce(() => {
+      throw new Error("LINE route conflict");
+    });
+
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        statusSink,
+      }),
+    ).rejects.toThrow("LINE route conflict");
+
+    const bot = createLineBotMock.mock.results[0]?.value as
+      | { stop: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bot?.stop).toHaveBeenCalledOnce();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {
@@ -534,18 +563,18 @@ describe("monitorLineProvider lifecycle", () => {
     }
   });
 
-  it("dispatches a signed POST to a configured trailing-slash webhook path", async () => {
+  it("dispatches a signed POST through the canonical configured webhook route", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
-      webhookPath: "/line/webhook/",
+      webhookPath: "/Line//Webhook/",
       accountId: "default",
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
     });
 
     const registration = requireWebhookRegistration();
-    expect(registration.target.path).toBe("/line/webhook");
+    expect(registration.target.path).toBe("/Line//Webhook");
 
     const route = requireRegisteredRoute();
     const payload = JSON.stringify({ events: [{ type: "message" }] });

@@ -151,6 +151,7 @@ function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCore
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  compatibilityHostVersion?: string;
   /**
    * Optional in-memory install records from earlier post-core steps (e.g.
    * `syncPluginsForUpdateChannel`, `updateNpmInstalledPlugins`) whose
@@ -165,12 +166,24 @@ export async function runPostCorePluginConvergence(params: {
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion ?? VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
-  const prunedBaseline = params.baselineInstallRecords
+  // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
+  // became bundled with the new core must not survive into the next startup's contract graph.
+  const { maybeRepairStaleManagedNpmBundledPlugins } =
+    await import("../../commands/doctor-plugin-registry.js");
+  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins({
+    config: params.cfg,
+    env,
+    prompter: { shouldRepair: true },
+    ...(params.baselineInstallRecords ? { installRecords: params.baselineInstallRecords } : {}),
+  });
+  const convergenceBaseline =
+    staleManagedNpmBundledPluginRepair?.installRecords ?? params.baselineInstallRecords;
+  const prunedBaseline = convergenceBaseline
     ? pruneStaleLocalBundledPluginInstallRecords({
-        installRecords: params.baselineInstallRecords,
+        installRecords: convergenceBaseline,
         env,
       })
     : null;
@@ -254,6 +267,9 @@ export async function runPostCorePluginConvergence(params: {
 
   return {
     changes: [
+      ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
+        (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,
+      ) ?? []),
       ...(prunedBaseline?.stale.map(
         (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
       ) ?? []),

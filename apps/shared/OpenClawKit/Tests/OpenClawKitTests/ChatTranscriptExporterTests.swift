@@ -1,8 +1,59 @@
+import Foundation
 import Testing
 @testable import OpenClawChatUI
 
 @Suite("ChatTranscriptExporter")
 struct ChatTranscriptExporterTests {
+    @Test func `exports system transcript rows without leaking internal prompts`() throws {
+        let wire = Data(#"""
+        [
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System] Resume the interrupted turn with private context."}],
+            "timestamp": 0,
+            "provenance": {"kind": "internal_system", "sourceTool": "main_session_restart_recovery"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System] Gateway restarted after an update."}],
+            "timestamp": 500,
+            "provenance": {"kind": "internal_system", "sourceTool": "restart-sentinel"}
+          },
+          {
+            "role": "system",
+            "content": [],
+            "timestamp": 1000,
+            "__openclaw": {"kind": "compaction", "id": "compact-1", "tokensBefore": 25000, "tokensAfter": 12500}
+          },
+          {
+            "role": "system",
+            "content": [],
+            "timestamp": 2000,
+            "__openclaw": {"kind": "reset", "id": "reset-1"}
+          },
+          {
+            "role": "system",
+            "content": [{"type": "text", "text": "Unknown marker body"}],
+            "timestamp": 3000,
+            "__openclaw": {"kind": "future-marker", "id": "future-1"}
+          }
+        ]
+        """#.utf8)
+        let messages = try JSONDecoder().decode([OpenClawChatMessage].self, from: wire)
+
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "System events",
+            sessionKey: "agent:main",
+            messages: messages)
+
+        #expect(!markdown.contains("private context"))
+        #expect(markdown.contains("System · restart recovery"))
+        #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
+        #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))
+        #expect(!markdown.contains("Unknown marker body"))
+    }
+
     @Test func `formats visible messages and attachments`() {
         let messages = [
             self.message(role: "system", text: "Hidden setup", timestamp: 0),

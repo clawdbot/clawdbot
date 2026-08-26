@@ -103,6 +103,14 @@ describe("resolveEffectiveUpdateChannel", () => {
       expected: { channel: "extended-stable", source: "config" },
     },
     {
+      name: "uses installed extended-stable version without config",
+      params: {
+        currentVersion: "2026.6.33",
+        installKind: "package" as const,
+      },
+      expected: { channel: "extended-stable", source: "installed-version" },
+    },
+    {
       name: "uses beta git tag",
       params: { installKind: "git" as const, git: { tag: "v2026.2.24-beta.1" } },
       expected: { channel: "beta", source: "git-tag" },
@@ -242,6 +250,20 @@ describe("resolveUpdateChannelDisplay", () => {
 });
 
 describe("resolveRegistryUpdateChannel", () => {
+  it.each([
+    { currentVersion: "2026.6.32", expected: "stable" },
+    { currentVersion: "2026.6.33", expected: "stable" },
+    { currentVersion: "2026.6.34", expected: "stable" },
+    { currentVersion: "2026.6.33-1", expected: "stable" },
+    { currentVersion: "1.33.1", expected: "stable" },
+    { currentVersion: "1.6.33", expected: "stable" },
+  ] as const)(
+    "does not infer a package-only channel for $currentVersion",
+    ({ currentVersion, expected }) => {
+      expect(resolveRegistryUpdateChannel({ currentVersion })).toBe(expected);
+    },
+  );
+
   it("queries beta when the installed version is beta even if config is stale stable", () => {
     expect(
       resolveRegistryUpdateChannel({

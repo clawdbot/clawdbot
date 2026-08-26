@@ -5,6 +5,7 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+import { shortenPathWithHome } from "../../../infra/home-display.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
@@ -16,14 +17,7 @@ export function shortenPath(path: unknown): string {
   if (typeof path !== "string") {
     return "";
   }
-  const home = os.homedir();
-  if (path === home) {
-    return "~";
-  }
-  if (path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) {
-    return `~${path.slice(home.length)}`;
-  }
-  return path;
+  return shortenPathWithHome(path, { home: os.homedir(), prefix: "~" });
 }
 
 /** Returns a display string for string/nullish values, or null for unsupported values. */

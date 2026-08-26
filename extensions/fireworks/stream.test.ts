@@ -37,7 +37,7 @@ function capturePayload(params: {
   return captured;
 }
 
-describe("createFireworksKimiThinkingDisabledWrapper", () => {
+describe("wrapFireworksProviderStream", () => {
   it("forces thinking disabled for Fireworks Kimi models", () => {
     expect(
       capturePayload({

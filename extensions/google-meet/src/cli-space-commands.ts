@@ -8,6 +8,8 @@ import {
 import { writeCalendarEventsSummary, writeLatestConferenceRecordSummary } from "./cli-export.js";
 import {
   callGoogleMeetGateway,
+  parseGoogleMeetMode,
+  parseGoogleMeetTransport,
   type CreateOptions,
   type JsonOptions,
   type ResolveSpaceOptions,
@@ -137,8 +139,8 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           options.join !== false
             ? await rt.join({
                 url: result.meetingUri,
-                transport: options.transport,
-                mode: options.mode,
+                transport: parseGoogleMeetTransport(options.transport),
+                mode: parseGoogleMeetMode(options.mode),
                 message: options.message,
                 dialInNumber: options.dialInNumber,
                 pin: options.pin,
@@ -176,8 +178,8 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
               await params.ensureRuntime()
             ).join({
               url: result.meetingUri,
-              transport: options.transport,
-              mode: options.mode,
+              transport: parseGoogleMeetTransport(options.transport),
+              mode: parseGoogleMeetMode(options.mode),
               message: options.message,
               dialInNumber: options.dialInNumber,
               pin: options.pin,

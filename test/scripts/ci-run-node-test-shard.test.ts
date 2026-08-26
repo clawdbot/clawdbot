@@ -18,8 +18,9 @@ import {
   pruneFsModuleCache,
   resolveShardChildCommand,
   resolveShardPlans,
+  resolveTestProjectsEntrypoint,
   runShardPlans,
-} from "../../scripts/ci-run-node-test-shard.mjs";
+} from "../../scripts/ci-run-node-test-shard.mts";
 
 const scratchDirs: string[] = [];
 
@@ -35,12 +36,27 @@ afterEach(() => {
   }
 });
 
-describe("scripts/ci-run-node-test-shard.mjs", () => {
-  it("launches the child runner directly with Node", () => {
+describe("scripts/ci-run-node-test-shard.mts", () => {
+  it("launches the current TypeScript child runner directly with Node", () => {
     expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
+      command: "/runtime/node",
+      args: ["--import", "tsx", "scripts/test-projects.mts", "one.config.ts"],
+    });
+  });
+
+  it("uses the compiled child runner from a frozen candidate", () => {
+    const entrypoint = resolveTestProjectsEntrypoint((candidate) => candidate.endsWith(".mjs"));
+    expect(entrypoint).toBe("scripts/test-projects.mjs");
+    expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node", entrypoint)).toEqual({
       command: "/runtime/node",
       args: ["scripts/test-projects.mjs", "one.config.ts"],
     });
+  });
+
+  it("fails clearly when the candidate has no test-projects entrypoint", () => {
+    expect(() => resolveTestProjectsEntrypoint(() => false)).toThrow(
+      "CI target does not provide scripts/test-projects.mts or .mjs",
+    );
   });
 
   it("prefers explicit targets and keeps one target per child", () => {
@@ -94,7 +110,6 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(childEnv.IGNORED).toBeUndefined();
     expect(childEnv.OPENCLAW_VITEST_SHARD_NAME).toBe("g");
     expect(childEnv.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
-    expect(childEnv.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD).toBe("1");
     expect(childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       path.join(scratchDir, "vitest-cache-3"),
     );
@@ -151,6 +166,58 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(peakActive).toBeLessThanOrEqual(2);
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
+  });
+
+  it("runs per-config groups serially through one persistent cache slot", async () => {
+    const scratchDir = makeScratchDir();
+    const persistentRoot = path.join(makeScratchDir(), "persistent");
+    mkdirSync(persistentRoot, { recursive: true });
+    const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
+    let active = 0;
+    let peakActive = 0;
+
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: `cache-warm:${name}`,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+        runChild: async (
+          args: string[],
+          childEnv: Record<string, string | undefined>,
+          label: string,
+        ) => {
+          active += 1;
+          peakActive = Math.max(peakActive, active);
+          seen.push({
+            args,
+            cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+            label,
+          });
+          active -= 1;
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(peakActive).toBe(1);
+    expect(seen.map((run) => run.args)).toEqual([
+      ["a.config.ts"],
+      ["b.config.ts"],
+      ["c.config.ts"],
+    ]);
+    expect(seen.map((run) => run.label)).toEqual(["cache-warm:a", "cache-warm:b", "cache-warm:c"]);
+    expect(new Set(seen.map((run) => run.cache))).toEqual(
+      new Set([path.join(persistentRoot, "vitest-cache-0")]),
+    );
   });
 
   it("forwards trusted Vitest arguments after the target separator", async () => {
@@ -321,12 +388,59 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(started).toEqual(["a", "b"]);
   });
 
-  it("fails plans that carry no configs", async () => {
-    const scratchDir = makeScratchDir();
+  it("continues through failed plans only when explicitly requested", async () => {
+    const started: string[] = [];
     const exitCode = await runShardPlans(
-      [{ kind: "group" as const, name: "broken", plan: { configs: [] } }],
-      { concurrency: 1, env: {}, runChild: async () => 0, scratchDir },
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        continueOnFailure: true,
+        env: {},
+        runChild: async (_args, _env, label) => {
+          started.push(label);
+          return label === "b" ? 7 : label === "d" ? 9 : 0;
+        },
+        scratchDir: makeScratchDir(),
+      },
     );
-    expect(exitCode).toBe(1);
+
+    expect(started).toEqual(["a", "b", "c", "d"]);
+    expect(exitCode).toBe(7);
   });
+
+  it.each([
+    { continueOnFailure: false, expectedStarted: [] },
+    { continueOnFailure: true, expectedStarted: ["next"] },
+  ])(
+    "fails a malformed plan with continuation=$continueOnFailure",
+    async ({ continueOnFailure, expectedStarted }) => {
+      const started: string[] = [];
+      const exitCode = await runShardPlans(
+        [
+          { kind: "group" as const, name: "broken", plan: { configs: [] } },
+          { kind: "group" as const, name: "next", plan: { configs: ["next.config.ts"] } },
+        ],
+        {
+          concurrency: 1,
+          continueOnFailure,
+          env: {},
+          runChild: async (_args, _env, label) => {
+            started.push(label);
+            return 0;
+          },
+          scratchDir: makeScratchDir(),
+        },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(started).toEqual(expectedStarted);
+    },
+  );
 });

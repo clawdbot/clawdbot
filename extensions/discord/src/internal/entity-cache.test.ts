@@ -77,6 +77,23 @@ describe("DiscordEntityCache eviction", () => {
     expect(cache.size).toBe(0);
   });
 
+  it("reuses normalized guild emojis until their cache entry expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const { cache } = makeCache({ ttlMs: 30_000 });
+    const fetchEmojis = vi.fn(async () => [{ name: "party", identifier: "party:1" }]);
+
+    expect(await cache.fetchGuildEmojis("g1", fetchEmojis)).toEqual([
+      { name: "party", identifier: "party:1" },
+    ]);
+    await cache.fetchGuildEmojis("g1", fetchEmojis);
+    expect(fetchEmojis).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    await cache.fetchGuildEmojis("g1", fetchEmojis);
+    expect(fetchEmojis).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["updated", GatewayDispatchEvents.ThreadUpdate],
     ["deleted", GatewayDispatchEvents.ThreadDelete],
@@ -91,5 +108,40 @@ describe("DiscordEntityCache eviction", () => {
     await cache.fetchChannel("thread-42");
 
     expect(getCalls()).toBe(2);
+  });
+});
+
+describe("DiscordEntityCache gateway invalidation", () => {
+  it("invalidates only the updated guild's normalized emoji list", async () => {
+    const { cache } = makeCache({ ttlMs: 60_000 });
+    const fetchEmojis = vi.fn(async () => [{ name: "party", identifier: "party:1" }]);
+
+    await cache.fetchGuildEmojis("g1", fetchEmojis);
+    await cache.fetchGuildEmojis("g2", fetchEmojis);
+    cache.invalidateForGatewayEvent(GatewayDispatchEvents.GuildEmojisUpdate, { guild_id: "g1" });
+    await cache.fetchGuildEmojis("g1", fetchEmojis);
+    await cache.fetchGuildEmojis("g2", fetchEmojis);
+
+    expect(fetchEmojis).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    GatewayDispatchEvents.GuildMemberAdd,
+    GatewayDispatchEvents.GuildMemberRemove,
+    GatewayDispatchEvents.GuildMemberUpdate,
+  ])("invalidates member and user entries for %s", async (event) => {
+    const { cache, getCalls } = makeCache({ ttlMs: 60_000 });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(2);
+
+    cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
+
+    await cache.fetchMember("g1", "u1");
+    await cache.fetchUser("u1");
+    expect(getCalls()).toBe(4);
   });
 });

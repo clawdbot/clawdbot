@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
@@ -19,7 +20,6 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
-import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
@@ -28,6 +28,7 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
 } from "../../onboard-custom-config.js";
+import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
@@ -35,8 +36,6 @@ import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-pr
 type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
 >;
-
-const GENERIC_NON_INTERACTIVE_AUTH_CHOICES = ["oauth", "setup-token", "token", "apiKey"];
 
 /** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
@@ -52,35 +51,43 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,
+    workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
-    runtime.exit(1);
     return null;
   }
-  const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
+  const toStoredSecretInput = (paramsLocal: {
+    resolved: ResolvedNonInteractiveApiKey;
+    provider: string;
+    envVarName?: string;
+  }): SecretInput | null => {
+    const { resolved } = paramsLocal;
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {
       return resolved.key;
     }
-    if (resolved.source !== "env") {
-      return resolved.key;
-    }
-    if (!resolved.envVarName) {
-      // Secret refs need a durable env-var id; provider auto-detection without
-      // a concrete name cannot be serialized as a config reference.
-      runtime.error(
+    if (resolved.source !== "env" || !resolved.envVarName) {
+      // Existing profiles may be reused, but neither serializer may turn their
+      // resolved secret or a literal flag into plaintext when refs were requested.
+      const envHint = paramsLocal.envVarName
+        ? `Set ${paramsLocal.envVarName} in env and retry`
+        : "Set the provider API key env var and retry";
+      rejectOnboardingOption(
+        opts,
+        runtime,
         [
-          `Unable to determine which environment variable to store as a ref for provider "${authChoice}".`,
-          "Set an explicit provider env var and retry, or use --secret-input-mode plaintext.",
+          `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
+          `${envHint}, or use --secret-input-mode plaintext.`,
         ].join("\n"),
       );
-      runtime.exit(1);
       return null;
     }
     return {
@@ -97,6 +104,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       agentDir: params.target.agentDir,
       workspaceDir: params.target.workspaceDir,
       secretInputMode: requestedSecretInputMode,
+      json: opts.json,
     });
   const toApiKeyCredential = (paramsLocal: {
     provider: string;
@@ -104,39 +112,17 @@ export async function applyNonInteractiveAuthChoice(params: {
     email?: string;
     metadata?: Record<string, string>;
   }): ApiKeyCredential | null => {
-    const storeSecretRef =
-      requestedSecretInputMode === "ref" && paramsLocal.resolved.source === "env"; // pragma: allowlist secret
-    if (storeSecretRef) {
-      if (!paramsLocal.resolved.envVarName) {
-        // Plugin profile credentials have the same secret-ref contract as core
-        // provider config: the stored ref must name a specific env variable.
-        runtime.error(
-          [
-            `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
-            "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
-          ].join("\n"),
-        );
-        runtime.exit(1);
-        return null;
-      }
-      return {
-        type: "api_key",
-        provider: paramsLocal.provider,
-        keyRef: {
-          source: "env",
-          provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-            preferFirstProviderForSource: true,
-          }),
-          id: paramsLocal.resolved.envVarName,
-        },
-        ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
-        ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
-      };
+    const stored = toStoredSecretInput({
+      resolved: paramsLocal.resolved,
+      provider: paramsLocal.provider,
+    });
+    if (!stored) {
+      return null;
     }
     return {
       type: "api_key",
       provider: paramsLocal.provider,
-      key: paramsLocal.resolved.key,
+      ...(typeof stored === "string" ? { key: stored } : { keyRef: stored }),
       ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
@@ -159,14 +145,15 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.log(replacement.message);
       authChoice = replacement.normalized;
     } else {
-      runtime.error(
+      rejectOnboardingOption(
+        opts,
+        runtime,
         formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
           config: nextConfig,
           workspaceDir: params.target.workspaceDir,
           env: process.env,
         })!,
       );
-      runtime.exit(1);
       return null;
     }
   }
@@ -186,30 +173,26 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
   const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
   if (replacementChoiceId) {
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
     );
-    runtime.exit(1);
     return null;
   }
 
-  const validAuthChoices = Array.from(
-    new Set([
-      ...formatAuthChoiceChoicesForCli({
-        includeLegacyAliases: false,
-        includeSkip: true,
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
-      }).split("|"),
-      ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
-    ]),
-  );
+  const validAuthChoices = formatAuthChoiceChoicesForCli({
+    includeSkip: true,
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  }).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
     );
-    runtime.exit(1);
     return null;
   }
 
@@ -235,13 +218,14 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "setup-token" || authChoice === "token") {
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       [
         `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
         'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
       ].join("\n"),
     );
-    runtime.exit(1);
     return null;
   }
 
@@ -273,19 +257,21 @@ export async function applyNonInteractiveAuthChoice(params: {
         required: false,
       });
       let customApiKeyInput: SecretInput | undefined;
-      if (resolvedCustomApiKey) {
-        const storeCustomApiKeyAsRef = requestedSecretInputMode === "ref"; // pragma: allowlist secret
-        if (storeCustomApiKeyAsRef) {
-          // Reuse the same SecretInput conversion as core providers so custom
-          // endpoints preserve env-ref storage semantics.
-          const stored = toStoredSecretInput(resolvedCustomApiKey);
-          if (!stored) {
-            return null;
-          }
-          customApiKeyInput = stored;
-        } else {
-          customApiKeyInput = resolvedCustomApiKey.key;
+      if (
+        resolvedCustomApiKey &&
+        (requestedSecretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
+      ) {
+        // Profile ownership stays in the auth store; serializing its resolved
+        // value would expose plaintext and overwrite an existing SecretRef.
+        const stored = toStoredSecretInput({
+          resolved: resolvedCustomApiKey,
+          provider: resolvedProviderId.providerId,
+          envVarName: "CUSTOM_API_KEY",
+        });
+        if (!stored) {
+          return null;
         }
+        customApiKeyInput = stored;
       }
       const result = applyCustomApiConfig({
         config: nextConfig,
@@ -295,6 +281,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
+        target: params.target,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
@@ -303,38 +290,22 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return result.config;
     } catch (err) {
-      if (err instanceof CustomApiError) {
-        switch (err.code) {
-          case "missing_required":
-          case "invalid_compatibility":
-            runtime.error(err.message);
-            break;
-          default:
-            runtime.error(`Invalid custom provider config: ${err.message}`);
-            break;
-        }
-        runtime.exit(1);
-        return null;
-      }
-      const reason = formatErrorMessage(err);
-      runtime.error(`Invalid custom provider config: ${reason}`);
-      runtime.exit(1);
+      const message =
+        err instanceof CustomApiError &&
+        (err.code === "missing_required" || err.code === "invalid_compatibility")
+          ? err.message
+          : `Invalid custom provider config: ${err instanceof CustomApiError ? err.message : formatErrorMessage(err)}`;
+      rejectOnboardingOption(opts, runtime, message);
       return null;
     }
   }
 
   if (
-    authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error(
-      authChoice === "oauth"
-        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
-        : "OAuth requires interactive mode.",
-    );
-    runtime.exit(1);
+    rejectOnboardingOption(opts, runtime, "OAuth requires interactive mode.");
     return null;
   }
 

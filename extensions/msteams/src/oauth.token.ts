@@ -2,6 +2,7 @@
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
@@ -44,6 +45,17 @@ function createMSTeamsTokenBody(params: {
 
 function resolveMSTeamsTokenExpiresAt(value: unknown): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value, { bufferMs: EXPIRY_BUFFER_MS });
+}
+
+function assertMSTeamsTokenResponseObject(
+  data: unknown,
+  failureLabel: string,
+): Record<string, unknown> {
+  // JSON.parse can yield null or arrays even when the provider response is typed as an object.
+  if (!isRecord(data)) {
+    throw new Error(`MSTeams ${failureLabel} failed: invalid token response fields`);
+  }
+  return data;
 }
 
 function parseMSTeamsTokenResponse(
@@ -93,11 +105,14 @@ async function fetchMSTeamsTokens(params: {
     if (!response.ok) {
       throw await createMSTeamsHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
-    const data = await readProviderJsonResponse<Record<string, unknown>>(
+    const data = await readProviderJsonResponse<unknown>(
       response,
       `MSTeams ${params.failureLabel} failed`,
     );
-    return parseMSTeamsTokenResponse(data, params.failureLabel);
+    return parseMSTeamsTokenResponse(
+      assertMSTeamsTokenResponseObject(data, params.failureLabel),
+      params.failureLabel,
+    );
   } finally {
     await release();
   }

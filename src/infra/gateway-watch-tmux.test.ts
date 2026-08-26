@@ -1,11 +1,12 @@
 // Covers gateway watch tmux script helpers.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGatewayWatchTmuxCommand,
   resolveGatewayWatchTmuxSessionName,
   runGatewayWatchTmuxMain,
   runGatewayWatchServiceHandoff,
-} from "../../scripts/gateway-watch-tmux.mjs";
+} from "../../scripts/gateway-watch-tmux.mts";
 
 const createOutput = () => {
   const chunks: string[] = [];
@@ -19,12 +20,7 @@ const createOutput = () => {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function spawnCall(mock: unknown, callIndex: number) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -126,7 +122,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("--force");
     expect(command).toContain("'a b.jsonl'");
     expect(command).not.toContain("scripts/run-node.mjs");
-    expect(command).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(command).toContain("scripts/gateway-watch-tmux.mts");
     expect(command).toContain("--handoff-managed-service");
   });
 
@@ -139,11 +135,11 @@ describe("gateway-watch tmux wrapper", () => {
       sessionName: "openclaw-gateway-watch-main",
     });
 
-    expect(command).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(command).toContain("scripts/gateway-watch-tmux.mts");
     expect(command).toMatch(
-      /gateway-watch-tmux\.mjs.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
+      /gateway-watch-tmux\.mts.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
     );
-    expect(command.indexOf("scripts/gateway-watch-tmux.mjs")).toBeLessThan(
+    expect(command.indexOf("scripts/gateway-watch-tmux.mts")).toBeLessThan(
       command.indexOf("scripts/watch-node.mjs"),
     );
   });
@@ -522,7 +518,7 @@ describe("gateway-watch tmux wrapper", () => {
       "-c",
       "/repo",
     ]);
-    expect(String(launchArgs[6])).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(String(launchArgs[6])).toContain("scripts/gateway-watch-tmux.mts");
     expect(String(launchArgs[6])).toContain("scripts/watch-node.mjs");
     expect(
       expectSpawn(spawnSync, 4, "tmux", [

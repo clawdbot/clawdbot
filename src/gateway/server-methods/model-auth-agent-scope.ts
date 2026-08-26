@@ -4,21 +4,37 @@ import {
   GatewayErrorDetailCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 
 type ModelAuthAgentScopeResult =
   | { ok: true; agentId: string; agentDir: string }
-  | { ok: false; agentId: string };
+  | { ok: false; agentId: string; error?: ReturnType<typeof errorShape> };
 
 /** Resolves model-auth RPC scope without letting explicit garbage reach the default store. */
 export function resolveModelAuthAgentScope(
   cfg: OpenClawConfig,
   requestedAgentId: unknown,
 ): ModelAuthAgentScopeResult {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   if (requestedAgentId === undefined || requestedAgentId === "") {
+    let defaultAgentId: string;
+    try {
+      defaultAgentId = resolveDefaultAgentId(cfg, {
+        surface: "model auth",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    } catch (error) {
+      if (!(error instanceof AgentSelectionRequiredError)) {
+        throw error;
+      }
+      return {
+        ok: false,
+        agentId: "",
+        error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
+      };
+    }
     return {
       ok: true,
       agentId: defaultAgentId,
@@ -37,17 +53,19 @@ export function resolveModelAuthAgentScope(
   if (!rawAgentId) {
     return { ok: false, agentId: requestedAgentId };
   }
-  const agentId = normalizeAgentId(rawAgentId);
-  // normalizeAgentId falls back to "main" when sanitization erases the entire
-  // input; explicit garbage must not inherit the default agent's credentials.
-  const collapsedToFallback = !/[A-Za-z0-9_]/u.test(rawAgentId);
-  if (collapsedToFallback || !listAgentIds(cfg).includes(agentId)) {
+  const normalized = normalizeAgentIdStrict(rawAgentId);
+  if (!normalized.ok || !listAgentIds(cfg).includes(normalized.value)) {
     return { ok: false, agentId: rawAgentId };
   }
+  const agentId = normalized.value;
   return { ok: true, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 
-export function unknownModelAuthAgentIdError(agentId: string) {
+export function modelAuthAgentScopeError(scope: Extract<ModelAuthAgentScopeResult, { ok: false }>) {
+  return scope.error ?? unknownModelAuthAgentIdError(scope.agentId);
+}
+
+function unknownModelAuthAgentIdError(agentId: string) {
   const details: UnknownAgentIdErrorDetails = {
     code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID,
     agentId,

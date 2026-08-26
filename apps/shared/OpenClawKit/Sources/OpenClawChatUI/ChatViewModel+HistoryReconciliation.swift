@@ -47,6 +47,8 @@ extension OpenClawChatViewModel {
             role: message.role,
             content: sanitizedContent,
             timestamp: message.timestamp,
+            transcriptMessageID: message.transcriptMessageID,
+            isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
@@ -54,7 +56,9 @@ extension OpenClawChatViewModel {
             stopReason: message.stopReason,
             errorMessage: message.errorMessage,
             details: message.details,
-            isError: message.isError)
+            isError: message.isError,
+            provenance: message.provenance,
+            historyMarker: message.historyMarker)
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -174,7 +178,9 @@ extension OpenClawChatViewModel {
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage,
             details: incoming.details,
-            isError: incoming.isError)
+            isError: incoming.isError,
+            provenance: incoming.provenance ?? existing.provenance,
+            historyMarker: incoming.historyMarker ?? existing.historyMarker)
     }
 
     private static func preservingLocalAudioDurations(
@@ -480,6 +486,8 @@ extension OpenClawChatViewModel {
                 role: existing.role,
                 content: existing.content,
                 timestamp: existing.timestamp,
+                transcriptMessageID: existing.transcriptMessageID,
+                isTruncated: existing.isTruncated,
                 idempotencyKey: remoteKey,
                 toolCallId: existing.toolCallId,
                 toolName: existing.toolName,
@@ -487,7 +495,9 @@ extension OpenClawChatViewModel {
                 stopReason: existing.stopReason,
                 errorMessage: existing.errorMessage,
                 details: existing.details,
-                isError: existing.isError)
+                isError: existing.isError,
+                provenance: existing.provenance,
+                historyMarker: existing.historyMarker)
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in
@@ -840,6 +850,7 @@ extension OpenClawChatViewModel {
         // Wholesale history replacement drops local-only queued bubbles;
         // re-adopt or re-append them from the durable outbox.
         restoreOutboxMessages(session: request.session)
+        self.scheduleProgressCardFetch(for: request.session)
         self.applyDeferredExternalStateIfReady()
         return true
     }

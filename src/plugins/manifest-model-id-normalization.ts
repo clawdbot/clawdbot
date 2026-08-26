@@ -4,11 +4,16 @@ import {
   normalizeProviderModelIdWithPolicies,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-workspace-state.js";
+// Snapshot reads go through the registration-slot bridge so this module stays
+// off the control-plane/kysely graph; doctor closures cold-load it via
+// parseModelRef consumers.
+import {
+  getCurrentPluginMetadataSnapshotRuntime,
+  resolvePluginMetadataSnapshotRuntime,
+} from "./plugin-metadata-snapshot.runtime.js";
+import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;
@@ -32,9 +37,9 @@ function resolveMetadataSnapshotForPolicies(
   cacheable: boolean;
 } {
   const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromStateCore();
   if (params.config === undefined) {
-    const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    const currentSnapshot = getCurrentPluginMetadataSnapshotRuntime({
       env,
       workspaceDir,
       allowWorkspaceScopedSnapshot: true,
@@ -48,12 +53,15 @@ function resolveMetadataSnapshotForPolicies(
       };
     }
   }
-  const snapshot = resolvePluginMetadataSnapshot({
+  const snapshot = resolvePluginMetadataSnapshotRuntime({
     config: params.config ?? {},
     env,
     workspaceDir,
     allowWorkspaceScopedCurrent: true,
   });
+  if (!snapshot) {
+    return { plugins: [], cacheable: false };
+  }
   return {
     plugins: snapshot.plugins,
     configFingerprint: snapshot.configFingerprint,

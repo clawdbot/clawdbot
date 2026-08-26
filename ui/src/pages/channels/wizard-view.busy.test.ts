@@ -6,7 +6,11 @@ import { i18n } from "../../i18n/index.ts";
 import type { ChannelWizardStep } from "./wizard-controller.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
-function renderStep(step: ChannelWizardStep, busy = true) {
+function renderStep(
+  step: ChannelWizardStep,
+  busy = true,
+  textValue = typeof step.initialValue === "string" ? step.initialValue : "",
+) {
   const container = document.createElement("div");
   const onAnswer = vi.fn();
   const onClose = vi.fn();
@@ -25,6 +29,10 @@ function renderStep(step: ChannelWizardStep, busy = true) {
       channelLabel: (channelId) => channelId,
       multiselectValues: ["alpha"],
       onToggleMultiselect,
+      textValue,
+      secretVisible: false,
+      onTextInput: vi.fn(),
+      onToggleSecretVisibility: vi.fn(),
       onAnswer,
       onClose,
       whatsappQrDataUrl: null,
@@ -110,11 +118,9 @@ describe("renderChannelWizard busy controls", () => {
         { label: "Beta", value: "beta" },
       ],
     });
-    const group = select.container.querySelector<HTMLElement & { disabled: boolean }>(
-      "wa-radio-group",
-    );
-    expect(group?.disabled).toBe(true);
+    const group = select.container.querySelector("wa-select");
     expect(group?.hasAttribute("disabled")).toBe(true);
+    expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
   });
 
   it("disables multiselect choices and submission while a step is running", () => {
@@ -136,16 +142,23 @@ describe("renderChannelWizard busy controls", () => {
   });
 
   it("disables text editing and submission while a step is running", () => {
-    const text = renderStep({
-      id: "text",
-      type: "text",
-      message: "Enter a value",
-      initialValue: "original",
-    });
+    const text = renderStep(
+      {
+        id: "text",
+        type: "text",
+        message: "Enter a value",
+        sensitive: true,
+      },
+      true,
+      "replacement",
+    );
     const input = text.container.querySelector<HTMLInputElement>('input[name="wizard-text"]');
     const submit = text.container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const toggle = text.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(input?.disabled).toBe(true);
-    expect(input?.value).toBe("original");
+    expect(input?.type).toBe("password");
+    expect(input?.value).toBe("replacement");
+    expect(toggle?.disabled).toBe(true);
     expect(submit?.disabled).toBe(true);
     submit?.click();
     expect(text.onAnswer).not.toHaveBeenCalled();
@@ -167,9 +180,7 @@ describe("renderChannelWizard busy controls", () => {
       },
       false,
     );
-    expect(
-      select.container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group")
-        ?.disabled,
-    ).toBe(false);
+    const picker = select.container.querySelector("wa-select");
+    expect(picker?.hasAttribute("disabled")).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import {
   respondError,
   type GatewayMethodContext,
 } from "./gateway-helpers.js";
-import type { WorkboardStore } from "./store.js";
+import { WorkboardCardConflictError, type WorkboardStore } from "./store.js";
 import {
   assertWorkboardWorkspaceMutationAccess,
   canonicalizeWorkboardWorkspaceAccess,
@@ -61,12 +61,36 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
   );
 
   api.registerGatewayMethod(
+    "workboard.cards.captureSession",
+    async (request) => {
+      const { params: requestParams, respond } = request;
+      try {
+        const input = withoutWorkboardWorkspaceAccess(requestParams);
+        const access = await resolveGatewayWorkspaceMutationAccess(request, input);
+        respond(true, {
+          card: redactCard(await store.captureSession(withWorkboardWorkspaceAccess(input, access))),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.update",
     async (request) => {
       const { params: requestParams, respond } = request;
       try {
         const patch = withoutWorkboardWorkspaceAccess(readPatch(requestParams));
         const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
+        const expectedUpdatedAt = requestParams.expectedUpdatedAt;
+        if (
+          expectedUpdatedAt !== undefined &&
+          (typeof expectedUpdatedAt !== "number" || !Number.isFinite(expectedUpdatedAt))
+        ) {
+          throw new Error("expectedUpdatedAt must be a finite number.");
+        }
         respond(true, {
           card: redactCard(
             await store.update(
@@ -74,10 +98,22 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
               containsWorkboardWorkspaceMutation(patch)
                 ? withWorkboardWorkspaceAccess(patch, access)
                 : patch,
+              { expectedUpdatedAt },
             ),
           ),
         });
       } catch (error) {
+        if (error instanceof WorkboardCardConflictError) {
+          respond(false, undefined, {
+            code: "workboard_conflict",
+            message: error.message,
+            details: {
+              type: "workboard_card_conflict",
+              card: redactCard(error.current),
+            },
+          });
+          return;
+        }
         respondError(respond, error);
       }
     },

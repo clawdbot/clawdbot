@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
@@ -102,7 +102,7 @@ function writeExternalSetupChannelPlugin(
   } = {},
 ) {
   useNoBundledPlugins();
-  const pluginDir = options.pluginDir ?? makeTempDir();
+  const pluginDir = options.pluginDir ?? makePluginLoaderTempDir();
   const pluginId = options.pluginId ?? "external-chat";
   const channelId = options.channelId ?? "external-chat";
   const manifestChannelIds = options.manifestChannelIds ?? [channelId];
@@ -274,7 +274,7 @@ function writeBundledSetupChannelPlugin(
     envVar?: string;
   } = {},
 ) {
-  const bundledRoot = makeTempDir();
+  const bundledRoot = makePluginLoaderTempDir();
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
   const pluginId = options.pluginId ?? "bundled-chat";
   const channelId = options.channelId ?? pluginId;
@@ -558,6 +558,41 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expect(pluginIds(second)).not.toContain("external-chat");
     expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("reloads replaced installed channel setup modules and their dependencies", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin();
+    const setupPath = path.join(pluginDir, "setup-entry.cjs");
+    const dependencyPath = path.join(pluginDir, "setup-dependency.cjs");
+    const initialSource = fs
+      .readFileSync(setupPath, "utf8")
+      .replace('blurb: "setup entry",', 'blurb: require("./setup-dependency.cjs"),');
+    fs.writeFileSync(dependencyPath, 'module.exports = "before";\n', "utf8");
+    fs.writeFileSync(setupPath, initialSource, "utf8");
+    const cfg = createExternalChannelTestConfig({ pluginDir });
+    const options = {
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    };
+
+    const first = listReadOnlyChannelPluginsForConfig(cfg, options);
+    expect(first.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("before");
+
+    fs.writeFileSync(dependencyPath, 'module.exports = "after";\n', "utf8");
+    fs.writeFileSync(
+      setupPath,
+      initialSource.replace(
+        'blurb: require("./setup-dependency.cjs"),',
+        'blurb: "updated:" + require("./setup-dependency.cjs"),',
+      ),
+      "utf8",
+    );
+    clearPluginMetadataLifecycleCaches();
+
+    const second = listReadOnlyChannelPluginsForConfig(cfg, options);
+    expect(second.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe(
+      "updated:after",
+    );
   });
 
   it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
@@ -1108,7 +1143,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
   });
 
   it("discovers trusted external channel plugins from the default agent workspace", () => {
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");
     fs.mkdirSync(pluginDir, { recursive: true });
     const { fullMarker, setupMarker } = writeExternalSetupChannelPlugin({

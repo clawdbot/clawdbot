@@ -1,3 +1,4 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Nostr tests cover channel.outbound plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -59,13 +60,14 @@ async function startOutboundAccount(accountId?: string) {
   };
   mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
   const abort = new AbortController();
-
-  const task = startNostrGatewayAccount(
-    createStartAccountContext({
-      account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
-      abortSignal: abort.signal,
-    }),
-  );
+  const context = createStartAccountContext({
+    account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
+    abortSignal: abort.signal,
+  });
+  context.channelRuntime = {
+    inbound: { buildContext: buildChannelInboundEventContext },
+  } as never;
+  const task = startNostrGatewayAccount(context);
   await vi.waitFor(() => {
     expect(mocks.startNostrBus).toHaveBeenCalledTimes(1);
   });

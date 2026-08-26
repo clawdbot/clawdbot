@@ -36,7 +36,7 @@ export {
   resolveCommandAuthorization,
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
+export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
 export { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 export {
   formatFastModeCommandOptions,

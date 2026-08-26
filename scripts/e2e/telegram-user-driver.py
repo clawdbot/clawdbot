@@ -8,13 +8,14 @@ import json
 import os
 import secrets
 import shutil
+import signal
+import socket
 import stat
 import subprocess
 import sys
 import time
 import urllib.request
 from pathlib import Path
-
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 STATE_DIR = Path(os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR") or (SKILL_DIR / "user-driver")).expanduser()
@@ -31,6 +32,22 @@ def read_json(path):
         return json.loads(path.read_text())
     except FileNotFoundError:
         return {}
+
+
+def open_contained_file(root, relative):
+    """Opens a file under root, descending one component at a time from an open directory
+    descriptor so no symlink can be traversed and no directory can be swapped mid-walk.
+    Anchoring on descriptors is what keeps containment true without Linux-only /proc paths."""
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        *directories, name = relative.parts
+        for directory in directories:
+            child = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        return os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    finally:
+        os.close(parent)
 
 
 def write_json_private(path, data):
@@ -305,7 +322,12 @@ class UserDriver:
                             }
                         )
                     elif getattr(args, "qr", False):
-                        self.client.send({"@type": "requestQrCodeAuthentication", "other_user_ids": []})
+                        self.client.send(
+                            {
+                                "@type": "requestQrCodeAuthentication",
+                                "other_user_ids": [],
+                            }
+                        )
                     elif need_ready:
                         raise DriverError("Not logged in. Run: user-driver.py login --qr")
                     else:
@@ -320,7 +342,11 @@ class UserDriver:
                     self.client.send({"@type": "checkAuthenticationPassword", "password": password})
                 elif state == "authorizationStateReady":
                     return True
-                elif state in {"authorizationStateClosing", "authorizationStateClosed", "authorizationStateLoggingOut"}:
+                elif state in {
+                    "authorizationStateClosing",
+                    "authorizationStateClosed",
+                    "authorizationStateLoggingOut",
+                }:
                     raise DriverError(f"TDLib auth state is {state}")
             elif item.get("@type") == "error":
                 message = item.get("message") or "TDLib error"
@@ -358,18 +384,25 @@ class UserDriver:
         if qrencode:
             subprocess.run([qrencode, "-t", "UTF8", link], check=False)
         print(link)
-        print("")
+        print()
 
     def resolve_chat(self, chat):
         chat = chat or default_chat(self.config, self.bot_config)
         if not chat:
-            raise DriverError("Missing chat. Pass --chat or configure defaultChatId. Run `user-driver.py chats --json` to list chats visible to the tester account.")
-        if chat.startswith("https://t.me/+") or chat.startswith("tg://join") or "joinchat" in chat:
+            raise DriverError(
+                "Missing chat. Pass --chat or configure defaultChatId. Run `user-driver.py chats --json` to list chats visible to the tester account."
+            )
+        if chat.startswith(("https://t.me/+", "tg://join")) or "joinchat" in chat:
             return self.client.request({"@type": "joinChatByInviteLink", "invite_link": chat})["id"]
         if chat.startswith("@"):
             return self.client.request({"@type": "searchPublicChat", "username": chat[1:]})["id"]
         if chat.startswith("https://t.me/") and "/" not in chat.removeprefix("https://t.me/"):
-            return self.client.request({"@type": "searchPublicChat", "username": chat.removeprefix("https://t.me/")})["id"]
+            return self.client.request(
+                {
+                    "@type": "searchPublicChat",
+                    "username": chat.removeprefix("https://t.me/"),
+                }
+            )["id"]
         try:
             return self.client.request({"@type": "getChat", "chat_id": int(chat)}, timeout=10)["id"]
         except DriverError as error:
@@ -385,7 +418,21 @@ class UserDriver:
             "clear_draft": True,
         }
 
-    def send_text(self, chat_id, text, reply_to=None, thread_id=0):
+    def document_content(self, file_path, caption):
+        return {
+            "@type": "inputMessageDocument",
+            "document": {"@type": "inputFileLocal", "path": file_path},
+            "thumbnail": None,
+            "disable_content_type_detection": False,
+            "caption": {
+                "@type": "formattedText",
+                "text": caption or "",
+                "entities": [],
+            },
+        }
+
+    def send_text(self, chat_id, text, reply_to=None, thread_id=0, file_path=None):
+        content = self.document_content(file_path, text) if file_path else self.text_content(text)
         return self.settle_sent_message(
             self.client.request(
                 {
@@ -400,9 +447,9 @@ class UserDriver:
                         "scheduling_state": None,
                     },
                     "reply_markup": None,
-                    "input_message_content": self.text_content(text),
+                    "input_message_content": content,
                 },
-                timeout=30,
+                timeout=60,
             )
         )
 
@@ -479,18 +526,515 @@ def normalize_message(message, users=None):
     elif "caption" in content:
         text = (content.get("caption") or {}).get("text", "")
     reply_to_message_id = message.get("reply_to_message_id") or (message.get("reply_to") or {}).get("message_id")
+    message_id = message.get("id")
     return {
-        "messageId": message.get("id"),
+        "messageId": message_id,
+        # TDLib reserves the low 20 bits; Telegram private-post links use the
+        # server/Bot API id. Keep both identities at the boundary that owns them.
+        "botApiMessageId": (int(message_id) >> 20) if message_id else None,
         "chatId": message.get("chat_id"),
         "senderId": sender_id,
         "senderUsername": sender_user.get("username") or "",
         "date": message.get("date"),
         "replyToMessageId": reply_to_message_id,
+        "replyToBotApiMessageId": (int(reply_to_message_id) >> 20) if reply_to_message_id else None,
         "threadId": message.get("message_thread_id"),
         "text": text,
         "contentType": content.get("@type"),
         "raw": message,
     }
+
+
+def rich_text(value):
+    if not isinstance(value, dict):
+        return ""
+    kind = value.get("@type", "")
+    if kind == "richTextPlain":
+        return value.get("text", "")
+    if kind == "richTextCustomEmoji":
+        return value.get("alternative_text", "")
+    if kind == "richTextMathematicalExpression":
+        return value.get("expression", "")
+    if kind == "richTexts":
+        return "".join(rich_text(item) for item in value.get("texts") or [])
+    return rich_text(value.get("text"))
+
+
+def rich_message_text(value):
+    if not isinstance(value, dict):
+        return ""
+    parts = []
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+        elif isinstance(node, dict):
+            if str(node.get("@type", "")).startswith("richText"):
+                text = rich_text(node)
+                if text:
+                    parts.append(text)
+            else:
+                for child in node.values():
+                    visit(child)
+
+    visit(value.get("blocks") or [])
+    return "\n".join(parts)
+
+
+def content_text(content):
+    for key in ("text", "caption"):
+        value = content.get(key)
+        if isinstance(value, dict) and isinstance(value.get("text"), str):
+            return value["text"]
+    if content.get("@type") == "messageRichMessage":
+        return rich_message_text(content.get("message") or {})
+    return ""
+
+
+def server_message_id(tdlib_message_id):
+    return str(int(tdlib_message_id) >> 20) if tdlib_message_id else None
+
+
+class UserObserver:
+    MAX_EVENTS = 500
+
+    def __init__(self, user_driver, chat_id, sut_user_id, sut_username, journal_path, media_root):
+        self.driver = user_driver
+        self.client = user_driver.client
+        self.chat_id = int(chat_id)
+        self.sut_user_id = int(sut_user_id)
+        self.sut = {"id": self.sut_user_id, "username": sut_username.lstrip("@")}
+        self.media_root = Path(media_root).resolve()
+        self.media_staging = Path(journal_path).parent / "media"
+        self.media_staging.mkdir(mode=0o700)
+        self.started_at = time.monotonic()
+        self.events = []
+        self.truncated = False
+        self.message_fields = {}
+        self.message_ids = {}
+        self.recorded_message_ids = set()
+        self.buttons = {}
+        self.sent_message_ids = set()
+        # One line-buffered handle keeps the live journal readable without reopening per event.
+        self.journal = Path(journal_path).open("w", buffering=1)  # noqa: SIM115
+
+    def close(self):
+        self.journal.close()
+        shutil.rmtree(self.media_staging)
+
+    def actor(self, sender_id, is_outgoing=False):
+        if is_outgoing:
+            return "user"
+        if sender_id == self.sut_user_id:
+            return "bot"
+        return "other"
+
+    def append(self, kind, message_id=None, **fields):
+        if len(self.events) >= self.MAX_EVENTS:
+            self.truncated = True
+            return None
+        event = {
+            "seq": len(self.events) + 1,
+            "elapsedMs": int((time.monotonic() - self.started_at) * 1000),
+            "kind": kind,
+            "messageId": server_message_id(message_id),
+            **fields,
+        }
+        self.events.append(event)
+        self.journal.write(json.dumps(event, separators=(",", ":")) + "\n")
+        return event
+
+    def sender_id(self, message):
+        sender = message.get("sender_id") or {}
+        return sender.get("user_id") or sender.get("chat_id")
+
+    def reply_fields(self, message):
+        reply = message.get("reply_to") or {}
+        return {"replyToMessageId": server_message_id(reply.get("message_id") or message.get("reply_to_message_id"))}
+
+    def remember_buttons(self, message_id, markup):
+        flattened = []
+        public_buttons = []
+        for row in markup.get("rows") or markup.get("inline_keyboard") or []:
+            row_buttons = row.get("buttons") if isinstance(row, dict) else row
+            for button in row_buttons or []:
+                index = len(flattened)
+                button_type = button.get("type") or {}
+                flattened.append(button_type)
+                public_buttons.append(
+                    {
+                        "index": index,
+                        "text": button.get("text", ""),
+                        "type": str(button_type.get("@type", "")).removeprefix("inlineKeyboardButtonType"),
+                    }
+                )
+        if flattened:
+            self.buttons[message_id] = flattened
+        else:
+            self.buttons.pop(message_id, None)
+        return public_buttons
+
+    def remember_message(self, message):
+        message_id = message.get("id")
+        if not isinstance(message_id, int):
+            return {}
+        sender_id = self.sender_id(message)
+        fields = {
+            "actor": self.actor(sender_id, bool(message.get("is_outgoing"))),
+            "isOutgoing": bool(message.get("is_outgoing")),
+            **self.reply_fields(message),
+        }
+        self.message_fields[message_id] = fields
+        public_buttons = []
+        if fields["actor"] != "other":
+            self.message_ids[server_message_id(message_id)] = message_id
+            if fields["isOutgoing"]:
+                self.sent_message_ids.add(message_id)
+            public_buttons = self.remember_buttons(message_id, message.get("reply_markup") or {})
+        return {**fields, "buttons": public_buttons}
+
+    def ingest(self, update):
+        message = update.get("message") or {}
+        update_chat_id = message.get("chat_id") if message else update.get("chat_id")
+        if int(update_chat_id or 0) != self.chat_id:
+            return
+        kind = update.get("@type")
+        if kind == "updateNewMessage":
+            if message.get("sending_state"):
+                return
+            if message.get("id") in self.recorded_message_ids:
+                return
+            content = message.get("content") or {}
+            self.recorded_message_ids.add(message.get("id"))
+            fields = self.remember_message(message)
+            if fields.get("actor") == "other":
+                return
+            self.append(
+                "message",
+                message.get("id"),
+                **fields,
+                contentType=content.get("@type", ""),
+                text=content_text(content),
+            )
+        elif kind == "updateMessageContent":
+            message_id = update.get("message_id")
+            content = update.get("new_content") or {}
+            fields = self.message_fields.get(message_id)
+            if not fields or fields.get("actor") == "other":
+                return
+            self.append(
+                "edit",
+                message_id,
+                **fields,
+                contentType=content.get("@type", ""),
+                text=content_text(content),
+            )
+        elif kind == "updateMessageEdited":
+            message_id = update.get("message_id")
+            fields = self.message_fields.get(message_id)
+            if not fields or fields.get("actor") == "other":
+                return
+            buttons = self.remember_buttons(message_id, update.get("reply_markup") or {})
+            self.append(
+                "edit-meta",
+                message_id,
+                **fields,
+                buttons=buttons,
+                editDate=update.get("edit_date"),
+            )
+        elif kind == "updateDeleteMessages" and not update.get("from_cache"):
+            for message_id in update.get("message_ids") or []:
+                fields = self.message_fields.get(message_id)
+                if not fields or fields.get("actor") == "other":
+                    continue
+                self.append(
+                    "delete",
+                    message_id,
+                    **fields,
+                    isPermanent=bool(update.get("is_permanent")),
+                )
+        elif kind == "updateChatAction":
+            sender_id = self.sender_id({"sender_id": update.get("sender_id") or {}})
+            actor = self.actor(sender_id)
+            if actor == "other":
+                return
+            self.append(
+                "typing",
+                actor=actor,
+                action=str((update.get("action") or {}).get("@type", "")).removeprefix("chatAction"),
+            )
+
+    def pump(self, seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            update = self.client.next_update(timeout=min(0.2, max(0.0, deadline - time.monotonic())))
+            if update:
+                self.ingest(update)
+
+    def resolve_message_id(self, value):
+        message_id = self.message_ids.get(str(value))
+        if message_id is None:
+            raise DriverError(f"Message {value} was not observed in this session.")
+        return message_id
+
+    def resolve_media(self, value):
+        relative = Path(value)
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise DriverError("Media must be inside the Mantis output directory.")
+        try:
+            descriptor = open_contained_file(self.media_root, relative)
+        except OSError as error:
+            raise DriverError("Media must be a regular file inside the Mantis output directory.") from error
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise DriverError("Media must be a regular file no larger than 20 MiB.")
+            staging_dir = self.media_staging / f"upload-{secrets.token_hex(8)}"
+            staging_dir.mkdir(mode=0o700)
+            target = staging_dir / relative.name
+            target_descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                copied = 0
+                with os.fdopen(os.dup(descriptor), "rb") as source, os.fdopen(target_descriptor, "wb") as destination:
+                    while chunk := source.read(1024 * 1024):
+                        copied += len(chunk)
+                        if copied > 20 * 1024 * 1024:
+                            raise DriverError("Media must be a regular file no larger than 20 MiB.")
+                        destination.write(chunk)
+            except Exception:
+                shutil.rmtree(staging_dir)
+                raise
+            return str(target)
+        finally:
+            os.close(descriptor)
+
+    def call(self, request):
+        command = request.get("command")
+        if command == "ping":
+            return {"ok": True, "cursor": len(self.events)}
+        if command == "events":
+            seconds = float(request.get("seconds") or 0)
+            if seconds < 0 or seconds > 60:
+                raise DriverError("Observation must be between 0 and 60 seconds.")
+            self.pump(seconds)
+            since = int(request.get("since") or 0)
+            if since < 0 or since > len(self.events):
+                raise DriverError("Observation cursor is outside this session's timeline.")
+            return {
+                "ok": True,
+                "cursor": len(self.events),
+                "events": self.events[since:],
+            }
+        if command == "send":
+            text, _ = apply_template(str(request.get("text") or ""), self.sut)
+            media = request.get("media")
+            if not text and not media:
+                raise DriverError("A message needs text or media.")
+            if len(text) > 4000:
+                raise DriverError("Message text exceeds 4000 characters.")
+            reply_to = request.get("replyTo")
+            reply_id = self.resolve_message_id(reply_to) if reply_to else None
+            staged_media = self.resolve_media(str(media)) if media else None
+            event_start = len(self.events)
+            try:
+                sent = self.driver.send_text(
+                    self.chat_id,
+                    text,
+                    reply_to=reply_id,
+                    file_path=staged_media,
+                )
+            finally:
+                if staged_media:
+                    shutil.rmtree(Path(staged_media).parent)
+            fields = self.remember_message(sent)
+            self.recorded_message_ids.add(sent.get("id"))
+            sent_event = self.append(
+                "message",
+                sent.get("id"),
+                **fields,
+                contentType=(sent.get("content") or {}).get("@type", ""),
+                text=content_text(sent.get("content") or {}),
+            )
+            self.pump(0.2)
+            return {
+                "ok": True,
+                "cursor": len(self.events),
+                "events": self.events[event_start:],
+                "sent": sent_event,
+            }
+        if command == "delete":
+            message_id = self.resolve_message_id(request.get("messageId"))
+            if message_id not in self.sent_message_ids:
+                raise DriverError("Only user messages sent in this session can be deleted.")
+            self.client.request(
+                {
+                    "@type": "deleteMessages",
+                    "chat_id": self.chat_id,
+                    "message_ids": [message_id],
+                    "revoke": True,
+                }
+            )
+            self.pump(0.2)
+            return {"ok": True, "cursor": len(self.events)}
+        if command == "press":
+            message_id = self.resolve_message_id(request.get("messageId"))
+            index = int(request.get("button"))
+            buttons = self.buttons.get(message_id) or []
+            if index < 0 or index >= len(buttons):
+                raise DriverError("Button index was not observed on that message.")
+            button = buttons[index]
+            if button.get("@type") != "inlineKeyboardButtonTypeCallback":
+                raise DriverError("Only callback buttons can be pressed by this harness.")
+            self.client.request(
+                {
+                    "@type": "getCallbackQueryAnswer",
+                    "chat_id": self.chat_id,
+                    "message_id": message_id,
+                    "payload": {
+                        "@type": "callbackQueryPayloadData",
+                        "data": button.get("data", ""),
+                    },
+                }
+            )
+            self.pump(0.2)
+            return {"ok": True, "cursor": len(self.events)}
+        if command == "shutdown":
+            self.pump(float(request.get("settleSeconds") or 0))
+            return {"ok": True, "cursor": len(self.events), "shutdown": True}
+        raise DriverError("Unknown observer command.")
+
+
+def command_serve_session(args):
+    config, bot_config = load_config()
+    user_driver = UserDriver(config, bot_config)
+    user_driver.authorize(need_ready=True)
+    chat_id = user_driver.resolve_chat(args.chat)
+    # Authorization can replay updates received while this QA account was offline.
+    # The proof timeline begins only after this observer is ready for scenario actions.
+    for _ in range(UserObserver.MAX_EVENTS):
+        if not user_driver.client.next_update(timeout=0):
+            break
+    else:
+        raise DriverError("Telegram observer startup backlog exceeded its event budget.")
+    observer = UserObserver(
+        user_driver,
+        chat_id,
+        args.sut_user_id,
+        args.sut_username,
+        args.journal,
+        args.media_root,
+    )
+    socket_path = Path(args.socket)
+    socket_path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_path))
+    # The session root's default ACL grants mantis-sut access; group rw keeps
+    # that named ACL entry effective when the runner tightens this socket.
+    socket_path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP)
+    server.listen(4)
+    server.settimeout(0.2)
+    shutdown = False
+    try:
+        while not shutdown:
+            update = observer.client.next_update(timeout=0)
+            if update:
+                observer.ingest(update)
+                continue
+            try:
+                connection, _ = server.accept()
+            except TimeoutError:
+                continue
+            with connection:
+                payload = b""
+                while b"\n" not in payload and len(payload) <= 65536:
+                    chunk = connection.recv(65536 - len(payload) + 1)
+                    if not chunk:
+                        break
+                    payload += chunk
+                try:
+                    request = json.loads(payload.split(b"\n", 1)[0])
+                    response = observer.call(request)
+                    shutdown = bool(response.pop("shutdown", False))
+                    response["truncated"] = observer.truncated
+                except (
+                    DriverError,
+                    ValueError,
+                    TypeError,
+                    json.JSONDecodeError,
+                ) as error:
+                    response = {"ok": False, "error": str(error)}
+                connection.sendall(json.dumps(response, separators=(",", ":")).encode() + b"\n")
+    finally:
+        observer.close()
+        server.close()
+        socket_path.unlink(missing_ok=True)
+
+
+def command_serve(args):
+    pid_path = Path(args.pid_file)
+    pid_fd = os.open(pid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(pid_fd, "w") as handle:
+        json.dump({"pid": os.getpid(), "pgid": os.getpgrp(), "socket": args.socket}, handle)
+        handle.write("\n")
+    try:
+        command_serve_session(args)
+    finally:
+        pid_path.unlink(missing_ok=True)
+
+
+def running_process_command_line(pid):
+    """Returns the argv pid is running under, or None once it is gone, so pid reuse cannot
+    redirect cleanup at an unrelated process group. Zombies hold their table entry until
+    they are reaped, so their pid cannot be reused and they count as already gone."""
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "state=", "-o", "args="],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    state, _, command_line = result.stdout.strip().partition(" ")
+    if result.returncode != 0 or not state or state.startswith("Z"):
+        return None
+    return command_line.strip()
+
+
+def command_terminate_observer(args):
+    pid_path = Path(args.pid_file)
+    try:
+        metadata = pid_path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+    ):
+        raise DriverError("Telegram observer pid file is not a private runner-owned file.")
+    value = json.loads(pid_path.read_text())
+    pid = int(value.get("pid") or 0)
+    pgid = int(value.get("pgid") or 0)
+    if value.get("socket") != args.socket or pid <= 0 or pgid <= 0 or pgid == os.getpgrp():
+        raise DriverError("Telegram observer pid file is invalid.")
+    command_line = running_process_command_line(pid)
+    if command_line is None:
+        pid_path.unlink(missing_ok=True)
+        return
+    if "telegram-user-driver" not in command_line or args.socket not in command_line or "serve" not in command_line:
+        raise DriverError("Telegram observer process identity changed before cleanup.")
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 2
+    while running_process_command_line(pid) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if running_process_command_line(pid) is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    pid_path.unlink(missing_ok=True)
 
 
 def apply_template(text, sut):
@@ -581,11 +1125,19 @@ def command_status(args):
     driver = UserDriver(config, bot_config)
     ready = driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms), need_ready=False)
     if not ready:
-        print_result({"ok": False, "authorized": False, "next": "login --qr"}, args.json, getattr(args, "output", ""))
+        print_result(
+            {"ok": False, "authorized": False, "next": "login --qr"},
+            args.json,
+            getattr(args, "output", ""),
+        )
         sys.exit(1)
     me = driver.client.request({"@type": "getMe"})
     save_tester_identity(config, me)
-    print_result({"ok": True, "authorized": True, "user": public_user(me)}, args.json, getattr(args, "output", ""))
+    print_result(
+        {"ok": True, "authorized": True, "user": public_user(me)},
+        args.json,
+        getattr(args, "output", ""),
+    )
 
 
 def command_confirm_qr(args):
@@ -616,7 +1168,11 @@ def command_terminate_session(args):
     driver = UserDriver(config, bot_config)
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     driver.client.request({"@type": "terminateSession", "session_id": int(args.session_id)}, timeout=30)
-    print_result({"ok": True, "sessionId": args.session_id}, args.json, getattr(args, "output", ""))
+    print_result(
+        {"ok": True, "sessionId": args.session_id},
+        args.json,
+        getattr(args, "output", ""),
+    )
 
 
 def command_terminate_desktop_sessions(args):
@@ -663,7 +1219,11 @@ def command_send(args):
     chat_id = driver.resolve_chat(args.chat)
     text, _run = apply_template(args.text, resolve_sut(config, bot_config))
     sent = driver.send_text(chat_id, text, args.reply_to, args.thread_id)
-    print_result({"ok": True, "sent": normalize_message(sent)}, args.json, getattr(args, "output", ""))
+    print_result(
+        {"ok": True, "sent": normalize_message(sent)},
+        args.json,
+        getattr(args, "output", ""),
+    )
 
 
 def command_wait(args):
@@ -732,7 +1292,11 @@ def command_transcript(args):
         }
     )
     messages = [normalize_message(message) for message in history.get("messages", [])]
-    print_result({"ok": True, "chatId": chat_id, "messages": messages}, args.json, getattr(args, "output", ""))
+    print_result(
+        {"ok": True, "chatId": chat_id, "messages": messages},
+        args.json,
+        getattr(args, "output", ""),
+    )
 
 
 def command_chats(args):
@@ -740,7 +1304,11 @@ def command_chats(args):
     driver = UserDriver(config, bot_config)
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     chats = driver.client.request(
-        {"@type": "getChats", "chat_list": {"@type": "chatListMain"}, "limit": args.limit},
+        {
+            "@type": "getChats",
+            "chat_list": {"@type": "chatListMain"},
+            "limit": args.limit,
+        },
         timeout=20,
     )
     seen = set()
@@ -757,7 +1325,11 @@ def command_chats(args):
                 rows.append(public_chat(chat, "configured"))
         except DriverError:
             pass
-    print_result({"ok": True, "configuredChat": configured, "chats": rows}, args.json, getattr(args, "output", ""))
+    print_result(
+        {"ok": True, "configuredChat": configured, "chats": rows},
+        args.json,
+        getattr(args, "output", ""),
+    )
 
 
 def public_chat(chat, source):
@@ -860,6 +1432,21 @@ def main():
     add_common(chats)
     chats.add_argument("--limit", type=int, default=50)
     chats.set_defaults(func=command_chats)
+
+    serve = sub.add_parser("serve", help=argparse.SUPPRESS)
+    serve.add_argument("--chat", required=True)
+    serve.add_argument("--sut-user-id", required=True, type=int)
+    serve.add_argument("--sut-username", required=True)
+    serve.add_argument("--socket", required=True)
+    serve.add_argument("--pid-file", required=True)
+    serve.add_argument("--journal", required=True)
+    serve.add_argument("--media-root", required=True)
+    serve.set_defaults(func=command_serve)
+
+    terminate_observer = sub.add_parser("terminate-observer", help=argparse.SUPPRESS)
+    terminate_observer.add_argument("--pid-file", required=True)
+    terminate_observer.add_argument("--socket", required=True)
+    terminate_observer.set_defaults(func=command_terminate_observer)
 
     args = parser.parse_args()
     try:

@@ -4,12 +4,16 @@ import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
+import {
+  getManagedTaskBackingInstance,
+  hasAuthoritativeTaskBacking,
+} from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
-import { finalizeTaskRunByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
+import { finalizeTaskRecordByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
 import {
   ensureTaskRegistryReady,
@@ -70,6 +74,15 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
+    if (!hasAuthoritativeTaskBacking(task)) {
+      return {
+        found: true,
+        cancelled: false,
+        reason: "Task backing ownership could not be verified.",
+        task: cloneTaskRecord(task),
+      };
+    }
+    const managedBacking = getManagedTaskBackingInstance(task);
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -126,12 +139,20 @@ export async function cancelTaskById(params: {
           cfg: params.cfg,
           sessionKey: childSessionKey,
           reason: params.reason?.trim() || "task-cancel",
+          expectedRunId: task.runId,
+          ...(managedBacking?.runtime === "acp"
+            ? { expectedInstanceId: managedBacking.instanceId, expectedOwnerKey: task.ownerKey }
+            : {}),
         });
       } else if (task.runtime === "subagent") {
         const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
         const result = await killSubagentRunAdmin({
           cfg: params.cfg,
           sessionKey: childSessionKey,
+          expectedRunId: task.runId,
+          ...(managedBacking?.runtime === "subagent"
+            ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
+            : {}),
         });
         const current = tasks.get(task.taskId);
         if (current?.status === "cancelled" && current.error === SUBAGENT_KILL_TASK_ERROR) {
@@ -166,7 +187,7 @@ export async function cancelTaskById(params: {
           // Reconcile the original task scope: steer/orphan recovery may have
           // replaced the registry run ID without remapping durable task rows.
           const taskRunId = task.runId?.trim() || result.runId;
-          const reconciledTasks = finalizeTaskRunByRunId({
+          const reconciledTasks = finalizeTaskRecordByRunId({
             runId: taskRunId,
             runtime: "subagent",
             sessionKey: childSessionKey,

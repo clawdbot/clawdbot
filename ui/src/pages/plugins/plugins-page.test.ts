@@ -2,12 +2,14 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
   PluginInstallRequest,
   PluginListResult,
+  PluginMutationResult,
   PluginSearchResult,
 } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -197,6 +199,87 @@ describe("PluginsPage", () => {
       {},
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("owns install-policy reviews by install identity across row aliases", async () => {
+    let installCalls = 0;
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        return createResult(
+          createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        );
+      }
+      if (method !== "plugins.install") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      installCalls += 1;
+      if (installCalls <= 2) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "install requires review",
+          details: {
+            installPolicyCode: "install_policy_warning_acknowledgement_required",
+            targetName: "@openclaw/bluebubbles",
+            targetType: "plugin",
+            requestMode: "install",
+            reason: `Review this plugin (${installCalls}).`,
+          },
+        });
+      }
+      return {
+        ok: true,
+        plugin: createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        restartRequired: false,
+      } satisfies PluginMutationResult;
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(
+          createPlugin({
+            id: "@openclaw/bluebubbles",
+            name: "BlueBubbles",
+            packageName: "@openclaw/bluebubbles",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+            install: { source: "official", pluginId: "@openclaw/bluebubbles" },
+          }),
+        ),
+      ),
+    );
+    const installIdentity = "plugin:@openclaw/bluebubbles";
+    const catalogRequest = {
+      source: "official",
+      pluginId: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    const searchRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
+
+    await page.install(catalogRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (1).",
+    );
+
+    await page.install(searchRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (2).",
+    );
+
+    await page.install(
+      { ...searchRequest, acknowledgeInstallPolicyWarning: true },
+      installIdentity,
+    );
+
+    expect(page.messages[installIdentity]).toBeUndefined();
+    expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
+    expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
+    expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {
@@ -414,10 +497,13 @@ describe("PluginsPage", () => {
       runtimeConfig.patchForm(["pending"], true);
 
       if (action === "install") {
-        await page.install("search:example-plugin", {
-          source: "clawhub",
-          packageName: "example-plugin",
-        } as PluginInstallRequest);
+        await page.install(
+          {
+            source: "clawhub",
+            packageName: "example-plugin",
+          } as PluginInstallRequest,
+          "clawhub:example-plugin",
+        );
       } else if (action === "enable") {
         await page.updateEnabled("workboard", true);
       } else {
@@ -672,6 +758,57 @@ describe("PluginsPage", () => {
       ),
     );
     expect(calls).toContainEqual(["plugins.list", {}]);
+  });
+
+  it("does not let an older uninstall republish its page notice after a newer row action", async () => {
+    const uninstallResult = deferred<unknown>();
+    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.uninstall") {
+        return uninstallResult.promise;
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+      }
+      if (method === "plugins.list") {
+        return createResult(enabledPlugin);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
+    );
+
+    const uninstall = page.uninstall("community-thing", "plugin:community-thing");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
+    );
+    await page.updateEnabled("workboard", true);
+
+    uninstallResult.resolve({
+      ok: true,
+      pluginId: "community-thing",
+      restartRequired: true,
+      removed: ["config entry", "install record", "directory"],
+    });
+    await uninstall;
+    await page.updateComplete;
+
+    expect(page.querySelector(".plugins-page-notice")).toBeNull();
+    expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
   });
 
   it("adds an MCP server through the shared config seam", async () => {

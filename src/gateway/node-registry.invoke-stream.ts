@@ -1,3 +1,5 @@
+import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
+
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
@@ -81,7 +83,7 @@ export class NodeInvokeStreamController {
       throw new Error("node invoke input exceeds 16 KiB");
     }
     if (!this.options.isConnectionActive(pending)) {
-      throw new Error("node invoke connection is unavailable");
+      throw new Error("node invoke connection or pairing generation is unavailable");
     }
     if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
       throw new Error("failed to send node invoke input");
@@ -107,7 +109,12 @@ export class NodeInvokeStreamController {
 
   handleResult(params: NodeInvokeResultParams): boolean {
     const pending = this.options.pendingInvokes.get(params.id);
-    if (!pending || pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
+    if (
+      !pending ||
+      pending.nodeId !== params.nodeId ||
+      pending.connId !== params.connId ||
+      !this.options.isConnectionActive(pending)
+    ) {
       return false;
     }
     if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
@@ -161,9 +168,13 @@ export class NodeInvokeStreamController {
           return;
         }
         this.sendInvokeCancel(params.requestId, params.pending);
+        this.options.onFailedResult(params.pending);
+        const pairingChanged = params.signal?.reason === NODE_INVOKE_PAIRING_CHANGED_ABORT;
         params.pending.resolve({
           ok: false,
-          error: { code: "ABORTED", message: "node invoke cancelled" },
+          error: pairingChanged
+            ? { code: "PAIRING_CHANGED", message: "node pairing changed after dispatch" }
+            : { code: "ABORTED", message: "node invoke cancelled" },
         });
       };
       params.signal.addEventListener("abort", onAbort, { once: true });
@@ -181,9 +192,14 @@ export class NodeInvokeStreamController {
       !pending ||
       pending.nodeId !== params.nodeId ||
       pending.connId !== params.connId ||
+      !this.options.isConnectionActive(pending) ||
       !pending.onProgress ||
       params.seq < pending.nextProgressSeq
     ) {
+      return false;
+    }
+    if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+      this.settleTimeout(params.invokeId, pending);
       return false;
     }
     if (params.seq > pending.nextProgressSeq) {
@@ -198,10 +214,17 @@ export class NodeInvokeStreamController {
       }
     }
     pending.progressChunks.set(params.seq, params.chunk);
-    this.resetIdleTimer(params.invokeId, pending);
+    // The first authenticated frame proves execution, even when it is out of order.
+    if (!pending.idleTimer) {
+      this.resetIdleTimer(params.invokeId, pending);
+    }
     while (true) {
       const chunk = pending.progressChunks.get(pending.nextProgressSeq);
       if (chunk === undefined) {
+        break;
+      }
+      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+        this.settleTimeout(params.invokeId, pending);
         break;
       }
       pending.progressChunks.delete(pending.nextProgressSeq);
@@ -221,6 +244,11 @@ export class NodeInvokeStreamController {
         pending.progressChunks.clear();
         break;
       }
+      if (pending.deadlineAtMs !== undefined && Date.now() >= pending.deadlineAtMs) {
+        this.settleTimeout(params.invokeId, pending);
+        break;
+      }
+      this.resetIdleTimer(params.invokeId, pending);
     }
     return true;
   }

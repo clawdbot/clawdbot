@@ -5,6 +5,7 @@ import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -24,6 +25,348 @@ import {
 
 describe("AcpSessionManager turn results", () => {
   installAcpSessionManagerTestLifecycle();
+
+  function setupPromptStartedRuntime() {
+    const runtimeState = createRuntime();
+    const sessionKey = "agent:codex:acp:session-1";
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: readySessionMeta(),
+    });
+    return { runtimeState, sessionKey };
+  }
+
+  it("emits prompt_submitted only after the runtime confirms prompt submission", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    const transitions: string[] = [];
+    runtimeState.runtime.startTurn = vi.fn((input) => {
+      transitions.push("turn-created");
+      const promptStarted = Promise.resolve().then(() => {
+        transitions.push("prompt-started");
+      });
+      return {
+        requestId: input.requestId,
+        promptStarted,
+        events: (async function* () {})(),
+        result: promptStarted.then(() => ({ status: "completed" as const })),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      };
+    });
+
+    await new AcpSessionManager().runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "submit once",
+      mode: "prompt",
+      requestId: "prompt-started-lifecycle",
+      onBeforePrompt: () => {
+        transitions.push("admission-accepted");
+      },
+      onLifecycle: () => {
+        transitions.push("prompt-submitted");
+      },
+    });
+
+    expect(transitions).toEqual([
+      "admission-accepted",
+      "turn-created",
+      "prompt-started",
+      "prompt-submitted",
+    ]);
+  });
+
+  it.each(["startTurn", "runTurn"] as const)(
+    "rejects expired gateway admission before calling runtime %s",
+    async (runtimeApi) => {
+      const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+      const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => ({
+        requestId: input.requestId,
+        promptStarted: Promise.resolve(),
+        events: (async function* () {})(),
+        result: Promise.resolve({ status: "completed" as const }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      if (runtimeApi === "startTurn") {
+        runtimeState.runtime.startTurn = startTurn;
+      }
+      const rejectExpiredAdmission = vi.fn(() => {
+        throw new Error("gateway admission deadline elapsed");
+      });
+
+      await expect(
+        new AcpSessionManager().runTurn({
+          provenance: "system",
+          cfg: baseCfg,
+          sessionKey,
+          text: "do not submit expired work",
+          mode: "prompt",
+          requestId: `expired-admission-${runtimeApi}`,
+          onBeforePrompt: rejectExpiredAdmission,
+        }),
+      ).rejects.toThrow("gateway admission deadline elapsed");
+
+      expect(rejectExpiredAdmission).toHaveBeenCalledOnce();
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(runtimeState.runTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("finishes submitted work when its lifecycle observer fails", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    const transitions: string[] = [];
+    const result = createDeferred<{ status: "completed" }>();
+    const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve().then(() => {
+        transitions.push("prompt-started");
+      }),
+      events: (async function* () {})(),
+      result: result.promise,
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    runtimeState.runtime.startTurn = startTurn;
+
+    await expect(
+      new AcpSessionManager().runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "finish submitted work",
+        mode: "prompt",
+        requestId: "prompt-started-observer-failure",
+        onLifecycle: () => {
+          transitions.push("observer-failed");
+          queueMicrotask(() => {
+            transitions.push("turn-cleaned-up");
+            result.resolve({ status: "completed" });
+          });
+          throw new Error("lifecycle observer unavailable");
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(transitions).toEqual(["prompt-started", "observer-failed", "turn-cleaned-up"]);
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "settles a %s terminal result when prompt readiness never resolves",
+    async (terminalStatus) => {
+      const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+      const promptStarted = createDeferred();
+      const result =
+        terminalStatus === "completed"
+          ? { status: "completed" as const }
+          : {
+              status: "failed" as const,
+              error: { code: "ACP_TURN_FAILED", message: "terminal failure before submission" },
+            };
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        promptStarted: promptStarted.promise,
+        events: (async function* () {})(),
+        result: Promise.resolve(result),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      const onLifecycle = vi.fn();
+      const outcome = new AcpSessionManager()
+        .runTurn({
+          provenance: "system",
+          cfg: baseCfg,
+          sessionKey,
+          text: "settle terminal work without readiness",
+          mode: "prompt",
+          requestId: `pending-readiness-${terminalStatus}`,
+          onLifecycle,
+        })
+        .then(
+          () => ({ status: "completed" as const }),
+          (error: unknown) => ({ status: "failed" as const, error }),
+        );
+
+      try {
+        const observed = await Promise.race([
+          outcome,
+          new Promise<{ status: "pending" }>((resolve) => {
+            setTimeout(() => resolve({ status: "pending" }), 0);
+          }),
+        ]);
+
+        expect(observed.status).toBe(terminalStatus);
+        if (terminalStatus === "failed") {
+          expect(observed).toMatchObject({
+            error: { code: "ACP_TURN_FAILED", message: "terminal failure before submission" },
+          });
+        }
+        expect(onLifecycle).not.toHaveBeenCalled();
+
+        promptStarted.resolve();
+        await Promise.resolve();
+        expect(onLifecycle).not.toHaveBeenCalled();
+        expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
+      } finally {
+        promptStarted.resolve();
+        await outcome;
+      }
+    },
+  );
+
+  it("retries cleaned-up terminal failures without publishing abandoned prompt readiness", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    const abandonedReadiness = createDeferred();
+    let attempt = 0;
+    const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => {
+      attempt += 1;
+      const firstAttempt = attempt === 1;
+      return {
+        requestId: input.requestId,
+        promptStarted: firstAttempt ? abandonedReadiness.promise : Promise.resolve(),
+        events: (async function* () {})(),
+        result: Promise.resolve(
+          firstAttempt
+            ? {
+                status: "failed" as const,
+                error: { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" },
+              }
+            : { status: "completed" as const },
+        ),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      };
+    });
+    runtimeState.runtime.startTurn = startTurn;
+    const onLifecycle = vi.fn();
+    const turn = new AcpSessionManager().runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "retry only terminally cleaned-up work",
+      mode: "prompt",
+      requestId: "pending-readiness-safe-retry",
+      onLifecycle,
+    });
+
+    try {
+      const outcome = await Promise.race([
+        turn.then(() => "completed" as const),
+        new Promise<"pending">((resolve) => {
+          setTimeout(() => resolve("pending"), 0);
+        }),
+      ]);
+
+      expect(outcome).toBe("completed");
+      expect(startTurn).toHaveBeenCalledTimes(2);
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(onLifecycle).toHaveBeenCalledOnce();
+
+      abandonedReadiness.resolve();
+      await Promise.resolve();
+      expect(onLifecycle).toHaveBeenCalledOnce();
+    } finally {
+      abandonedReadiness.resolve();
+      await turn.catch(() => {});
+    }
+  });
+
+  it("does not retry a submitted prompt even when the runtime exits before producing output", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve(),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" },
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    runtimeState.runtime.startTurn = startTurn;
+
+    await expect(
+      new AcpSessionManager().runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey,
+        text: "never replay a submitted prompt",
+        mode: "prompt",
+        requestId: "prompt-started-no-retry",
+      }),
+    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED", message: "acpx exited with code 1" });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
+    expect(startTurn).toHaveBeenCalledOnce();
+  });
+
+  it("waits for rejected readiness cleanup before a fresh retry and only publishes the real submission", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    const transitions: string[] = [];
+    let attempt = 0;
+    runtimeState.runtime.startTurn = vi.fn((input) => {
+      attempt += 1;
+      const firstAttempt = attempt === 1;
+      transitions.push(firstAttempt ? "first-turn-created" : "retry-turn-created");
+      const promptStarted = firstAttempt
+        ? Promise.reject(new Error("acpx exited with code 1"))
+        : Promise.resolve().then(() => {
+            transitions.push("retry-prompt-started");
+          });
+      promptStarted.catch(() => {});
+      return {
+        requestId: input.requestId,
+        promptStarted,
+        events: (async function* () {})(),
+        result: firstAttempt
+          ? new Promise<{
+              status: "failed";
+              error: { code: string; message: string };
+            }>((resolve) => {
+              setTimeout(() => {
+                transitions.push("first-turn-cleaned-up");
+                resolve({
+                  status: "failed",
+                  error: { code: "ACP_TURN_FAILED", message: "acpx exited with code 1" },
+                });
+              }, 0);
+            })
+          : promptStarted.then(() => ({ status: "completed" as const })),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      };
+    });
+
+    await new AcpSessionManager().runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "retry only an unsubmitted prompt",
+      mode: "prompt",
+      requestId: "prompt-started-safe-retry",
+      onLifecycle: () => {
+        transitions.push("prompt-submitted");
+      },
+    });
+
+    expect(transitions).toEqual([
+      "first-turn-created",
+      "first-turn-cleaned-up",
+      "retry-turn-created",
+      "retry-prompt-started",
+      "prompt-submitted",
+    ]);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
 
   it("uses startTurn terminal results instead of progress-only events for parented tasks", async () => {
     await withAcpManagerTaskStateDir(async () => {

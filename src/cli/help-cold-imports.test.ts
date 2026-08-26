@@ -102,14 +102,6 @@ vi.mock("../commands/export-trajectory.js", () => {
   return { exportTrajectoryCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/commitments.js", () => {
-  loaded.mark("commitments-command");
-  return {
-    commitmentsDismissCommand: vi.fn(async () => {}),
-    commitmentsListCommand: vi.fn(async () => {}),
-  };
-});
-
 vi.mock("../commands/tasks.js", () => {
   loaded.mark("tasks-command");
   return {
@@ -280,7 +272,6 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("sessions-command");
     expect(loaded.modules).not.toContain("sessions-cleanup-command");
     expect(loaded.modules).not.toContain("export-trajectory-command");
-    expect(loaded.modules).not.toContain("commitments-command");
     expect(loaded.modules).not.toContain("tasks-command");
     expect(loaded.modules).not.toContain("flows-command");
   });

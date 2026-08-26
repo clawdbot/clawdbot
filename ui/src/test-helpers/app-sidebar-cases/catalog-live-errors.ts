@@ -78,7 +78,7 @@ describe("AppSidebar session catalog request errors", () => {
         {
           defaultId: "roboclaw",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "roboclaw" }],
         },
       );
@@ -117,7 +117,7 @@ describe("AppSidebar session catalog request errors", () => {
         {
           defaultId: "roboclaw",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }, { id: "roboclaw" }],
         },
       );
@@ -155,7 +155,7 @@ describe("AppSidebar session catalog request errors", () => {
         {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }],
         },
       );

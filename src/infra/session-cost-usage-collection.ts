@@ -19,7 +19,7 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
@@ -387,7 +387,7 @@ export function resolveExistingUsageSessionFile(params: {
   const candidate =
     params.sessionFile ??
     (sessionId
-      ? resolveSessionFilePath(sessionId, params.sessionEntry, {
+      ? resolveSessionFilePathCore(sessionId, params.sessionEntry, {
           agentId: params.agentId,
         })
       : undefined);

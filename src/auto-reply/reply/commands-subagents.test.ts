@@ -7,25 +7,23 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
-import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import {
-  countPendingDescendantRunsFromRuns,
-  listRunsForControllerFromRuns,
-} from "../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../agents/subagent-registry-state.js";
+  countPendingDescendantRuns,
+  listSubagentRunsForController,
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { failTaskRunByRunId } from "../../tasks/task-executor.js";
+import { failTaskRunByRunIdCore } from "../../tasks/task-executor.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
-import { extractMessageText } from "./commands-subagents-text.js";
+import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
@@ -131,14 +129,12 @@ describe("subagents status", () => {
     },
   ])("$name", ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
     seedRuns();
-    const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-    const runs = listRunsForControllerFromRuns(runsSnapshot, "agent:main:main");
+    const runs = listSubagentRunsForController("agent:main:main");
     const text =
       buildSubagentsStatusLine({
         runs,
         verboseEnabled: verboseLevel === "on",
-        pendingDescendantsForRun: (entry) =>
-          countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey),
+        pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
         now: 5000,
       }) ?? "";
     for (const expected of expectedText) {
@@ -371,7 +367,7 @@ describe("subagents info", () => {
       status: "running",
       deliveryStatus: "delivered",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId,
       endedAt: now - 1_000,
       error: [
@@ -498,6 +494,79 @@ describe("subagents log", () => {
     });
   });
 
+  it.each([
+    {
+      name: "hides signed commentary while retaining the final answer",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "PRIVATE_COMMENTARY",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "output_text",
+              text: "Visible final answer",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "Assistant: Visible final answer",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "omits commentary-only history messages",
+      messages: [{ role: "assistant", phase: "commentary", content: "PRIVATE_COMMENTARY" }],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "does not revive legacy text when the signed final answer is empty",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "PRIVATE_LEGACY" },
+            {
+              type: "text",
+              text: "   ",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_LEGACY",
+    },
+    {
+      name: "renders persisted Responses output text",
+      messages: [
+        { role: "assistant", content: [{ type: "output_text", text: "Persisted output" }] },
+      ],
+      expectedText: "Assistant: Persisted output",
+      unexpectedText: "(no messages)",
+    },
+    {
+      name: "renders persisted assistant input text",
+      messages: [
+        { role: "assistant", content: [{ type: "input_text", text: "Persisted assistant input" }] },
+      ],
+      expectedText: "Assistant: Persisted assistant input",
+      unexpectedText: "(no messages)",
+    },
+  ])("$name", async ({ messages, expectedText, unexpectedText }) => {
+    callGatewayMock.mockResolvedValue({ messages });
+
+    const result = await handleSubagentsLogAction(buildLogContext(["1"], [makeRun()]));
+    const text = requireReplyText(result.reply);
+
+    expect(text).toContain(expectedText);
+    expect(text).not.toContain(unexpectedText);
+  });
+
   it("uses the numeric token after the target as the history limit", async () => {
     await handleSubagentsLogAction(buildLogContext(["1", "5"], [makeRun()]));
 
@@ -526,7 +595,7 @@ describe("subagents log", () => {
   });
 });
 
-describe("extractMessageText", () => {
+describe("extractSubagentMessageText", () => {
   it("preserves user markers and sanitizes assistant markers", () => {
     const cases = [
       {
@@ -540,7 +609,7 @@ describe("extractMessageText", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = extractMessageText(testCase.message);
+      const result = extractSubagentMessageText(testCase.message);
       expect(result?.text).toBe(testCase.expectedText);
     }
   });

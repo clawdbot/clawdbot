@@ -2,20 +2,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type {
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
 export type { ChannelApprovalKind } from "./approval-types.js";
 
-/** Union of approval request events a native approval handler can receive. */
-export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+/** Backward-compatible approval request accepted by public plugin callbacks. */
+export type ApprovalRequest = ApprovalRequestInput;
 /** Union of approval resolution events a native approval handler can finalize. */
 export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
@@ -235,7 +234,7 @@ export type ChannelApprovalNativeRuntimeAdapter<
   TBinding = unknown,
   TFinalPayload = unknown,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   /**
    * Trusted legacy ownership override retained for compatibility.
    * @deprecated Omit this so core derives approval ownership from the request payload.
@@ -264,7 +263,7 @@ export type ChannelApprovalNativeRuntimeSpec<
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   /**
    * Trusted legacy ownership override retained for compatibility.
    * @deprecated Omit this so core derives approval ownership from the request payload.

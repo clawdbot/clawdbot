@@ -4,7 +4,11 @@
  * become visible to long-lived agent sessions.
  */
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
+  workspaceFileSourceIdentitiesMatch,
+} from "./workspace.js";
 
 type BootstrapSnapshot = {
   workspaceDir: string;
@@ -29,7 +33,10 @@ function bootstrapFilesEqual(
       file.name === updated.name &&
       file.path === updated.path &&
       file.content === updated.content &&
-      file.missing === updated.missing
+      file.missing === updated.missing &&
+      // Equal bytes at a replaced inode or symlink target must carry the newly
+      // opened source identity instead of reusing stale file objects.
+      workspaceFileSourceIdentitiesMatch(file, updated)
     );
   });
 }

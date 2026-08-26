@@ -5,7 +5,6 @@ import { resolveChannelIngressEffectiveAllowFromLists } from "../channels/messag
 import { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import type { GroupPolicy } from "../config/types.base.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 
 /**
  * Derive a stable main-DM owner from a single-entry allowlist.
@@ -116,32 +115,6 @@ type DmGroupAccessInputParams = {
   isSenderAllowed: (allowFrom: string[]) => boolean;
 };
 
-const GROUP_ACCESS_RESULT: Record<
-  Exclude<ReturnType<typeof evaluateMatchedGroupAccessForPolicy>["reason"], "allowed">,
-  DmGroupAccessResult
-> = {
-  disabled: dmGroupAccess(
-    "block",
-    DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
-    "groupPolicy=disabled",
-  ),
-  empty_allowlist: dmGroupAccess(
-    "block",
-    DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
-    "groupPolicy=allowlist (empty allowlist)",
-  ),
-  missing_match_input: dmGroupAccess(
-    "block",
-    DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
-    "groupPolicy=allowlist (not allowlisted)",
-  ),
-  not_allowlisted: dmGroupAccess(
-    "block",
-    DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
-    "groupPolicy=allowlist (not allowlisted)",
-  ),
-};
-
 /** @deprecated Use `resolveChannelMessageIngress` or `readChannelIngressStoreAllowFromForDmPolicy` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export async function readStoreAllowFromForDmPolicy(params: {
   provider: ChannelId;
@@ -170,31 +143,34 @@ function resolveLegacyDmGroupAccessDecision(params: {
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
 
   if (params.isGroup) {
-    const groupAccess = evaluateMatchedGroupAccessForPolicy({
-      groupPolicy,
-      allowlistConfigured: effectiveGroupAllowFrom.length > 0,
-      allowlistMatched: params.isSenderAllowed(effectiveGroupAllowFrom),
-    });
-    if (groupAccess.allowed) {
+    if (groupPolicy === "disabled") {
       return dmGroupAccess(
-        "allow",
-        DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
-        `groupPolicy=${groupPolicy}`,
+        "block",
+        DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
+        "groupPolicy=disabled",
       );
     }
-    switch (groupAccess.reason) {
-      case "disabled":
-      case "empty_allowlist":
-      case "missing_match_input":
-      case "not_allowlisted":
-        return GROUP_ACCESS_RESULT[groupAccess.reason];
-      case "allowed":
+    if (groupPolicy === "allowlist") {
+      if (effectiveGroupAllowFrom.length === 0) {
         return dmGroupAccess(
-          "allow",
-          DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
-          `groupPolicy=${groupPolicy}`,
+          "block",
+          DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
+          "groupPolicy=allowlist (empty allowlist)",
         );
+      }
+      if (!params.isSenderAllowed(effectiveGroupAllowFrom)) {
+        return dmGroupAccess(
+          "block",
+          DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
+          "groupPolicy=allowlist (not allowlisted)",
+        );
+      }
     }
+    return dmGroupAccess(
+      "allow",
+      DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
+      `groupPolicy=${groupPolicy}`,
+    );
   }
 
   if (dmPolicy === "disabled") {

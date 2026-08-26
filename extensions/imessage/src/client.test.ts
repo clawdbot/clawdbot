@@ -1,5 +1,8 @@
 // iMessage tests cover the RPC client child-process stream error handling.
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -47,6 +50,7 @@ function createMockChild(): MockChild {
 
 describe("IMessageRpcClient child stream error handling", () => {
   let child: MockChild;
+  const tempDirs: string[] = [];
 
   beforeEach(() => {
     // start() refuses to spawn under a test env; clear the markers so the real
@@ -57,9 +61,14 @@ describe("IMessageRpcClient child stream error handling", () => {
     spawnMock.mockReset().mockReturnValue(child);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.resetModules();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
+    );
   });
 
   it.each(["stdout", "stderr", "stdin"] as const)(
@@ -78,44 +87,113 @@ describe("IMessageRpcClient child stream error handling", () => {
       expect(() => child[streamName].emit("error", streamError)).not.toThrow();
 
       await expect(pending).rejects.toThrow(`${streamName} broke`);
-      await expect(client.waitForClose()).resolves.toBeUndefined();
+      await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
       expect(child.kill).toHaveBeenCalledOnce();
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
+      child.emit("close", null, "SIGTERM");
       await client.stop();
     },
   );
 
-  it("clears the stop fallback timer when the child closes first", async () => {
-    const realClearTimeout = globalThis.clearTimeout;
+  it("propagates a synchronous stdin write failure as a terminal transport error", async () => {
+    const writeError = new Error("write after end");
+    child.stdin.write = () => {
+      throw writeError;
+    };
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+
+    await expect(client.request("ping", {}, { timeoutMs: 0 })).rejects.toBe(writeError);
+    await expect(client.waitForClose()).rejects.toBe(writeError);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    child.emit("close", null, "SIGTERM");
+    await client.stop();
+  });
+
+  it("preserves structured JSON-RPC error data for send callers", async () => {
+    const { IMessageRpcClient, IMessageRpcRequestError } = await import("./client.js");
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+    const data = {
+      retry_safe: true,
+      disposition: "not_started",
+      transport: "bridge_v2",
+      operation: "send-message",
+    };
+
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Delivery failed before dispatch",
+            data,
+          },
+        })}\n`,
+      ),
+    );
+
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    expect(error).toMatchObject({
+      name: "IMessageRpcRequestError",
+      code: -32603,
+      data,
+      message:
+        'Delivery failed before dispatch: code=-32603 {\n  "retry_safe": true,\n  "disposition": "not_started",\n  "transport": "bridge_v2",\n  "operation": "send-message"\n}',
+    });
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
+  it("finishes graceful shutdown without scheduling escalation after synchronous close", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    let scheduledTimer: NodeJS.Timeout | undefined;
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+    const endMock = vi.fn(() => {
+      child.emit("close", 0, null);
+    });
+    child.stdin.end = endMock;
 
-    try {
-      const { IMessageRpcClient } = await import("./client.js");
-      const client = new IMessageRpcClient({ cliPath: "imsg" });
-      await client.start();
-      const endMock = vi.fn(() => {
-        child.emit("close", 0, null);
-        return child.stdin;
-      });
-      child.stdin.end = endMock;
+    await client.stop();
 
-      await client.stop();
+    expect(endMock).toHaveBeenCalledOnce();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
 
-      expect(endMock).toHaveReturnedWith(child.stdin);
-      expect(setTimeoutSpy).toHaveBeenCalledOnce();
-      scheduledTimer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
-      expect(scheduledTimer).toBeDefined();
-      expect(clearTimeoutSpy).toHaveBeenCalledWith(scheduledTimer);
-      expect(child.kill).not.toHaveBeenCalled();
-    } finally {
-      if (scheduledTimer) {
-        realClearTimeout(scheduledTimer);
+  it("escalates EOF to SIGTERM and SIGKILL, then waits for close", async () => {
+    vi.useFakeTimers();
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ cliPath: "imsg" });
+    await client.start();
+    child.stdin.end = vi.fn();
+    child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
+      if (signal === "SIGKILL") {
+        queueMicrotask(() => child.emit("close", null, "SIGKILL"));
       }
-      vi.restoreAllMocks();
-    }
+      return true;
+    });
+
+    const stopping = client.stop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(500);
+    await stopping;
+
+    expect(child.kill.mock.calls.map((call) => call[0])).toEqual(["SIGTERM", "SIGKILL"]);
+    vi.useRealTimers();
   });
 
   it("settles the client after a real child stdout stream failure", async () => {
@@ -135,7 +213,7 @@ describe("IMessageRpcClient child stream error handling", () => {
       realChild.stdout.destroy(new Error("real stdout failure"));
 
       await expect(pending).rejects.toThrow("real stdout failure");
-      await expect(client.waitForClose()).resolves.toBeUndefined();
+      await expect(client.waitForClose()).rejects.toThrow("real stdout failure");
       expect(realChild.killed).toBe(true);
     } finally {
       if (!realChild.killed) {
@@ -227,6 +305,89 @@ describe("IMessageRpcClient child stream error handling", () => {
     child.emit("close", 1, null);
 
     await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");
+    await expect(client.waitForClose()).rejects.toThrow("imsg rpc exited (code 1)");
     expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
+  });
+
+  it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-boundary-"));
+    tempDirs.push(root);
+    const wrapperDir = path.join(root, ".openclaw");
+    const wrapperPath = path.join(wrapperDir, "imsg remote");
+    const reportPath = path.join(root, "rpc-report.jsonl");
+    await fs.mkdir(wrapperDir, { recursive: true });
+    await fs.writeFile(
+      wrapperPath,
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        `const reportPath = ${JSON.stringify(reportPath)};`,
+        'let buffered = "";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data", (chunk) => {',
+        "  buffered += chunk;",
+        '  let newline = buffered.indexOf("\\n");',
+        "  while (newline !== -1) {",
+        "    const line = buffered.slice(0, newline);",
+        "    buffered = buffered.slice(newline + 1);",
+        "    const request = JSON.parse(line);",
+        '    fs.appendFileSync(reportPath, JSON.stringify({ args: process.argv.slice(2), request }) + "\\n");',
+        '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: request.params }) + "\\n");',
+        '    newline = buffered.indexOf("\\n");',
+        "  }",
+        "});",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    vi.stubEnv("HOME", root);
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementationOnce((command, args, options) =>
+      childProcess.spawn(command, args, options),
+    );
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({
+      cliPath: "~/.openclaw/imsg remote",
+      dbPath: "~/Library/Messages/chat.db",
+      remoteHost: "messages-mac",
+    });
+    await client.start();
+    const params = {
+      text: `spaces ; $(touch ${path.join(root, "should-not-exist")}) ' " & |`,
+      to: "person name@example.test",
+    };
+
+    await expect(client.request("send", params)).resolves.toEqual(params);
+    await client.stop();
+
+    const records = (await fs.readFile(reportPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { args: string[]; request: Record<string, unknown> });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.args).toEqual(["rpc", "--json", "--db", "~/Library/Messages/chat.db"]);
+    expect(records[0]?.request).toMatchObject({ method: "send", params });
+    await expect(fs.access(path.join(root, "should-not-exist"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps local dbPath home expansion", async () => {
+    vi.stubEnv("HOME", "/Users/gateway");
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({
+      cliPath: "~/.openclaw/imsg-local",
+      dbPath: "~/Library/Messages/chat.db",
+    });
+
+    await client.start();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/Users/gateway/.openclaw/imsg-local",
+      ["rpc", "--json", "--db", "/Users/gateway/Library/Messages/chat.db"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    child.emit("close", 0, null);
+    await client.stop();
   });
 });

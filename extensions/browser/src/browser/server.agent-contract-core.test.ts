@@ -1,5 +1,7 @@
 // Browser tests cover server.agent contract core plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
@@ -29,6 +31,12 @@ import {
 import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
+const NAVIGATION_TIMEOUT_CASES = [
+  { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+  { requestedTimeoutMs: 45_000, expectedTimeoutMs: 45_000 },
+  { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+  { requestedTimeoutMs: 3_000_000_000, expectedTimeoutMs: 120_000 },
+] as const;
 
 type ActErrorResponse = {
   error?: string;
@@ -593,6 +601,53 @@ describe("browser control server", () => {
     });
   });
 
+  it.each(NAVIGATION_TIMEOUT_CASES)(
+    "forwards timer-safe navigation timeout $requestedTimeoutMs to the Playwright backend",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      const base = await startServerAndBase();
+
+      const response = await postJson<{ ok: boolean }>(`${base}/navigate`, {
+        url: "https://example.com/slow",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      expect(response.ok).toBe(true);
+      expect(requirePwMock("navigateViaPlaywright")).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/slow",
+          timeoutMs: expectedTimeoutMs,
+        }),
+      );
+    },
+  );
+
+  it.each(NAVIGATION_TIMEOUT_CASES)(
+    "forwards timer-safe navigation timeout $requestedTimeoutMs to the Chrome MCP backend",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      setBrowserControlServerProfiles({
+        openclaw: { color: "#FF4500", driver: "existing-session" },
+      });
+      const base = await startServerAndBase();
+
+      const response = await postJson<{ ok: boolean }>(`${base}/navigate`, {
+        url: "https://example.com/slow",
+        targetId: "7",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      expect(response.ok).toBe(true);
+      const chromeMcp = await vi.importMock<typeof import("./chrome-mcp.js")>("./chrome-mcp.js");
+      expect(chromeMcp.navigateChromeMcpPage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileName: "openclaw",
+          targetId: "7",
+          url: "https://example.com/slow",
+          timeoutMs: expectedTimeoutMs,
+        }),
+      );
+    },
+  );
+
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
     const realFetch = getBrowserTestFetch();
@@ -796,6 +851,8 @@ describe("browser control server", () => {
 });
 
 describe("profile CRUD endpoints", () => {
+  const tempDirsToCleanup = new Set<string>();
+
   beforeEach(async () => {
     await resetBrowserControlServerTestContext();
 
@@ -812,7 +869,14 @@ describe("profile CRUD endpoints", () => {
   });
 
   afterEach(async () => {
-    await cleanupBrowserControlServerTestContext();
+    try {
+      await cleanupBrowserControlServerTestContext();
+    } finally {
+      await Promise.allSettled(
+        [...tempDirsToCleanup].map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
+      );
+      tempDirsToCleanup.clear();
+    }
   });
 
   it("validates profile create/delete endpoints", async () => {
@@ -888,8 +952,10 @@ describe("profile CRUD endpoints", () => {
     expect(createClawdBody.cdpPort).toBeTypeOf("number");
     expect(createClawdBody.userDataDir).toBeNull();
 
-    const explicitUserDataDir = "/tmp/openclaw-brave-profile";
-    await fs.promises.mkdir(explicitUserDataDir, { recursive: true });
+    const explicitUserDataDir = await fs.promises.realpath(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-brave-profile-")),
+    );
+    tempDirsToCleanup.add(explicitUserDataDir);
     const createExistingSession = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

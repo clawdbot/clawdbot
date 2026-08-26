@@ -5,6 +5,7 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -17,7 +18,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./app-server/protocol.js";
-import { requestCodexAppServerJson } from "./app-server/request.js";
+import { requestCodexAppServerJson, withCodexAppServerJsonClient } from "./app-server/request.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -34,6 +35,7 @@ export type CodexControlRequestOptions = {
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  onResponse?: (response: unknown, client: CodexAppServerClient) => Promise<void>;
 };
 
 export function requestOptions(
@@ -76,9 +78,7 @@ export async function codexControlRequest(
   const runtime = options.startOptions
     ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
     : resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  return await requestCodexAppServerJson({
-    method,
-    requestParams,
+  const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     startOptions: options.startOptions ?? runtime.start,
     config: options.config,
@@ -87,7 +87,17 @@ export async function codexControlRequest(
     authProfileId: options.authProfileId,
     agentDir: options.agentDir,
     isolated: options.isolated,
-  });
+  };
+  if (options.onResponse) {
+    return await withCodexAppServerJsonClient(controlRequestOptions, async (request, client) => {
+      const response = await request({ method, requestParams });
+      // Subscription-producing control requests must publish their exact
+      // physical-client ownership before this shared lease can be released.
+      await options.onResponse!(response, client);
+      return response;
+    });
+  }
+  return await requestCodexAppServerJson({ method, requestParams, ...controlRequestOptions });
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(

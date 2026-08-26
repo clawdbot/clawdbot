@@ -299,6 +299,7 @@ function buildPendingApprovalContent(params: {
     params.view.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
           request: {
+            approvalKind: "plugin",
             id: params.view.approvalId,
             request: {
               title: params.view.title,

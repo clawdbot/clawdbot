@@ -48,6 +48,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "READ_FLAGS = os.O_RDONLY",
   "if hasattr(os, 'O_NOFOLLOW'):",
   "    READ_FLAGS |= os.O_NOFOLLOW",
+  "if hasattr(os, 'O_NONBLOCK'):",
+  "    READ_FLAGS |= os.O_NONBLOCK",
   "",
   "WRITE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL",
   "if hasattr(os, 'O_NOFOLLOW'):",

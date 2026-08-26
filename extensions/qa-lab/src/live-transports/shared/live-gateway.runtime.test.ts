@@ -146,7 +146,7 @@ describe("startQaLiveLaneGateway", () => {
         },
         slots: {
           memory: "memory-core",
-          contextEngine: "qmd",
+          contextEngine: "custom-context",
         },
       },
       memory: {
@@ -163,7 +163,7 @@ describe("startQaLiveLaneGateway", () => {
     expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
     expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
     expect(cfg?.plugins?.slots?.memory).toBe("none");
-    expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
+    expect(cfg?.plugins?.slots?.contextEngine).toBe("custom-context");
     expect(cfg?.memory?.search?.enabled).toBe(false);
   });
 

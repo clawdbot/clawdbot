@@ -35,13 +35,13 @@ export async function saveRemoteMediaForStore(params: {
 }): Promise<SavedMedia> {
   const resolvePinned = params.resolvePinnedHostnameForTest;
   const lookupFn: LookupFn | undefined = resolvePinned
-    ? ((async (hostname: string) => {
+    ? async (hostname, _options) => {
         const pinned = await resolvePinned(hostname);
         return pinned.addresses.map((address) => ({
           address,
           family: address.includes(":") ? 6 : 4,
         }));
-      }) as unknown as LookupFn)
+      }
     : undefined;
   const { id, path, size, contentType } = await saveRemoteMedia({
     url: params.source,

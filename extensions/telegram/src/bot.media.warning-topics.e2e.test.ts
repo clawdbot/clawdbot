@@ -3,7 +3,7 @@ import {
   readRemoteMediaBufferSpy,
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
-} from "./bot.media.e2e-harness.js";
+} from "./bot.media.e2e.test-harness.js";
 import { createBotHandlerWithOptions } from "./bot.media.test-utils.js";
 
 describe("Telegram single-media warnings", () => {

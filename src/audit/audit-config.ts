@@ -12,6 +12,11 @@ export function isAuditLedgerEnabled(cfg: OpenClawConfig | undefined): boolean {
   return cfg?.logging?.audit?.enabled !== false;
 }
 
+/** Execution identity is retained only after an explicit startup-scoped opt-in. */
+export function isExecutionIdentityCollectionEnabled(cfg: OpenClawConfig | undefined): boolean {
+  return isAuditLedgerEnabled(cfg) && cfg?.logging?.audit?.executionIdentity === true;
+}
+
 /** Message metadata remains an explicit opt-in inside the default-on ledger. */
 export function resolveAuditMessageMode(cfg: OpenClawConfig | undefined): AuditMessageMode {
   return cfg?.logging?.audit?.messages ?? "off";

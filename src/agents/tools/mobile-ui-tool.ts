@@ -10,16 +10,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam, ToolInputError } from "./common.js";
-import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
 import {
   type EligibleNodeMessages,
-  listNodes,
-  type NodeListNode,
   resolveEligibleNodeFromList,
-} from "./nodes-utils.js";
+} from "../../shared/node-resolve.js";
+import { stringEnum } from "../schema/typebox.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
+import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
 const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
@@ -152,26 +151,26 @@ function readMobileUiAction(input: Record<string, unknown>): MobileUiAction {
     throw new ToolInputError("mobileAction required for act");
   }
   const action = input.mobileAction;
-  const type = readStringParam(action, "type", { required: true });
+  const type = readToolStringParam(action, "type", { required: true });
   switch (type) {
     case "activate":
-      return { type, ref: readStringParam(action, "ref", { required: true }) };
+      return { type, ref: readToolStringParam(action, "ref", { required: true }) };
     case "set_text":
       return {
         type,
-        ref: readStringParam(action, "ref", { required: true }),
-        text: readStringParam(action, "text", {
+        ref: readToolStringParam(action, "ref", { required: true }),
+        text: readToolStringParam(action, "text", {
           required: true,
           trim: false,
           allowEmpty: true,
         }),
       };
     case "scroll": {
-      const direction = readStringParam(action, "direction", { required: true });
+      const direction = readToolStringParam(action, "direction", { required: true });
       if (direction !== "forward" && direction !== "backward") {
         throw new ToolInputError("direction must be forward or backward");
       }
-      return { type, ref: readStringParam(action, "ref", { required: true }), direction };
+      return { type, ref: readToolStringParam(action, "ref", { required: true }), direction };
     }
     case "tap":
       return {
@@ -192,7 +191,7 @@ function readMobileUiAction(input: Record<string, unknown>): MobileUiAction {
         }),
       };
     case "global_action": {
-      const name = readStringParam(action, "name", { required: true });
+      const name = readToolStringParam(action, "name", { required: true });
       if (!(GLOBAL_ACTION_NAMES as readonly string[]).includes(name)) {
         throw new ToolInputError("name must be back, home, recents, or notifications");
       }
@@ -223,7 +222,7 @@ function isEligibleMobileUiNode(node: NodeListNode): boolean {
 
 const MOBILE_UI_NODE_HINT = "enable Android Accessibility Control and approve the pairing update";
 
-const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages = {
+const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>
     `node "${query}" is not a mobile-UI-capable device (${MOBILE_UI_NODE_HINT}; ` +
     `eligible device ids: ${eligibleIds})`,
@@ -321,7 +320,7 @@ function parseMobileUiNode(value: unknown): MobileUiNode {
   if (!isRecord(value)) {
     throw new Error("mobile.ui.observe returned an invalid node");
   }
-  const ref = readStringParam(value, "ref", { required: true });
+  const ref = readToolStringParam(value, "ref", { required: true });
   const role = typeof value.role === "string" ? value.role : "";
   if (
     !Array.isArray(value.bounds) ||
@@ -356,7 +355,7 @@ function parseMobileUiNode(value: unknown): MobileUiNode {
 
 function parseMobileUiSnapshot(payload: unknown): MobileUiSnapshot {
   const record = payloadRecord(payload, MOBILE_UI_OBSERVE_COMMAND);
-  const snapshotId = readStringParam(record, "snapshotId", { required: true });
+  const snapshotId = readToolStringParam(record, "snapshotId", { required: true });
   if (!Array.isArray(record.nodes)) {
     throw new Error("mobile.ui.observe response missing nodes");
   }
@@ -371,7 +370,7 @@ function parseMobileUiSnapshot(payload: unknown): MobileUiSnapshot {
 function parseMobileUiOutcome(payload: unknown): MobileUiOutcome {
   const record = payloadRecord(payload, MOBILE_UI_ACT_COMMAND);
   return {
-    code: readStringParam(record, "code", { required: true }),
+    code: readToolStringParam(record, "code", { required: true }),
     message: nullableString(record.message, "message"),
   };
 }
@@ -542,7 +541,7 @@ export function createMobileUiTool(options?: {
       serialize(async () => {
         signal?.throwIfAborted();
         const input = args as Record<string, unknown>;
-        const action = readStringParam(input, "action", { required: true });
+        const action = readToolStringParam(input, "action", { required: true });
         if (action !== "observe" && action !== "act") {
           throw new ToolInputError("action must be observe or act");
         }
@@ -572,7 +571,7 @@ export function createMobileUiTool(options?: {
           return jsonResult(await observe());
         }
 
-        const snapshotId = readStringParam(input, "snapshotId", { required: true });
+        const snapshotId = readToolStringParam(input, "snapshotId", { required: true });
         const mobileAction = readMobileUiAction(input);
         const observed = observations.get(node.nodeId);
         if (!observed || observed.snapshotId !== snapshotId) {

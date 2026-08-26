@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { validateKovaWorkflowEvidence } from "../../scripts/lib/kova-workflow-evidence.mjs";
+import { validateKovaWorkflowEvidence } from "../../scripts/lib/kova-workflow-evidence.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type JsonObject = Record<string, unknown>;
@@ -17,7 +17,7 @@ const MODEL = "gpt-5.6";
 const INCLUDE_FILTERS = ["scenario:scenario-a", "scenario:scenario-b"];
 const FIRST_PAIR: Pair = { scenario: "scenario-a", state: "state-a" };
 const PAIRS: Pair[] = [FIRST_PAIR, { scenario: "scenario-b", state: "state-b" }];
-const SCRIPT_PATH = "scripts/lib/kova-workflow-evidence.mjs";
+const SCRIPT_PATH = "scripts/lib/kova-workflow-evidence.mts";
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function plan(

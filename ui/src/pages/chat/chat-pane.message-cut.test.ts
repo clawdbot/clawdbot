@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
@@ -11,17 +13,9 @@ type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   forkFromMessage: (entryId: string) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  paneId: string;
   state: ChatPageHost;
-  switchPaneSession: (sessionKey: string) => void;
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function createSessionContext(
   client: GatewayBrowserClient,
@@ -98,21 +92,23 @@ describe("chat pane message cuts", () => {
     const client = {} as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
     state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
-    pane.switchPaneSession = vi.fn((sessionKey: string) => {
-      state.sessionKey = sessionKey;
-      state.chatAttachments = [];
-    });
 
     await pane.forkFromMessage("user-entry");
 
-    expect(state.sessionKey).toBe("agent:main:forked");
+    expect(state.sessionKey).toBe("agent:main:current");
     expect(state.chatAttachments).toEqual([
-      {
-        id: expect.stringMatching(/^att-/),
-        mimeType: "image/png",
-        dataUrl: "data:image/png;base64,aW1hZ2U=",
-      },
+      { id: "old", mimeType: "image/jpeg", dataUrl: "data:old" },
     ]);
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toEqual({
+      attachments: [
+        {
+          id: expect.stringMatching(/^att-/),
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,aW1hZ2U=",
+        },
+      ],
+      draft: "edit me",
+    });
   });
 
   it("keeps a newer global agent selection when a message fork finishes late", async () => {
@@ -135,5 +131,45 @@ describe("chat pane message cuts", () => {
     expect(navigate).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("global");
     expect(state.assistantAgentId).toBe("work");
+  });
+
+  it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.forkFromMessage("user-entry");
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
+  });
+
+  it("does not paint a stale fork error after the selected session changes", async () => {
+    let rejectFork!: (error: Error) => void;
+    const forked = new Promise<never>((_resolve, reject) => {
+      rejectFork = reject;
+    });
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+
+    const pending = pane.forkFromMessage("user-entry");
+    state.sessionKey = "agent:main:replacement";
+    rejectFork(new Error("stale fork failed"));
+
+    await pending;
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
   });
 });

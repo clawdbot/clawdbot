@@ -115,6 +115,7 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
         const gateway = await installMockGateway(page, {
           assistantAgentId: "research",
           defaultAgentId: "research",
+          featureMethods: ["chat.metadata", "chat.startup", "skills.proposals.evaluate"],
           methodResponses: {
             "skills.proposals.list": {
               schema: "openclaw.skill-workshop.proposals-manifest.v1",

@@ -1,9 +1,29 @@
 /**
  * Shared Browser CLI resize runner used by resize and set viewport commands.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
-import { callBrowserResize, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime } from "./core-api.js";
+
+/** Parses a bounded viewport dimension for both Browser resize commands. */
+export function parseBrowserViewportDimension(value: unknown, label: string): number | undefined {
+  const parsed = parseBrowserPositiveIntegerValue(value);
+  if (parsed !== undefined && parsed <= ACT_MAX_VIEWPORT_DIMENSION) {
+    return parsed;
+  }
+  const reason =
+    parsed === undefined
+      ? "must be a positive integer"
+      : `maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`;
+  defaultRuntime.error(danger(`Invalid ${label}: ${reason}`));
+  defaultRuntime.exit(1);
+  return undefined;
+}
 
 /** Validates viewport dimensions, sends resize action, and writes CLI output. */
 export async function runBrowserResizeWithOutput(params: {
@@ -12,7 +32,6 @@ export async function runBrowserResizeWithOutput(params: {
   width: number;
   height: number;
   targetId?: string;
-  timeoutMs?: number;
   successMessage: string;
 }): Promise<void> {
   const { width, height } = params;
@@ -27,16 +46,17 @@ export async function runBrowserResizeWithOutput(params: {
     return;
   }
 
-  const result = await callBrowserResize(
-    params.parent,
-    {
-      profile: params.profile,
+  const result = await callBrowserRequest(params.parent, {
+    method: "POST",
+    path: "/act",
+    query: params.profile ? { profile: params.profile } : undefined,
+    body: {
+      kind: "resize",
       width,
       height,
-      targetId: params.targetId,
+      targetId: normalizeOptionalString(params.targetId),
     },
-    { timeoutMs: params.timeoutMs ?? 20000 },
-  );
+  });
 
   if (params.parent?.json) {
     defaultRuntime.writeJson(result);

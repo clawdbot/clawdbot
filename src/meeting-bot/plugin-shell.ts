@@ -34,8 +34,6 @@ import type {
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-const SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
-
 type MeetingPluginShellPlatform = {
   browserLabel: string;
   displayName: string;
@@ -67,10 +65,13 @@ export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHos
     bridgeIdPrefix: `${platform.session.idPrefix}_node_`,
     talkBackModes: new Set(["agent", "bidi"]),
     agentMode: "agent",
+    defaultAudio: {
+      backend: "auto",
+      bufferBytes: 4_096,
+      format: "pcm16-24khz",
+    },
     normalizeUrl: (value) => platform.urls.validateAndNormalize(value),
     normalizeMeetingKey: (value) => platform.urls.normalizeForReuse(value),
-    outputMentionsAudioDevice: (output) => /\bBlackHole\s+2ch\b/i.test(output),
-    systemProfilerCommand: SYSTEM_PROFILER_COMMAND,
     browser: {
       application: "Google Chrome",
       buildProfileArgs: (profile) => ["--args", `--profile-directory=${profile}`],
@@ -143,12 +144,7 @@ export function createMeetingPluginChromeTransport<
 >(
   options: Omit<
     MeetingChromeTransportOptions<Mode, Health, Transcript>,
-    | "browserNodeAdapter"
-    | "isRealtimeRouteReady"
-    | "isTalkBackMode"
-    | "nodeCommandName"
-    | "outputMentionsAudioDevice"
-    | "systemProfilerCommand"
+    "browserNodeAdapter" | "isRealtimeRouteReady" | "isTalkBackMode" | "nodeCommandName"
   >,
 ) {
   return createMeetingChromeTransport<MeetingChromeTransportConfig, Mode, Health, Transcript>({
@@ -157,8 +153,6 @@ export function createMeetingPluginChromeTransport<
     isRealtimeRouteReady: isMeetingRealtimeRouteReady,
     isTalkBackMode: isMeetingTalkBackMode,
     nodeCommandName: options.platform.nodeCommandName,
-    outputMentionsAudioDevice: (output) => /\bBlackHole\s+2ch\b/i.test(output),
-    systemProfilerCommand: SYSTEM_PROFILER_COMMAND,
   });
 }
 

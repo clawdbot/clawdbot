@@ -4,10 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 type SessionCustomEntry = {
   type: "custom";
@@ -488,9 +488,9 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-2");
   });
 
-  it("propagates session takeover errors from cache entry persistence", async () => {
+  it("propagates writer-claim rebound from cache entry persistence", async () => {
     const now = 2_500_000;
-    const takeoverError = new EmbeddedAttemptSessionTakeoverError("/tmp/session.jsonl");
+    const takeoverError = new SessionTranscriptWriterClaimReboundError("agent:main:test");
     const sessionManager = {
       appendCustomEntry: vi.fn(async () => {
         throw takeoverError;

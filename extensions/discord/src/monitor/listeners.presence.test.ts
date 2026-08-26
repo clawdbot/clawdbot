@@ -13,7 +13,7 @@ import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 
 const mocks = vi.hoisted(() => ({
   canViewDiscordGuildChannel: vi.fn(async () => true),
-  enqueueSystemEvent: vi.fn(() => true),
+  enqueueSystemEvent: vi.fn((_text: unknown, _options: Record<string, unknown>) => true),
   requestHeartbeat: vi.fn(),
   resolveAgentRoute: vi.fn(() => ({
     agentId: "molty",
@@ -26,7 +26,16 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/routing", () => ({ resolveAgentRoute: mocks.resolveAgentRoute }));
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { agentId: unknown; sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) =>
+    mocks.enqueueSystemEvent(text, {
+      ...options,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+    }),
 }));
 vi.mock("../send.permissions.js", () => ({
   canViewDiscordGuildChannel: mocks.canViewDiscordGuildChannel,
@@ -136,6 +145,7 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining('user_id="user-1"'),
       expect.objectContaining({
+        agentId: "molty",
         sessionKey: "agent:molty:discord:channel:channel-1",
         deliveryContext: {
           channel: "discord",

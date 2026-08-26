@@ -1,15 +1,23 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
+import fs from "node:fs/promises";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  downloadClawHubSkillArchive,
+  normalizeClawHubSha256Integrity,
+} from "../../infra/clawhub-artifacts.js";
 import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
 import {
-  downloadClawHubSkillArchive,
-  normalizeClawHubSha256Integrity,
-} from "../../infra/clawhub.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
+  fetchClawHubSkillVerification,
+  type ClawHubSkillVerificationResponse,
+} from "../../infra/clawhub-skills.js";
+import { formatErrorMessage, isErrno } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
 import {
   normalizeTrackedSkillSlug,
@@ -26,6 +34,7 @@ import {
   type InstallClawHubSkillResult,
   type Logger,
 } from "./clawhub-install-core.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
   parseRequestedClawHubSkillRef,
@@ -34,6 +43,11 @@ import {
   type ClawHubSkillRef,
   type ClawHubSkillsLockfile,
 } from "./clawhub-store.js";
+import {
+  checkClawHubSkillPlanAtPath,
+  planTrackedClawHubSkillState,
+  type ClawHubSkillUninstallPlan,
+} from "./clawhub-uninstall.js";
 
 export { readVerifiedClawHubSkillSourceUrl } from "./clawhub-install-core.js";
 export {
@@ -52,6 +66,18 @@ export {
   type ClawHubSkillsLockfileStatusRead,
 } from "./clawhub-store.js";
 
+export async function verifySkillWithClawHub(
+  params: Parameters<typeof fetchClawHubSkillVerification>[0],
+): Promise<Result<ClawHubSkillVerificationResponse, string>> {
+  try {
+    return ok(await fetchClawHubSkillVerification(params));
+  } catch (error) {
+    return resultError(
+      formatClawHubSkillRequestError(error, { slug: params.slug, operation: "verify" }),
+    );
+  }
+}
+
 type UpdateClawHubSkillResult =
   | {
       ok: true;
@@ -62,7 +88,13 @@ type UpdateClawHubSkillResult =
       targetDir: string;
       warning?: string;
     }
-  | { ok: false; error: string; code?: ClawHubTrustErrorCode; version?: string; warning?: string };
+  | {
+      ok: false;
+      error: string;
+      code?: ClawHubTrustErrorCode | "force_required";
+      version?: string;
+      warning?: string;
+    };
 
 type TrackedUpdateTarget =
   | {
@@ -87,7 +119,7 @@ async function resolveRequestedUpdateSlug(params: {
 }): Promise<string> {
   const requested = params.requestedSlug.trim();
   const requestedRef =
-    requested.startsWith("@") || requested.startsWith("skills-sh:")
+    requested.startsWith("@") || requested.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)
       ? parseRequestedClawHubSkillRef(requested)
       : { slug: normalizeTrackedSkillSlug(requested) };
   const trackedSlug = requestedRef.slug;
@@ -315,6 +347,7 @@ export async function installSkillFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
 }): Promise<InstallClawHubSkillResult> {
@@ -327,15 +360,44 @@ export async function installSkillFromClawHub(params: {
   );
 }
 
+async function guardTrackedSkillLocalState(params: {
+  workspaceDir: string;
+  slug: string;
+  previousVersion: string | null;
+}): Promise<
+  { ok: true; plan: ClawHubSkillUninstallPlan | undefined } | { ok: false; error: string }
+> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+  try {
+    await fs.lstat(targetDir);
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return { ok: true, plan: undefined };
+    }
+    return { ok: false, error: String(error) };
+  }
+  const local = await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef: { slug: params.slug },
+    expectedVersion: params.previousVersion ?? "",
+  });
+  if (local.ok) {
+    return { ok: true, plan: local.plan };
+  }
+  return { ok: false, error: local.error };
+}
+
 export async function updateSkillsFromClawHub(params: {
   workspaceDir: string;
   slug?: string;
   baseUrl?: string;
+  force?: boolean;
   forceInstall?: boolean;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   const slugs = params.slug
@@ -361,8 +423,27 @@ export async function updateSkillsFromClawHub(params: {
     }
     const install = await withClawPackageLifecycleLease(
       { kind: "skill", source: "clawhub", ref: tracked.slug, workspace: params.workspaceDir },
-      () =>
-        installTrackedSkillFromClawHub({
+      async () => {
+        let replaceBlocked: string | undefined;
+        let localPlan: ClawHubSkillUninstallPlan | undefined;
+        if (!params.force) {
+          // Carry the verified digests into the install transaction. Re-resolving the
+          // live path after download would leave another check-to-backup race.
+          const local = await guardTrackedSkillLocalState({
+            workspaceDir: params.workspaceDir,
+            slug: tracked.slug,
+            previousVersion: tracked.previousVersion,
+          });
+          if (!local.ok) {
+            return {
+              ok: false as const,
+              code: "force_required" as const,
+              error: `${local.error} Updating replaces the installed skill directory.`,
+            };
+          }
+          localPlan = local.plan;
+        }
+        const installed = await installTrackedSkillFromClawHub({
           workspaceDir: params.workspaceDir,
           slug: tracked.slug,
           ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
@@ -375,7 +456,29 @@ export async function updateSkillsFromClawHub(params: {
           onClawHubRisk: params.onClawHubRisk,
           logger: params.logger,
           config: params.config,
-        }),
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          ...(params.force
+            ? {}
+            : {
+                onAfterBackup: async (backupDir: string) => {
+                  const current = localPlan
+                    ? await checkClawHubSkillPlanAtPath(localPlan, backupDir)
+                    : {
+                        ok: false as const,
+                        error: `Skill ${JSON.stringify(tracked.slug)} appeared during update.`,
+                      };
+                  replaceBlocked = current.ok
+                    ? undefined
+                    : `${current.error} Updating replaces the installed skill directory.`;
+                  return replaceBlocked;
+                },
+              }),
+        });
+        if (!installed.ok && replaceBlocked) {
+          return { ok: false as const, code: "force_required" as const, error: replaceBlocked };
+        }
+        return installed;
+      },
       { required: true },
     );
     results.push(

@@ -1,6 +1,6 @@
 // Tests subagent utility helpers for label, routing, and transcript handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   resolveSubagentLabel,
   resolveSubagentTargetFromRuns,

@@ -13,7 +13,10 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { createFlexMessage as createProviderFlexMessage } from "./send.js";
+import {
+  createFlexMessage as createProviderFlexMessage,
+  createLocationMessage as createRealLocationMessage,
+} from "./send.js";
 
 describe("deliverLineAutoReply", () => {
   it.each([
@@ -101,21 +104,19 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
-  it.each([
-    { name: "title", title: " ", address: "1 Main Street" },
-    { name: "address", title: "Meet here", address: " " },
-  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+  it("delivers whatever the location builder returns, including its text degradation", async () => {
+    // A blank required field makes LINE reject the pin, and the builder answers
+    // with the sender's values as text. The reply must carry that, not drop it.
     const lineData = {
-      location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+      location: { title: "Meet here", address: " ", latitude: 35.6895, longitude: 139.6917 },
     };
-    const createLocationMessage = vi.fn<LineAutoReplyDeps["createLocationMessage"]>((value) =>
-      value.title.trim() && value.address.trim()
-        ? {
-            type: "location" as const,
-            ...value,
-          }
-        : null,
-    );
+    const degraded = {
+      type: "text" as const,
+      text: "Meet here" + String.fromCharCode(10) + "35.6895, 139.6917",
+    };
+    // The real builder decides the degradation; injecting a stand-in here would
+    // only prove the stand-in was pushed.
+    const createLocationMessage = vi.fn(createRealLocationMessage);
     const { deps, replyMessageLine } = createDeps({ createLocationMessage });
 
     const result = await deliverLineAutoReply({
@@ -127,7 +128,8 @@ describe("deliverLineAutoReply", () => {
 
     expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
       "token",
-      [{ type: "text", text: "Meet me there." }],
+      // No quick replies here, so the text leads and rich parts follow it.
+      [{ type: "text", text: "Meet me there." }, degraded],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(createLocationMessage).toHaveBeenCalledOnce();

@@ -62,19 +62,21 @@ describe("gateway codex harness live helpers", () => {
       guardianProbe: false,
       imageProbe: false,
       mcpProbe: false,
+      multiSessionProbe: false,
       resumeStress: false,
       subagentProbe: true,
     };
 
     expect(shouldUseCodexHarnessSubagentOnlyFastPath(base)).toBe(true);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, resumeStress: true })).toBe(false);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, compactionStress: true })).toBe(
-      false,
-    );
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, codeModeOnly: true })).toBe(false);
-    expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, explicitOptOut: true })).toBe(
-      false,
-    );
+    for (const flag of [
+      "codeModeOnly",
+      "compactionStress",
+      "explicitOptOut",
+      "multiSessionProbe",
+      "resumeStress",
+    ] as const) {
+      expect(shouldUseCodexHarnessSubagentOnlyFastPath({ ...base, [flag]: true })).toBe(false);
+    }
   });
 
   it("classifies sessions.list timeouts as retryable live Codex errors", () => {

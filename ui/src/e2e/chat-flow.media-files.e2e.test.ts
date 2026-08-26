@@ -1,7 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
   copiedViaExec,
   createChatFlowE2eSuite,
@@ -11,6 +12,7 @@ import {
   managedImageCacheProofDir,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -60,7 +62,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf" });
+      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
       await link.waitFor({ state: "visible", timeout: 10_000 });
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
 
@@ -84,9 +86,25 @@ suite.define(() => {
       source: "/home/node/.openclaw/media/outbound/bootstrap-image.png",
       ticket: "ticket-bootstrap-image",
     },
+    {
+      kind: "image",
+      source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
+      ticket: "ticket-bootstrap-uppercase-image",
+    },
+    {
+      kind: "image",
+      source: "file:/home/node/.openclaw/media/outbound/bootstrap-authorityless-image.png",
+      ticket: "ticket-bootstrap-authorityless-image",
+    },
+    {
+      kind: "audio",
+      source: `FILE:${path.join(managedImageCacheProofDir, "bootstrap-structured-audio.mp3")}`,
+      ticket: "ticket-bootstrap-structured-audio",
+      structured: true,
+    },
   ] as const)(
     "renders local assistant $kind through server metadata before preview roots load",
-    async ({ kind, source, ticket }) => {
+    async ({ kind, source, ticket, ...options }) => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -94,12 +112,13 @@ suite.define(() => {
       });
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
+      const expectedSource = "structured" in options ? new URL(source).pathname : source;
 
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(source);
+        expect(url.searchParams.get("source")).toBe(expectedSource);
         if (url.searchParams.get("meta") === "1") {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           await route.fulfill({
@@ -119,10 +138,7 @@ suite.define(() => {
           kind === "image"
             ? {
                 contentType: "image/png",
-                body: Buffer.from(
-                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-                  "base64",
-                ),
+                body: await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png")),
               }
             : {
                 contentType: "audio/mpeg",
@@ -143,7 +159,10 @@ suite.define(() => {
             : {
                 id: "assistant-bootstrap-local-audio",
                 role: "assistant",
-                content: [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                content:
+                  "structured" in options
+                    ? (await buildLocalWebchatAudioMessage(source)).content
+                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
         ],
@@ -171,7 +190,7 @@ suite.define(() => {
                 element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
               ),
             )
-            .toBe(1);
+            .toBe(180);
         }
 
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -179,7 +198,7 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-local-${kind}.png`),
+            path: path.join(artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -531,6 +550,10 @@ suite.define(() => {
       const id = String(index + 1).padStart(12, "0");
       return `/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-${id}/full`;
     });
+    const managedImageBody = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+      "base64",
+    );
     const fetchedMedia: Array<{
       authorization: string | undefined;
       pathname: string;
@@ -545,8 +568,8 @@ suite.define(() => {
         requesterSessionKey: request.headers()["x-openclaw-requester-session-key"],
       });
       await route.fulfill({
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" rx="12" fill="#0f766e"/><text x="80" y="50" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14">managed preview</text></svg>',
-        contentType: "image/svg+xml",
+        body: managedImageBody,
+        contentType: "image/png",
       });
     });
 
@@ -617,9 +640,7 @@ suite.define(() => {
               (images) =>
                 images.filter(
                   (image) =>
-                    image instanceof HTMLImageElement &&
-                    image.complete &&
-                    image.naturalWidth === 160,
+                    image instanceof HTMLImageElement && image.complete && image.naturalWidth === 1,
                 ).length,
             ),
         )
@@ -643,19 +664,21 @@ suite.define(() => {
       const overflowProof = await readBlobProof();
       // Concurrent image fetches can resolve in any order. Find the real LRU
       // rather than assuming that creation order matches transcript order.
+      expect(overflowProof.revoked).toHaveLength(1);
       const evictedBlobUrl = expectDefined(
-        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
+        overflowProof.revoked.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      expect(overflowProof.created).toContain(evictedBlobUrl);
       const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
-      expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
-      const evictedPath = new URL(
+      const evictedUrl = new URL(
         expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
-      ).pathname;
+      );
+      const evictedPath = evictedUrl.pathname.replace(/\/full$/u, "/thumbnail");
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;
@@ -671,7 +694,7 @@ suite.define(() => {
             image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
           ),
         )
-        .toBe(160);
+        .toBe(1);
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
       const finalProof = await readBlobProof();
       const evictedImageFetches = fetchedMedia.filter(
@@ -832,7 +855,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -903,16 +926,10 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      // Collapsed rails render nothing; the title-bar toggle carries the
-      // changed-file badge.
-      const opener = page.locator(".chat-workspace-toggle");
-      await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
-      await expect.poll(() => opener.getAttribute("aria-expanded")).toBe("true");
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -932,22 +949,17 @@ suite.define(() => {
         }),
       ).toBe(0);
 
-      await page.locator(".chat-workspace-rail__collapse-toggle").click();
-      await opener.waitFor({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Close Files" }).click();
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
-      await page.setViewportSize({ height: 900, width: 760 });
-      const workbench = page.locator(".chat-workbench");
-      await expect
-        .poll(() => workbench.getAttribute("class"))
-        .toContain("chat-workbench--dock-bottom");
+      await page.setViewportSize({ height: 900, width: 640 });
+      await page.locator(".side-panel--narrow").waitFor();
       const workspaceRail = page.locator(".chat-workspace-rail");
       await expect
         .poll(async () => {
@@ -991,7 +1003,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });

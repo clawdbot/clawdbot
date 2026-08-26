@@ -1,4 +1,4 @@
-/** Verifies transport disconnect cancels only its own paired-node invocation. */
+/** Verifies transport disconnect cancellation stays scoped to request-owned work. */
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -93,7 +93,7 @@ function createDispatcher(
       connId: client.connId,
       extraHandlers: {},
       buildRequestContext: () => ({}) as never,
-      send: vi.fn(),
+      send: vi.fn((_frame: unknown) => ({ kind: "sent" }) as const),
       close: vi.fn(),
       isClosed: () => false,
       setCloseCause: vi.fn(),
@@ -104,7 +104,7 @@ function createDispatcher(
   return { client, dispatcher };
 }
 
-describe("paired-node WebSocket request cancellation", () => {
+describe("authenticated WebSocket request cancellation", () => {
   it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
     const socket = new EventEmitter();
     const { registry, frames } = createPairedNode();
@@ -155,20 +155,67 @@ describe("paired-node WebSocket request cancellation", () => {
     await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
   });
 
-  it("does not attach a node cancellation lifetime to unrelated requests", async () => {
+  it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
+    "keeps authenticated %s work alive after its socket disconnects",
+    async (method) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket);
+      let finish!: () => void;
+      const completion = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let completed = false;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        await completion;
+        completed = true;
+        options.respond(true, { ok: true });
+      });
+
+      await dispatcher.dispatch(
+        { type: "req", id: "ordinary-request", method, params: {} },
+        client,
+      );
+      await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
+
+      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close", 1006, Buffer.alloc(0));
+      expect(completed).toBe(false);
+
+      finish();
+      await vi.waitFor(() => expect(completed).toBe(true));
+    },
+  );
+
+  it("cancels a session companion ask when its authenticated socket closes", async () => {
     const socket = new EventEmitter();
-    const { client, dispatcher } = createDispatcher(socket);
+    const { client, dispatcher } = createDispatcher(socket, {
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      mode: GATEWAY_CLIENT_MODES.UI,
+    });
+    let observedSignal: AbortSignal | undefined;
     handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      options.respond(true, { ok: true });
+      observedSignal = options.signal;
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
     });
 
-    await dispatcher.dispatch(
-      { type: "req", id: "ordinary-request", method: "test.trace", params: {} },
+    const request = dispatcher.dispatch(
+      {
+        type: "req",
+        id: "session-companion",
+        method: "sessions.companion.ask",
+        params: { sessionKey: "agent:main:main", question: "What changed?" },
+      },
       client,
     );
-    await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(1));
 
-    expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    socket.emit("close", 1000, Buffer.alloc(0));
+
+    await request;
+    expect(observedSignal?.aborted).toBe(true);
     expect(socket.listenerCount("close")).toBe(0);
   });
 

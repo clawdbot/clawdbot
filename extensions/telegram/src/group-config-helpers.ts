@@ -1,4 +1,9 @@
-import { resolveChannelGroupPolicy, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
+import {
+  resolveChannelGroupPolicy,
+  resolveToolsBySender,
+  type GroupToolPolicyConfig,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
 // Telegram helper module supports group config helpers behavior.
 import type {
   OpenClawConfig,
@@ -73,4 +78,21 @@ export function resolveTelegramGroupPromptSettings(params: {
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   return { skillFilter, groupSystemPrompt };
+}
+
+export function resolveTelegramDirectToolPolicy(params: {
+  directConfig?: Pick<TelegramDirectConfig, "tools" | "toolsBySender">;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+}): GroupToolPolicyConfig | undefined {
+  return (
+    resolveToolsBySender({
+      toolsBySender: params.directConfig?.toolsBySender,
+      messageProvider: "telegram",
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+    }) ?? params.directConfig?.tools
+  );
 }

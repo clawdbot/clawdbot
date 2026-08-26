@@ -1,7 +1,7 @@
 // Model list formatting tests cover fixed-width terminal cell helpers.
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
-import { formatTokenK, pad, truncate } from "./list.format.js";
+import { formatTokenK, padTerminalCell, truncate } from "./list.format.js";
 
 describe("formatTokenK", () => {
   it("renders token context windows in decimal K", () => {
@@ -49,9 +49,9 @@ describe("truncate", () => {
   });
 });
 
-describe("pad", () => {
+describe("padTerminalCell", () => {
   it("pads to terminal visible width rather than string length", () => {
-    expect(pad("表", 2)).toBe("表");
-    expect(pad("表", 3)).toBe("表 ");
+    expect(padTerminalCell("表", 2)).toBe("表");
+    expect(padTerminalCell("表", 3)).toBe("表 ");
   });
 });

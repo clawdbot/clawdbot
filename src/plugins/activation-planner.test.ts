@@ -45,7 +45,13 @@ describe("activation planner", () => {
         },
         {
           id: "browser",
-          commandAliases: [{ name: "browser" }],
+          cliCommands: [
+            {
+              name: "browser",
+              description: "Manage the browser",
+              hasSubcommands: true,
+            },
+          ],
           providers: [],
           channels: [],
           cliBackends: [],

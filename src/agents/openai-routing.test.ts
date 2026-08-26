@@ -172,6 +172,40 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
+  it("uses the configured fixed-store owner for agent-scoped request parameters", () => {
+    const config = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "research" } },
+        entries: {
+          ops: {},
+          research: { params: { store: false } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        sessionKey: "global",
+        env: {},
+      }),
+    ).toBe("openclaw");
+    expect(() =>
+      resolveOpenAIImplicitAgentRuntime({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        agentId: "ops",
+        sessionKey: "global",
+        env: {},
+      }),
+    ).toThrow(/belongs to "research"/);
+  });
+
   it("honors explicit model runtime policy before the OpenAI base URL default", () => {
     const customCodexConfig = {
       agents: {

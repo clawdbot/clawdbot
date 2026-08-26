@@ -252,6 +252,69 @@ describe("dreaming markdown storage", () => {
     expect(dreamsContent).toContain("- Lowercase target.");
   });
 
+  it.each([
+    {
+      label: "daily inline phase",
+      relativePath: path.join("memory", "2026-04-05.md"),
+      run: async (workspaceDir: string) =>
+        await writeDailyDreamingPhaseBlock({
+          workspaceDir,
+          phase: "light",
+          bodyLines: ["- Candidate: replacement"],
+          nowMs,
+          timezone,
+          storage: { mode: "inline", separateReports: false },
+        }),
+    },
+    {
+      label: "separate light report",
+      relativePath: path.join("memory", "dreaming", "light", "2026-04-05.md"),
+      run: async (workspaceDir: string) =>
+        await writeDailyDreamingPhaseBlock({
+          workspaceDir,
+          phase: "light",
+          bodyLines: ["- Candidate: replacement"],
+          nowMs,
+          timezone,
+          storage: { mode: "separate", separateReports: false },
+        }),
+    },
+    {
+      label: "separate deep report",
+      relativePath: path.join("memory", "dreaming", "deep", "2026-04-05.md"),
+      run: async (workspaceDir: string) =>
+        await writeDeepDreamingReport({
+          workspaceDir,
+          bodyLines: ["- Promoted: replacement"],
+          nowMs,
+          timezone,
+          storage: { mode: "separate", separateReports: false },
+        }),
+    },
+  ])("keeps an existing $label when replacement fails", async ({ relativePath, run }) => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-atomic-");
+    const targetPath = path.join(workspaceDir, relativePath);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "# Previous dreaming artifact\n", "utf-8");
+    const priorBytes = await fs.readFile(targetPath);
+    const realRename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        typeof destination === "string" &&
+        path.resolve(destination) === path.resolve(targetPath)
+      ) {
+        throw Object.assign(new Error("replace failed"), { code: "ENOSPC" });
+      }
+      await realRename(source, destination);
+    });
+
+    await expect(run(workspaceDir)).rejects.toThrow("replace failed");
+    await expect(fs.readFile(targetPath)).resolves.toEqual(priorBytes);
+    await expect(fs.readdir(path.dirname(targetPath))).resolves.toEqual([
+      path.basename(targetPath),
+    ]);
+  });
+
   it("refuses to overwrite a symlinked DREAMS.md for deep summaries", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const targetPath = path.join(workspaceDir, "outside.txt");

@@ -31,9 +31,10 @@ export function readRuntimePromptImageFactIndexes(
   if (!images?.length) {
     return undefined;
   }
-  const factIndexes = (images as unknown as Record<PropertyKey, unknown>)[
-    RUNTIME_PROMPT_IMAGE_FACT_INDEXES
-  ];
+  const runtimeImages: readonly object[] & {
+    [RUNTIME_PROMPT_IMAGE_FACT_INDEXES]?: unknown;
+  } = images;
+  const factIndexes = runtimeImages[RUNTIME_PROMPT_IMAGE_FACT_INDEXES];
   return Array.isArray(factIndexes) &&
     factIndexes.length === images.length &&
     factIndexes.every(

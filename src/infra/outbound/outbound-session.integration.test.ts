@@ -4,15 +4,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
+  listConversations,
   registerConversationAddresses,
   resolveConversation,
 } from "../../config/sessions/conversation-registry.js";
 import {
   loadExactSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
+  deliveryContextFromSession,
   normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
@@ -33,7 +35,7 @@ describe("outbound session persistence", () => {
 
   it("binds a discovered canonical peer through a different delivery alias", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "shared-main-session",
@@ -81,6 +83,78 @@ describe("outbound session persistence", () => {
       role: "participant",
       target: "@molty",
     });
+  });
+
+  it("binds a newer threadless address without restoring the established thread", async () => {
+    const sessionKey = "agent:main:main";
+    const peerId = "reef:contact-42";
+    const target = "reef:contact-42";
+    const threadId = "thread-7";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "shared-main-session",
+        updatedAt: 100,
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: target, threadId },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            chatType: "direct",
+            from: peerId,
+            to: target,
+            threadId,
+          },
+        }),
+      },
+    );
+    const threadlessIdentity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId,
+      deliveryTarget: target,
+      nativeDirectUserId: "contact-42",
+    });
+    expect(threadlessIdentity).toBeDefined();
+    const established = loadExactSessionEntry({ agentId: "main", sessionKey, storePath });
+    expect(established).toBeDefined();
+    registerConversationAddresses(
+      { agentId: "main", storePath },
+      [threadlessIdentity!],
+      established!.entry.updatedAt + 1,
+    );
+
+    const discovered = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    expect(discovered[0]?.conversationRef).toBe(threadlessIdentity!.conversationRef);
+    expect(discovered[0]).not.toMatchObject({ sessionId: expect.any(String) });
+
+    await bindOutboundSessionEntry({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      channel: "reef",
+      accountId: "default",
+      route: {
+        sessionKey,
+        baseSessionKey: sessionKey,
+        peer: { kind: "direct", id: "contact-42" },
+        chatType: "direct",
+        from: peerId,
+        to: target,
+      },
+    });
+
+    expect(
+      resolveConversation({ agentId: "main", storePath }, threadlessIdentity!.conversationRef),
+    ).toMatchObject({
+      sessionId: "shared-main-session",
+      sessionKey,
+      role: "participant",
+      target,
+    });
+    const persisted = loadExactSessionEntry({ agentId: "main", sessionKey, storePath });
+    expect(deliveryContextFromSession(persisted?.entry)?.threadId).toBeUndefined();
+    expect(sessionDeliveryOrigin(persisted?.entry)?.threadId).toBeUndefined();
   });
 
   it("creates the session row when a discovered peer has no local entry", async () => {

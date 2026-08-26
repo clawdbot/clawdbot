@@ -132,21 +132,6 @@ describe("stopSlackStream finalize error handling", () => {
     expect(session.stopped).toBe(true);
   });
 
-  it("throws SlackStreamNotDeliveredError carrying stop()'s final text too", async () => {
-    const session = makeSession({
-      appendImpl: async () => null,
-      stopImpl: async () => {
-        throw slackApiError("team_not_found");
-      },
-    });
-    await appendSlackStream({ session, text: "hello " });
-
-    const thrown = await stopSlackStream({ session, text: "world" }).catch((err: unknown) => err);
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("team_not_found");
-    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
-  });
-
   it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
     const session = makeSession({
       appendImpl: async () => null,
@@ -368,6 +353,64 @@ describe("stopSlackStream finalize error handling", () => {
     expect(alreadyDelivered.delivered).toBe(true);
     expect(alreadyDelivered.pendingText).toBe("");
     expect(alreadyDelivered.stopped).toBe(false);
+  });
+
+  it("finalizes a stream started during failed stop after fallback delivery", async () => {
+    const streamTs = "1700000000.500300";
+    const startStream = vi.fn(async () => ({ ok: true, ts: streamTs }));
+    const stopStream = vi
+      .fn()
+      .mockRejectedValueOnce(slackApiError("user_not_found"))
+      .mockResolvedValueOnce({ ok: true, ts: streamTs });
+    const client = {
+      chat: {
+        startStream,
+        appendStream: vi.fn(async () => ({ ok: true })),
+        stopStream,
+      },
+    };
+    const streamer = new ChatStreamer(
+      client as never,
+      { debug: vi.fn() } as never,
+      {
+        channel: "C123",
+        thread_ts: "1700000000.000100",
+      },
+      { buffer_size: 256 },
+    );
+    const session: SlackStreamSession = {
+      streamer,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      stopped: false,
+      delivered: false,
+      pendingText: "",
+    };
+    const metadata = { event_type: "openclaw.reply", event_payload: { turn: "qa" } };
+
+    await appendSlackStream({ session, text: "short buffered reply" });
+    await expect(stopSlackStream({ session, metadata })).rejects.toBeInstanceOf(
+      SlackStreamNotDeliveredError,
+    );
+    expect(streamer.ts).toBe(streamTs);
+    expect(session.delivered).toBe(false);
+
+    markSlackStreamFallbackDelivered(session);
+    expect(session.stopped).toBe(false);
+    await expect(stopSlackStream({ session, metadata })).resolves.toEqual({ messageId: streamTs });
+
+    expect(startStream).toHaveBeenCalledOnce();
+    expect(stopStream).toHaveBeenCalledTimes(2);
+    expect(stopStream).toHaveBeenNthCalledWith(2, {
+      token: undefined,
+      channel: "C123",
+      ts: streamTs,
+      chunks: [],
+      metadata,
+    });
+    expect(session.stopped).toBe(true);
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
   });
 
   it("clears the SDK buffer before finalizing an already-visible fallback stream", async () => {

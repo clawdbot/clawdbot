@@ -70,6 +70,16 @@ export async function appendConfiguredModelRowSources(params: {
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
 }): Promise<void> {
+  if (params.context.cfg.models?.mode === "replace") {
+    // In replace mode models.providers is the complete catalog. Starting from
+    // default/fallback refs would reintroduce rows absent from that catalog.
+    await appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys: new Set(),
+    });
+    return;
+  }
   // Configured rows are emitted first for tag ordering, so they must read the
   // same committed generation the catalog rows below use; otherwise a ref that
   // only exists in a plugin catalog renders default placeholder metadata.

@@ -4,8 +4,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  defineChannelAliasMigration,
+  definePluginDoctorMigrationFromPlans,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { detectIMessageLegacyStateMigrations } from "./src/state-migrations.js";
 
 // Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
 // as a compatibility contract: older configs that opted into replay still get
@@ -102,3 +106,11 @@ export function normalizeCompatibilityConfig({
   }
   return { config: aliases.config, changes };
 }
+
+export const stateMigrations = [
+  definePluginDoctorMigrationFromPlans({
+    id: "imessage-legacy-state",
+    label: "iMessage legacy state",
+    resolvePlans: detectIMessageLegacyStateMigrations,
+  }),
+];

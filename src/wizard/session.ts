@@ -1,8 +1,13 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
 import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred, type Deferred } from "../shared/deferred.js";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
@@ -35,6 +40,16 @@ export function wizardStepAwaitsInput(step: WizardStep): boolean {
   return unhandledRequirement;
 }
 
+/** Remove secret prefill before a wizard step crosses a client boundary. */
+export function sanitizeWizardStepForClient(step: WizardStep): WizardStep {
+  if (step.sensitive !== true || step.initialValue === undefined) {
+    return step;
+  }
+  const safe = { ...step };
+  delete safe.initialValue;
+  return safe;
+}
+
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
 type WizardNextResult = {
@@ -44,6 +59,7 @@ type WizardNextResult = {
   error?: string;
   channels?: string[];
   accounts?: Array<{ channel: string; accountId: string }>;
+  preparedModelRef?: string;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -98,9 +114,12 @@ class WizardSessionPrompter implements WizardPrompter {
     const fallbackMessage = [
       params.message ?? "Enter this one-time code on the provider's sign-in page.",
       `Code: ${params.code}`,
-      ...(params.expiresInMinutes
-        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
-        : []),
+      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+      // Device-code phishing works by getting the victim to enter the attacker's
+      // code, so the warning has to cover received codes, not just shared ones.
+      // Unconditional: codes delivered over a chat channel are the risky case and
+      // carry no expiry hint. Matches the Codex CLI prompt.
+      DEVICE_CODE_PHISHING_WARNING,
     ].join("\n");
     await this.prompt({
       type: "note",
@@ -266,6 +285,7 @@ export class WizardSession {
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
+  private preparedModelRef: string | undefined;
 
   constructor(
     private runner: (
@@ -300,7 +320,7 @@ export class WizardSession {
       return this.terminalResult();
     }
     if (!this.stepDeferred) {
-      this.stepDeferred = createDeferred();
+      this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
     if (step) {
@@ -310,21 +330,30 @@ export class WizardSession {
   }
 
   private terminalResult(): WizardNextResult {
-    if (!this.configuredAccounts) {
-      return { done: true, status: this.status, error: this.error };
-    }
     return {
       done: true,
       status: this.status,
       error: this.error,
-      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
-      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+      ...(this.configuredAccounts
+        ? {
+            channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+            accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+          }
+        : {}),
+      ...(this.status === "done" && this.preparedModelRef
+        ? { preparedModelRef: this.preparedModelRef }
+        : {}),
     };
   }
 
   /** Record what the channels flow actually configured (channels flow only). */
   setConfiguredAccounts(accounts: ReadonlyArray<{ channel: string; accountId: string }>) {
     this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
+  }
+
+  /** Record the exact provider-owned model prepared by a setup flow. */
+  setPreparedModelRef(modelRef: string) {
+    this.preparedModelRef = modelRef;
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -465,7 +494,7 @@ export class WizardSession {
       throw new Error("wizard: session not running");
     }
     this.pushStep(step);
-    const deferred = createDeferred<unknown>();
+    const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
     return await deferred.promise;
   }

@@ -12,8 +12,6 @@ import Testing
         _ = try await withTimeout(seconds: 10.0) {
             await TalkBufferedAudioPlayer.shared.play(data: wav)
         }
-
-        #expect(true)
     }
 
     @MainActor
@@ -30,9 +28,7 @@ import Testing
 
         _ = try await withTimeout(seconds: 10.0) {
             await first.value
-        }
-        #expect(true)
-    }
+        }    }
 }
 
 private struct TimeoutError: Error {}

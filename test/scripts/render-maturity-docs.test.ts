@@ -263,10 +263,7 @@ describe("maturity docs renderer CLI", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
-    expect(scorecard).toContain("Incomplete QA evidence accepted.");
-    expect(scorecard).toContain(
-      "Failed, blocked, and skipped checks provided no Coverage; only passing evidence fulfilled Coverage.",
-    );
+    expect(scorecard).not.toContain("Incomplete QA evidence accepted.");
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
   });

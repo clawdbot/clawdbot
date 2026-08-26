@@ -2,8 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -11,18 +13,25 @@ import {
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
+  readWorkspaceStateSnapshot,
 } from "../agents/workspace-state-store.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  resolveWorkspaceBootstrapStatus,
+} from "../agents/workspace.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
-import { moveToTrash } from "../commands/onboard-helpers.js";
+import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -262,7 +271,7 @@ export async function cleanupClawAgentFilesystem(params: {
         }
         deleteWorkspaceState(statePlan);
       } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
+        errors.push(coerceErrorMessage(error));
       }
     } else {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
@@ -285,10 +294,17 @@ export const clawRemoveQuietRuntime: RuntimeEnv = {
   },
 };
 
-type ClawRemovableWorkspaceFile = PersistedClawWorkspaceFile & {
+type DigestOwnedWorkspaceFile = Pick<
+  PersistedClawWorkspaceFile,
+  "workspace" | "path" | "contentDigest"
+>;
+
+type DigestOwnedWorkspaceFileStatus = {
   state: "unchanged" | "modified" | "missing" | "unsafe";
   message?: string;
 };
+
+type ClawRemovableWorkspaceFile = DigestOwnedWorkspaceFile & DigestOwnedWorkspaceFileStatus;
 
 export type RemovedWorkspaceFile = {
   path: string;
@@ -301,35 +317,110 @@ export type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
   message?: string;
 };
 
-export async function inspectClawWorkspaceFile(
-  record: PersistedClawWorkspaceFile,
-): Promise<ClawManagedFileStatus> {
+export type ClawBootstrapStatus = {
+  state: "pending" | "complete" | "modified" | "missing" | "unsafe" | "unknown";
+  workspace: string;
+  path: string;
+  sourcePath?: string;
+  contentDigest?: string;
+  message?: string;
+};
+
+async function inspectDigestOwnedWorkspaceFile(
+  record: DigestOwnedWorkspaceFile,
+  maxBytes = 1024 * 1024,
+): Promise<DigestOwnedWorkspaceFileStatus> {
   try {
     const workspace = await fsSafeRoot(record.workspace, {
       hardlinks: "reject",
-      maxBytes: 1024 * 1024,
+      maxBytes,
       symlinks: "reject",
     });
     if (!(await workspace.exists(record.path))) {
-      return { ...record, state: "missing" };
+      return { state: "missing" };
     }
-    const content = await workspace.readBytes(record.path, { maxBytes: 1024 * 1024 });
+    const content = await workspace.readBytes(record.path, { maxBytes });
     const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
-    return { ...record, state: digest === record.contentDigest ? "unchanged" : "modified" };
+    return {
+      state: digest === record.contentDigest ? "unchanged" : "modified",
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { ...record, state: "missing" };
+      return { state: "missing" };
     }
     return {
-      ...record,
       state: "unsafe",
-      message: error instanceof Error ? error.message : String(error),
+      message: coerceErrorMessage(error),
     };
   }
 }
 
+export async function inspectClawWorkspaceFile(
+  record: PersistedClawWorkspaceFile,
+): Promise<ClawManagedFileStatus> {
+  return { ...record, ...(await inspectDigestOwnedWorkspaceFile(record)) };
+}
+
+export async function inspectClawBootstrap(
+  install: PersistedClawInstall,
+  options: OpenClawStateDatabaseOptions,
+): Promise<ClawBootstrapStatus> {
+  const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
+  const setupState = readWorkspaceStateSnapshot(install.workspace, options).setup;
+  const base = {
+    workspace: install.workspace,
+    path: DEFAULT_BOOTSTRAP_FILENAME,
+    ...install.bootstrap,
+  };
+  const nativeBootstrapConsumed =
+    typeof setupState.setupCompletedAt === "string" ||
+    typeof setupState.bootstrapSeededAt === "string";
+  if (nativeState === "complete" && (!install.bootstrap || nativeBootstrapConsumed)) {
+    return { ...base, state: "complete" };
+  }
+  if (!install.bootstrap) {
+    return { ...base, state: nativeState };
+  }
+  const bootstrapSeedingPending =
+    install.status === "pending" ||
+    install.status === "partial" ||
+    install.status === "workspace_ready";
+  if (bootstrapSeedingPending) {
+    try {
+      await fs.lstat(install.workspace);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { ...base, state: "missing" };
+      }
+    }
+  }
+  const inspected = await inspectDigestOwnedWorkspaceFile(
+    {
+      workspace: install.workspace,
+      path: DEFAULT_BOOTSTRAP_FILENAME,
+      contentDigest: install.bootstrap.contentDigest,
+    },
+    MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  );
+  if (inspected.state === "unchanged") {
+    return { ...base, state: "pending" };
+  }
+  if (inspected.state === "modified" || inspected.state === "unsafe") {
+    return {
+      ...base,
+      state: inspected.state,
+      ...(inspected.message ? { message: inspected.message } : {}),
+    };
+  }
+  if (bootstrapSeedingPending) {
+    return { ...base, state: "missing" };
+  }
+  return { ...base, state: "unknown", message: "BOOTSTRAP.md disappeared during inspection." };
+}
+
 export async function removeClawWorkspaceFile(
   record: ClawRemovableWorkspaceFile,
+  maxBytes = 1024 * 1024,
 ): Promise<RemovedWorkspaceFile> {
   if (record.state === "missing") {
     return { path: record.path, action: "missing" };
@@ -340,7 +431,7 @@ export async function removeClawWorkspaceFile(
   try {
     const workspace = await fsSafeRoot(record.workspace, {
       hardlinks: "reject",
-      maxBytes: 1024 * 1024,
+      maxBytes,
       symlinks: "reject",
     });
     if (!(await workspace.exists(record.path))) {
@@ -348,7 +439,7 @@ export async function removeClawWorkspaceFile(
     }
     const stagedPath = `${record.path}.openclaw-claw-remove-${randomUUID()}`;
     await workspace.move(record.path, stagedPath, { overwrite: false });
-    const content = await workspace.readBytes(stagedPath, { maxBytes: 1024 * 1024 });
+    const content = await workspace.readBytes(stagedPath, { maxBytes });
     const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
     if (digest !== record.contentDigest) {
       await workspace.move(stagedPath, record.path, { overwrite: false });
@@ -371,6 +462,10 @@ export function releaseClawRemoveRows(
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
 ): void {
+  if (complete) {
+    // Keep the install record as the retry owner until database discovery is released.
+    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
+  }
   runOpenClawStateWriteTransaction(({ db }) => {
     if (clawStateTableExists(db, "claw_workspace_files")) {
       for (const file of files.filter((candidate) => candidate.action !== "error")) {
@@ -393,4 +488,7 @@ export function releaseClawRemoveRows(
         .run(agentId);
     }
   }, options);
+  if (complete) {
+    deleteCachedClawInstallSchemaVersion(agentId, options);
+  }
 }

@@ -10,13 +10,14 @@ const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 /** Allow one level of balanced parentheses inside a URL so markdown link
  *  targets like `https://en.wikipedia.org/wiki/URL_(disambiguation)` are
  *  fully captured instead of truncated at the first `)`. */
-const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]+(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
+const URL_PATH_WITH_PARENS =
+  /https?:\/\/[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+(?:\([^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*\)[^()\s<>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)*/g;
 
-/** Strip the suffix starting at a `)` without a matching `(` in the URL.
- *  Bare URLs in prose can pick up a trailing `)` that belongs to surrounding
- *  punctuation, e.g. `(see https://example.com/path)` — the `)` after `path`
- *  and anything after it are sentence punctuation, not part of the URL. */
-function trimUnbalancedTrailingParens(url: string): string {
+/** Strip GFM sentence punctuation and unmatched closing parentheses from bare
+ *  URLs, while preserving balanced parentheses and exact authored Markdown
+ *  destinations. `(see https://example.com/path).` must link only the URL,
+ *  but `[label](https://example.com/path.)` must retain its authored dot. */
+function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
   let open = 0;
   for (let index = 0; index < url.length; index++) {
     const ch = url[index];
@@ -24,12 +25,16 @@ function trimUnbalancedTrailingParens(url: string): string {
       open++;
     } else if (ch === ")") {
       if (open === 0) {
-        return url.slice(0, index);
+        const authoredUrl = url.slice(0, index);
+        return knownUrls?.includes(authoredUrl)
+          ? authoredUrl
+          : trimUrlTrailingPunctuation(authoredUrl, knownUrls);
       }
       open--;
     }
   }
-  return url;
+  const trimmed = url.replace(/[?!.,:;*_~]+$/u, "");
+  return knownUrls?.includes(url) && !knownUrls.includes(trimmed) ? url : trimmed;
 }
 
 function hasUrlContent(url: string): boolean {
@@ -61,9 +66,10 @@ export function extractUrls(markdown: string): string[] {
 
   // Bare URLs (remove markdown links first to avoid double-matching)
   const stripped = markdown.replace(mdLinkRe, "");
-  const bareRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]+)/gi;
+  const bareRe =
+    /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+)/gi;
   while ((m = bareRe.exec(stripped)) !== null) {
-    const url = trimUnbalancedTrailingParens(m[0]);
+    const url = trimUrlTrailingPunctuation(m[0]);
     if (hasUrlContent(url)) {
       urls.add(url);
     }
@@ -126,12 +132,13 @@ function findUrlRanges(
   }
 
   // Find new URL starts in visible text
-  const urlRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]*)/gi;
+  const urlRe =
+    /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
   urlRe.lastIndex = searchFrom;
   let match: RegExpExecArray | null;
 
   while ((match = urlRe.exec(visibleText)) !== null) {
-    const fragment = trimUnbalancedTrailingParens(match[0]);
+    const fragment = trimUrlTrailingPunctuation(match[0], knownUrls);
     const start = match.index;
 
     // Resolve fragment to a known URL (exact > prefix > superstring)
@@ -147,8 +154,11 @@ function findUrlRanges(
       if (!hasUnpunctuatedSchemeAtLineEnd) {
         continue;
       }
-      const nextToken = nextVisibleText?.trimStart().match(/^[^\s\]>]+/)?.[0] ?? "";
-      const nextFragment = trimUnbalancedTrailingParens(nextToken);
+      const nextToken =
+        nextVisibleText
+          ?.trimStart()
+          .match(/^[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/)?.[0] ?? "";
+      const nextFragment = trimUrlTrailingPunctuation(nextToken);
       for (const known of knownUrls) {
         if (!known.startsWith(fragment)) {
           continue;
@@ -165,14 +175,8 @@ function findUrlRanges(
       }
     }
 
-    if (!found) {
-      for (const known of knownUrls) {
-        if (known === fragment) {
-          resolvedUrl = known;
-          found = true;
-          break;
-        }
-      }
+    if (!found && knownUrls.includes(fragment)) {
+      found = true;
     }
     if (!found) {
       let bestLen = 0;
@@ -242,7 +246,7 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
       // Existing OSC 8 sequence (pass through)
       const osc = line.slice(i).match(OSC8_START_RE);
       if (osc) {
-        result += osc[0];
+        result += osc[0].replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
         i += osc[0].length;
         continue;
       }

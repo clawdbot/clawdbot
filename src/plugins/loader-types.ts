@@ -25,6 +25,8 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  /** Registry-construction fact supplied by the process composition root. */
+  allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {

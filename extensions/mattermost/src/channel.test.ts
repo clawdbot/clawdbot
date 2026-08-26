@@ -31,6 +31,16 @@ import {
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
 
+describe("mattermost target classification", () => {
+  it("requires an explicit user namespace for direct targets", () => {
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "user:owner" })).toBe("direct");
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "channel:operators" })).toBe(
+      "channel",
+    );
+    expect(mattermostPlugin.messaging?.inferTargetChatType?.({ to: "ambiguous" })).toBeUndefined();
+  });
+});
+
 type MattermostHandleAction = NonNullable<
   NonNullable<typeof mattermostPlugin.actions>["handleAction"]
 >;
@@ -643,12 +653,16 @@ describe("mattermostPlugin", () => {
   describe("messageActions", () => {
     let reactionActionSequence = 0;
 
-    const runReactAction = async (params: Record<string, unknown>, fetchMode: "add" | "remove") => {
+    const runReactAction = async (
+      params: Record<string, unknown>,
+      fetchMode: "add" | "remove",
+      emojiName = "thumbsup",
+    ) => {
       const cfg = createMattermostTestConfig(`message-action-${++reactionActionSequence}`);
       const fetchImpl = createMattermostReactionFetchMock({
         mode: fetchMode,
         postId: "POST1",
-        emojiName: "thumbsup",
+        emojiName,
       });
 
       return await withMockedGlobalFetch(fetchImpl, async () => {
@@ -1221,6 +1235,51 @@ describe("mattermostPlugin", () => {
       expect(result?.details).toStrictEqual({});
     });
 
+    it("normalizes a raw emoji glyph through the react action boundary", async () => {
+      const result = await runReactAction({ messageId: "POST1", emoji: "👍" }, "add");
+
+      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
+      expect(result?.details).toStrictEqual({});
+    });
+
+    it("normalizes a raw emoji glyph when removing a reaction", async () => {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "👍", remove: true },
+        "remove",
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
+      ]);
+      expect(result?.details).toStrictEqual({});
+    });
+
+    it("preserves the skin tone when adding a toned glyph reaction", async () => {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "👍🏽" },
+        "add",
+        "thumbsup_medium_skin_tone",
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: "Reacted with :thumbsup_medium_skin_tone: on POST1" },
+      ]);
+      expect(result?.details).toStrictEqual({});
+    });
+
+    it("preserves the skin tone when removing a toned glyph reaction", async () => {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "👍🏽", remove: true },
+        "remove",
+        "thumbsup_medium_skin_tone",
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: "Removed reaction :thumbsup_medium_skin_tone: from POST1" },
+      ]);
+      expect(result?.details).toStrictEqual({});
+    });
+
     it("maps replyTo to replyToId for send actions", async () => {
       const cfg = createMattermostTestConfig();
 
@@ -1729,7 +1788,7 @@ describe("mattermostPlugin", () => {
       expect(onDeliveryResult).toHaveBeenCalledWith({
         channel: "mattermost",
         messageId: "post-final",
-        channelId: "CHAN1",
+        target: { kind: "channel", id: "CHAN1" },
         content: "provider-final",
       });
     });

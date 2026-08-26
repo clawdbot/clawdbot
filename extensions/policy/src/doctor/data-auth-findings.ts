@@ -81,9 +81,6 @@ function scopedDataHandlingAgentMatches(
   policyAgentId: string,
   entries: readonly PolicyDataHandlingEvidence[],
 ): boolean {
-  if (entry.id === "memory-qmd-session-transcripts") {
-    return true;
-  }
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }

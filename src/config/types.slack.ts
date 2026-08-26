@@ -1,11 +1,8 @@
 // Defines Slack channel configuration types.
 import type {
-  ChannelStreamingBlockConfig,
+  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
-  ChannelStreamingPreviewConfig,
   ReplyToMode,
-  StreamingMode,
-  TextChunkMode,
 } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
@@ -63,22 +60,20 @@ type SlackPresenceEventsMode = "off" | "auto" | "on";
 type SlackPresenceEventsConfig = {
   /** Presence wake mode. Default: off. */
   mode?: SlackPresenceEventsMode;
+  /** Override the default presence-event guidance. Empty omits guidance. Maximum: 20,000 characters. */
+  prompt?: string;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+// DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Opt in to Slack-native task cards for progress mode. Default: false. */
+  /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
+  style?: "card" | "compact";
+  /** Use Slack-native task cards for card-style progress. Default: true. */
   nativeTaskCards?: boolean;
 };
-export type SlackChannelStreamingConfig = {
-  mode?: StreamingMode;
-  chunkMode?: TextChunkMode;
-  nativeTransport?: boolean;
-  preview?: ChannelStreamingPreviewConfig;
-  progress?: SlackStreamingProgressConfig;
-  block?: ChannelStreamingBlockConfig;
-};
+export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
 export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
 export type SlackCapabilitiesConfig = string[];
@@ -146,12 +141,6 @@ export type SlackAccountConfig = Omit<
     postAs?: "bot" | "user";
     /** Slack connection mode (socket|http|relay). Default: socket. */
     mode?: "socket" | "http" | "relay";
-    /**
-     * Treat this account as one Slack Enterprise Grid org-wide installation.
-     * The declaration is verified against auth.test during monitor startup.
-     * DMs must be disabled or use dmPolicy="open" with effective allowFrom containing "*".
-     */
-    enterpriseOrgInstall?: boolean;
     /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
     /** Relay-delivered Slack event source. Used when mode is "relay". */
     relay?: SlackRelayConfig;

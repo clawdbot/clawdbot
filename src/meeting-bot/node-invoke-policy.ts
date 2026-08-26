@@ -1,16 +1,28 @@
+import {
+  asPositiveFiniteNumber as readPositiveNumber,
+  asSafeIntegerInRange,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
 } from "../plugins/plugin-registration.types.js";
+import type { MeetingAudioBackendSelection } from "./audio-backend.js";
 import { isMeetingAudioBase64 } from "./audio-base64.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 
 export type MeetingBrowserNodeStartConfig = {
   launch: boolean;
   browserProfile?: string;
   joinTimeoutMs: number;
+  audioBackend?: MeetingAudioBackendSelection;
+  audioBufferBytes?: number;
+  audioFormat?: MeetingRealtimeAudioFormat;
   audioInputCommand?: string[];
+  audioInputCommandOverride?: string[];
   audioOutputCommand?: string[];
+  audioOutputCommandOverride?: string[];
   bargeInInputCommand?: string[];
   audioBridgeCommand?: string[];
   audioBridgeHealthCommand?: string[];
@@ -30,20 +42,57 @@ type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 function readOutputGeneration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
+}
+
+function copyConfiguredAudio(
+  target: Record<string, unknown>,
+  start: MeetingBrowserNodeStartConfig,
+): void {
+  if (
+    start.audioBackend === "auto" ||
+    start.audioBackend === "blackhole-2ch" ||
+    start.audioBackend === "pipewire-pulse"
+  ) {
+    target.audioBackend = start.audioBackend;
+  }
+  if (typeof start.audioBufferBytes === "number" && start.audioBufferBytes > 0) {
+    target.audioBufferBytes = start.audioBufferBytes;
+  }
+  if (start.audioFormat === "pcm16-24khz" || start.audioFormat === "g711-ulaw-8khz") {
+    target.audioFormat = start.audioFormat;
+  }
+  const hasCommandOverrideFields =
+    "audioInputCommandOverride" in start || "audioOutputCommandOverride" in start;
+  const audioInputCommand = copyCommand(
+    start.audioInputCommandOverride ??
+      (hasCommandOverrideFields ? undefined : start.audioInputCommand),
+  );
+  const audioOutputCommand = copyCommand(
+    start.audioOutputCommandOverride ??
+      (hasCommandOverrideFields ? undefined : start.audioOutputCommand),
+  );
+  if (audioInputCommand) {
+    target.audioInputCommand = audioInputCommand;
+  }
+  if (audioOutputCommand) {
+    target.audioOutputCommand = audioOutputCommand;
+  }
+  for (const key of [
+    "bargeInInputCommand",
+    "audioBridgeCommand",
+    "audioBridgeHealthCommand",
+  ] as const) {
+    const command = copyCommand(start[key]);
+    if (command) {
+      target[key] = command;
+    }
+  }
 }
 
 function denied(options: MeetingBrowserNodePolicyOptions, message: string) {
@@ -70,7 +119,7 @@ function buildStartParams(
       ),
     };
   }
-  const mode = readString(params.mode);
+  const mode = readNonEmptyString(params.mode);
   if (mode && !options.supportedModes.has(mode)) {
     return {
       approved: false,
@@ -87,17 +136,7 @@ function buildStartParams(
   if (mode) {
     startParams.mode = mode;
   }
-  for (const key of [
-    "audioInputCommand",
-    "audioOutputCommand",
-    "audioBridgeCommand",
-    "audioBridgeHealthCommand",
-  ] as const) {
-    const command = copyCommand(options.start[key]);
-    if (command) {
-      startParams[key] = command;
-    }
-  }
+  copyConfiguredAudio(startParams, options.start);
   return approved(startParams);
 }
 
@@ -116,18 +155,18 @@ function buildForwardParams(
   params: Record<string, unknown>,
   options: MeetingBrowserNodePolicyOptions,
 ): PolicyDecision | null {
-  const action = readString(params.action);
+  const action = readNonEmptyString(params.action);
   switch (action) {
     case "setup":
       return approved({ action });
     case "status": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
     case "list": {
       const forwarded: Record<string, unknown> = { action };
-      const url = readString(params.url);
-      const mode = readString(params.mode);
+      const url = readNonEmptyString(params.url);
+      const mode = readNonEmptyString(params.mode);
       if (url) {
         try {
           forwarded.url = options.normalizeUrl(url);
@@ -148,9 +187,9 @@ function buildForwardParams(
     }
     case "stopByUrl": {
       const forwarded: Record<string, unknown> = { action };
-      const url = readString(params.url);
-      const mode = readString(params.mode);
-      const exceptBridgeId = readString(params.exceptBridgeId);
+      const url = readNonEmptyString(params.url);
+      const mode = readNonEmptyString(params.mode);
+      const exceptBridgeId = readNonEmptyString(params.exceptBridgeId);
       if (!url) {
         return denyMissing(options, action, "url");
       }
@@ -175,7 +214,7 @@ function buildForwardParams(
     }
     case "pullAudio": {
       const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       const timeoutMs = readPositiveNumber(params.timeoutMs);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
@@ -188,8 +227,8 @@ function buildForwardParams(
     }
     case "pushAudio": {
       const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readString(params.bridgeId);
-      const base64 = readString(params.base64);
+      const bridgeId = readNonEmptyString(params.bridgeId);
+      const base64 = readNonEmptyString(params.base64);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
@@ -217,7 +256,7 @@ function buildForwardParams(
       return approved(forwarded);
     }
     case "clearAudio": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
@@ -235,7 +274,7 @@ function buildForwardParams(
       });
     }
     case "stop": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
@@ -254,19 +293,10 @@ export function createMeetingBrowserNodeInvokePolicy(
         return denied(options, `unsupported ${options.displayName} node command: ${ctx.command}`);
       }
       const params = asOptionalRecord(ctx.params) ?? {};
-      const action = readString(params.action);
+      const action = readNonEmptyString(params.action);
       if (action === "setup" && options.useConfiguredSetupCommands) {
         const setupParams: Record<string, unknown> = { action };
-        for (const key of [
-          "audioInputCommand",
-          "audioOutputCommand",
-          "bargeInInputCommand",
-        ] as const) {
-          const command = copyCommand(options.start[key]);
-          if (command) {
-            setupParams[key] = command;
-          }
-        }
+        copyConfiguredAudio(setupParams, options.start);
         return await ctx.invokeNode({ params: setupParams });
       }
       const decision =

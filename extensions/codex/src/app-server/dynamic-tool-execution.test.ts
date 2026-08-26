@@ -1,7 +1,7 @@
 // Codex tests cover dynamic tool execution plugin behavior.
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -157,8 +157,8 @@ describe("dynamic tool execution helpers", () => {
           turnId: "turn-1",
           callId: "call-image-capability-default",
           namespace: null,
-          tool: "image",
-          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+          tool: "view_image",
+          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
         },
         config: {
           tools: {
@@ -177,8 +177,8 @@ describe("dynamic tool execution helpers", () => {
           turnId: "turn-1",
           callId: "call-image-mixed-timeouts",
           namespace: null,
-          tool: "image",
-          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+          tool: "view_image",
+          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
         },
         config: {
           tools: {
@@ -247,8 +247,8 @@ describe("dynamic tool execution helpers", () => {
           turnId: "turn-1",
           callId: "call-image-default",
           namespace: null,
-          tool: "image",
-          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+          tool: "view_image",
+          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
         },
         config: undefined,
       }),
@@ -293,8 +293,8 @@ describe("dynamic tool execution helpers", () => {
           turnId: "turn-1",
           callId: "call-image-default",
           namespace: null,
-          tool: "image",
-          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+          tool: "view_image",
+          arguments: { prompt: "describe", paths: ["/tmp/one.jpg"] },
         },
         config: {
           tools: {

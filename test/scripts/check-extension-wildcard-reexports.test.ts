@@ -1,6 +1,6 @@
 // Check Extension Wildcard Reexports tests cover check extension wildcard reexports script behavior.
 import { describe, expect, it } from "vitest";
-import { findLocalWildcardReexports } from "../../scripts/check-extension-wildcard-reexports.mjs";
+import { findLocalWildcardReexports } from "../../scripts/check-extension-wildcard-reexports.mts";
 
 describe("check-extension-wildcard-reexports", () => {
   it("flags local wildcard re-exports", () => {

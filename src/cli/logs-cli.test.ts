@@ -124,6 +124,26 @@ async function runLogsCli(argv: string[]) {
   });
 }
 
+function createGatewayCloseError(params: {
+  code: number;
+  reason: string;
+  message: string;
+  url?: string;
+  urlSource?: "cli" | "local loopback";
+}) {
+  return new GatewayTransportError({
+    kind: "closed",
+    code: params.code,
+    reason: params.reason,
+    connectionDetails: {
+      url: params.url ?? "ws://127.0.0.1:18789",
+      urlSource: params.urlSource ?? "local loopback",
+      message: "",
+    },
+    message: params.message,
+  });
+}
+
 function captureStdoutWrites() {
   const writes: string[] = [];
   vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
@@ -188,7 +208,9 @@ describe("logs cli", () => {
 
     expect(stdoutWrites.join("")).toContain("Log file:");
     expect(stdoutWrites.join("")).toContain("raw line");
-    expect(stderrWrites.join("")).toContain("Log tail truncated");
+    expect(stderrWrites.join("")).toContain(
+      "Log tail truncated (increase --limit or --max-bytes).",
+    );
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
@@ -381,15 +403,9 @@ describe("logs cli", () => {
 
   it("falls back to the configured Gateway file log on loopback gateway close errors", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
-      new GatewayTransportError({
-        kind: "closed",
+      createGatewayCloseError({
         code: 1000,
         reason: "no close reason",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1000 normal closure): no close reason",
       }),
     );
@@ -436,15 +452,9 @@ describe("logs cli", () => {
   describe("--follow retry behavior", () => {
     it("uses the active systemd journal for implicit local follow failures", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli.mockRejectedValueOnce(closeError).mockRejectedValueOnce(closeError);
@@ -521,15 +531,9 @@ describe("logs cli", () => {
       });
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://127.0.0.1:18789",
-              urlSource: "local loopback",
-              message: "",
-            },
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -583,15 +587,9 @@ describe("logs cli", () => {
 
     it("keeps journal polling responsive while a Gateway recovery probe is pending", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       const pendingProbe = new Promise<never>(() => {
@@ -659,15 +657,9 @@ describe("logs cli", () => {
       vi.spyOn(Date.prototype, "toISOString").mockImplementation(
         () => timestamps.shift() ?? "2026-06-01T00:00:08.000Z",
       );
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -730,15 +722,9 @@ describe("logs cli", () => {
 
     it("emits source meta records in --follow --json when fallback recovers", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -809,15 +795,9 @@ describe("logs cli", () => {
 
     it("keeps journal cursor across repeated fallback before Gateway recovery", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       callGatewayFromCli
@@ -893,15 +873,9 @@ describe("logs cli", () => {
     });
 
     it("retries loopback close errors in --follow mode instead of tailing fallback files", async () => {
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       for (let i = 0; i <= 8; i += 1) {
@@ -924,15 +898,10 @@ describe("logs cli", () => {
     it("exits after exhausting max retries in --follow mode with explicit URL", async () => {
       // Explicit --url bypasses shouldUseLocalLogsFallback so close errors reach the retry path.
       // initial attempt + 8 retries = 9 total calls before fatal exit.
-      const closeError = new GatewayTransportError({
-        kind: "closed",
+      const closeError = createGatewayCloseError({
         code: 1006,
         reason: "abnormal closure",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "cli",
-          message: "",
-        },
+        urlSource: "cli",
         message: "gateway closed (1006 abnormal closure): abnormal closure",
       });
       for (let i = 0; i <= 8; i += 1) {
@@ -952,15 +921,11 @@ describe("logs cli", () => {
     it("retries on transient close errors in --follow mode with explicit URL (no local fallback)", async () => {
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://remote.example.com:18789",
-              urlSource: "cli",
-              message: "",
-            },
+            url: "ws://remote.example.com:18789",
+            urlSource: "cli",
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -993,15 +958,11 @@ describe("logs cli", () => {
     it("emits notice JSON records for retry and reconnect in --follow --json mode", async () => {
       callGatewayFromCli
         .mockRejectedValueOnce(
-          new GatewayTransportError({
-            kind: "closed",
+          createGatewayCloseError({
             code: 1006,
             reason: "abnormal closure",
-            connectionDetails: {
-              url: "ws://remote.example.com:18789",
-              urlSource: "cli",
-              message: "",
-            },
+            url: "ws://remote.example.com:18789",
+            urlSource: "cli",
             message: "gateway closed (1006 abnormal closure): abnormal closure",
           }),
         )
@@ -1043,11 +1004,10 @@ describe("logs cli", () => {
 
     it("exits immediately on pairing-required close errors in --follow mode with explicit URL", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 1008,
           reason: "pairing required",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (1008 policy violation): pairing required",
         }),
       );
@@ -1064,11 +1024,10 @@ describe("logs cli", () => {
 
     it("exits immediately on app-defined auth errors (4xxx) in --follow mode with explicit URL", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 4001,
           reason: "unauthorized",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (4001 unauthorized): unauthorized",
         }),
       );
@@ -1083,13 +1042,35 @@ describe("logs cli", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
+    it("redacts credential-bearing Gateway URLs from JSON errors", async () => {
+      const rawUrl =
+        "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";
+      buildGatewayConnectionDetails.mockReturnValueOnce({
+        url: rawUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${rawUrl}`,
+      });
+      callGatewayFromCli.mockRejectedValueOnce(new Error(`failed to connect to ${rawUrl}`));
+      const stderrWrites = captureStderrWrites();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await runLogsCli(["logs", "--json", "--url", rawUrl]);
+
+      const stderr = stderrWrites.join("");
+      expect(stderr).toContain("gateway.example/ws");
+      expect(stderr).not.toContain("password");
+      expect(stderr).not.toContain("secret");
+      expect(stderr).not.toContain("api-key");
+      expect(stderr).not.toContain("signed");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
     it("routes terminal reset to stderr in --follow --json so stdout stays parseable JSON in a PTY", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
-        new GatewayTransportError({
-          kind: "closed",
+        createGatewayCloseError({
           code: 4001,
           reason: "unauthorized",
-          connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "cli", message: "" },
+          urlSource: "cli",
           message: "gateway closed (4001 unauthorized): unauthorized",
         }),
       );
@@ -1130,15 +1111,9 @@ describe("logs cli", () => {
 
   it("does not use local fallback for explicit Gateway URLs", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
-      new GatewayTransportError({
-        kind: "closed",
+      createGatewayCloseError({
         code: 1000,
         reason: "no close reason",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "",
-        },
         message: "gateway closed (1000 normal closure): no close reason",
       }),
     );

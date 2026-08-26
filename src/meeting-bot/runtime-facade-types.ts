@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import type { MeetingAudioBackend } from "./audio-backend.js";
 import type {
   MeetingBrowserJoinSession,
   MeetingPlatformAdapter,
@@ -49,6 +50,7 @@ export type MeetingRuntimeAudioBridge<Health extends MeetingBrowserHealth> =
 
 type MeetingRuntimeLaunchResult<Health extends MeetingBrowserHealth> = {
   launched: boolean;
+  audioBackend?: MeetingAudioBackend;
   audioBridge?: MeetingRuntimeAudioBridge<Health>;
   browser?: Health;
   nodeId?: string;

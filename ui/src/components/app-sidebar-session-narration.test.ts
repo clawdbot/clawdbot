@@ -14,14 +14,14 @@ function runningRow(key: string): SidebarRecentSession {
   return {
     key,
     label: "Run",
-    meta: "now",
+    updatedAt: Date.now(),
     href: "#",
     active: false,
     visuallyActive: false,
     hasActiveRun: true,
     modelSelectionLocked: false,
     pinned: false,
-    cloudWorkerActive: false,
+    cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,
     attention: { kind: "none" },
@@ -80,12 +80,12 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
+      openSessionKey: "",
       rows: [
         { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
         { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
         runningRow("agent:main:active"),
       ],
-      openSessionKey: "",
       agentId: "main",
     });
     await Promise.resolve();
@@ -112,8 +112,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -163,6 +163,22 @@ describe("SidebarSessionNarrationController", () => {
       "Reviewing the current implementation",
     );
 
+    const digestUpdateCount = digests.length;
+    controller.handleEvent(
+      gatewayEvent("session.observer", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        revision: 0,
+        updatedAt: 10_001,
+        headline: "Invalid replacement",
+        health: "on-track",
+      }),
+    );
+    expect(digests).toHaveLength(digestUpdateCount);
+    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+      "Reviewing the current implementation",
+    );
+
     controller.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
@@ -199,8 +215,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity,
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
     await Promise.resolve();
@@ -249,8 +265,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -282,8 +298,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -320,8 +336,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -353,8 +369,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -395,8 +411,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -433,8 +449,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -480,8 +496,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -540,8 +556,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -578,8 +594,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -619,8 +635,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -659,8 +675,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -748,8 +764,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("global")],
       openSessionKey: "",
+      rows: [runningRow("global")],
     };
 
     controller.sync({ ...base, agentId: "main" });
@@ -785,8 +801,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 
@@ -835,8 +851,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity,
       source: firstSource,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
     controller.sync({
@@ -844,8 +860,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity,
       source: secondSource,
-      rows: [],
       openSessionKey: "",
+      rows: [],
       agentId: "main",
     });
     resolveFirst({ key: "agent:main:run", agentId: null });
@@ -855,28 +871,6 @@ describe("SidebarSessionNarrationController", () => {
       key: "agent:main:run",
       agentId: null,
     });
-  });
-
-  it("does not hand an old agent's global subscription to the open chat", async () => {
-    const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
-      Promise.resolve({ key, agentId: options?.agentId ?? null }),
-    );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
-    const controller = new SidebarSessionNarrationController(() => undefined);
-    const base = {
-      enabled: true,
-      connected: true,
-      connectionIdentity: {},
-      source,
-      rows: [runningRow("global")],
-    };
-
-    controller.sync({ ...base, openSessionKey: "", agentId: "main" });
-    await Promise.resolve();
-    controller.sync({ ...base, openSessionKey: "global", agentId: "research" });
-
-    expect(unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
   });
 
   it("keeps the newest sentence after a response exceeds the retained tail", async () => {
@@ -891,8 +885,8 @@ describe("SidebarSessionNarrationController", () => {
       connected: true,
       connectionIdentity: {},
       source,
-      rows: [runningRow("agent:main:run")],
       openSessionKey: "",
+      rows: [runningRow("agent:main:run")],
       agentId: "main",
     });
 

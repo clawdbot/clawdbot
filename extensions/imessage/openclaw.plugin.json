@@ -1,5 +1,9 @@
 {
   "id": "imessage",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "icon": "https://cdn.simpleicons.org/imessage",
   "activation": {
     "onStartup": false

@@ -1,11 +1,12 @@
 // Memory Host SDK module implements embeddings remote provider behavior.
 import {
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 
@@ -26,7 +27,7 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
 }): EmbeddingProvider {
   const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
   const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {

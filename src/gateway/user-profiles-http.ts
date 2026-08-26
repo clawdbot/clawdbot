@@ -12,13 +12,13 @@ import {
 } from "../state/user-profiles.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
-  authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -281,13 +281,14 @@ function sendAvatar(
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar with the same HTTP operator auth as sibling gateway endpoints. */
+/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
   opts: {
     auth: ResolvedGatewayAuth;
+    basePath?: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -295,8 +296,8 @@ export async function handleUserProfileAvatarHttpRequest(
     nowMs?: () => number;
   },
 ): Promise<boolean> {
-  const profileId = matchUserProfileAvatarPath(pathname);
-  if (profileId === undefined) {
+  const parsed = parseControlUiUserAvatarPath(pathname, opts.basePath ?? "");
+  if (!parsed.matched) {
     return false;
   }
   const method = req.method;
@@ -318,7 +319,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -335,6 +336,11 @@ export async function handleUserProfileAvatarHttpRequest(
   // heuristically-cached 404 miss would otherwise hide a later uploaded image.
   // Misses must never be cached; the 200 path overrides this with must-revalidate.
   res.setHeader("Cache-Control", "no-store");
+  const profileId = parsed.value;
+  if (!profileId) {
+    sendJson(res, 404, { ok: false, error: { type: "not_found" } });
+    return true;
+  }
   let uploadedAvatar: ReturnType<typeof getProfileAvatar>;
   try {
     uploadedAvatar = getProfileAvatar(profileId);

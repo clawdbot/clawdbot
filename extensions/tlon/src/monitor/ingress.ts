@@ -44,13 +44,6 @@ const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "t
   { withReason: true },
 );
 
-class TlonIngressShutdownError extends Error {
-  constructor() {
-    super("Tlon ingress stopped before dispatch adoption.");
-    this.name = "TlonIngressShutdownError";
-  }
-}
-
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
   const envelope = isRecord(event) ? event : null;
   const nest = nonEmptyString(envelope?.nest);
@@ -207,7 +200,7 @@ export function createTlonIngressMonitor(options: {
       onLog: (message) => options.runtime.log?.(`tlon ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-    createStoppedError: () => new TlonIngressShutdownError(),
+    createStoppedError: () => new Error("Tlon ingress stopped before dispatch adoption."),
     onError: (error) =>
       options.runtime.error?.(`tlon ingress drain failed: ${formatErrorMessage(error)}`),
   });

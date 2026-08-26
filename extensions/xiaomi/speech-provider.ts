@@ -12,15 +12,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import {
-  asObject,
-  resolveSpeechProviderApiKey,
-  trimToUndefined,
-} from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
@@ -76,8 +73,12 @@ function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
 function resolveXiaomiTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.xiaomi) ?? asObject(providers?.mimo) ?? asObject(rawConfig.xiaomi);
+  const providers = asOptionalRecord(rawConfig.providers);
+  return (
+    asOptionalRecord(providers?.xiaomi) ??
+    asOptionalRecord(providers?.mimo) ??
+    asOptionalRecord(rawConfig.xiaomi)
+  );
 }
 
 function normalizeXiaomiTtsProviderConfig(
@@ -236,11 +237,11 @@ function buildXiaomiTtsAudio(params: { model: string; voice: string; format: Xia
 }
 
 function decodeXiaomiAudioData(body: unknown): Buffer {
-  const root = asObject(body);
+  const root = asOptionalRecord(body);
   const choices = Array.isArray(root?.choices) ? root.choices : [];
-  const firstChoice = asObject(choices[0]);
-  const message = asObject(firstChoice?.message);
-  const audio = asObject(message?.audio);
+  const firstChoice = asOptionalRecord(choices[0]);
+  const message = asOptionalRecord(firstChoice?.message);
+  const audio = asOptionalRecord(message?.audio);
   const audioData = trimToUndefined(audio?.data);
   if (!audioData) {
     throw new Error("Xiaomi TTS API returned no audio data");

@@ -3,12 +3,18 @@
   flex: 0 0 auto;
   align-items: center;
   margin-left: auto;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 .chat-pane__face-switch .settings-segmented {
   flex-wrap: nowrap;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+  background: transparent;
+}
+
+.chat-pane__face-switch--split .settings-segmented {
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
 .chat-pane__face-switch .settings-segmented__btn {
@@ -25,12 +31,21 @@
   margin-left: 0;
 }
 
-.chat-pane__board-dock-menu {
+.chat-pane__dock-caret {
   display: inline-flex;
 }
 
-.chat-pane__board-dock-menu svg,
-.board-session-surface__reopen svg {
+.chat-pane__dock-caret-trigger {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.chat-pane__dock-caret svg {
   width: 15px;
   height: 15px;
   fill: none;
@@ -38,6 +53,37 @@
   stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.board-fullscreen-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.board-fullscreen-button__icon {
+  display: inline-flex;
+}
+
+.board-fullscreen-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane-primary-column:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+/* Fullscreen detaches the pane from shell chrome even though the DOM ancestry
+   still matches titlebar inset selectors in split-view.css. */
+.chat-pane-primary-column:fullscreen > .chat-pane__header {
+  padding-left: 12px !important;
 }
 
 .board-session-surface {
@@ -49,6 +95,10 @@
   min-height: 0;
   overflow: hidden;
   background: color-mix(in srgb, var(--panel) 35%, transparent);
+}
+
+.board-session-surface[hidden] {
+  display: none;
 }
 
 .board-session-surface--dock-bottom {
@@ -163,67 +213,7 @@ openclaw-workboard-card-chip {
   z-index: 2;
 }
 
-.board-session-surface__reopen[hidden] {
-  display: none;
-}
-
-.board-session-surface__reopen {
-  position: absolute;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 34px;
-  min-height: 34px;
-  padding: 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--muted);
-  background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-}
-
-.board-session-surface__reopen:hover,
-.board-session-surface__reopen:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-
-.board-session-surface__reopen:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.board-session-surface__reopen span {
-  font-size: 11px;
-  font-weight: 600;
-  writing-mode: vertical-rl;
-}
-
-.board-session-surface__reopen--left {
-  top: 50%;
-  left: 8px;
-  transform: translateY(-50%);
-}
-
-.board-session-surface__reopen--right {
-  top: 50%;
-  right: 8px;
-  transform: translateY(-50%);
-}
-
-.board-session-surface__reopen--bottom {
-  right: 12px;
-  bottom: 8px;
-}
-
-.board-session-surface__reopen--bottom span {
-  writing-mode: horizontal-tb;
-}
-
-@media (max-width: 560px) {
+@container (max-width: 560px) {
   .chat-pane__face-switch .settings-segmented__btn {
     padding-inline: 7px;
   }

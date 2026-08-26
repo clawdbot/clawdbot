@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseDateStringTimestampMs as parseGoogleMeetTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import {
@@ -85,14 +86,6 @@ async function attachDocumentText<T extends { docsDestination?: Record<string, u
       documentTextError: formatErrorMessage(error),
     };
   }
-}
-
-function parseGoogleMeetTimestamp(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function isoFromMs(value: number | undefined): string | undefined {

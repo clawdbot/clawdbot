@@ -20,8 +20,8 @@ type IMessageResourceAuthorizationParams = {
   chatContext: IMessageChatContext;
   cliPath: string;
   dbPath?: string;
-  hasExclusiveLocalDatabase: boolean;
   remoteHost?: string;
+  hasExclusiveLocalDatabase: boolean;
   messageId: string;
   conversationReadOrigin?: string;
 };
@@ -47,6 +47,7 @@ export function resolveAuthorizedIMessageReplyReference(params: {
   target: IMessageTarget;
   cliPath: string;
   dbPath?: string;
+  remoteHost?: string;
   hasExclusiveLocalDatabase: boolean;
   service?: IMessageService;
   replyToId?: string;
@@ -70,7 +71,7 @@ export function resolveAuthorizedIMessageReplyReference(params: {
     cliPath: params.cliPath,
     dbPath: params.dbPath,
     hasExclusiveLocalDatabase: params.hasExclusiveLocalDatabase,
-    remoteHost: params.account.config.remoteHost,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
     messageId,
     conversationReadOrigin: params.conversationReadOrigin,
   });

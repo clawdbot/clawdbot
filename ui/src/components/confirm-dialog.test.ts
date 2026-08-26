@@ -1,10 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 
 let restoreDialogPolyfill: () => void;
+
+function tickSkipCheckbox() {
+  const checkbox = document.body.querySelector<HTMLInputElement>(
+    '.exec-approval-skip input[type="checkbox"]',
+  );
+  if (!checkbox) {
+    throw new Error("Expected the skip-preference checkbox");
+  }
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new Event("change"));
+}
 
 function findButton(label: string): HTMLButtonElement {
   const button = [...document.body.querySelectorAll("button")].find(
@@ -65,6 +76,65 @@ describe("showConfirmDialog", () => {
 
     await expect(result).resolves.toBe(false);
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("offers the opt-out only when a skip preference is supplied", async () => {
+    const plain = showConfirmDialog({ message: "Continue?" });
+    await getRenderedModalDialog(document.body);
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    findButton("Cancel").click();
+    await expect(plain).resolves.toBe(false);
+
+    const remember = vi.fn();
+    const offered = showConfirmDialog({
+      message: "Delete?",
+      skipPreference: { skipped: false, remember },
+    });
+    await getRenderedModalDialog(document.body);
+
+    expect(document.body.querySelector(".exec-approval-skip")).toBeInstanceOf(HTMLElement);
+    findButton("Confirm").click();
+    await expect(offered).resolves.toBe(true);
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it("remembers the opt-out only when the operator confirms with it ticked", async () => {
+    const remember = vi.fn();
+    const cancelled = showConfirmDialog({
+      message: "Delete?",
+      skipPreference: { skipped: false, remember },
+    });
+    await getRenderedModalDialog(document.body);
+    tickSkipCheckbox();
+    findButton("Cancel").click();
+
+    await expect(cancelled).resolves.toBe(false);
+    expect(remember).not.toHaveBeenCalled();
+
+    const confirmed = showConfirmDialog({
+      message: "Delete?",
+      skipPreference: { skipped: false, remember },
+    });
+    await getRenderedModalDialog(document.body);
+    tickSkipCheckbox();
+    findButton("Confirm").click();
+
+    await expect(confirmed).resolves.toBe(true);
+    expect(remember).toHaveBeenCalledOnce();
+  });
+
+  it("resolves an opted-out confirmation without rendering a modal", async () => {
+    const remember = vi.fn();
+
+    const result = showConfirmDialog({
+      message: "Delete?",
+      skipPreference: { skipped: true, remember },
+    });
+
+    await expect(result).resolves.toBe(true);
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    // Re-remembering a stored choice would rewrite the preference on every run.
+    expect(remember).not.toHaveBeenCalled();
   });
 
   it("rejects a reentrant confirmation instead of stacking or replaying it", async () => {

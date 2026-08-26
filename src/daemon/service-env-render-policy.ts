@@ -1,6 +1,7 @@
 /** Applies platform render policy for managed daemon service environment values. */
-import { normalizeServiceEnvPlanKey, type MutableServiceEnvPlan } from "./service-env-plan.js";
+import type { MutableServiceEnvPlan } from "./service-env-plan.js";
 import {
+  normalizeServiceEnvKey,
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
@@ -26,7 +27,7 @@ function addManagedServiceEnvEntries(params: {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
-    const key = normalizeServiceEnvPlanKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (!key || !params.managedKeys.has(key)) {
       continue;
     }

@@ -9,13 +9,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -34,6 +36,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -52,10 +55,14 @@ import {
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -73,7 +80,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -83,6 +90,8 @@ import {
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -91,6 +100,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -126,16 +136,15 @@ function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSes
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
 }): string {
+  // Proxy-verified identity owns continuation; forwarded bearers are unverified.
+  if (params.requestAuth.authMethod === "trusted-proxy") {
+    return `trusted-proxy:${params.requestAuth.user}`;
+  }
   const bearer = getBearerToken(params.req);
   if (bearer) {
     return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
-  }
-  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
-    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
-    if (user) {
-      return `trusted-proxy:${user}`;
-    }
   }
   return `gateway-auth:${params.auth.mode}`;
 }
@@ -143,10 +152,11 @@ function resolveResponseSessionAuthSubject(params: {
 function createResponseSessionScope(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
   agentId: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
+    authSubject: resolveResponseSessionAuthSubject(params),
     agentId: params.agentId,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
@@ -241,6 +251,17 @@ export const testing = {
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function resolveResponsePayloadText(result: unknown): string {
+  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  return Array.isArray(payloads)
+    ? payloads
+        .flatMap((payload) =>
+          typeof payload.text === "string" && payload.text ? [payload.text] : [],
+        )
+        .join("\n\n")
+    : "";
 }
 
 type ResolvedResponsesLimits = {
@@ -357,6 +378,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
 
 function createResponseResource(params: {
   id: string;
+  createdAt: number;
   model: string;
   status: ResponseResource["status"];
   output: OutputItem[];
@@ -366,7 +388,7 @@ function createResponseResource(params: {
   return {
     id: params.id,
     object: "response",
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: params.createdAt,
     status: params.status,
     model: params.model,
     output: params.output,
@@ -387,9 +409,10 @@ async function runResponsesAgentCommand(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   deps: CliDeps;
+  resolveGatewayContext?: GatewayContextResolver;
   abortSignal?: AbortSignal;
 }) {
-  return agentCommandFromIngress(
+  return agentCommandFromGatewayIngress(
     {
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
@@ -405,9 +428,16 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
+      ...(params.resolveGatewayContext
+        ? {
+            onAdmittedRunContext: (context: AdmittedRunContext) =>
+              bindGatewayContextResolver(context, params.resolveGatewayContext),
+          }
+        : {}),
     },
     defaultRuntime,
     params.deps,
+    {},
   );
 }
 
@@ -463,13 +493,30 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
       return true;
     }
     throw err;
+  }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
+      ? { actor: { kind: "system" as const } }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
@@ -483,7 +530,9 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  // Extract images + files from input (Phase 2)
+  const prompt = buildAgentPrompt(payload.input);
+
+  // Count URL sources request-wide, but replay media only from the current user turn.
   let images: ImageContent[] = [];
   const fileContexts: string[] = [];
   let urlParts = 0;
@@ -500,31 +549,23 @@ export async function handleOpenResponsesHttpRequest(
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
           for (const part of item.content) {
+            if (part.type !== "input_image" && part.type !== "input_file") {
+              continue;
+            }
+            if (part.source.type === "url") {
+              markUrlPart();
+            }
+            if (item !== prompt.activeUserMessage) {
+              continue;
+            }
             if (part.type === "input_image") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_image must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
+              const source = part.source;
               const imageSource: InputImageSource =
-                sourceType === "url"
-                  ? {
-                      type: "url",
-                      url: source.url ?? "",
-                      mediaType: source.media_type,
-                    }
+                source.type === "url"
+                  ? { type: "url", url: source.url }
                   : {
                       type: "base64",
-                      data: source.data ?? "",
+                      data: source.data,
                       mediaType: source.media_type,
                     };
               const image = await extractImageContentFromSource(imageSource, limits.images);
@@ -532,67 +573,46 @@ export async function handleOpenResponsesHttpRequest(
               continue;
             }
 
-            if (part.type === "input_file") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-                filename?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_file must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
-              const file = await extractFileContentFromSource({
-                source:
-                  sourceType === "url"
-                    ? {
-                        type: "url",
-                        url: source.url ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      }
-                    : {
-                        type: "base64",
-                        data: source.data ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      },
-                limits: limits.files,
-              });
-              const rawText = file.text;
-              if (rawText?.trim()) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: wrapUntrustedFileContent(rawText),
-                  }),
-                );
-              } else if (file.images && file.images.length > 0) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[PDF content rendered to images]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              } else {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[No extractable text]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              }
-              if (file.images && file.images.length > 0) {
-                images = images.concat(file.images);
-              }
+            const source = part.source;
+            const file = await extractFileContentFromSource({
+              source:
+                source.type === "url"
+                  ? { type: "url", url: source.url }
+                  : {
+                      type: "base64",
+                      data: source.data,
+                      mediaType: source.media_type,
+                      filename: source.filename,
+                    },
+              limits: limits.files,
+            });
+            const rawText = file.text;
+            if (rawText?.trim()) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: wrapUntrustedFileContent(rawText),
+                }),
+              );
+            } else if (file.images && file.images.length > 0) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[PDF content rendered to images]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            } else {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[No extractable text]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            }
+            if (file.images && file.images.length > 0) {
+              images = images.concat(file.images);
             }
           }
         }
@@ -636,7 +656,12 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -647,6 +672,7 @@ export async function handleOpenResponsesHttpRequest(
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,
+    requestAuth: handled.requestAuth,
     agentId: resolved.agentId,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
@@ -657,9 +683,16 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
-
-  // Build prompt from input
-  const prompt = buildAgentPrompt(payload.input);
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId: resolved.agentId,
+    sessionKey,
+    requestAuth: handled.requestAuth,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
+    return true;
+  }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -685,6 +718,7 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const responseId = `resp_${randomUUID()}`;
+  const responseIdentity = { id: responseId, createdAt: Math.floor(Date.now() / 1000) };
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
@@ -719,6 +753,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
 
@@ -726,9 +761,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (isFailedOpenAiAgentRun(result)) {
+        throw new Error("agent run failed");
+      }
+      const assistantText = resolveResponsePayloadText(result);
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -739,7 +777,7 @@ export async function handleOpenResponsesHttpRequest(
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
         const failed = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -760,14 +798,6 @@ export async function handleOpenResponsesHttpRequest(
       // pending call was emitted, so multi-tool turns lost every call but
       // the leading one.
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const assistantText =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "";
-
         const output: OutputItem[] = [];
         if (assistantText) {
           output.push(
@@ -791,7 +821,7 @@ export async function handleOpenResponsesHttpRequest(
         }
 
         const response = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "completed",
           output,
@@ -802,22 +832,14 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const content =
-        Array.isArray(payloads) && payloads.length > 0
-          ? payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n")
-          : "No response from OpenClaw.";
-
       const response = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "completed",
         output: [
           createAssistantOutputItem({
             id: outputItemId,
-            text: content,
+            text: assistantText || "No response from OpenClaw.",
             phase: "final_answer",
             status: "completed",
           }),
@@ -834,7 +856,7 @@ export async function handleOpenResponsesHttpRequest(
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
         const response = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -844,7 +866,7 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
       const response = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "failed",
         output: [],
@@ -853,7 +875,7 @@ export async function handleOpenResponsesHttpRequest(
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
         const mappedResponse = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -954,7 +976,7 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       const finalResponse = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: finalizeRequested.status,
         output: [completedItem],
@@ -1014,7 +1036,7 @@ export async function handleOpenResponsesHttpRequest(
     rememberResponseSession();
     finalizeFailedResponse(
       createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "failed",
         output: [],
@@ -1029,7 +1051,7 @@ export async function handleOpenResponsesHttpRequest(
 
   // Send initial events
   const initialResponse = createResponseResource({
-    id: responseId,
+    ...responseIdentity,
     model,
     status: "in_progress",
     output: [],
@@ -1038,7 +1060,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
 
-  // Add output item
+  // Start empty because content_part.added owns appending content index 0.
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
@@ -1048,7 +1070,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, {
     type: "response.output_item.added",
     output_index: 0,
-    item: outputItem,
+    item: { ...outputItem, content: [] },
   });
 
   // Add content part
@@ -1106,10 +1128,14 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      const content = resolveAssistantStreamDeltaText(evt);
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold assistant prose until the tool-choice contract is confirmed. A
       // `required`/pinned request must reject text-only turns, so streaming
@@ -1123,7 +1149,6 @@ export async function handleOpenResponsesHttpRequest(
 
       sawAssistantDelta = true;
       accumulatedText += content;
-      streamedAssistantText += content;
 
       writeSseEvent(res, {
         type: "response.output_text.delta",
@@ -1182,8 +1207,29 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
+
+      if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createResponseResource({
+            ...responseIdentity,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "api_error", message: "internal error" },
+            usage: extractUsageFromResult(result),
+          }),
+        );
+        return;
+      }
 
       finalUsage = extractUsageFromResult(result);
 
@@ -1194,13 +1240,8 @@ export async function handleOpenResponsesHttpRequest(
 
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
-      const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
-      const resultPayloadText = Array.isArray(resultAny.payloads)
-        ? resultAny.payloads
-            .map((p) => (typeof p.text === "string" ? p.text : ""))
-            .filter(Boolean)
-            .join("\n\n")
-        : "";
+      const resultAny = result as { meta?: unknown };
+      const resultPayloadText = resolveResponsePayloadText(result);
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1213,7 +1254,7 @@ export async function handleOpenResponsesHttpRequest(
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
         const failed = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -1243,7 +1284,7 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
-        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
+        if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
@@ -1314,12 +1355,12 @@ export async function handleOpenResponsesHttpRequest(
             output_index: nextStreamOutputIndex,
             item: completedFunctionCallItem,
           });
-          functionCallItems.push(functionCallItem);
+          functionCallItems.push(completedFunctionCallItem);
           nextStreamOutputIndex += 1;
         }
 
         const completedResponse = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "completed",
           output: [completedItem, ...functionCallItems],
@@ -1366,7 +1407,7 @@ export async function handleOpenResponsesHttpRequest(
       finalUsage = finalUsage ?? createEmptyUsage();
       if (isClientToolNameConflictError(err)) {
         const errorResponse = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -1378,7 +1419,7 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
       const errorResponse = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "failed",
         output: [],
@@ -1389,7 +1430,7 @@ export async function handleOpenResponsesHttpRequest(
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
         const mappedResponse = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
           status: "failed",
           output: [],
@@ -1420,5 +1461,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

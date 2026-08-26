@@ -6,7 +6,11 @@
 // numbered options so it can vote by 1-based index via the poll-vote action.
 import type { IMessagePoll } from "./types.js";
 
-export function renderIMessagePollBody(poll: IMessagePoll, sender?: string | null): string | null {
+export function renderIMessagePollBody(
+  poll: IMessagePoll,
+  sender?: string | null,
+  renderOptions?: { preferOptionId?: boolean },
+): string | null {
   const options = poll.options ?? [];
 
   // Vote update: prefer imsg's full selection snapshot. Its singular `vote`
@@ -78,9 +82,13 @@ export function renderIMessagePollBody(poll: IMessagePoll, sender?: string | nul
   const optionList = options
     .map((option, index) => {
       const count = tally.get(option.id) ?? 0;
-      return `${index + 1}) ${option.text}${count > 0 ? ` [${count}]` : ""}`;
+      const id = renderOptions?.preferOptionId ? ` (id: ${option.id})` : "";
+      return `${index + 1}) ${option.text}${id}${count > 0 ? ` [${count}]` : ""}`;
     })
     .join("  ");
   const question = poll.question?.trim();
-  return `\u{1F4CA} Poll${question ? `: ${question}` : ""} — options: ${optionList}. Cast your vote on this poll with the poll-vote action (pollOptionIndex = the option number); do not answer in a text reply.`;
+  const selector = renderOptions?.preferOptionId
+    ? "pollOptionId = the stable option id shown above"
+    : "pollOptionIndex = the option number";
+  return `\u{1F4CA} Poll${question ? `: ${question}` : ""} — options: ${optionList}. Cast your vote on this poll with the poll-vote action (${selector}); do not answer in a text reply.`;
 }

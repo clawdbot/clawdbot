@@ -1,7 +1,7 @@
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 // Browser tests cover cdp.internal plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,

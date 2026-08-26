@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
+  mergeControlUiTranslationMaps,
 } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import {
   createControlUiLocaleSyncPlan,
@@ -55,6 +56,18 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("merges lazy English source catalogs without losing sibling keys", () => {
+    expect(
+      mergeControlUiTranslationMaps(
+        { activity: { title: "Activity" }, common: { ok: "OK" } },
+        { activity: { runInspector: { title: "Run inspector" } } },
+      ),
+    ).toEqual({
+      activity: { title: "Activity", runInspector: { title: "Run inspector" } },
+      common: { ok: "OK" },
+    });
+  });
+
   it("preserves provenance when a configured provider performs no translation", () => {
     const previousMeta = localeMeta();
 

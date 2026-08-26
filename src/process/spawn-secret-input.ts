@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { SpawnSecretInput } from "./supervisor/types.js";
 
-export type SpawnStdioEntry = "ignore" | "inherit" | "overlapped" | "pipe";
+export type SpawnStdioEntry = "ignore" | "inherit" | "ipc" | "overlapped" | "pipe";
 
 export function addSecretInputStdio(
   stdio: SpawnStdioEntry[],

@@ -1,4 +1,4 @@
-/** Publishes gateway/canvas/SSH records through one ciao-owned advertisement lifecycle. */
+/** Publishes gateway/SSH records through one ciao-owned advertisement lifecycle. */
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
@@ -19,7 +19,6 @@ type GatewayBonjourAdvertiseOpts = {
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable?: boolean;
-  canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
   minimal?: boolean;
@@ -264,9 +263,6 @@ export async function startGatewayBonjourAdvertiser(
     }
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
-    }
-    if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
-      txtBase.canvasPort = String(opts.canvasPort);
     }
     if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();

@@ -2,11 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn(),
+  migrateLegacyMainSessionKeys: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: mocks.createAgent }));
-vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
+vi.mock("../agents/agent-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-create.js")>()),
+  createAgent: mocks.createAgent,
+}));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
+  migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
+}));
 
 const { ensureOnboardingAgent } = await import("./onboard-agent.js");
 
@@ -14,13 +24,15 @@ describe("onboarding main-agent creation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createAgent.mockResolvedValue({
-      status: "existing",
+      status: "created",
       agentId: "main",
       name: "main",
       workspace: "/tmp/work",
       agentDir: "/tmp/agent",
       bootstrapPending: true,
+      configHash: "hash-after-create",
     });
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValue({});
     mocks.readConfigFileSnapshot
       .mockResolvedValueOnce({
         exists: false,
@@ -54,9 +66,11 @@ describe("onboarding main-agent creation", () => {
 
     expect(mocks.createAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        entry: expect.objectContaining({ id: "main", default: true }),
+        entry: expect.objectContaining({ id: "main" }),
+        bootstrapMain: true,
       }),
     );
+    expect(mocks.createAgent.mock.calls[0]?.[0]?.entry).not.toHaveProperty("default");
     expect(result).toMatchObject({
       agentId: "main",
       config: {
@@ -69,6 +83,32 @@ describe("onboarding main-agent creation", () => {
     });
   });
 
+  it("stages a normalized named first agent and runs legacy-session convergence", async () => {
+    mocks.createAgent.mockResolvedValueOnce({
+      status: "created",
+      agentId: "robby",
+      name: "Robby!",
+      workspace: "/tmp/work",
+      agentDir: "/tmp/agent",
+      bootstrapPending: true,
+      configHash: "hash-after-create",
+    });
+
+    await ensureOnboardingAgent({
+      config: {},
+      workspace: "/tmp/work",
+      firstAgent: { name: "Robby!" },
+    });
+
+    expect(mocks.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: { id: "robby", name: "Robby!", workspace: "/tmp/work" } }),
+    );
+    expect(mocks.migrateLegacyMainSessionKeys).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ agents: expect.any(Object) }),
+      mode: "automatic",
+    });
+  });
+
   it("preserves an explicit imported candidate roster", async () => {
     const config = { agents: { list: [{ id: "main", default: true }] } };
 
@@ -78,7 +118,12 @@ describe("onboarding main-agent creation", () => {
         workspace: "/tmp/work",
         preserveCandidateRoster: true,
       }),
-    ).resolves.toEqual({ config, agentId: "main", bootstrapPending: false });
+    ).resolves.toEqual({
+      config,
+      agentId: "main",
+      bootstrapPending: false,
+      createdAgent: false,
+    });
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.createAgent).not.toHaveBeenCalled();
   });
@@ -104,6 +149,58 @@ describe("onboarding main-agent creation", () => {
     });
 
     expect(result.configHash).toBeUndefined();
+    expect(mocks.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a whitespace-only explicit first-agent name instead of defaulting to main", async () => {
+    await expect(
+      ensureOnboardingAgent({
+        config: {},
+        workspace: "/tmp/work",
+        firstAgent: { name: "   " },
+      }),
+    ).rejects.toThrow("Agent name is required");
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an incomplete legacy-session migration with a doctor recovery hint", async () => {
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
+      armed: true,
+      complete: false,
+      warnings: ["database is locked"],
+    });
+
+    const result = await ensureOnboardingAgent({
+      config: {},
+      workspace: "/tmp/work",
+      firstAgent: { name: "robby" },
+    });
+
+    expect(result.sessionMigrationWarnings).toEqual([
+      expect.stringMatching(/database is locked.*openclaw doctor --fix/),
+    ]);
+  });
+
+  it("rejects a roster written after the approved config revision", async () => {
+    mocks.readConfigFileSnapshot.mockReset().mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      hash: "concurrent",
+      sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
+      config: { agents: { entries: { ops: {} } } },
+    });
+
+    await expect(
+      ensureOnboardingAgent({
+        config: {},
+        workspace: "/tmp/work",
+        firstAgent: { name: "robby" },
+        expectedConfigHash: "approved",
+      }),
+    ).rejects.toThrow("config changed before first-agent creation");
+
     expect(mocks.createAgent).not.toHaveBeenCalled();
   });
 });

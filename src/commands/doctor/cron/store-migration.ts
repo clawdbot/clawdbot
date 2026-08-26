@@ -1,5 +1,6 @@
 // Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -9,23 +10,33 @@ import {
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
-import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
 } from "../shared/codex-route-model-ref.js";
+import {
+  hasLegacyToolNameList,
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+} from "../shared/legacy-tool-name-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 import {
   classifyUnresolvedAgentTurnShellToolPrompt,
   collectLegacyOpenAICodexCronModelRoutes,
+  copyTopLevelAgentTurnFields,
   hasLegacyOpenAICodexCronModelRef,
+  inferPayloadIfMissing,
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
+  normalizePayloadKind,
+  stripLegacyTopLevelFields,
 } from "./payload-migration.js";
 import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
+import { migrateLegacyCronTriggerScript } from "./trigger-script-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -35,6 +46,8 @@ type CronStoreIssueKey =
   | "legacyScheduleCron"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
+  | "legacyImageInspectionToolName"
+  | "legacyTaskSuggestionToolName"
   | "legacyAgentTurnCommandPayload"
   | "unresolvedAgentTurnShellToolPrompt"
   | "legacyPayloadProvider"
@@ -97,6 +110,8 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyTriggerScriptJobs: string[];
+  unsupportedLegacyTriggerScriptJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   jobs: Array<Record<string, unknown>>;
@@ -141,164 +156,6 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   };
 }
 
-function normalizePayloadKind(payload: Record<string, unknown>) {
-  const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
-  if (raw === "agentturn") {
-    if (payload.kind !== "agentTurn") {
-      payload.kind = "agentTurn";
-      return true;
-    }
-    return false;
-  }
-  if (raw === "systemevent") {
-    if (payload.kind !== "systemEvent") {
-      payload.kind = "systemEvent";
-      return true;
-    }
-    return false;
-  }
-  return false;
-}
-
-function inferPayloadIfMissing(raw: Record<string, unknown>) {
-  const message = normalizeOptionalString(raw.message) ?? "";
-  const text = normalizeOptionalString(raw.text) ?? "";
-  const command = normalizeOptionalString(raw.command) ?? "";
-  if (message) {
-    raw.payload = { kind: "agentTurn", message };
-    return true;
-  }
-  if (text) {
-    raw.payload = { kind: "systemEvent", text };
-    return true;
-  }
-  if (command) {
-    raw.payload = { kind: "systemEvent", text: command };
-    return true;
-  }
-  return false;
-}
-
-function copyTopLevelAgentTurnFields(
-  raw: Record<string, unknown>,
-  payload: Record<string, unknown>,
-) {
-  let mutated = false;
-
-  const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = normalizeOptionalString(payload[field]);
-    if (existing) {
-      return;
-    }
-    const value = normalizeOptionalString(raw[field]);
-    if (value) {
-      payload[field] = value;
-      mutated = true;
-    }
-  };
-  copyTrimmedString("model");
-  copyTrimmedString("thinking");
-
-  if (
-    typeof payload.timeoutSeconds !== "number" &&
-    typeof raw.timeoutSeconds === "number" &&
-    Number.isFinite(raw.timeoutSeconds)
-  ) {
-    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
-    mutated = true;
-  }
-
-  if (
-    typeof payload.allowUnsafeExternalContent !== "boolean" &&
-    typeof raw.allowUnsafeExternalContent === "boolean"
-  ) {
-    payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
-    mutated = true;
-  }
-
-  if (typeof payload.deliver !== "boolean" && typeof raw.deliver === "boolean") {
-    payload.deliver = raw.deliver;
-    mutated = true;
-  }
-  const channel = normalizeOptionalString(raw.channel);
-  if (typeof payload.channel !== "string" && channel) {
-    payload.channel = channel;
-    mutated = true;
-  }
-  const to = normalizeOptionalString(raw.to);
-  if (typeof payload.to !== "string" && to) {
-    payload.to = to;
-    mutated = true;
-  }
-  const rawThreadId = normalizeOptionalString(raw.threadId);
-  if (
-    !("threadId" in payload) &&
-    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) || Boolean(rawThreadId))
-  ) {
-    payload.threadId = rawThreadId ?? raw.threadId;
-    mutated = true;
-  }
-  if (
-    typeof payload.bestEffortDeliver !== "boolean" &&
-    typeof raw.bestEffortDeliver === "boolean"
-  ) {
-    payload.bestEffortDeliver = raw.bestEffortDeliver;
-    mutated = true;
-  }
-  const provider = normalizeOptionalString(raw.provider);
-  if (typeof payload.provider !== "string" && provider) {
-    payload.provider = provider;
-    mutated = true;
-  }
-
-  return mutated;
-}
-
-function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
-  if ("model" in raw) {
-    delete raw.model;
-  }
-  if ("thinking" in raw) {
-    delete raw.thinking;
-  }
-  if ("timeoutSeconds" in raw) {
-    delete raw.timeoutSeconds;
-  }
-  if ("allowUnsafeExternalContent" in raw) {
-    delete raw.allowUnsafeExternalContent;
-  }
-  if ("message" in raw) {
-    delete raw.message;
-  }
-  if ("text" in raw) {
-    delete raw.text;
-  }
-  if ("deliver" in raw) {
-    delete raw.deliver;
-  }
-  if ("channel" in raw) {
-    delete raw.channel;
-  }
-  if ("to" in raw) {
-    delete raw.to;
-  }
-  if ("threadId" in raw) {
-    delete raw.threadId;
-  }
-  if ("bestEffortDeliver" in raw) {
-    delete raw.bestEffortDeliver;
-  }
-  if ("provider" in raw) {
-    delete raw.provider;
-  }
-  if ("command" in raw) {
-    delete raw.command;
-  }
-  if ("timeout" in raw) {
-    delete raw.timeout;
-  }
-}
-
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
@@ -310,6 +167,8 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const legacyTriggerScriptJobs: string[] = [];
+  const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
@@ -366,6 +225,25 @@ export function normalizeStoredCronJobs(
       mutated = true;
     } else {
       raw.name = nameRaw.trim();
+    }
+
+    const trigger = raw.trigger;
+    if (isRecord(trigger)) {
+      if (typeof trigger.script === "string") {
+        const migration = migrateLegacyCronTriggerScript(trigger.script);
+        const id = normalizeOptionalString(raw.id);
+        const name = normalizeOptionalString(raw.name);
+        const jobIdentity = name && id && name !== id ? `${name} (${id})` : (name ?? id);
+        if (migration.kind === "supported") {
+          trigger.script = migration.script;
+          mutated = true;
+          if (jobIdentity) {
+            legacyTriggerScriptJobs.push(jobIdentity);
+          }
+        } else if (migration.kind === "unsupported" && jobIdentity) {
+          unsupportedLegacyTriggerScriptJobs.push(jobIdentity);
+        }
+      }
     }
 
     const desc = normalizeOptionalString(raw.description);
@@ -478,6 +356,14 @@ export function normalizeStoredCronJobs(
     if (payloadRecord) {
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
+      const hadLegacyTaskSuggestionToolName = hasLegacyToolNameList(
+        payloadRecord.toolsAllow,
+        TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+      );
+      const hadLegacyImageInspectionToolName = hasLegacyToolNameList(
+        payloadRecord.toolsAllow,
+        IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+      );
       const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
       const agentId = normalizeOptionalString(raw.agentId);
       const shouldMigrateCodexModelRef = (modelRef: string, legacyModelRef: string) =>
@@ -488,6 +374,12 @@ export function normalizeStoredCronJobs(
         }) !== false;
       if (hadLegacyPayloadCodexModel) {
         trackIssue("legacyPayloadCodexModel");
+      }
+      if (hadLegacyTaskSuggestionToolName) {
+        trackIssue("legacyTaskSuggestionToolName");
+      }
+      if (hadLegacyImageInspectionToolName) {
+        trackIssue("legacyImageInspectionToolName");
       }
       if (
         migrateLegacyCronPayload(payloadRecord, {
@@ -739,6 +631,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
+    legacyTriggerScriptJobs,
+    unsupportedLegacyTriggerScriptJobs,
     legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
     invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
     jobs,

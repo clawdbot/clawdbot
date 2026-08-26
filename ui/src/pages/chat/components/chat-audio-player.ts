@@ -21,12 +21,7 @@ import {
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
-import {
-  appendChatMediaPlaybackParam,
-  buildChatMediaFetchHeaders,
-  waitForChatMediaPlayback,
-  type ChatMediaPlaybackMode,
-} from "./chat-media-playback.ts";
+import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -100,19 +95,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private duration = 0;
   @state() private buffered = 0;
   @state() private playing = false;
-  @state() private failed = false;
-  @state() private preparing = false;
-  @state() private playbackReady = true;
   @state() private waveformPeaks: readonly number[] | null = null;
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
-  private currentSourceFailed = false;
   private readonly cancelPendingResume = () => this.sourceController.cancelPendingResume();
-  private readinessController: AbortController | null = null;
-  private readinessKey = "";
-  private readinessPromise: Promise<boolean> | null = null;
-  private readySource = "";
   private playRequest: Promise<void> | null = null;
   private releaseWaveformBlob: (() => void) | undefined;
   private waveformController: AbortController | null = null;
@@ -124,19 +111,13 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
-    this.readinessController?.abort();
-    this.readinessController = null;
-    this.readinessKey = "";
-    this.readinessPromise = null;
-    this.readySource = "";
-    this.playbackReady = this.playback !== "transcode";
+    this.sourceController.cancel();
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = undefined;
     this.waveformController?.abort();
     this.waveformController = null;
     this.waveformAttempted = false;
     if (this.media) {
-      this.sourceController.cancelPendingResume();
       if (!this.media.paused) {
         this.media.pause();
       }
@@ -174,10 +155,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           this.media.pause();
           releaseChatAudioPlayback(this.media);
         }
-        if ((sourceIdentityChanged || changedProperties.has("authToken")) && this.media) {
-          this.sourceController.reset(this.media);
-          this.currentSourceFailed = false;
-        }
       }
       this.syncSource();
     }
@@ -190,77 +167,25 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private syncSource(): void {
     const media = this.media;
-    const source = this.src.trim();
-    if (!media || !source || !this.sourceIdentity.trim() || !this.isConnected) {
+    if (!media || !this.isConnected) {
       return;
     }
     if (this.releaseWaveformBlob) {
       return;
     }
-    const playbackSource =
-      this.playback === "transcode" ? appendChatMediaPlaybackParam(source) : source;
-    const hasCurrentAttachmentSource =
-      this.sourceController.currentIdentity === this.sourceIdentity.trim();
-    const hasUsableCurrentAttachmentSource =
-      hasCurrentAttachmentSource && !this.currentSourceFailed;
-    if (this.playback !== "transcode") {
-      this.readinessController?.abort();
-      this.readinessController = null;
-      this.readinessKey = "";
-      this.readinessPromise = null;
-      this.preparing = false;
-      this.playbackReady = true;
-      this.readySource = playbackSource;
-      this.failed = false;
-      this.currentSourceFailed = false;
-      this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
-      return;
-    }
-
-    const readinessKey = `${playbackSource}\0${this.authToken?.trim() ?? ""}`;
-    if (readinessKey === this.readinessKey && this.readinessController && this.readinessPromise) {
-      return;
-    }
-    this.readinessController?.abort();
-    const controller = new AbortController();
-    this.readinessController = controller;
-    this.readinessKey = readinessKey;
-    this.readySource = "";
-    this.preparing = !hasUsableCurrentAttachmentSource;
-    this.playbackReady = hasUsableCurrentAttachmentSource;
-    this.failed = false;
-    const pending = waitForChatMediaPlayback({
-      source: playbackSource,
-      authToken: this.authToken,
-      signal: controller.signal,
-      onPreparing: () => {
-        if (this.readinessController === controller && !hasUsableCurrentAttachmentSource) {
-          this.preparing = true;
-        }
-      },
-    }).then((result) => {
-      if (this.readinessController !== controller || result === "aborted") {
-        return false;
+    const pending = this.sourceController.sync(
+      media,
+      this.src,
+      this.sourceIdentity,
+      this.playback,
+      this.authToken,
+    );
+    this.requestUpdate();
+    void pending?.then(() => {
+      if (this.isConnected) {
+        this.requestUpdate();
       }
-      this.preparing = false;
-      if (result !== "ready") {
-        if (hasUsableCurrentAttachmentSource) {
-          this.readySource = this.sourceController.currentSource;
-          this.playbackReady = true;
-          return true;
-        }
-        this.failed = true;
-        this.playbackReady = false;
-        return false;
-      }
-      this.readySource = playbackSource;
-      this.playbackReady = true;
-      this.failed = false;
-      this.currentSourceFailed = false;
-      this.sourceController.updateSource(media, playbackSource, this.sourceIdentity);
-      return true;
     });
-    this.readinessPromise = pending;
   }
 
   private resolveWaveformCacheKey(): string {
@@ -306,7 +231,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private async prepareWaveformAudio(): Promise<void> {
     const media = this.media;
-    const source = this.readySource;
+    const source = this.sourceController.readySource;
     if (!media || !source || this.releaseWaveformBlob || this.waveformAttempted) {
       return;
     }
@@ -410,7 +335,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private togglePlayback(): void {
     const media = this.media;
-    if (!media || !this.playbackReady) {
+    if (!media || this.sourceController.readiness !== "ready") {
       return;
     }
     if (media.paused) {
@@ -517,6 +442,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   override render() {
     const progress = this.duration > 0 ? Math.min(1, this.currentTime / this.duration) : 0;
     const downloadHref = safeAttachmentHref(this.src);
+    const failed = this.sourceController.readiness === "unavailable";
     return html`
       <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
         <div class="chat-assistant-attachment-card__header">
@@ -527,7 +453,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   >${t("chat.messages.voiceNote")}</span
                 >`
               : null}
-            ${downloadHref && !this.failed
+            ${downloadHref && !failed
               ? html`<!-- The download attribute is ignored for cross-origin URLs (rare here — attachment
                   hrefs are same-origin gateway routes); those open in a new tab instead. -->
                   <a
@@ -543,7 +469,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
               : null}
           </span>
         </div>
-        ${this.failed
+        ${failed
           ? html`<div class="chat-assistant-attachment-card__reason">
               ${t("chat.mediaPlayer.videoUnavailable")}
               ${downloadHref
@@ -557,7 +483,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   >`
                 : null}
             </div> `
-          : this.preparing
+          : this.sourceController.readiness === "preparing"
             ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
                 ${t("chat.mediaPlayer.preparing")}
               </div>`
@@ -569,7 +495,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                 <button
                   type="button"
                   class="chat-audio-player__toggle"
-                  ?disabled=${!this.playbackReady}
+                  ?disabled=${this.playback === "transcode" &&
+                  this.sourceController.readiness !== "ready"}
                   aria-label=${t(this.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
                   @click=${() => this.togglePlayback()}
                 >
@@ -596,8 +523,6 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             );
             this.duration = Number.isFinite(this.media.duration) ? this.media.duration : 0;
             this.currentTime = this.media.currentTime;
-            this.failed = false;
-            this.currentSourceFailed = false;
             this.updateBuffered();
             this.onMediaLoaded?.();
           }}
@@ -633,9 +558,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
             if (this.media && !this.sourceController.handleError(this.media)) {
               releaseChatAudioPlayback(this.media);
               this.playing = false;
-              this.failed = true;
-              this.currentSourceFailed = true;
             }
+            this.requestUpdate();
           }}
         ></audio>
       </div>

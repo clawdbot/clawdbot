@@ -55,6 +55,64 @@ describe("OpenClaw assistant", () => {
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("Never ask for or repeat a credential");
   });
 
+  it("does not tell the fallback planner to solicit secrets", () => {
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).not.toMatch(/\bask for secrets?\b/iu);
+  });
+
+  it.each([
+    ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT],
+    ["primary agent loop", SYSTEM_AGENT_SYSTEM_PROMPT],
+  ])("keeps credential collection out of transcript-bearing %s", (_name, prompt) => {
+    const credentialGuidance = prompt
+      .split("\n")
+      .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
+
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:ask for|request)/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:echo|repeat)/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:place|put|include)/iu.test(line) &&
+          /(?:recommend|suggest)/iu.test(line) &&
+          /(?:command(?:-line)?|arguments?)/iu.test(line) &&
+          /urls?/iu.test(line) &&
+          /shell/iu.test(line) &&
+          /(?:variable|interpolat)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) =>
+          /(?:never|do not)/iu.test(line) &&
+          /(?:ask|request)/iu.test(line) &&
+          /(?:report|share|provide)/iu.test(line) &&
+          /(?:authentication|pairing)/iu.test(line) &&
+          /codes?/iu.test(line) &&
+          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      credentialGuidance.some(
+        (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps remote Gateway mode outside both hosted chat planners", () => {
     for (const prompt of [SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, SYSTEM_AGENT_SYSTEM_PROMPT]) {
       expect(prompt).toContain("running the Gateway on another machine");

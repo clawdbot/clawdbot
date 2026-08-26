@@ -292,14 +292,10 @@ struct ExecApprovalsUIRollbackTests {
     {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-approvals-ui-\(UUID().uuidString)", isDirectory: true)
-        let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
 
-        return try await TestIsolation.withIsolatedState(env: [
-            "OPENCLAW_HOME": home.path,
-            "OPENCLAW_STATE_DIR": stateDir.path,
-        ]) {
+        return try await ExecApprovalsStore.withStateDirectory(stateDir) {
             try await body(stateDir)
         }
     }

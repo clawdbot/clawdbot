@@ -206,6 +206,8 @@ const RETIRED_TUNING_PATHS = [
   ["memory", "search", "query", "hybrid", "mmr", "lambda"],
   ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
   ["memory", "search", "cache", "maxEntries"],
+  ["channels", "*", "streaming", "progress", "render"],
+  ["channels", "*", "accounts", "*", "streaming", "progress", "render"],
 ] as const;
 
 const RETIRED_AGENT_TUNING_PATHS = [

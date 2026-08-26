@@ -47,6 +47,38 @@ function writePlugin([dir, id, version, method, name]) {
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
+function writePluginPack([dir, id, version, entryList]) {
+  for (const [value, label] of [
+    [dir, "dir"],
+    [id, "id"],
+    [version, "version"],
+  ]) {
+    requireArg(value, label);
+  }
+  const entries = entryList
+    ? entryList
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : ["one", "two"];
+  if (entries.length === 0) {
+    throw new Error("plugin-pack entries must not be empty");
+  }
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: entries.map((entry) => `./${entry}.js`) },
+  });
+  for (const entry of entries) {
+    const childId = `${id}/${entry}`;
+    write(
+      path.join(dir, `${entry}.js`),
+      `module.exports = { id: ${JSON.stringify(childId)}, name: ${JSON.stringify(childId)}, register(api) { api.registerGatewayMethod(${JSON.stringify(`${id}.${entry}`)}, async () => ({ version: ${JSON.stringify(version)} })); }, };\n`,
+    );
+  }
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
 function writePluginWithVendoredDependency([dir, id, version, method, name]) {
   writePlugin([dir, id, version, method, name]);
   const packageJsonPath = path.join(dir, "package.json");
@@ -162,6 +194,7 @@ function writePluginMarketplace(args) {
 export const pluginCommands = {
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
+  "plugin-pack": writePluginPack,
   "plugin-vendored-dep": writePluginWithVendoredDependency,
   "plugin-cli": writePluginWithCli,
   "plugin-cli-registry-dep": writePluginWithCliRegistryDependency,

@@ -109,7 +109,7 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
           },
         }),
       ),
@@ -119,6 +119,7 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
+    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
   });
 
   it("shows a model-catalog failure and lets the operator retry", () => {
@@ -145,8 +146,8 @@ describe("renderAgents", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
-    const globalNextWakeAtMs = Date.now() + 60_000;
-    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const nextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
     render(
       renderAgents(
@@ -154,7 +155,7 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
             jobs: [job],
             jobsTotal: 1,
             jobsHasMore: false,
@@ -188,10 +189,11 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
       formatNextRun(scopedNextWakeAtMs),
     );
-    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
+    const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>
       createCronJob(`main-${index}`, { agentId: "alpha" }),
     );
@@ -201,8 +203,10 @@ describe("renderAgents", () => {
     });
     const request = vi.fn(async () => ({
       jobs: [lastJob],
+      snapshotRevision,
       total: 51,
       offset: 50,
+      limit: 50,
       nextOffset: null,
       hasMore: false,
     }));
@@ -211,6 +215,7 @@ describe("renderAgents", () => {
       ...createInitialCronState({ client, connected: true }),
       cronAgentId: "alpha",
       cronJobs: jobs,
+      cronJobsSnapshotRevision: snapshotRevision,
       cronJobsTotal: 51,
       cronJobsHasMore: true,
       cronJobsNextOffset: 50,
@@ -223,7 +228,7 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               jobs: cronState.cronJobs,
               jobsTotal: cronState.cronJobsTotal,
               jobsHasMore: cronState.cronJobsHasMore,
@@ -234,10 +239,7 @@ describe("renderAgents", () => {
               error: cronState.cronError,
             },
             onCronLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, {
-                append: true,
-                tableFilters: true,
-              });
+              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
               renderCurrentPage();
               void nextPage.then(renderCurrentPage);
             },
@@ -334,12 +336,10 @@ describe("renderAgents", () => {
       container,
     );
 
-    const defaultSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(select?.value).toBe("openai/gpt-5.4");
-      return select;
-    });
-    expect(defaultSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
+    const defaultSelect = container.querySelector("wa-select.model-picker__select");
+    expect(defaultSelect?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
+      "openai/gpt-5.4",
+    );
 
     render(
       renderAgents(
@@ -357,12 +357,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    const inheritedSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(select?.value).toBe("");
-      return select;
-    });
-    expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
+    const inheritedSelect = container.querySelector("wa-select.model-picker__select");
+    expect(inheritedSelect?.querySelector("wa-option[selected]")?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
     );
   });
@@ -380,7 +376,15 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        entries: { alpha: {}, beta: {} },
+        entries: {
+          alpha: {
+            models: {
+              "local/unlisted-model": { alias: "Alpha local model" },
+              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
+            },
+          },
+          beta: {},
+        },
       },
     };
 
@@ -420,19 +424,24 @@ describe("renderAgents", () => {
       container,
     );
 
-    const select = await vi.waitFor(() => {
-      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
-      return candidate;
-    });
+    const select = container.querySelector("wa-select.model-picker__select");
+    expect(select?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
+      "anthropic/claude-opus-4-8",
+    );
     const options = new Map(
-      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+      Array.from(select?.querySelectorAll("wa-option") ?? []).map((option) => [
+        option.getAttribute("value"),
+        option.querySelector(".picker-select__label")?.textContent?.trim(),
+      ]),
     );
 
     expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
     expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
+    expect(options.get("google/gemini-3-flash-preview")).toBe(
+      "Alpha Flash (google/gemini-3-flash-preview)",
+    );
   });
 
   it.each([
@@ -504,13 +513,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    const betaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(
-        Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
-      ).toBe(true);
-      return select;
-    });
+    const betaSelect = container.querySelector("wa-select.model-picker__select");
+    expect(betaSelect?.querySelector('wa-option[value="openai/gpt-5.4"]')).not.toBeNull();
 
     render(
       renderAgents(
@@ -528,15 +532,10 @@ describe("renderAgents", () => {
       container,
     );
 
-    const alphaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(
-        Array.from(select?.options ?? []).some(
-          (option) => option.value === "anthropic/claude-sonnet-4-6",
-        ),
-      ).toBe(true);
-      return select;
-    });
+    const alphaSelect = container.querySelector("wa-select.model-picker__select");
+    expect(
+      alphaSelect?.querySelector('wa-option[value="anthropic/claude-sonnet-4-6"]'),
+    ).not.toBeNull();
     expect(alphaSelect).not.toBe(betaSelect);
   });
 
@@ -549,7 +548,7 @@ describe("renderAgents", () => {
           agentsList: {
             defaultId: "alpha",
             mainKey: "main",
-            scope: "workspace",
+            scope: "per-sender",
             agents: [
               { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
               { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
@@ -745,6 +744,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -791,6 +791,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -859,6 +860,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -911,6 +913,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -928,11 +931,10 @@ describe("renderAgentFiles", () => {
         agentFilesError: null,
         agentFileActive: "USER.md",
         agentFileContents: {
-          "USER.md": "# User Profile\n\nHello world",
+          "USER.md":
+            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
         },
-        agentFileDrafts: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
+        agentFileDrafts: {},
         agentFileSaving: false,
         onLoadFiles: () => undefined,
         onSelectFile: () => undefined,
@@ -943,9 +945,6 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
-      1,
-    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
@@ -955,6 +954,10 @@ describe("renderAgentFiles", () => {
     expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
       "Markdown Preview",
     );
+    const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
+    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
+    expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
+    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
@@ -963,6 +966,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -1014,6 +1018,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",

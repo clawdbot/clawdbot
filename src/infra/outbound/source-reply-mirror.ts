@@ -7,18 +7,20 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   beginRestartRecoveryTerminalDelivery,
   cancelRestartRecoveryTerminalDelivery,
   completeRestartRecoveryTerminalDelivery,
   type RestartRecoveryTerminalDeliveryScope,
 } from "../../config/sessions/restart-recovery-receipt.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
@@ -41,6 +43,28 @@ type SourceReplyTranscriptMirrorParams = {
   deliveredPayload?: unknown;
   replyToIsExplicit?: boolean;
 };
+
+type TerminalSourceReplyDeliveryStart =
+  | TerminalSourceReplyDeliveryReceipt
+  | {
+      outcome: "already_delivered" | "delivery_ambiguous";
+      result: { status: string; delivered: false; message: string };
+    }
+  | undefined;
+
+function buildTerminalSourceReplyNoSendResult(outcome: "already_delivered" | "delivery_ambiguous") {
+  return {
+    outcome,
+    result: {
+      status: outcome,
+      delivered: false as const,
+      message:
+        outcome === "already_delivered"
+          ? "The completed reply was already delivered. Do not retry it."
+          : "The completed reply may already have been delivered. Do not retry it.",
+    },
+  };
+}
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
   sessionKey: string;
@@ -211,7 +235,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sourceTurnId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     toolCallId,
   };
 }
@@ -219,7 +243,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
 /** Arms the fail-closed state before a terminal source reply can reach a provider. */
 export async function beginTerminalSourceReplyDelivery(
   params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryReceipt | undefined> {
+): Promise<TerminalSourceReplyDeliveryStart> {
   const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
   if (!receipt) {
     return undefined;
@@ -228,11 +252,11 @@ export async function beginTerminalSourceReplyDelivery(
   if (result === "not-applicable") {
     return undefined;
   }
-  if (result === "blocked") {
-    throw new Error("terminal source reply already has a durable delivery outcome");
+  if (result === "already-delivered") {
+    return buildTerminalSourceReplyNoSendResult("already_delivered");
   }
-  if (result === "stale") {
-    throw new Error("terminal source reply lost restart recovery ownership");
+  if (result === "delivery-ambiguous" || result === "stale") {
+    return buildTerminalSourceReplyNoSendResult("delivery_ambiguous");
   }
   return receipt;
 }
@@ -485,6 +509,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
       presentation: params.actionParams.presentation as ReplyPayload["presentation"],
       interactive: params.actionParams.interactive as ReplyPayload["interactive"],
       channelData: params.actionParams.channelData as ReplyPayload["channelData"],
+      location: normalizeOutboundLocation(params.actionParams.location),
     },
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);
@@ -492,10 +517,15 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
   const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const writerFence = getOwnedSessionTranscriptWriterFence();
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
+    ...(writerFence?.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+      : {}),
+    ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
     idempotencyKey: resolveTranscriptMirrorIdempotencyKey({

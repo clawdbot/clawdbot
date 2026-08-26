@@ -10,6 +10,10 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
+import {
+  markFrozenClawToolAllowPolicy,
+  resolveClawToolPolicyConsent,
+} from "../claws/tool-policy-runtime.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -22,7 +26,7 @@ import {
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
-import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -34,13 +38,9 @@ import {
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
-} from "./subagent-capabilities.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import {
-  mergeAlsoAllowPolicy,
-  normalizeToolName,
-  resolveToolProfilePolicy,
-} from "./tool-policy.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { resolveProviderToolPolicy };
@@ -53,10 +53,12 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
+  "openclaw",
   // Status/scheduling - main agent coordinates
   "session_status",
   AUTOMATIONS_TOOL_NAME,
-  // Direct session sends - subagents communicate through announce chain
+  // Direct user/session sends - subagents communicate through announce chain
+  "message",
   "sessions_send",
   "conversations_list",
   "conversations_send",
@@ -105,13 +107,8 @@ export function resolveSubagentToolPolicyForSession(
   });
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
-  const explicitAllow = new Set(
-    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
-  );
   const deny = [
-    ...resolveSubagentDenyListForRole(capabilities.role).filter(
-      (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
-    ),
+    ...resolveSubagentDenyListForRole(capabilities.role),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
@@ -382,13 +379,16 @@ export function resolveEffectiveToolPolicy(params: {
     typeof params.agentId === "string" && params.agentId.trim()
       ? normalizeAgentId(params.agentId)
       : undefined;
-  const agentId =
-    explicitAgentId ??
-    (params.sessionKey ? parseAgentSessionKey(params.sessionKey)?.agentId : undefined) ??
-    (params.config &&
-    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0)
-      ? resolveDefaultAgentId(params.config)
-      : undefined);
+  const canResolveConfiguredAgent =
+    params.config &&
+    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0);
+  const agentId = canResolveConfiguredAgent
+    ? resolveSessionAgentIds({
+        config: params.config,
+        agentId: explicitAgentId,
+        sessionKey: params.sessionKey,
+      }).sessionAgentId
+    : (explicitAgentId ?? parseAgentSessionKey(params.sessionKey)?.agentId);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   // Shipped pre-roster SDK inputs allowed this raw defaults shape. Runtime-loaded
@@ -415,6 +415,17 @@ export function resolveEffectiveToolPolicy(params: {
   });
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
+  const agentPolicy = pickSandboxToolPolicy(agentTools);
+  const clawToolPolicyConsent = resolveClawToolPolicyConsent({
+    agentTools,
+    agentId,
+    profile,
+    ownsProfile: profileSource === "agent",
+    hasAgentAllowlist: (agentPolicy?.allow?.length ?? 0) > 0,
+  });
+  if (clawToolPolicyConsent.frozen) {
+    markFrozenClawToolAllowPolicy(agentPolicy);
+  }
 
   // Warn affected users about removed implicit grants (#47487), but only when
   // the active profile/explicit alsoAllow do not already grant those tools.
@@ -456,7 +467,7 @@ export function resolveEffectiveToolPolicy(params: {
     agentId,
     globalPolicy: pickSandboxToolPolicy(globalTools),
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
-    agentPolicy: pickSandboxToolPolicy(agentTools),
+    agentPolicy,
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,

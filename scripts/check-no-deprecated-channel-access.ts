@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
-import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 
 type Rule = {
   label: string;
@@ -22,7 +22,7 @@ const RULES: Rule[] = [
   {
     label: "caller-owned reply dispatcher lifecycle",
     pattern:
-      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|dispatchReplyFromConfigWithSettledDispatcher|settleReplyDispatcher)\s*\(/u,
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|settleReplyDispatcher)\s*\(/u,
   },
   {
     label: "deprecated channel ingress resolver aliases",

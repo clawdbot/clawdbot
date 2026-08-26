@@ -1,19 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveControlUiDistIndexHealth } from "./control-ui-assets.js";
-import { trimLogTail } from "./restart-sentinel.js";
+import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
+  managerInstallIgnoreScriptsArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
-import { MAX_LOG_CHARS } from "./update-runner-command.js";
+import { runStep } from "./update-runner-command.js";
 import {
   resolveBuildEnv,
   resolveInstallEnv,
-  resolveRetryInstallArgs,
-  shouldRetryWindowsInstallIgnoringScripts,
+  shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
 import type { CommandRunner, UpdateStepResult } from "./update-runner-types.js";
 
@@ -46,22 +45,18 @@ export async function rebuildRolledBackGitRuntime(params: {
   steps: UpdateStepResult[];
 }): Promise<GitRuntimeRecovery> {
   const appendStep = async (name: string, argv: string[], env?: NodeJS.ProcessEnv) => {
-    const started = Date.now();
-    const result = await params.runCommand(argv, {
+    const result = await runStep({
+      runCommand: params.runCommand,
+      name,
+      argv,
       cwd: params.gitRoot,
       timeoutMs: params.timeoutMs,
       env,
+      stepIndex: 0,
+      totalSteps: 1,
+      results: params.steps,
     });
-    params.steps.push({
-      name,
-      command: argv.join(" "),
-      cwd: params.gitRoot,
-      durationMs: Date.now() - started,
-      exitCode: result.code,
-      stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
-      stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
-    });
-    return result.code === 0;
+    return result.exitCode === 0;
   };
   const appendFailure = (reason: RecoveryReason, detail: string): GitRuntimeRecovery => {
     params.steps.push({
@@ -94,8 +89,8 @@ export async function rebuildRolledBackGitRuntime(params: {
       }),
       installEnv,
     );
-    if (!installed && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
-      const retryArgv = resolveRetryInstallArgs(manager.manager);
+    if (!installed && shouldInstallWithoutScriptsOnWindows(manager.manager)) {
+      const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
       installed = retryArgv
         ? await appendStep("git rollback deps install (ignore scripts)", retryArgv, installEnv)
         : false;
@@ -129,14 +124,14 @@ export async function rebuildRolledBackGitRuntime(params: {
         () => true,
         () => false,
       ),
-      resolveControlUiDistIndexHealth({ root: params.gitRoot }),
+      resolveControlUiAssetHealth({ root: params.gitRoot }),
     ]);
     const verified =
       commit === params.expectedSha &&
       buildHead === params.expectedSha &&
       runtimeHead === params.expectedSha &&
       entryExists &&
-      uiHealth.exists;
+      uiHealth.kind === "ready";
     params.steps.push({
       name: "git rollback runtime verify",
       command: `verify rollback runtime ${params.expectedSha}`,
@@ -146,7 +141,7 @@ export async function rebuildRolledBackGitRuntime(params: {
       ...(verified
         ? {}
         : {
-            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.exists})`,
+            stderrTail: `rollback runtime mismatch (build=${commit ?? "missing"}, buildStamp=${buildHead ?? "missing"}, runtimeStamp=${runtimeHead ?? "missing"}, entry=${entryExists}, ui=${uiHealth.kind})`,
           }),
     });
     return verified

@@ -110,6 +110,12 @@ export class Guild<IsPartial extends boolean = false> extends Base {
   get name() {
     return this.rawDataValue?.name ?? "";
   }
+  get icon() {
+    return this.rawDataValue?.icon;
+  }
+  get iconUrl() {
+    return this.icon ? `https://cdn.discordapp.com/icons/${this.id}/${this.icon}.png` : null;
+  }
 }
 
 export class GuildMember extends Base {

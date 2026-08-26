@@ -9,7 +9,8 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -30,6 +31,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/p
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
@@ -52,6 +54,7 @@ import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleRoots = new Map<string, string>();
 const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
@@ -66,6 +69,7 @@ type ReadOnlyChannelPluginOptions = {
 
 type ReadOnlyChannelPluginResolution = {
   plugins: ChannelPlugin[];
+  manifestRecords: readonly PluginManifestRecord[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
@@ -85,6 +89,7 @@ let nextReadOnlyChannelPluginObjectId = 1;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   readOnlyChannelPluginResolutionCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
 });
 
 function cloneReadOnlyChannelPluginResolution(
@@ -92,6 +97,7 @@ function cloneReadOnlyChannelPluginResolution(
 ): ReadOnlyChannelPluginResolution {
   return {
     plugins: [...resolution.plugins],
+    manifestRecords: [...resolution.manifestRecords],
     configuredChannelIds: [...resolution.configuredChannelIds],
     missingConfiguredChannelIds: [...resolution.missingConfiguredChannelIds],
     loadFailures: resolution.loadFailures.map((failure) => ({ ...failure })),
@@ -429,6 +435,7 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return {};
   }
   try {
+    moduleRoots.set(params.record.setupSource, params.record.rootDir);
     const moduleLoader = getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath: params.record.setupSource,
@@ -640,7 +647,7 @@ function resolveReadOnlyWorkspaceDir(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions,
 ): string | undefined {
-  return options.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  return options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
 }
 
 function listExternalChannelManifestRecords(
@@ -717,13 +724,19 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }
   const manifestRecords =
     options.metadataSnapshot?.plugins ??
-    resolvePluginMetadataSnapshot({
-      config: cfg,
-      stateDir: options.stateDir,
-      workspaceDir,
-      env,
-      allowWorkspaceScopedCurrent: true,
-    }).plugins;
+    (options.workspaceDir !== undefined
+      ? resolvePluginMetadataSnapshot({
+          config: cfg,
+          stateDir: options.stateDir,
+          workspaceDir: options.workspaceDir,
+          env,
+          allowWorkspaceScopedCurrent: true,
+        }).plugins
+      : resolveConfigWidePluginManifestRegistry({
+          config: cfg,
+          stateDir: options.stateDir,
+          env,
+        }).plugins);
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
@@ -855,6 +868,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const plugins = [...byId.values()];
   const resolution = {
     plugins,
+    manifestRecords,
     configuredChannelIds,
     missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
     loadFailures,

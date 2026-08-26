@@ -22,6 +22,7 @@ async function fixture() {
   const sha256 = createHash("sha256").update(content).digest("hex");
   const installedAt = 123;
   const registry = "https://clawhub.ai";
+  const ownerHandle = "owner";
   await mkdir(join(skillDir, ".clawhub"), { recursive: true });
   await mkdir(join(workspaceDir, ".clawhub"), { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), content);
@@ -34,6 +35,7 @@ async function fixture() {
       slug,
       installedVersion: "1.0.0",
       installedAt,
+      ownerHandle,
       skillFile: { path: "SKILL.md", sha256 },
       fileTreeSha256,
     }),
@@ -47,13 +49,37 @@ async function fixture() {
           version: "1.0.0",
           registry,
           installedAt,
+          ownerHandle,
           skillFile: { path: "SKILL.md", sha256 },
           fileTreeSha256,
         },
       },
     }),
   );
-  return { workspaceDir, slug, skillDir };
+  return {
+    workspaceDir,
+    slug,
+    skillDir,
+    originPath: join(skillDir, ".clawhub", "origin.json"),
+    lockPath: join(workspaceDir, ".clawhub", "lock.json"),
+  };
+}
+
+async function replaceTrackedOwner(
+  current: Awaited<ReturnType<typeof fixture>>,
+  ownerHandle: string,
+) {
+  const origin = JSON.parse(await readFile(current.originPath, "utf8")) as {
+    ownerHandle: string;
+  };
+  origin.ownerHandle = ownerHandle;
+  await writeFile(current.originPath, JSON.stringify(origin));
+
+  const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
+    skills: Record<string, { ownerHandle: string }>;
+  };
+  lock.skills[current.slug]!.ownerHandle = ownerHandle;
+  await writeFile(current.lockPath, JSON.stringify(lock));
 }
 
 describe("ClawHub skill uninstall lifecycle", () => {
@@ -66,7 +92,10 @@ describe("ClawHub skill uninstall lifecycle", () => {
       slug: current.slug,
       expectedVersion: "1.0.0",
     });
-    expect(planned).toMatchObject({ ok: true, plan: { slug: "triage", version: "1.0.0" } });
+    expect(planned).toMatchObject({
+      ok: true,
+      plan: { requestedRef: "triage", slug: "triage", version: "1.0.0" },
+    });
     if (!planned.ok) {
       throw new Error(planned.error);
     }
@@ -93,6 +122,73 @@ describe("ClawHub skill uninstall lifecycle", () => {
         },
       },
     });
+  });
+
+  it("removes an owner-qualified tracked skill by its local slug", async () => {
+    const current = await fixture();
+    const planned = await planClawHubSkillUninstall({
+      workspaceDir: current.workspaceDir,
+      slug: "@owner/triage",
+      expectedVersion: "1.0.0",
+    });
+
+    expect(planned).toMatchObject({
+      ok: true,
+      plan: { requestedRef: "@owner/triage", slug: "triage", version: "1.0.0" },
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error);
+    }
+    await expect(applyClawHubSkillUninstall(planned.plan)).resolves.toEqual({ ok: true });
+    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).rejects.toThrow();
+    const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
+      skills: Record<string, unknown>;
+    };
+    expect(lock.skills).toEqual({});
+  });
+
+  it("rejects an owner-qualified ref for a different tracked publisher", async () => {
+    const current = await fixture();
+
+    await expect(
+      planClawHubSkillUninstall({
+        workspaceDir: current.workspaceDir,
+        slug: "@other/triage",
+        expectedVersion: "1.0.0",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "ambiguous",
+      error: 'Skill "triage" is tracked as @owner/triage, not @other/triage.',
+    });
+    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "name: triage",
+    );
+    const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
+      skills: Record<string, unknown>;
+    };
+    expect(lock.skills.triage).toBeDefined();
+  });
+
+  it("revalidates the requested publisher before applying removal", async () => {
+    const current = await fixture();
+    const planned = await planClawHubSkillUninstall({
+      workspaceDir: current.workspaceDir,
+      slug: "@owner/triage",
+      expectedVersion: "1.0.0",
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error);
+    }
+    await replaceTrackedOwner(current, "other");
+
+    await expect(applyClawHubSkillUninstall(planned.plan)).resolves.toEqual({
+      ok: false,
+      error: 'Skill "triage" is tracked as @other/triage, not @owner/triage.',
+    });
+    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "name: triage",
+    );
   });
 
   it("retains a locally modified skill", async () => {

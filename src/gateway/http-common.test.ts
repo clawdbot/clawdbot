@@ -10,12 +10,12 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
-  buildMissingScopeForbiddenBody,
   readJsonBodyOrError,
   sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
+  sendMissingScopeForbidden,
   sendRateLimited,
   sendUnauthorized,
   setDefaultSecurityHeaders,
@@ -123,15 +123,20 @@ describe("sendJson", () => {
   });
 });
 
-describe("buildMissingScopeForbiddenBody", () => {
+describe("sendMissingScopeForbidden", () => {
   it("preserves the legacy response when no concrete scope is available", () => {
-    expect(buildMissingScopeForbiddenBody(undefined)).toEqual({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: undefined",
-      },
-    });
+    const { res, end } = makeMockHttpResponse();
+    sendMissingScopeForbidden(res, undefined);
+    expect(res.statusCode).toBe(403);
+    expect(end).toHaveBeenCalledWith(
+      JSON.stringify({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: undefined",
+        },
+      }),
+    );
   });
 });
 
@@ -227,7 +232,17 @@ describe("sendInvalidRequest", () => {
 });
 
 describe("readJsonBodyOrError", () => {
-  const makeRequest = () => ({}) as IncomingMessage;
+  const makeRequest = (headers: Record<string, string> = {}) => {
+    const req = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      headers,
+      destroy: vi.fn(() => {
+        req.destroyed = true;
+        return req;
+      }),
+    }) as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
+    return req;
+  };
 
   it("returns the parsed body on success", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { hello: "world" } });
@@ -243,7 +258,7 @@ describe("readJsonBodyOrError", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));
     const { res, end } = makeMockHttpResponse();
-    const req = { headers: { "content-length": "2048" } } as IncomingMessage;
+    const req = makeRequest({ "content-length": "2048" });
     const result = await readJsonBodyOrError(req, res, 1024);
     stop();
     expect(result).toBeUndefined();
@@ -259,12 +274,18 @@ describe("readJsonBodyOrError", () => {
     expect(event?.bytes).toBe(2048);
     expect(event?.limitBytes).toBe(1024);
     expect(event?.reason).toBe("json_body_limit");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
+    expect(req.destroy).toHaveBeenCalledOnce();
   });
 
   it("responds with 408 when the request body times out", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
     const { res, end } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = makeRequest();
+    const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toBeUndefined();
     expect(res.statusCode).toBe(408);
     expect(end).toHaveBeenCalledWith(
@@ -272,17 +293,25 @@ describe("readJsonBodyOrError", () => {
         error: { message: "Request body timeout", type: "invalid_request_error" },
       }),
     );
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
+    expect(req.destroy).toHaveBeenCalledOnce();
   });
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
     const { res, end } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = makeRequest();
+    const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toBeUndefined();
     expect(res.statusCode).toBe(400);
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({ error: { message: "bad json", type: "invalid_request_error" } }),
     );
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
   });
 });
 

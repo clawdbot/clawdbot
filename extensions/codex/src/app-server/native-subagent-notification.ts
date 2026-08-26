@@ -2,6 +2,7 @@
  * Extracts native Codex subagent completion notifications from trusted
  * inter-agent commentary messages emitted by the app-server.
  */
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -251,11 +252,6 @@ function extractSingleTextPart(item: JsonObject): string | undefined {
     return undefined;
   }
   return readString(entry, "text")?.trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeStatusKey(value: string): string {

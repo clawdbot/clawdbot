@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getModelProviderMetadataOwners } from "../provider-request-config.js";
+import { getModelProviderRequestRouteFacts } from "../provider-request-config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryCore: vi.fn(),
   normalizePluginDiscoveryResult: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   runProviderStaticCatalog: vi.fn(),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => undefined,
+  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
@@ -25,7 +27,7 @@ vi.mock("../../plugins/manifest-owner-policy.js", () => ({
 }));
 
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../../plugins/manifest.js", () => ({
@@ -95,7 +97,7 @@ describe("prepared bundled provider static catalogs", () => {
     );
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     mocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "google",
@@ -224,7 +226,9 @@ describe("prepared bundled provider static catalogs", () => {
         contextWindow: 1_048_576,
       }),
     ]);
-    expect(getModelProviderMetadataOwners(models[0]!)).toBe(metadataSnapshot.owners);
+    expect(getModelProviderRequestRouteFacts(models[0]!)?.providerMetadataOwners).toBe(
+      metadataSnapshot.owners,
+    );
     expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
     expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
@@ -260,7 +264,7 @@ describe("prepared bundled provider static catalogs", () => {
 
   it("discovers unconfigured providers when the full catalog is requested", async () => {
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["anthropic", "google"]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "anthropic",

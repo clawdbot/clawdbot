@@ -30,6 +30,7 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
+import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
 import { markdownToWhatsAppChunks, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -147,18 +148,19 @@ export async function sendMessageWhatsApp(
     audioAsVoice?: boolean;
     forceDocument?: boolean;
     accountId?: string;
-    quotedMessageKey?: {
-      id: string;
-      remoteJid: string;
-      fromMe: boolean;
-      participant?: string;
-      messageText?: string;
-      media?: import("openclaw/plugin-sdk/channel-inbound").MediaPlaceholderTextFact;
-    };
+    quotedMessageKey?: WhatsAppQuotedMessageKey;
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
     onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
   },
+): Promise<{ messageId: string; toJid: string }> {
+  return await sendWhatsAppUploadFile(to, body, options);
+}
+
+export async function sendWhatsAppUploadFile(
+  to: string,
+  body: string,
+  options: Parameters<typeof sendMessageWhatsApp>[2] & { fileName?: string; contentType?: string },
 ): Promise<{ messageId: string; toJid: string }> {
   return await withWhatsAppLogicalDeliveryActivity(() =>
     sendMessageWhatsAppInActivityScope(to, body, options),
@@ -168,7 +170,7 @@ export async function sendMessageWhatsApp(
 async function sendMessageWhatsAppInActivityScope(
   to: string,
   body: string,
-  options: Parameters<typeof sendMessageWhatsApp>[2],
+  options: Parameters<typeof sendMessageWhatsApp>[2] & { fileName?: string; contentType?: string },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
@@ -206,7 +208,7 @@ async function sendMessageWhatsAppInActivityScope(
     tableMode,
     resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
   );
-  text = textChunks.shift() ?? "";
+  text = textChunks.shift() ?? text;
   if (!text && !hasMedia) {
     return { messageId: "", toJid: jid };
   }
@@ -230,14 +232,22 @@ async function sendMessageWhatsAppInActivityScope(
     } else if (primaryMediaUrl) {
       // Injected readers must carry an explicit local-root boundary. The shared loader enforces
       // that contract; never restore the former implicit `localRoots: "any"` widening here.
+      const loadedMedia = await loadOutboundMediaFromUrl(primaryMediaUrl, {
+        maxBytes: resolveWhatsAppMediaMaxBytes(account),
+        optimizeImages: options.forceDocument ? false : undefined,
+        mediaAccess: options.mediaAccess,
+        mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
+      });
+      // An explicit upload MIME supersedes the loader's inferred kind; preserving a stale
+      // document guess would incorrectly send native images and videos as documents.
+      const mediaWithRequestedType = options.contentType
+        ? { ...loadedMedia, contentType: options.contentType, kind: undefined }
+        : loadedMedia;
       media = await prepareWhatsAppOutboundMedia(
-        await loadOutboundMediaFromUrl(primaryMediaUrl, {
-          maxBytes: resolveWhatsAppMediaMaxBytes(account),
-          optimizeImages: options.forceDocument ? false : undefined,
-          mediaAccess: options.mediaAccess,
-          mediaLocalRoots: options.mediaLocalRoots,
-          mediaReadFile: options.mediaReadFile,
-        }),
+        options.fileName
+          ? { ...mediaWithRequestedType, fileName: options.fileName }
+          : mediaWithRequestedType,
         primaryMediaUrl,
       );
     }

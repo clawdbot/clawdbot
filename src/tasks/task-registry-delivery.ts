@@ -31,7 +31,7 @@ import {
   ensureTaskRegistryReady,
   getPeerTasksForDelivery,
   loadTaskRegistryDeliveryRuntime,
-  log,
+  taskRegistryLog,
   pickPreferredRunIdTask,
   taskDeliveryStates,
   tasks,
@@ -290,7 +290,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
           lastEventAt: Date.now(),
         });
       } catch (error) {
-        log.warn("Failed to queue background task session delivery", {
+        taskRegistryLog.warn("Failed to queue background task session delivery", {
           taskId,
           ownerKey: latest.ownerKey,
           error,
@@ -309,7 +309,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       }
       const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
       const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
-      await sendMessage({
+      const sendResult = await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
@@ -327,6 +327,23 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
         return afterSend ? cloneTaskRecord(afterSend) : null;
       }
+      if (sendResult.deliveryStatus === "suppressed") {
+        if (sendResult.suppressionReason === "adapter_returned_no_identity") {
+          taskRegistryLog.warn("Background task update delivery was not confirmed", {
+            taskId,
+            ownerKey: ownerSessionKey,
+            requesterOrigin: owner.requesterOrigin,
+            suppressionReason: sendResult.suppressionReason,
+          });
+          return updateTask(taskId, {
+            deliveryStatus: "failed",
+            lastEventAt: Date.now(),
+          });
+        }
+        throw new Error(
+          `background task update suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
+      }
       if (afterSend.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(afterSend);
       }
@@ -335,7 +352,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     } catch (error) {
-      log.warn("Failed to deliver background task update", {
+      taskRegistryLog.warn("Failed to deliver background task update", {
         taskId,
         ownerKey: ownerSessionKey,
         requesterOrigin: owner.requesterOrigin,
@@ -351,7 +368,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
           queueBlockedTaskFollowup(beforeFallback);
         }
       } catch (fallbackError) {
-        log.warn("Failed to queue background task fallback event", {
+        taskRegistryLog.warn("Failed to queue background task fallback event", {
           taskId,
           ownerKey: latest.ownerKey,
           error: fallbackError,
@@ -420,7 +437,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       latestEvent,
       owner,
     });
-    await sendMessage({
+    const sendResult = await sendMessage({
       channel: owner.requesterOrigin?.channel,
       to: owner.requesterOrigin?.to ?? "",
       accountId: owner.requesterOrigin?.accountId,
@@ -434,6 +451,19 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         idempotencyKey,
       },
     });
+    if (sendResult.deliveryStatus === "suppressed") {
+      if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
+        throw new Error(
+          `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
+      }
+      taskRegistryLog.warn("Background task state change delivery was not confirmed", {
+        taskId,
+        ownerKey: current.ownerKey,
+        requesterOrigin: owner.requesterOrigin,
+        suppressionReason: sendResult.suppressionReason,
+      });
+    }
     upsertTaskDeliveryState({
       taskId,
       requesterOrigin: deliveryState?.requesterOrigin,
@@ -443,7 +473,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       lastEventAt: Date.now(),
     });
   } catch (error) {
-    log.warn("Failed to deliver background task state change", {
+    taskRegistryLog.warn("Failed to deliver background task state change", {
       taskId,
       ownerKey: current.ownerKey,
       error,

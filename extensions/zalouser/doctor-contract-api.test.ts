@@ -11,12 +11,13 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   listSessionEntries,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { setZalouserRuntime } from "./src/runtime.js";
@@ -61,6 +62,10 @@ describe("zalouser doctor state migration", () => {
   });
 
   afterEach(async () => {
+    // Session migrations open per-agent databases under the temporary state dir, and
+    // resetPluginStateStoreForTests only releases plugin state plus shared state, so the
+    // cached agent handles must be closed here or Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });

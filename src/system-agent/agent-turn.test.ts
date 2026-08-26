@@ -16,6 +16,7 @@ import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
@@ -62,6 +63,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 const tempDirs: string[] = [];
+let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
@@ -109,36 +111,12 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  // Core tests install a contract-level selectable backend instead of loading
-  // a plugin's generated setup artifact from dist/.
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "anthropic",
-        modelProvider: "anthropic",
-        bundleMcp: true,
-        bundleMcpMode: "claude-config-file",
-        config: { command: "claude" },
-        normalizeConfig: (config, context) => ({
-          ...config,
-          args: [
-            ...(config.args ?? []),
-            "--test-exec-policy",
-            JSON.stringify(context?.config?.tools?.exec ?? null),
-          ],
-        }),
-        nativeToolMode: "selectable",
-        toolAvailabilityEnforcement: "execution-args",
-        sideQuestionToolMode: "disabled",
-        resolveExecutionArgs: (context) => context.baseArgs,
-      },
-    ],
-  });
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterEach(() => {
-  cliBackendsTesting.resetDepsForTest();
+  restoreCliBackendFixture?.();
+  restoreCliBackendFixture = undefined;
   vi.unstubAllEnvs();
   pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
@@ -775,6 +753,7 @@ describe("runSystemAgentTurn", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-global" },
+          systemAgent: { agentId: "ops" },
           models: {
             "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
           },
@@ -929,6 +908,38 @@ describe("runSystemAgentTurn", () => {
     {
       name: "empty model output",
       runEmbeddedAgent: async () => ({ payloads: [] }),
+    },
+    {
+      name: "hidden reasoning",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Considering the answer", isReasoning: true }],
+      }),
+    },
+    {
+      name: "hidden commentary",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Checking the gateway", isCommentary: true }],
+      }),
+    },
+    {
+      name: "explicitly hidden output",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Private model output", visible: false }],
+      }),
+    },
+    {
+      name: "status notice",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Still working", isStatusNotice: true }],
+      }),
+    },
+    {
+      name: "silent reply",
+      runEmbeddedAgent: async () => ({ payloads: [{ text: "NO_REPLY" }] }),
+    },
+    {
+      name: "raw-only hidden metadata",
+      runEmbeddedAgent: async () => ({ meta: { finalAssistantRawText: "Hidden draft" } }),
     },
   ])("clears partial session state after $name", async ({ runEmbeddedAgent }) => {
     useTempStateDir();

@@ -17,12 +17,10 @@ export const browserPanelStyles = css`
     right: var(--oc-terminal-reserve-right, 0px);
     bottom: var(--oc-terminal-reserve-bottom, 0px);
   }
-  .bp-icon.is-active {
-    color: var(--accent, #ff5c5c);
-    background: color-mix(in srgb, var(--accent, #ff5c5c) 14%, transparent);
-  }
-  .bp-icon:disabled {
-    opacity: 0.4;
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
   }
   .bp-actions {
     flex: none;
@@ -33,6 +31,23 @@ export const browserPanelStyles = css`
     gap: 4px;
     padding: 5px 8px;
     border-bottom: 1px solid var(--border, #262b34);
+  }
+  .bp-toolbar .bp-icon {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted, #8a919e);
+  }
+  .bp-toolbar .bp-icon:hover,
+  .bp-toolbar .bp-icon:focus-visible {
+    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    color: var(--text, #d7dae0);
   }
   .bp-url {
     flex: 1;
@@ -87,11 +102,21 @@ export const browserPanelStyles = css`
   }
   .bp-viewport {
     position: relative;
+    display: flex;
     flex: 1;
     min-height: 0;
+    flex-direction: column;
     overflow: auto;
     background: var(--bg, #0e1015);
     outline: none;
+  }
+  /* The tab panel's own body must stretch, otherwise an empty state sizes to its
+     content and sits in the upper third instead of centring in the viewport. */
+  .bp-viewport::part(base) {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
   }
   .bp-stage {
     position: relative;

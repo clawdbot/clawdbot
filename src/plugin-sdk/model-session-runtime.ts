@@ -16,3 +16,4 @@ export {
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
 } from "../sessions/model-overrides.js";
+export { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";

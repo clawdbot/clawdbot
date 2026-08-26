@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,6 +33,14 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
       operation: "doctor",
     });
   }
+  const unreadableStateDatabase = databaseSchemas.indeterminate.find(
+    (database) => database.kind === "state",
+  );
+  if (unreadableStateDatabase) {
+    throw new Error(
+      `Doctor cannot continue because the shared state database is unreadable: ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}. The database was left unchanged; doctor will not recreate it because that could discard persistent operator data. Stop the Gateway and other OpenClaw processes, then restore this file from a verified backup or repair it manually. After recovery, run ${formatCliCommand("openclaw doctor --fix")} again. See ${stateDatabase.OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+    );
+  }
 }
 
 function stateDirectoryExistsAtDoctorStart(): boolean {
@@ -43,7 +52,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 }
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
@@ -109,9 +118,23 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     sourceConfigValid: configResult.sourceConfigValid ?? true,
     configPath: configResult.path ?? CONFIG_PATH,
     stateDirExistedAtStart,
+    runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+    invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);
+  if (ctx.configWriteRefusal) {
+    // Config fixes were computed but refused by the writer; the warning above
+    // already lists the manual work. This failure outranks a recoverable
+    // post-install advisory because the run did not converge.
+    outro(
+      ctx.configResultWriteCommitted === true
+        ? "Doctor finished, but some config fixes were not applied."
+        : "Doctor finished, but config fixes were not applied.",
+    );
+    effectiveRuntime.exit(1);
+    return;
+  }
   if (ctx.postInstallDoctorResult) {
     const {
       UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -128,6 +151,5 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
       return;
     }
   }
-
   outro("Doctor complete.");
 }

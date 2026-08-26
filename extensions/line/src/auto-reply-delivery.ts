@@ -41,7 +41,7 @@ type LineAutoReplyDeps = {
     address: string;
     latitude: number;
     longitude: number;
-  }) => messagingApi.LocationMessage | null;
+  }) => messagingApi.LocationMessage | messagingApi.TextMessage;
   replyMessageLine: (
     replyToken: string,
     messages: messagingApi.Message[],
@@ -241,10 +241,7 @@ export async function deliverLineAutoReply(params: {
   }
 
   if (lineData.location) {
-    const locationMessage = deps.createLocationMessage(lineData.location);
-    if (locationMessage) {
-      richMessages.push(locationMessage);
-    }
+    richMessages.push(deps.createLocationMessage(lineData.location));
   }
 
   // Inbound auto-replies bypass the channel outbound adapter, so enforce the

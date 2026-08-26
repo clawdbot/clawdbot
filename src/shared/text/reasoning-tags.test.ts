@@ -81,6 +81,16 @@ describe("stripReasoningTagsFromText", () => {
         input: "<think>first</think>A<think>second</think>B",
         expected: "AB",
       },
+      {
+        name: "strips internal reflection blocks",
+        input: "<internal>private reflection</internal>Visible answer.",
+        expected: "Visible answer.",
+      },
+      {
+        name: "never recovers nested unclosed internal reflection as visible text",
+        input: "<thinking>outer<internal>private reflection",
+        expected: "",
+      },
     ] as const)("$name", (testCase) => {
       expectStrippedCase(testCase);
     });
@@ -95,6 +105,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         name: "preserves inline literal think tag documentation",
         input: "The `<think>` tag is used for reasoning. Don't forget the closing `</think>` tag.",
+      },
+      {
+        name: "preserves literal internal tag documentation",
+        input: "Use `<internal>private</internal>` literally.",
       },
       {
         name: "preserves xml fenced examples",
@@ -368,6 +382,12 @@ describe("stripReasoningTagsFromText", () => {
         name: "still strips fully closed reasoning blocks in preserve mode",
         input: "A <think>hidden</think> B",
         expected: "A  B",
+        opts: { mode: "preserve" as const },
+      },
+      {
+        name: "does not recover internal reflection in preserve mode",
+        input: "<internal>private reflection",
+        expected: "",
         opts: { mode: "preserve" as const },
       },
     ] as const)("$name", (testCase) => {

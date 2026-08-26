@@ -1,6 +1,7 @@
 // Qa Lab tests cover live OpenAI scenario catalog metadata.
 import { describe, expect, it } from "vitest";
 import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
+import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 
 describe("qa scenario catalog", () => {
   it("includes the GPT-5.6 Luna thinking visibility switch scenario", () => {
@@ -36,6 +37,7 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("openai-native-web-search-live");
     const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
       | {
+          requiredProviderMode?: string;
           requiredProvider?: string;
           requiredModel?: string;
           expectedMarker?: string;
@@ -51,6 +53,7 @@ describe("qa scenario catalog", () => {
         },
       },
     });
+    expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
@@ -58,6 +61,29 @@ describe("qa scenario catalog", () => {
       "confirms live OpenAI GPT-5.6 Luna web search auto mode",
       "searches official OpenAI News through the live model",
     ]);
+    expect(scenario.execution.flow?.steps.at(-1)?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ call: "runAgentPrompt" }),
+        expect.objectContaining({ call: "waitForOutboundMessage" }),
+      ]),
+    );
+  });
+
+  it("rejects the native web-search probe from matching-provider mock lanes", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const mockLane = {
+      scenarios: [scenario],
+      providerMode: "mock-openai" as const,
+      primaryModel: "openai/gpt-5.6-luna",
+    };
+
+    expect(selectQaFlowSuiteScenarios({ ...mockLane, providerMode: "live-frontier" })).toEqual([
+      scenario,
+    ]);
+    expect(selectQaFlowSuiteScenarios(mockLane)).toEqual([]);
+    expect(() => selectQaFlowSuiteScenarios({ ...mockLane, scenarioIds: [scenario.id] })).toThrow(
+      "providerMode=live-frontier",
+    );
   });
 
   it("includes the live inbound voice talkback scenario", () => {

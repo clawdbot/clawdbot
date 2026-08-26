@@ -293,10 +293,10 @@ function resolveDefaultProviderForAliasContext(params: {
       DEFAULT_PROVIDER,
     );
     const parsed =
-      parseModelRef(
+      parseCodexRouteModelRef(
         primaryAliasRef ?? compatModelRef ?? legacyCodexModel ?? effectivePrimaryModelRef,
       ) ??
-      parseModelRef(
+      parseCodexRouteModelRef(
         resolveConfiguredBareModelRef({
           cfg: params.cfg,
           modelRef: effectivePrimaryModelRef,
@@ -305,7 +305,7 @@ function resolveDefaultProviderForAliasContext(params: {
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
   }
-  const implicit = parseModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
+  const implicit = parseCodexRouteModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
   return normalizeProviderId(implicit?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
 }
 
@@ -353,7 +353,7 @@ function resolveConfiguredBareModelRef(params: {
   const matches = new Set<string>();
   const pushModelMapMatches = (models: MutableRecord | undefined) => {
     for (const key of Object.keys(models ?? {})) {
-      const parsed = parseModelRef(key);
+      const parsed = parseCodexRouteModelRef(key);
       if (parsed?.modelId === modelId) {
         matches.add(`${parsed.provider}/${parsed.modelId}`);
       }
@@ -442,7 +442,9 @@ function concreteRuntimeId(runtime: string | undefined): string | undefined {
   return runtime && runtime !== "auto" && runtime !== "default" ? runtime : undefined;
 }
 
-export function parseModelRef(modelRef: string): { provider: string; modelId: string } | undefined {
+export function parseCodexRouteModelRef(
+  modelRef: string,
+): { provider: string; modelId: string } | undefined {
   const slash = modelRef.indexOf("/");
   if (slash <= 0 || slash >= modelRef.length - 1) {
     return undefined;
@@ -459,7 +461,7 @@ export function canonicalOpenAIModelUsesCodexRuntime(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const parsed = parseModelRef(params.modelRef);
+  const parsed = parseCodexRouteModelRef(params.modelRef);
   if (!parsed) {
     return false;
   }

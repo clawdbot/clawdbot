@@ -13,6 +13,7 @@ export function createBaseToolHandlerState() {
     toolMetas: [] as Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>,
     acceptedSessionSpawns: [],
     toolSummaryById: new Set<string>(),
+    liveEditDiffStateById: new Map(),
     itemActiveIds: new Set<string>(),
     itemStartedCount: 0,
     itemCompletedCount: 0,

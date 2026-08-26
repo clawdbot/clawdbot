@@ -190,6 +190,14 @@ podman run --rm -it \
 On SELinux hosts, add `,Z` to both bind mounts if Podman blocks access to the
 mounted state.
 
+After restarting the Gateway with the updated image, run the read-only
+deployment preflight through the container-aware host CLI:
+
+```bash
+export OPENCLAW_CONTAINER=openclaw
+openclaw doctor --json
+```
+
 ## Useful commands
 
 - **Container logs:** `podman logs -f openclaw`

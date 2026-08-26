@@ -11,7 +11,7 @@ import {
  */
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasNonBlankUserText } from "./attempt.user-message-boundary.js";
+import { hasNonBlankUserText } from "./attempt-history.js";
 import { hydratePromptMediaMessages } from "./images.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
@@ -85,7 +85,7 @@ function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   return (
     Boolean(meta) &&
     typeof meta === "object" &&

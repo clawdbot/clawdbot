@@ -165,7 +165,61 @@ describe("xai code_execution tool", () => {
     ).toBe(true);
   });
 
-  it("reuses the xAI plugin web search key for code_execution requests", async () => {
+  it("returns every response answer and citation from the code execution HTTP boundary", async () => {
+    const mockFetch = installCodeExecutionFetch({
+      output: [
+        { type: "code_interpreter_call" },
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: "Mean: ",
+              annotations: [{ type: "url_citation", url: "https://example.com/input.csv" }],
+            },
+            {
+              type: "output_text",
+              text: "42",
+              annotations: [
+                { type: "url_citation", url: "https://example.com/result.csv" },
+                { type: "url_citation", url: "https://example.com/input.csv" },
+              ],
+            },
+          ],
+        },
+        {
+          type: "message",
+          content: [{ type: "output_text", text: ". Verified." }],
+        },
+      ],
+    });
+    const tool = createCodeExecutionTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: { apiKey: "xai-plugin-key" }, // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool?.execute?.("code-execution:multi-block", {
+      task: "Calculate and verify the mean.",
+    });
+
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
+    expect(result?.details).toMatchObject({
+      content: "Mean: 42. Verified.",
+      citations: ["https://example.com/input.csv", "https://example.com/result.csv"],
+      usedCodeExecution: true,
+    });
+  });
+
+  it("reuses the xAI plugin web search key without overriding custom model reasoning", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
       config: {
@@ -176,6 +230,7 @@ describe("xai code_execution tool", () => {
                 webSearch: {
                   apiKey: "xai-plugin-key", // pragma: allowlist secret
                 },
+                codeExecution: { model: "grok-build-0.1" },
               },
             },
           },
@@ -188,6 +243,14 @@ describe("xai code_execution tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("grok-build-0.1");
+    expect(body.input).toEqual([
+      { role: "user", content: "Compute the standard deviation of [1, 2, 3]" },
+    ]);
+    expect(body.store).toBe(false);
+    expect(body).not.toHaveProperty("reasoning");
+    expect(body).not.toHaveProperty("max_turns");
   });
 
   it("reports malformed code_execution JSON as a provider error", async () => {

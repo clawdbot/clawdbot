@@ -1,10 +1,11 @@
 // Shared lifecycle handling for interactive onboarding entrypoints.
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 
 export function hasInteractiveOnboardingTty(): boolean {
-  return process.stdin.isTTY && process.stdout.isTTY;
+  return isTerminalInteractive();
 }
 
 export async function runInteractiveOnboarding(

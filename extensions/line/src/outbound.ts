@@ -21,6 +21,12 @@ import {
   resolveLineOutboundMedia,
 } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
+import {
+  createLineQuickReply,
+  LINE_PRESENTATION_CAPABILITIES,
+  renderLineCard,
+  renderLinePresentation,
+} from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
@@ -32,14 +38,19 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 5000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
+  renderPresentation: ({ payload, presentation }) => renderLinePresentation(payload, presentation),
   sendPayload: async ({ to, payload, accountId, cfg, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
-    const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+    const rawLineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+    const lineData =
+      rawLineData.card && !rawLineData.flexMessage
+        ? { ...rawLineData, flexMessage: renderLineCard(rawLineData.card) }
+        : rawLineData;
     const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const validLocation = locationMessage ? location : undefined;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
@@ -71,10 +82,18 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       return result;
     };
     const quickReplies = lineData.quickReplies ?? [];
-    const hasQuickReplies = quickReplies.length > 0;
-    const quickReply = hasQuickReplies
-      ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(quickReplies)
-      : undefined;
+    const quickReplyItems = lineData.quickReplyItems ?? [];
+    const hasQuickReplies = quickReplies.length > 0 || quickReplyItems.length > 0;
+    const quickReply = quickReplyItems.length
+      ? createLineQuickReply(quickReplyItems)
+      : quickReplies.length
+        ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(
+            quickReplies,
+          )
+        : undefined;
+    const quickReplyLabels = quickReplyItems.length
+      ? quickReplyItems.map((item) => item.label)
+      : quickReplies;
 
     // LINE SDK expects Message[] but we build dynamically.
     const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
@@ -91,6 +110,20 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           }),
         );
       }
+    };
+
+    const sendTextWithQuickReply = async (text: string) => {
+      if (quickReplyItems.length > 0 && quickReply) {
+        await sendMessageBatch([{ type: "text", text, quickReply }]);
+        return;
+      }
+      await recordResult(
+        sendQuickReplies(to, text, quickReplies, {
+          verbose: false,
+          cfg,
+          accountId: accountId ?? undefined,
+        }),
+      );
     };
 
     const processed = payload.text
@@ -183,9 +216,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
 
-      if (validLocation) {
+      if (location) {
         await recordResult(
-          sendLocation(to, validLocation, {
+          sendLocation(to, location, {
             verbose: false,
             cfg,
             accountId: accountId ?? undefined,
@@ -227,13 +260,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
             );
           }
         } else if (isLast && hasQuickReplies) {
-          await recordResult(
-            sendQuickReplies(to, message.text, quickReplies, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await sendTextWithQuickReply(message.text);
         } else {
           await recordResult(
             sendText(to, message.text, {
@@ -248,13 +275,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       for (const [i, chunk] of chunks.entries()) {
         const isLast = i === chunks.length - 1;
         if (isLast && hasQuickReplies) {
-          await recordResult(
-            sendQuickReplies(to, chunk, quickReplies, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await sendTextWithQuickReply(chunk);
         } else {
           await recordResult(
             sendText(to, chunk, {
@@ -306,13 +327,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         };
         await sendMessageBatch(quickReplyMessages);
       } else if (quickReply) {
-        await recordResult(
-          sendQuickReplies(to, buildLineQuickReplyFallbackText(quickReplies), quickReplies, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+        await sendTextWithQuickReply(buildLineQuickReplyFallbackText(quickReplyLabels));
       }
     }
 

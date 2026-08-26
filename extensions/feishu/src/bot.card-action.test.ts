@@ -1,5 +1,6 @@
-// Feishu tests cover bot.card action plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+// Feishu tests cover bot.card action plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
@@ -133,12 +134,7 @@ describe("Feishu Card Action Handler", () => {
     return call[0];
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (!value || typeof value !== "object") {
-      throw new Error(`Expected ${label}`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "expected-label-capitalized");
 
   function handleMessageEvent(callIndex = 0) {
     const arg = requireRecord(

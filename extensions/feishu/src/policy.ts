@@ -6,6 +6,7 @@ import {
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -131,6 +132,7 @@ export async function resolveFeishuDmIngressAccess(params: {
   conversationId: string;
   mayPair: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   return await createFeishuIngressResolver({
     cfg: params.cfg,
@@ -145,6 +147,7 @@ export async function resolveFeishuDmIngressAccess(params: {
       kind: "direct",
       id: params.conversationId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     event: {
       mayPair: params.mayPair,
     },
@@ -162,6 +165,8 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
   groupPolicy: FeishuGroupPolicy;
   groupAllowFrom?: Array<string | number> | null;
   groupExplicitlyConfigured?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
   const groupAllowFrom =
@@ -178,7 +183,9 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy,
     groupAllowFrom,
@@ -195,6 +202,8 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
   requireMention: boolean;
   mentionedBot: boolean;
   command?: { hasControlCommand: boolean };
+  contextBinding?: ChannelIngressContextBinding;
+  threadId?: string;
 }) {
   const groupAllowFrom = params.allowFrom ?? [];
   return await createFeishuIngressResolver({
@@ -208,7 +217,9 @@ export async function resolveFeishuGroupSenderActivationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
+      threadId: params.threadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy: groupAllowFrom.length > 0 ? "allowlist" : "open",
     groupAllowFrom,

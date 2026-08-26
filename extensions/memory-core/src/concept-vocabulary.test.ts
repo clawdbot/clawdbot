@@ -106,7 +106,7 @@ describe("concept vocabulary", () => {
       summarizeConceptTagScriptCoverage([
         ["routeur", "sauvegarde"],
         ["路由器", "备份"],
-        ["qmd", "路由器"],
+        ["vectors", "路由器"],
         ["сервер"],
       ]),
     ).toEqual({

@@ -40,6 +40,7 @@ describe("memory read result slicing", () => {
         lines: fixture.requestedLines,
       }),
     ).toEqual({
+      status: "ok",
       text: fixture.text,
       path: "memory/test.md",
       from: 1,
@@ -56,6 +57,7 @@ describe("memory read result slicing", () => {
         lines: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo\nthree",
       path: "memory/test.md",
       from: 1,
@@ -72,6 +74,7 @@ describe("memory read result slicing", () => {
         maxChars: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo",
       path: "memory/test.md",
       from: 1,
@@ -89,6 +92,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "abc\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,
@@ -107,6 +111,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,

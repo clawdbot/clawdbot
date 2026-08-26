@@ -53,6 +53,55 @@ describe("buildTelegramInteractiveButtons callback limits", () => {
   });
 });
 
+describe("resolveTelegramInlineButtons precedence", () => {
+  it("returns explicit buttons without reading lower-priority payloads", () => {
+    const buttons = [[{ text: "Explicit", callback_data: "explicit" }]];
+    const params = {
+      buttons,
+      get interactive(): never {
+        throw new Error("unexpected interactive normalization");
+      },
+      get presentation(): never {
+        throw new Error("unexpected presentation normalization");
+      },
+    };
+
+    expect(resolveTelegramInlineButtons(params)).toBe(buttons);
+  });
+
+  it.each([
+    {
+      description: "the legacy payload contains only text",
+      interactive: { blocks: [{ type: "text", text: "Legacy heading" }] },
+      expectedDropped: [],
+    },
+    {
+      description: "every legacy callback exceeds the Telegram byte limit",
+      interactive: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Oversized", value: "x".repeat(65) }] }],
+      },
+      expectedDropped: [
+        { label: "Oversized", reason: "callback_data_too_long", callbackDataBytes: 65 },
+      ],
+    },
+  ])("falls back to presentation buttons when $description", ({ interactive, expectedDropped }) => {
+    const dropped: Array<{ label: string; reason: string; callbackDataBytes?: number }> = [];
+
+    expect(
+      resolveTelegramInlineButtons(
+        {
+          interactive,
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Fallback", value: "fallback" }] }],
+          },
+        },
+        { onDroppedControl: (control) => dropped.push(control) },
+      ),
+    ).toEqual([[{ text: "Fallback", callback_data: "fallback", style: undefined }]]);
+    expect(dropped).toEqual(expectedDropped);
+  });
+});
+
 describe("buildTelegramPresentationButtons", () => {
   it("builds inline buttons from presentation blocks", () => {
     expect(
@@ -645,6 +694,25 @@ describe("buildTelegramPresentationButtons", () => {
         ],
       }),
     ).toBeUndefined();
+  });
+
+  it("records Web App gating separately from callback overflow", () => {
+    const dropped: Array<{ reason: string; callbackDataBytes?: number }> = [];
+    buildTelegramPresentationButtons(
+      {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "App", action: { type: "web-app", url: "https://example.com/app" } },
+            ],
+          },
+        ],
+      },
+      { onDroppedControl: (control) => dropped.push(control) },
+    );
+
+    expect(dropped).toEqual([{ label: "App", reason: "web_app_unavailable" }]);
   });
 
   it("skips hosted widget actions without a Telegram web app URL", () => {

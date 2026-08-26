@@ -14,6 +14,7 @@ export type {
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MarkdownConfig,
+  ReplyToMode,
 } from "openclaw/plugin-sdk/config-contracts";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";

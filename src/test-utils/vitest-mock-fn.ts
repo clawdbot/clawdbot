@@ -5,3 +5,8 @@
 // oxlint-disable-next-line typescript/no-explicit-any
 export type MockFn<T extends (...args: any[]) => any = (...args: any[]) => any> =
   import("vitest").Mock<T>;
+
+/** Preserves a Vitest mock's precise implementation type behind the shared named mock type. */
+export function defineMockFn<T extends MockFn>(mock: T): T {
+  return mock;
+}

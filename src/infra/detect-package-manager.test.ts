@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 
@@ -10,7 +10,7 @@ async function withPackageManagerRoot<T>(
   files: Array<{ path: string; content: string }>,
   run: (root: string) => Promise<T>,
 ): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
+  return await withTestDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
     for (const file of files) {
       const target = path.join(root, file.path);
       await fs.mkdir(path.dirname(target), { recursive: true });
@@ -110,7 +110,7 @@ describe("detectPackageManager", () => {
   )(
     "detects $manager ownership for $packageFormat packages in $layout layouts",
     async ({ manager, layout, shrinkwrap }) => {
-      await withTempDir({ prefix: `openclaw-detect-pm-${manager}-` }, async (base) => {
+      await withTestDir({ prefix: `openclaw-detect-pm-${manager}-` }, async (base) => {
         const bunInstall = path.join(base, "custom-bun-home");
         const nodeModulesRoot =
           manager === "bun"
@@ -136,8 +136,44 @@ describe("detectPackageManager", () => {
     },
   );
 
+  it.each([
+    { name: "missing Bun install environment", installEnv: "missing", customGlobalDir: false },
+    {
+      name: "conflicting Bun install environment",
+      installEnv: "conflicting",
+      customGlobalDir: false,
+    },
+    {
+      name: "explicit custom Bun global directory",
+      installEnv: "conflicting",
+      customGlobalDir: true,
+    },
+  ] as const)(
+    "detects lockless Bun ownership with $name",
+    async ({ installEnv, customGlobalDir }) => {
+      await withTestDir({ prefix: "openclaw-detect-pm-bun-owner-" }, async (base) => {
+        const bunInstall = path.join(base, "owning-bun");
+        const globalProject = customGlobalDir
+          ? path.join(base, "custom-global-project")
+          : path.join(bunInstall, "install", "global");
+        const packageRoot = path.join(globalProject, "node_modules", "openclaw");
+        await writePublishedOpenClawRoot(packageRoot, { shrinkwrap: false });
+
+        await withEnvAsync(
+          {
+            BUN_INSTALL: installEnv === "missing" ? undefined : path.join(base, "unrelated-bun"),
+            BUN_INSTALL_GLOBAL_DIR: customGlobalDir ? globalProject : undefined,
+          },
+          async () => {
+            await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
+          },
+        );
+      });
+    },
+  );
+
   it("keeps pnpm 11 ownership through markerless global virtual-store symlinks", async () => {
-    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-global-store-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-detect-pm-pnpm-global-store-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
       const installRoot = path.join(globalRoot, "install-openclaw");
       const linkedPackageRoot = path.join(installRoot, "node_modules", "openclaw");

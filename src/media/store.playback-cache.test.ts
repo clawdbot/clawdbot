@@ -32,10 +32,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  await fs.rm(path.join(store.getMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR), {
-    recursive: true,
-    force: true,
-  });
+  await fs.rm(store.getMediaDir(), { recursive: true, force: true });
 });
 
 it("evicts oldest playback transcodes when insertion enforcement exceeds its byte budget", async () => {
@@ -58,20 +55,30 @@ it("evicts oldest playback transcodes when insertion enforcement exceeds its byt
   await expect(fs.stat(newPath)).resolves.toMatchObject({ size: sparseSize });
 });
 
-it("uses the long playback TTL instead of the default transient-media TTL", async () => {
+it("prunes only playback entries using the fixed seven-day retention", async () => {
   const testApi = getPlaybackCacheTestApi();
-  const cacheDir = path.join(store.getMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);
+  const mediaDir = await store.ensureMediaDir();
+  const cacheDir = path.join(mediaDir, store.PLAYBACK_TRANSCODE_SUBDIR);
   await fs.mkdir(cacheDir, { recursive: true });
   const freshPath = path.join(cacheDir, "v2-fresh.m4a");
   const oldPath = path.join(cacheDir, "v2-expired.m4a");
-  await Promise.all([fs.writeFile(freshPath, "fresh"), fs.writeFile(oldPath, "old")]);
+  const transientPath = path.join(mediaDir, "expired-transient.m4a");
+  await Promise.all([
+    fs.writeFile(freshPath, "fresh"),
+    fs.writeFile(oldPath, "old"),
+    fs.writeFile(transientPath, "transient"),
+  ]);
   const nowMs = Date.now();
   await fs.utimes(freshPath, (nowMs - 5 * 60_000) / 1000, (nowMs - 5 * 60_000) / 1000);
   const expiredMs = nowMs - testApi.PLAYBACK_TRANSCODE_TTL_MS - 1_000;
-  await fs.utimes(oldPath, expiredMs / 1000, expiredMs / 1000);
+  await Promise.all([
+    fs.utimes(oldPath, expiredMs / 1000, expiredMs / 1000),
+    fs.utimes(transientPath, expiredMs / 1000, expiredMs / 1000),
+  ]);
 
-  await store.cleanOldMedia();
+  await store.prunePlaybackTranscodeCache();
 
   await expect(fs.stat(freshPath)).resolves.toMatchObject({ size: 5 });
   await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.stat(transientPath)).resolves.toMatchObject({ size: 9 });
 });

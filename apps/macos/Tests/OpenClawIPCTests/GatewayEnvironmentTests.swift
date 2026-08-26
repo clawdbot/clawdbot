@@ -3,21 +3,6 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayEnvironmentTests {
-    private final class LockedCounter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var count = 0
-
-        func increment() {
-            self.lock.withLock {
-                self.count += 1
-            }
-        }
-
-        func value() -> Int {
-            self.lock.withLock { self.count }
-        }
-    }
-
     @Test func `semver parses common forms`() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("  v1.2.3  \n") == Semver(major: 1, minor: 2, patch: 3))
@@ -56,7 +41,7 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse(normalized2) == Semver(major: 2026, minor: 4, patch: 2))
     }
 
-    @Test func `failed global version probe falls back to local package`() async throws {
+    @Test func `failed global version probe does not borrow the local package version`() async throws {
         let projectRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-environment-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
@@ -69,45 +54,74 @@ struct GatewayEnvironmentTests {
             projectRoot: projectRoot,
             searchPaths: ["/usr/bin"])
 
-        #expect(version == "2026.7.29")
+        #expect(version == nil)
+        #expect(await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: nil,
+            projectRoot: projectRoot,
+            searchPaths: ["/usr/bin"]) == "2026.7.29")
     }
 
-    @Test func `gateway launch resolution scans preferred paths once`() async throws {
+    @Test func `failed gateway probe cannot validate version output from a broken executable`() async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
-        let node = bin.appendingPathComponent("node")
-        let gateway = bin.appendingPathComponent("openclaw")
-        try makeExecutableForTests(at: node)
-        try makeExecutableForTests(at: gateway)
-        try "#!/bin/sh\necho v24.15.0\n".write(to: node, atomically: true, encoding: .utf8)
-        let expectedVersion = GatewayEnvironment.expectedGatewayVersionString()
-        let gatewayVersion = expectedVersion.flatMap { Semver.parse($0) == nil ? nil : $0 } ?? "2026.7.30"
-        try "#!/bin/sh\necho OpenClaw \(gatewayVersion)\n"
+        let gateway = root.appendingPathComponent("openclaw")
+        try "#!/bin/sh\necho OpenClaw 2026.7.30\nexit 1\n"
             .write(to: gateway, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gateway.path)
 
-        let scans = LockedCounter()
-        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
-            scans.increment()
-            return [bin.path]
-        })
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: gateway.path,
+            projectRoot: root,
+            searchPaths: [root.path, "/usr/bin", "/bin"])
 
-        #expect(scans.value() == 1)
-        #expect(resolution.status.kind == .ok)
-        #expect(resolution.status.gatewayVersion == gatewayVersion)
-        #expect(resolution.command?.first == gateway.path)
+        #expect(version == nil)
     }
 
-    @Test func `failed gateway launch resolution scans preferred paths once`() async {
-        let scans = LockedCounter()
-        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
-            scans.increment()
-            return ["/missing/\(UUID().uuidString)"]
-        })
+    @Test func `broken global gateway remains an actionable error beside a valid checkout`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bin = root.appendingPathComponent("node_modules/.bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let node = bin.appendingPathComponent("node")
+        let gateway = bin.appendingPathComponent("openclaw")
+        try "#!/bin/sh\necho v24.15.0\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 1\n".write(to: gateway, atomically: true, encoding: .utf8)
+        for executable in [node, gateway] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+        let version = GatewayEnvironment.expectedGatewayVersionString() ?? "2026.7.30"
+        try Data(#"{"version":"\#(version)"}"#.utf8).write(to: root.appendingPathComponent("package.json"))
 
-        #expect(scans.value() == 1)
-        #expect(resolution.status.kind == .missingNode)
-        #expect(resolution.command == nil)
+        await TestIsolation.withIsolatedState(
+            defaults: ["openclaw.gatewayProjectRootPath": root.path])
+        {
+            let gatewayStatus = await GatewayEnvironment.check()
+
+            guard case let .error(message) = gatewayStatus.kind else {
+                Issue.record("Expected an actionable gateway failure, got \(gatewayStatus)")
+                return
+            }
+            #expect(message.contains(gateway.path))
+            #expect(message.contains("repair"))
+            #expect(gatewayStatus.gatewayVersion == nil)
+            #expect(gatewayStatus.nodeVersion == "24.15.0")
+        }
+    }
+
+    @Test func `gateway version probe tolerates loaded host delay`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gateway = root.appendingPathComponent("openclaw")
+        try "#!/bin/sh\nsleep 2.1\necho OpenClaw 2026.7.30\n"
+            .write(to: gateway, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gateway.path)
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: gateway.path,
+            projectRoot: root,
+            searchPaths: [root.path, "/usr/bin", "/bin"])
+
+        #expect(version == "2026.7.30")
     }
 
     @Test func `semver compatibility requires same major and not older`() {
@@ -133,6 +147,50 @@ struct GatewayEnvironmentTests {
             defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
             #expect(GatewayEnvironment.gatewayPort() == 19999)
         }
+    }
+
+    @Test func `named profiles derive stable distinct gateway ports after explicit precedence`() {
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        let personal = AppProfile(environment: ["OPENCLAW_PROFILE": "personal"])
+        let workPort = GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 0,
+            profile: work)
+        #expect((20000..<60000).contains(workPort))
+        #expect(workPort == work.defaultGatewayPort)
+        #expect(workPort != personal.defaultGatewayPort)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "21001"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 21001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "65536"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 65536,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 65536,
+            profile: work) == work.defaultGatewayPort)
+        #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
 
     @Test func `expected gateway version from string uses parser`() {

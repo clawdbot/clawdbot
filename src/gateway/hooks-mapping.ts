@@ -9,6 +9,7 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -48,6 +49,7 @@ type HookMappingContext = {
 type HookAction =
   | {
       kind: "wake";
+      mappingId: string;
       text: string;
       mode: "now" | "next-heartbeat";
       agentId?: string;
@@ -56,6 +58,7 @@ type HookAction =
     }
   | {
       kind: "agent";
+      mappingId: string;
       message: string;
       name?: string;
       agentId?: string;
@@ -271,6 +274,7 @@ function buildActionFromMapping(
       ok: true,
       action: {
         kind: "wake",
+        mappingId: mapping.id,
         text,
         mode: mapping.wakeMode ?? "now",
         agentId: mapping.agentId,
@@ -284,6 +288,7 @@ function buildActionFromMapping(
     ok: true,
     action: {
       kind: "agent",
+      mappingId: mapping.id,
       message,
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
@@ -317,6 +322,7 @@ function mergeAction(
     const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
+      mappingId: base.mappingId,
       text,
       mode,
       agentId: override.agentId ?? baseWake?.agentId,
@@ -331,6 +337,7 @@ function mergeAction(
     override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
+    mappingId: base.mappingId,
     message,
     wakeMode,
     name: override.name ?? baseAgent?.name,
@@ -444,13 +451,10 @@ function resolvePath(baseDir: string, target: string): string {
   return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
-function escapesBase(baseDir: string, candidate: string): boolean {
-  const relative = path.relative(baseDir, candidate);
-  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-}
-
 function safeRealpathSync(candidate: string): string | null {
   try {
+    // Hook containment prefers native canonicalization when Node exposes it.
+    // Keep the plain fallback only for runtimes without the native entrypoint.
     const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
     return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
   } catch {
@@ -479,7 +483,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
     throw new Error(`${label} module path is required`);
   }
   const resolved = resolvePath(base, trimmed);
-  if (escapesBase(base, resolved)) {
+  if (!isPathInside(base, resolved)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
 
@@ -491,7 +495,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (
     baseRealpath &&
     existingAncestorRealpath &&
-    escapesBase(baseRealpath, existingAncestorRealpath)
+    !isPathInside(baseRealpath, existingAncestorRealpath)
   ) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }

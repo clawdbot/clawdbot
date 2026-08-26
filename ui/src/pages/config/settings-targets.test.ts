@@ -28,6 +28,7 @@ describe("settings search target manifest", () => {
     ).toEqual([
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
+      ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
@@ -42,6 +43,12 @@ describe("settings search target manifest", () => {
         "/settings/appearance",
         "?section=__appearance__",
         "#settings-appearance-theme",
+      ],
+      [
+        "appearanceAccent",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-accent",
       ],
       [
         "appearanceTextSize",
@@ -117,6 +124,7 @@ describe("settings config section ownership", () => {
     ["memory", ["memory"]],
     ["talk", ["talk"]],
     ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+    ["updates", ["update"]],
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 

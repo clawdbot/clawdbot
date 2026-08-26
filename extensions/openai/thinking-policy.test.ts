@@ -23,12 +23,12 @@ describe("OpenAI thinking route provenance", () => {
     ).toContain("ultra");
   });
 
-  it("uses ChatGPT model/list metadata as authoritative", () => {
+  it("retains known native capabilities when ChatGPT metadata is incomplete", () => {
     expect(
       levelIds({
         api: "openai-chatgpt-responses",
-        efforts: ["low", "medium", "high", "xhigh", "max"],
+        efforts: ["low", "high"],
       }),
-    ).not.toContain("ultra");
+    ).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 });

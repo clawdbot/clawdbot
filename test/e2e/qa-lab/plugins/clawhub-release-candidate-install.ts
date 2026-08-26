@@ -8,6 +8,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 import {
   createQaScriptBlockedStatusTracker,
@@ -163,10 +164,6 @@ function parseOptions(
 async function writeJson(filePath: string, value: unknown) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function resolveCandidateTarball(options: ProducerOptions) {

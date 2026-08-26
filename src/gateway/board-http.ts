@@ -4,6 +4,7 @@ import { buildBoardWidgetContentSecurityPolicy } from "./board-sandbox.js";
 import { boardStore } from "./board-store.js";
 import { BOARD_HTTP_PATH_PREFIX } from "./board-view-ticket.js";
 import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
+import { isReadHttpMethod, respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 
 const BOARD_WIDGET_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -12,18 +13,6 @@ type BoardHttpOptions = {
   store?: BoardStore;
   nowMs?: number;
 };
-
-function sendNotFound(res: ServerResponse): void {
-  res.statusCode = 404;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Not Found");
-}
-
-function sendUnauthorized(res: ServerResponse): void {
-  res.statusCode = 401;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Unauthorized");
-}
 
 function parseBoardWidgetPath(pathname: string): { sessionKey: string; name: string } | undefined {
   const match = /^\/__openclaw__\/board\/([^/]+)\/([^/]+)\/index\.html$/.exec(pathname);
@@ -55,18 +44,18 @@ export function handleBoardHttpRequest(
   // The ticket is the authorization boundary. CORS lets a Control UI hosted
   // away from the Gateway fetch the bytes and observe authorization failures.
   res.setHeader("Access-Control-Allow-Origin", "*");
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
+  if (!isReadHttpMethod(req.method)) {
+    sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
   const path = parseBoardWidgetPath(pathname);
   if (!path) {
-    sendNotFound(res);
+    respondNotFound(res);
     return true;
   }
   const ticket = url.searchParams.get("bt");
   if (!ticket) {
-    sendUnauthorized(res);
+    respondPlainText(res, 401, "Unauthorized");
     return true;
   }
   let authorized;
@@ -75,20 +64,22 @@ export function handleBoardHttpRequest(
       nowMs: opts.nowMs,
     });
   } catch {
-    sendUnauthorized(res);
+    respondPlainText(res, 401, "Unauthorized");
     return true;
   }
   if (authorized.sessionKey !== path.sessionKey || authorized.name !== path.name) {
-    sendUnauthorized(res);
+    respondPlainText(res, 401, "Unauthorized");
     return true;
   }
+  const html = authorized.document.html;
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Length", String(Buffer.byteLength(html)));
   res.setHeader(
     "Content-Security-Policy",
     buildBoardWidgetContentSecurityPolicy(authorized.document),
   );
   res.setHeader("Cache-Control", "no-cache");
-  res.end(authorized.document.html);
+  res.end(req.method === "HEAD" ? undefined : html);
   return true;
 }

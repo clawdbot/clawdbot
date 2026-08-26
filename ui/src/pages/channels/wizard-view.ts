@@ -1,13 +1,12 @@
 // Channel setup wizard modal: renders gateway wizard steps (note/select/text/
 // confirm/multiselect) plus the WhatsApp QR linking phase after config write.
-import "@awesome.me/webawesome/dist/components/radio/radio.js";
-import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
-import { channelDocsUrl, channelHubMeta, renderChannelArt } from "./hub-meta.ts";
+import { channelDocsUrl, channelHubMeta } from "./hub-meta.ts";
 import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
@@ -16,6 +15,10 @@ type ChannelWizardViewProps = {
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
+  textValue: string;
+  secretVisible: boolean;
+  onTextInput: (value: string) => void;
+  onToggleSecretVisibility: () => void;
   onAnswer: (value: unknown) => void;
   onClose: () => void;
   // WhatsApp QR linking phase (wizard done + channel === whatsapp).
@@ -47,6 +50,8 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     `;
   }
   const looksLikeCode = message.includes("{") || message.includes("  ");
+  const copyLabel = t("channels.setup.copyText");
+  const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
     ${message
@@ -59,8 +64,8 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     ${message
       ? html`
           <div class="channels-wizard__links">
-            <button type="button" class="btn btn--sm" @click=${() => void copyToClipboard(message)}>
-              ${t("channels.setup.copyText")}
+            <button type="button" class="btn btn--sm" @click=${onCopy}>
+              <span data-copy-label>${copyLabel}</span>
             </button>
           </div>
         `
@@ -84,13 +89,24 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   }
   return renderWizardStepControls({
     step,
-    value: step.type === "multiselect" ? props.multiselectValues : step.initialValue,
+    value:
+      step.type === "multiselect"
+        ? props.multiselectValues
+        : step.type === "text"
+          ? props.textValue
+          : step.initialValue,
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
     presentation: "channels",
+    channelSelect: props.wizard.phase === "step" && props.wizard.channel === null,
     answerLabel: t("channels.setup.continue"),
-    onValueChange: props.onToggleMultiselect,
+    sensitiveRevealed: props.secretVisible,
+    onValueChange:
+      step.type === "text"
+        ? (value) => props.onTextInput(typeof value === "string" ? value : "")
+        : props.onToggleMultiselect,
     onAnswer: props.onAnswer,
+    onToggleSensitiveVisibility: props.onToggleSecretVisibility,
   });
 }
 
@@ -244,7 +260,7 @@ export function renderChannelWizard(
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          ${channel ? renderChannelArt(channel, label, "tile") : nothing}
+          ${channel ? renderChannelIcon(channel, label, "tile") : nothing}
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted">${t("channels.setup.subtitle")}</div>

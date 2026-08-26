@@ -128,25 +128,32 @@ extension SettingsProTab {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
+        self.gatewayActionStatusText = nil
         defer { self.isReconnectingGateway = false }
-        await self.gatewayController.connectActiveGateway()
+        if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+            self.gatewayActionStatusText = message
+        }
     }
 
     func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
         guard self.connectingGateway == nil else { return }
         self.connectingGateway = .gateway(entry.id)
-        self.setupStatusText = String(
+        self.gatewayActionStatusText = String(
             format: String(localized: "Switching to %@…"),
             entry.name)
         defer {
             self.connectingGateway = nil
             self.refreshGatewayRegistry()
         }
-        if let failure = await self.gatewayController.switchToGateway(stableID: entry.stableID) {
-            self.setupStatusText = failure
-            return
+        switch await self.gatewayController.switchToGateway(stableID: entry.stableID) {
+        case .accepted:
+            self.gatewayActionStatusText = nil
+            self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
+        case let .failed(message):
+            self.gatewayActionStatusText = message
+        case .superseded:
+            self.gatewayActionStatusText = nil
         }
-        self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
     func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async {
@@ -214,6 +221,15 @@ extension SettingsProTab {
     func syncSettingsState() {
         self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
+        let activeManual = GatewaySettingsStore.activeGatewayEntry()
+        if activeManual?.kind == .manual,
+           activeManual?.host?.caseInsensitiveCompare(self.manualGatewayHost) == .orderedSame,
+           activeManual?.port == self.manualGatewayPort
+        {
+            self.manualGatewayContextPath = activeManual?.contextPath
+        } else {
+            self.manualGatewayContextPath = nil
+        }
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
         self.refreshLocationPermissionSummary()
@@ -371,6 +387,7 @@ extension SettingsProTab {
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
+        self.manualGatewayContextPath = link.contextPath
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
@@ -543,6 +560,7 @@ extension SettingsProTab {
             host: host,
             port: port,
             useTLS: self.manualGatewayTLS,
+            contextPath: self.manualGatewayContextPath,
             authOverride: authOverride)
         // The controller now owns this attempt's immutable override. A later retry must reload
         // durable state so a spent bootstrap token cannot be resurrected from the live view.
@@ -830,7 +848,8 @@ extension SettingsProTab {
         guard !host.isEmpty, let port = self.resolvedManualPort(host: host) else { return nil }
         return GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: port)
+            port: port,
+            contextPath: self.manualGatewayContextPath)
     }
 
     var gatewayCredentialTargetStableID: String? {
@@ -879,6 +898,7 @@ extension SettingsProTab {
             get: { self.manualGatewayHost },
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualGatewayContextPath = nil
                 self.manualGatewayHost = value
                 if GatewayStableIdentifier.key(previousStableID) !=
                     GatewayStableIdentifier.key(self.currentManualGatewayStableID)
@@ -968,6 +988,7 @@ extension SettingsProTab {
             get: { self.manualGatewayPortText },
             set: { newValue in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualGatewayContextPath = nil
                 let filtered = newValue.filter(\.isNumber)
                 self.manualGatewayPortText = filtered
                 self.manualGatewayPort = Int(filtered) ?? 0
@@ -1168,10 +1189,8 @@ extension SettingsProTab {
         var lines: [String] = []
         if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
         if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
-        let gw = gateway.gatewayPort.map(String.init)
-        let canvas = gateway.canvasPort.map(String.init)
-        if gw != nil || canvas != nil {
-            lines.append("Ports: gateway \(gw ?? "-") / canvas \(canvas ?? "-")")
+        if let gatewayPort = gateway.gatewayPort {
+            lines.append("Port: \(gatewayPort)")
         }
         return lines.isEmpty ? [gateway.debugID] : lines
     }

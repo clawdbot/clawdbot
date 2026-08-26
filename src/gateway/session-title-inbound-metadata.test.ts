@@ -74,10 +74,10 @@ describe("session titles with inbound Gateway metadata", () => {
     },
   );
 
-  test("falls back to the session id when the first message contains only metadata", () => {
+  test("does not derive a title when the first message contains only metadata", () => {
     const entry: SessionEntry = { sessionId: "abcd1234-rest-of-session", updatedAt: 0 };
 
-    expect(deriveSessionTitle(entry, senderMetadata)).toBe("abcd1234");
+    expect(deriveSessionTitle(entry, senderMetadata)).toBeUndefined();
   });
 
   test("preserves unmarked sender-like user text", () => {

@@ -249,27 +249,16 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
-  it("captures reply context from wrapped quoted messages", async () => {
+  it.each([
+    ["captures reply context from wrapped quoted messages", "viewOnceMessageV2Extension"],
+    ["captures reply context from botInvokeMessage wrapped quoted messages", "botInvokeMessage"],
+    [
+      "captures reply context from groupMentionedMessage wrapped quoted messages",
+      "groupMentionedMessage",
+    ],
+  ])("%s", async (_name, wrapper) => {
     await expectQuotedReplyContext({
-      viewOnceMessageV2Extension: {
-        message: { conversation: "original" },
-      },
-    });
-  });
-
-  it("captures reply context from botInvokeMessage wrapped quoted messages", async () => {
-    await expectQuotedReplyContext({
-      botInvokeMessage: {
-        message: { conversation: "original" },
-      },
-    });
-  });
-
-  it("captures reply context from groupMentionedMessage wrapped quoted messages", async () => {
-    await expectQuotedReplyContext({
-      groupMentionedMessage: {
-        message: { conversation: "original" },
-      },
+      [wrapper]: { message: { conversation: "original" } },
     });
   });
 });

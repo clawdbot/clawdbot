@@ -147,8 +147,8 @@ main() {
   export NO_COLOR=1
   mkdir -p "$HOME" "$BUN_INSTALL/bin" "$BUN_INSTALL/install/global" "$XDG_CACHE_HOME"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-  # Release publishes @openclaw/ai first. Bun 1.3.14 ignores bundled deps in
-  # local tarballs, so resolve that one package from the exact candidate bytes.
+  # Release publishes @openclaw/ai first. Pin the local tarball install to
+  # exact candidate bytes instead of allowing public-registry resolution.
   node --input-type=module - \
     "$BUN_INSTALL/install/global/package.json" \
     "$AI_PACKAGE_TGZ" <<'NODE'
@@ -177,12 +177,35 @@ NODE
   fi
 
   echo "==> OpenClaw version through Bun global install"
-  run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" --version
+  local openclaw_version
+  openclaw_version="$(run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" --version)"
+  printf "%s\n" "$openclaw_version"
+
+  echo "==> OpenClaw help through Bun global install"
+  run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" --help >/dev/null
 
   echo "==> OpenClaw image providers through Bun global install"
   local providers_json
   providers_json="$(run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" infer image providers --json)"
   OPENCLAW_IMAGE_PROVIDERS_JSON="$providers_json" node scripts/e2e/lib/bun-global-install/assertions.mjs assert-image-providers
+
+  if [ -n "${OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH:-}" ]; then
+    node --input-type=module - \
+      "$OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH" \
+      "$bun_path" \
+      "$openclaw_bin" \
+      "$openclaw_version" <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+
+const [, , proofPath, bunPath, openclawPath, openclawVersion] = process.argv;
+fs.mkdirSync(path.dirname(proofPath), { recursive: true });
+fs.writeFileSync(
+  proofPath,
+  `${JSON.stringify({ bunPath, openclawPath, openclawVersion }, null, 2)}\n`,
+);
+NODE
+  fi
 }
 
 main "$@"

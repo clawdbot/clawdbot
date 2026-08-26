@@ -64,7 +64,31 @@ describe("reconcileSidebarZone", () => {
     ).toEqual(["route:usage"]);
   });
 
-  it("keeps active Workboard boards and drops stale or plugin-off pins", () => {
+  it("preserves a shipped Workboard parent slot and renders it only for its descriptor", () => {
+    const args = [
+      ["route:usage", "route:workboard", "route:plugins"],
+      [],
+      SIDEBAR_NAV_ROUTES,
+      new Set<string>(),
+      [],
+      true,
+      true,
+    ] as const;
+    expect(reconcileSidebarZone(...args, false)).toEqual({
+      entries: [
+        { type: "route", route: "usage" },
+        { type: "route", route: "plugins" },
+      ],
+      sidebarEntries: ["route:usage", "route:workboard", "route:plugins"],
+    });
+    expect(reconcileSidebarZone(...args, true).entries).toEqual([
+      { type: "route", route: "usage" },
+      { type: "route", route: "workboard" },
+      { type: "route", route: "plugins" },
+    ]);
+  });
+
+  it("keeps active Workboard boards, drops stale ids, and preserves plugin-off pins", () => {
     const boards = [
       { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
       { id: "ops", total: 0, active: 0, archived: 0, byStatus: {} },
@@ -80,6 +104,8 @@ describe("reconcileSidebarZone", () => {
         true,
       ).sidebarEntries,
     ).toEqual(["workboard:ops", "route:usage"]);
+    // Disabled is indistinguishable from an unloaded config snapshot at
+    // startup; a zone write then must not erase persisted pins.
     expect(
       reconcileSidebarZone(
         ["workboard:ops", "route:usage"],
@@ -89,8 +115,11 @@ describe("reconcileSidebarZone", () => {
         boards,
         false,
         true,
-      ).sidebarEntries,
-    ).toEqual(["route:usage"]);
+      ),
+    ).toEqual({
+      entries: [{ type: "route", route: "usage" }],
+      sidebarEntries: ["workboard:ops", "route:usage"],
+    });
   });
 
   it("preserves Workboard pins until the active plugin's board catalog is authoritative", () => {

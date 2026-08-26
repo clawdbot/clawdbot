@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
@@ -150,18 +150,21 @@ function recordClientVoiceToolEffect(event: TrustedToolExecutionEvent): void {
 
 function ensureToolEffectSubscription(): void {
   unsubscribeToolEffects ??= onTrustedToolExecutionEvent(recordClientVoiceToolEffect);
-  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type !== "run.completed") {
-      return;
-    }
-    const binding = voiceSessionByRunId.get(event.runId);
-    if (!binding) {
-      return;
-    }
-    voiceSessionByRunId.delete(event.runId);
-    releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
-    mutationDigestDeliveryOwner.retry(binding);
-  });
+  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (event.type !== "run.completed") {
+        return;
+      }
+      const binding = voiceSessionByRunId.get(event.runId);
+      if (!binding) {
+        return;
+      }
+      voiceSessionByRunId.delete(event.runId);
+      releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
+      mutationDigestDeliveryOwner.retry(binding);
+    },
+    { include: ["run.completed"] },
+  );
 }
 
 /** Create a call record or resume the same open call across transport restarts. */
@@ -236,7 +239,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   sessionKey: string;
   deadlineAt?: number;
 }): Promise<string> {
-  const created = await patchSessionEntry(
+  const created = await patchSessionEntryCore(
     params,
     (_entry, context) => {
       // Browser credentials can be short-lived. Check at the authoritative
@@ -534,6 +537,14 @@ export function appendClientVoiceTranscript(
   params: Omit<Parameters<typeof appendVoiceTranscript>[0], "origin">,
 ): Promise<void> {
   return appendVoiceTranscript({ ...params, origin: "client" });
+}
+
+/** Wait for the accepted transcript/effect prefix without closing the logical call. */
+export async function flushClientVoiceSessionWrites(params: {
+  agentId: string;
+  voiceSessionId: string;
+}): Promise<void> {
+  await voiceSessionOperations.flush(operationKey(params.agentId, params.voiceSessionId));
 }
 
 /** Append one finalized relay-owned transcript item idempotently. */

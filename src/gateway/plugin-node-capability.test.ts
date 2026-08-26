@@ -281,6 +281,25 @@ describe("plugin node capability helpers", () => {
     ).toBe(false);
   });
 
+  test("rejects invalidated clients without sliding capability expiry", () => {
+    const client = makeClient({
+      invalidated: true,
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: 1_500 },
+      },
+    });
+
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+  });
+
   test("rejects plugin surface capabilities when the clock is invalid", () => {
     const client = makeClient({
       pluginNodeCapabilities: {

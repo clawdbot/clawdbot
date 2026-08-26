@@ -3,6 +3,7 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 let whatsappChannelOutbound: typeof import("./channel-outbound.js").whatsappChannelOutbound;
+let whatsappMessageAdapter: typeof import("./channel-outbound.js").whatsappMessageAdapter;
 let clearWhatsAppApprovalReactionTargetsForTest: typeof import("./approval-reactions.js").clearWhatsAppApprovalReactionTargetsForTest;
 let resolveWhatsAppApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveWhatsAppApprovalReactionTargetWithPersistence;
 
@@ -36,7 +38,7 @@ type ApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
 describe("whatsappChannelOutbound", () => {
   beforeAll(async () => {
-    ({ whatsappChannelOutbound } = await import("./channel-outbound.js"));
+    ({ whatsappChannelOutbound, whatsappMessageAdapter } = await import("./channel-outbound.js"));
     ({
       clearWhatsAppApprovalReactionTargetsForTest,
       resolveWhatsAppApprovalReactionTargetWithPersistence,
@@ -532,6 +534,73 @@ describe("whatsappChannelOutbound", () => {
       gifPlayback: undefined,
       onDeliveryResult: expect.any(Function),
       preserveLeadingWhitespace: true,
+    });
+  });
+
+  it("backs declared message adapter capabilities with delivery proofs", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid-1" }));
+
+    await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "whatsappMessage",
+      adapter: whatsappMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await whatsappMessageAdapter.send.text?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "hello",
+            deps: { whatsapp: sendWhatsApp },
+          } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
+            deps: { whatsapp: typeof sendWhatsApp };
+          });
+          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "hello", {
+            verbose: false,
+            cfg: {},
+            accountId: undefined,
+            gifPlayback: undefined,
+            quotedMessageKey: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+        },
+        replyTo: async () => {
+          const result = await whatsappMessageAdapter.send.text?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "reply",
+            replyToId: "msg-1",
+            deps: { whatsapp: sendWhatsApp },
+          } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
+            deps: { whatsapp: typeof sendWhatsApp };
+          });
+          expect(sendWhatsApp).not.toHaveBeenCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            expect.anything(),
+          );
+          expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            {
+              verbose: false,
+              cfg: {},
+              accountId: undefined,
+              gifPlayback: undefined,
+              quotedMessageKey: {
+                id: "msg-1",
+                remoteJid: "5511999999999@c.us",
+                fromMe: false,
+                participant: undefined,
+                messageText: undefined,
+              },
+              preserveLeadingWhitespace: true,
+            },
+          );
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+        },
+        messageSendingHooks: () => {
+          expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");
+        },
+      },
     });
   });
 });

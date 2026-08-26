@@ -7,6 +7,7 @@
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
+import { SECRET_ENV_NAME_RE } from "../../secrets/secret-env-name.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -27,7 +28,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^(GH|GITHUB)_TOKEN$/i,
   /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
   /_ADMIN_KEY$/i,
-  /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
+  SECRET_ENV_NAME_RE,
 ];
 
 const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [

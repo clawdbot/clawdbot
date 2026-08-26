@@ -16,11 +16,16 @@ export const TransportProtocolSchemas = {
   StateVersion: snapshot.StateVersionSchema,
   Snapshot: snapshot.SnapshotSchema,
   ErrorShape: frames.ErrorShapeSchema,
+  CronJobNotFoundErrorDetails: errorCodes.CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetails: errorCodes.MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: errorCodes.McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetails: errorCodes.OutboundDeliveryQueuedErrorDetailsSchema,
+  SkillProposalRevisionChangedErrorDetails:
+    errorCodes.SkillProposalRevisionChangedErrorDetailsSchema,
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,
+  ProjectCloneErrorDetails: errorCodes.ProjectCloneErrorDetailsSchema,
   GatewaySuspendTaskBlocker: gatewaySuspend.GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: gatewaySuspend.GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: gatewaySuspend.GatewaySuspendPrepareParamsSchema,
@@ -33,4 +38,5 @@ export const TransportProtocolSchemas = {
   GatewaySuspendStatusResult: gatewaySuspend.GatewaySuspendStatusResultSchema,
   GatewaySuspendResumeParams: gatewaySuspend.GatewaySuspendResumeParamsSchema,
   GatewaySuspendResumeResult: gatewaySuspend.GatewaySuspendResumeResultSchema,
+  UserPrefsLimitExceededErrorDetails: errorCodes.UserPrefsLimitExceededErrorDetailsSchema,
 } as const;

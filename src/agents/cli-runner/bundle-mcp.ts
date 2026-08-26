@@ -21,7 +21,11 @@ import {
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import {
+  loadMergedBundleMcpConfig,
+  prepareOwnedBundleMcpDataDirs,
+  toCliBundleMcpServerConfig,
+} from "../bundle-mcp-config.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import {
   findClaudeMcpConfigPaths,
@@ -375,8 +379,12 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  const prepareDataDirsByServer = { ...bundleConfig.prepareDataDirsByServer };
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+    for (const serverName of Object.keys(params.additionalConfig.mcpServers)) {
+      delete prepareDataDirsByServer[serverName];
+    }
   }
   const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
     config: mergedConfig,
@@ -390,13 +398,18 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
   });
 
+  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+    config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
+    prepareDataDirsByServer,
+  });
+  for (const diagnostic of preparedDataDirs.diagnostics) {
+    params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
+  }
+
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig: applyMcpServerOverrides(
-      resolvedBearerConfig.config,
-      params.toolOverrides?.mcpServers,
-    ),
+    mergedConfig: preparedDataDirs.config,
     env: resolvedBearerConfig.env,
     mcpToolsDeny: params.toolOverrides?.mcpToolsDeny,
     webSearchEnabled: params.toolOverrides?.webSearch,

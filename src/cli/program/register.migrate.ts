@@ -1,3 +1,4 @@
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 // Migration command registration: list, plan, and apply migration providers.
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -23,38 +24,9 @@ function collectMigrationItem(value: string, previous: string[] | undefined): st
   return [...(previous ?? []), value];
 }
 
-function readMigrationSkills(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const skills = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return skills.length > 0 ? skills : undefined;
-}
-
-function readMigrationPlugins(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const plugins = value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return plugins.length > 0 ? plugins : undefined;
-}
-
 function readMigrationItems(value: unknown, command?: Command): string[] | undefined {
   const selected = Array.isArray(value) ? value : command?.parent?.opts().item;
-  if (!Array.isArray(selected)) {
-    return undefined;
-  }
-  const items = selected
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return items.length > 0 ? items : undefined;
+  return normalizeOptionalTrimmedStringList(selected);
 }
 
 function addMigrationSkillOption(command: Command): Command {
@@ -183,8 +155,8 @@ export function registerMigrateCommand(program: Command) {
           includeSecrets: opts.includeSecrets === true ? true : undefined,
           authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
-          skills: readMigrationSkills(opts.skill),
-          plugins: readMigrationPlugins(opts.plugin),
+          skills: normalizeOptionalTrimmedStringList(opts.skill),
+          plugins: normalizeOptionalTrimmedStringList(opts.plugin),
           itemIds: readMigrationItems(opts.item),
           verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
           dryRun: Boolean(opts.dryRun),
@@ -220,8 +192,8 @@ export function registerMigrateCommand(program: Command) {
         includeSecrets: opts.includeSecrets === true ? true : undefined,
         authCredentials: opts.authCredentials as boolean | undefined,
         overwrite: Boolean(opts.overwrite),
-        skills: readMigrationSkills(opts.skill),
-        plugins: readMigrationPlugins(opts.plugin),
+        skills: normalizeOptionalTrimmedStringList(opts.skill),
+        plugins: normalizeOptionalTrimmedStringList(opts.plugin),
         itemIds: readMigrationItems(opts.item, command),
         verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
         json: Boolean(opts.json),
@@ -245,8 +217,8 @@ export function registerMigrateCommand(program: Command) {
           includeSecrets: opts.includeSecrets === true ? true : undefined,
           authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
-          skills: readMigrationSkills(opts.skill),
-          plugins: readMigrationPlugins(opts.plugin),
+          skills: normalizeOptionalTrimmedStringList(opts.skill),
+          plugins: normalizeOptionalTrimmedStringList(opts.plugin),
           itemIds: readMigrationItems(opts.item, command),
           verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
           yes: Boolean(opts.yes),

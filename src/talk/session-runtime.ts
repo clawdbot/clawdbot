@@ -6,9 +6,11 @@ import type {
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
@@ -36,7 +38,7 @@ export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignor
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(markName?: string): void;
-  close(): void;
+  close(options?: RealtimeVoiceCloseOptions): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
@@ -56,6 +58,8 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
@@ -69,6 +73,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -106,13 +111,13 @@ export function createRealtimeVoiceBridgeSession(
       return requireBridge();
     },
     acknowledgeMark: (markName) => requireBridge().acknowledgeMark(markName),
-    close: () => {
+    close: (options) => {
       if (phase === "disposed") {
         return;
       }
       const bridge = requireBridge();
       phase = "disposed";
-      bridge.close();
+      bridge.close(options);
     },
     connect: () => {
       if (phase === "disposed") {
@@ -162,6 +167,7 @@ export function createRealtimeVoiceBridgeSession(
   };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
@@ -195,6 +201,7 @@ export function createRealtimeVoiceBridgeSession(
     },
     onTranscript: params.onTranscript,
     onEvent: params.onEvent,
+    onResponseDone: params.onResponseDone,
     onToolCall: (event) => {
       if (!bridgeRef.current || !isAdmitting()) {
         return;

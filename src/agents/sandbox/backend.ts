@@ -12,6 +12,17 @@ import type {
   SandboxBackendRegistration,
   SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
+import {
+  createDockerSandboxBackend,
+  createPodmanSandboxBackend,
+  dockerSandboxBackendManager,
+  podmanSandboxBackendManager,
+} from "./docker-backend.js";
+import {
+  createSshSandboxBackend,
+  resolveSshRuntimePaths,
+  sshSandboxBackendManager,
+} from "./ssh-backend.js";
 
 export type {
   CreateSandboxBackendParams,
@@ -100,18 +111,6 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
     ].join("\n"),
   );
 }
-
-import {
-  createDockerSandboxBackend,
-  createPodmanSandboxBackend,
-  dockerSandboxBackendManager,
-  podmanSandboxBackendManager,
-} from "./docker-backend.js";
-import {
-  createSshSandboxBackend,
-  resolveSshRuntimePaths,
-  sshSandboxBackendManager,
-} from "./ssh-backend.js";
 
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,

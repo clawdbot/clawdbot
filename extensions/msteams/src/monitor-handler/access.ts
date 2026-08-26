@@ -4,6 +4,7 @@ import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,8 +15,10 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
-import type { StoredConversationReference } from "../conversation-store.js";
-import type { MSTeamsConversationStore } from "../conversation-store.js";
+import type {
+  StoredConversationReference,
+  MSTeamsConversationStore,
+} from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
@@ -112,6 +115,8 @@ export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
+  conversationThreadId?: string;
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const activity = params.activity;
   const msteamsCfg = params.cfg.channels?.msteams;
@@ -161,8 +166,9 @@ export async function resolveMSTeamsSenderAccess(params: {
     conversation: {
       kind: isDirectMessage ? "direct" : convType === "channel" ? "channel" : "group",
       id: conversationId,
-      parentId: activity.channelData?.team?.id,
+      threadId: params.conversationThreadId,
     },
+    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     route: channelIngressRoutes(
       !isDirectMessage &&
         channelGate.allowlistConfigured && {
@@ -195,6 +201,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   });
   return {
     ...resolved,
+    channelIngress: resolved,
     pairing,
     isDirectMessage,
     conversationId,
@@ -341,7 +348,7 @@ export async function admitMSTeamsMessage(params: {
       });
       return null;
     }
-    if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_not_allowlisted") {
+    if (!senderAccess.allowed) {
       const allowMatch = resolveMSTeamsAllowlistMatch({
         allowFrom: effectiveGroupAllowFrom,
         senderId,

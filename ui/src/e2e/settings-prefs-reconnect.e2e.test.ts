@@ -1,23 +1,19 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI server prefs reconnect sync",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 function configResponse(prefs: Record<string, unknown>, hash: string) {
   const config = { ui: { prefs } };
@@ -49,7 +45,7 @@ function patchPrefs(request: MockGatewayRequest): Record<string, unknown> {
 }
 
 async function createContext(): Promise<BrowserContext> {
-  return browser.newContext({
+  return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -116,32 +112,29 @@ async function readSettingsMirror(page: Page): Promise<Record<string, unknown> |
   });
 }
 
-function themeCard(page: Page, theme: "claw" | "knot") {
+async function readPendingPrefStorage(page: Page): Promise<Record<string, unknown>[]> {
+  return page.evaluate(() =>
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("openclaw.control.serverPrefs.pending.v1:"))
+      .map((key) => JSON.parse(localStorage.getItem(key) ?? "null") as Record<string, unknown>),
+  );
+}
+
+function themeCard(page: Page, theme: "claw" | "knot" | "dash") {
   return page.locator(`.settings-theme-card--${theme}`);
 }
 
-async function expectThemeActive(page: Page, theme: "claw" | "knot"): Promise<void> {
+async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): Promise<void> {
   await expect
     .poll(() => themeCard(page, theme).getAttribute("class"), { timeout: 10_000 })
     .toContain("settings-theme-card--active");
 }
 
-describeControlUiE2e("Control UI server prefs reconnect sync", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
+  return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
+}
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("replays an offline theme edit after a same-client reconnect", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -152,7 +145,7 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
@@ -166,12 +159,103 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
 
       const patch = await gateway.waitForRequest("config.patch");
       expect(patchPrefs(patch)).toEqual({ theme: "knot" });
-      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit);
+      // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
+      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
       await expectThemeActive(page, "knot");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps offline intent through read-only reconnect and dispatches once after authorization", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-scope-1");
+    const committed = configResponse({ theme: "knot", themeMode: "system" }, "prefs-scope-2");
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "config.get": initial },
+    });
+
+    try {
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      expect(response?.status()).toBe(200);
+      await themeCard(page, "claw").waitFor();
+      await gateway.waitForRequest("config.get");
+
+      await proxyReconnect(page, gateway, async () => {
+        await themeCard(page, "knot").click();
+        await expectThemeActive(page, "knot");
+        await gateway.setOperatorScopes(["operator.read"]);
+      });
+
+      await expectThemeActive(page, "knot");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+
+      await gateway.deferNext("config.patch");
+      await gateway.setMethodResponse("config.get", committed);
+      await proxyReconnect(page, gateway, async () => {
+        await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      });
+
+      const patch = await gateway.waitForRequest("config.patch");
+      expect(patchPrefs(patch)).toEqual({ theme: "knot" });
+      await gateway.resolveDeferred("config.patch", committed);
+      await expectThemeActive(page, "knot");
+      await expect
+        .poll(async () => (await gateway.getRequests("config.patch")).length, { timeout: 10_000 })
+        .toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("does not resurrect an offline edit superseded browser-locally in another tab", async () => {
+    const context = await createContext();
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-tabs-1");
+    const gatewayA = await installMockGateway(pageA, {
+      methodResponses: { "config.get": initial },
+    });
+    const gatewayB = await installMockGateway(pageB, {
+      methodResponses: { "config.get": initial },
+    });
+    try {
+      await Promise.all([
+        pageA.goto(`${suite.server.baseUrl}settings/appearance`),
+        pageB.goto(`${suite.server.baseUrl}settings/appearance`),
+      ]);
+      await Promise.all([themeCard(pageA, "claw").waitFor(), themeCard(pageB, "claw").waitFor()]);
+      await Promise.all([
+        gatewayA.waitForRequest("config.get"),
+        gatewayB.waitForRequest("config.get"),
+      ]);
+
+      await proxyReconnect(pageB, gatewayB, async () => {
+        await gatewayB.setOperatorScopes(["operator.read"]);
+      });
+
+      await proxyReconnect(pageA, gatewayA, async () => {
+        await themeCard(pageA, "knot").click();
+        await expectThemeActive(pageA, "knot");
+        expect(await readPendingPrefStorage(pageA)).toEqual([{ theme: "knot" }]);
+        await themeCard(pageB, "dash").click();
+        await expectThemeActive(pageB, "dash");
+        expect(await readPendingPrefStorage(pageB)).toEqual([]);
+      });
+      expect(await readPendingPrefStorage(pageA)).toEqual([]);
+
+      await themeModeOption(pageA, "dark").click();
+      const patch = await gatewayA.waitForRequest("config.patch");
+      expect(patchPrefs(patch)).toEqual({ themeMode: "dark" });
+      expect(await gatewayA.getRequests("config.patch")).toHaveLength(1);
+      expect(await gatewayB.getRequests("config.patch")).toHaveLength(0);
+      await expectThemeActive(pageA, "dash");
+      await expectThemeActive(pageB, "dash");
     } finally {
       await context.close();
     }
@@ -192,8 +276,8 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
 
     try {
       await Promise.all([
-        pageA.goto(`${server.baseUrl}settings/appearance`),
-        pageB.goto(`${server.baseUrl}settings/appearance`),
+        pageA.goto(`${suite.server.baseUrl}settings/appearance`),
+        pageB.goto(`${suite.server.baseUrl}settings/appearance`),
       ]);
       await Promise.all([themeCard(pageA, "claw").waitFor(), themeCard(pageB, "claw").waitFor()]);
       await Promise.all([gatewayA.deferNext("config.patch"), gatewayB.deferNext("config.patch")]);
@@ -250,7 +334,7 @@ describeControlUiE2e("Control UI server prefs reconnect sync", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
       const initialConfigGets = (await gateway.getRequests("config.get")).length;

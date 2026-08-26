@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
+  PreservedSessionWorktree,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
@@ -13,7 +16,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { ApplicationOverlays } from "../app/overlays.ts";
+import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
@@ -27,11 +30,17 @@ import {
   type SessionListOptions,
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
-import { createApplicationContextProvider } from "./application-context.ts";
+import {
+  createApplicationContextProvider,
+  hiddenScopeUpgradeCapability,
+} from "./application-context.ts";
+import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
 import { createStorageMock } from "./storage.ts";
 
 // The attention widget owns independent health RPC tests. Keep those requests
 // out of sidebar client call-order assertions.
+// Sidebar attention is inert in this harness; cover attention rendering in
+// sidebar-attention.test.ts, not app-sidebar cases.
 vi.mock("../components/sidebar-attention.ts", () => ({}));
 
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
@@ -43,12 +52,14 @@ const sidebarSessionGatewayBindings = new WeakMap<
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
+  hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
-  outboxCountForSession: (sessionKey: string) => number;
+  outboxAttentionCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -66,11 +77,20 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
+  listSessionGroupFolders(path?: string): Promise<{
+    path: string;
+    home: string;
+    entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
+  }>;
+  inspectSessionGroupRepository(path?: string): Promise<"git" | "not_git" | "unavailable">;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
+  canUpdate: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
   onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
@@ -82,6 +102,8 @@ export type LobsterPetElement = HTMLElement & {
 
 export type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  forkFromLastCompleted: boolean;
+  onAction: (action: { kind: "fork" }) => void;
   selectionCount: number;
   readonly updateComplete: Promise<boolean>;
 };
@@ -113,7 +135,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "openclaw.chat"]),
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
     lastError: null,
@@ -131,6 +153,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       bootstrapToken: "",
       password: "",
     },
+    connectionRevision: 0,
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
@@ -180,6 +203,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     },
     sessions: keys.map((key, index) => ({
       key,
+      sessionId: `session:${key}`,
       kind: "direct" as const,
       updatedAt: index + 1,
     })),
@@ -192,6 +216,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    groupSettings: [],
     sectionOrder: [],
   };
 }
@@ -220,7 +245,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const groupsPut = vi.fn(() => Promise.resolve());
+  const archiveVisibilityByKey = new Map<string, "pending" | "archived">();
+  const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
@@ -234,14 +260,27 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve({
       deleted: [] as string[],
       errors: [] as string[],
-      preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
+      preservedWorktrees: [] as PreservedSessionWorktree[],
     }),
   );
   const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
     Promise.resolve(),
   );
   const refreshReplacement = vi.fn(() => Promise.resolve());
-  const setCreatorFilter = vi.fn(() => Promise.resolve());
+  const patchMany = vi.fn(
+    async (
+      targets: SessionsPatchManyParams["targets"],
+      _patch: SessionsPatchManyParams["patch"],
+    ): Promise<SessionsPatchManyResult> => ({
+      outcomes: targets.map((target) => ({
+        ok: true,
+        key: target.key,
+        ...(target.agentId ? { agentId: target.agentId } : {}),
+      })),
+    }),
+  );
+  const setOwnerFilter = vi.fn(() => Promise.resolve());
+  const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -263,6 +302,25 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
+  const assignOwner = vi.fn<SessionCapability["assignOwner"]>(async (key, owner, options) => {
+    const assigned = scopedSessions ? await scopedSessions.assignOwner(key, owner, options) : null;
+    if (!assigned || !state.result) {
+      return assigned;
+    }
+    state = {
+      ...state,
+      result: {
+        ...state.result,
+        sessions: state.result.sessions.map((row) =>
+          row.key === key ? { ...row, owner: assigned } : row,
+        ),
+      },
+    };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return assigned;
+  });
   const sessions = {
     get state() {
       return state;
@@ -270,6 +328,10 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => scopedSessions?.captureConnectionScope() ?? null,
+    isConnectionScopeCurrent: (
+      scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],
+    ) => scopedSessions?.isConnectionScopeCurrent(scope) ?? false,
     subscribe(listener: (next: SessionState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -288,11 +350,27 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
     },
     groupsLoad: () => Promise.resolve(),
+    groupsGeneration: () => 0,
+    groupsStatus: () => "ready",
+    groupsInvalidate: () => undefined,
     groupsPut,
     groupsRename,
     groupsDelete,
     create,
     patch,
+    archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
+    setArchiveVisibility(key: string, visibility: "pending" | "archived" | undefined) {
+      if (visibility) {
+        archiveVisibilityByKey.set(key, visibility);
+      } else {
+        archiveVisibilityByKey.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
+    assignOwner,
+    patchMany,
     delete: deleteSession,
     deleteMany,
     list,
@@ -320,7 +398,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.refreshList(options);
     },
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -346,6 +425,10 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
         request: async <T>(method: string, params?: unknown): Promise<T> => {
           if (method === "sessions.subscribe") {
             return { subscribed: true } as T;
+          }
+          if (method === "sessions.patchMany") {
+            const { targets, patch: sessionPatch } = params as SessionsPatchManyParams;
+            return (await patchMany(targets, sessionPatch)) as T;
           }
           if (method !== "sessions.list") {
             return client.request<T>(method, params);
@@ -390,17 +473,24 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
+    patchMany,
     deleteSession,
     deleteMany,
     list,
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
     unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
+      for (const row of statePatch.result?.sessions ?? []) {
+        if (row.archived !== true && archiveVisibilityByKey.get(row.key) === "archived") {
+          archiveVisibilityByKey.delete(row.key);
+        }
+      }
       canonicalListRevision += 1;
       publish(statePatch);
     },
@@ -450,6 +540,7 @@ export function createContext(
       setScope: () => undefined,
       subscribe: () => () => undefined,
     },
+    scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
       subscribe: () => () => undefined,
@@ -489,7 +580,7 @@ export async function mountSidebar(
 export const TWO_AGENTS = {
   defaultId: "main",
   mainKey: "main",
-  scope: "agent",
+  scope: "per-sender",
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
@@ -497,12 +588,12 @@ export const manyAgents = (count: number) =>
   ({
     defaultId: "agent-1",
     mainKey: "main",
-    scope: "agent",
+    scope: "per-sender",
     agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
   }) as AgentsListResult;
 
 export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string }>,
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
   nextCursor?: string,
   catalogId = "codex",
 ): SessionsCatalogListResult => ({
@@ -563,8 +654,8 @@ export function setupSidebarTest() {
       configurable: true,
       value: createStorageMock(),
     });
-    // The Coding zone defaults to collapsed on first run; most cases assert its
-    // contents, so start expanded. Collapse-specific tests override this value.
+    // Coding defaults to compact; most cases assert expanded contents, so start
+    // expanded. Collapse tests override this value.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 

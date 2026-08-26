@@ -1,3 +1,4 @@
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Discord plugin module cleans up reactions left by the retired subagent progress feature.
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -66,8 +67,8 @@ function reservedReactionEmojis(api: ProgressCleanupApi, accountAckReaction?: st
       reserved.add(emoji.trim());
     }
   }
-  for (const agent of api.config.agents?.list ?? []) {
-    const emoji = agent.identity?.emoji?.trim();
+  for (const agentId of listAgentIds(api.config)) {
+    const emoji = resolveAgentConfig(api.config, agentId)?.identity?.emoji?.trim();
     if (emoji) {
       reserved.add(emoji);
     }
