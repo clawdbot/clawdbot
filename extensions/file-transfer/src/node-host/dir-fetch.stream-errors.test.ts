@@ -73,6 +73,8 @@ describe("dir.fetch process wrapper", () => {
         expect.any(String),
         tmpRoot,
         tmpRoot,
+        expect.any(String),
+        expect.any(String),
         process.platform !== "win32" ? "/usr/bin/tar" : "tar",
       ],
       expect.objectContaining({

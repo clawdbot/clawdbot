@@ -67,11 +67,32 @@ describe("handleDirFetch — happy path", () => {
       await fs.mkdir(second);
       await fs.symlink(second, link);
 
-      await expect(createTarArchive(link, first, 1024 * 1024)).resolves.toBe(
-        "CANONICAL_PATH_CHANGED",
-      );
+      const firstStats = await fs.stat(first, { bigint: true });
+      await expect(
+        createTarArchive(link, first, String(firstStats.dev), String(firstStats.ino), 1024 * 1024),
+      ).resolves.toBe("CANONICAL_PATH_CHANGED");
     },
   );
+
+  it.runIf(HAS_TAR)("rejects a same-path replacement before tar starts", async () => {
+    const target = path.join(tmpRoot, "target");
+    const moved = path.join(tmpRoot, "moved");
+    await fs.mkdir(target);
+    const targetStats = await fs.stat(target, { bigint: true });
+    await fs.rename(target, moved);
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, "secret.txt"), "secret");
+
+    await expect(
+      createTarArchive(
+        target,
+        target,
+        String(targetStats.dev),
+        String(targetStats.ino),
+        1024 * 1024,
+      ),
+    ).resolves.toBe("CANONICAL_PATH_CHANGED");
+  });
 
   it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
@@ -129,6 +150,31 @@ describe("handleDirFetch — happy path", () => {
         message: "canonical path differs from the authorized target",
         canonicalPath: second,
       });
+    },
+  );
+
+  it.runIf(HAS_TAR)(
+    "rejects a replacement at the same canonical pathname before creating an archive",
+    async () => {
+      const target = path.join(tmpRoot, "target");
+      const moved = path.join(tmpRoot, "moved");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "approved.txt"), "approved");
+      const preflight = await handleDirFetch({ path: target, preflightOnly: true });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+      await fs.rename(target, moved);
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "secret.txt"), "secret");
+
+      const result = await handleDirFetch({
+        path: target,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
     },
   );
 

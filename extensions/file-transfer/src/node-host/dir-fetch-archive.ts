@@ -5,9 +5,11 @@ const CANONICAL_PATH_CHANGED_EXIT_CODE = 78;
 const CANONICAL_TAR_WORKER = [
   'const fs=require("node:fs");',
   'const {spawn}=require("node:child_process");',
-  "const [directory,expected,tar]=process.argv.slice(1);",
+  "const [directory,expected,device,inode,tar]=process.argv.slice(1);",
   "try{process.chdir(directory);}catch{process.exit(1);}",
   'if(fs.realpathSync(".")!==expected){process.exit(78);}',
+  'const bound=fs.statSync(".",{bigint:true});',
+  "if(String(bound.dev)!==device||String(bound.ino)!==inode){process.exit(78);}",
   'const child=spawn(tar,["-czf","-","."],{stdio:["ignore","inherit","inherit"]});',
   'child.once("error",()=>process.exit(1));',
   'child.once("exit",code=>process.exit(code??1));',
@@ -18,6 +20,8 @@ type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "CANONICAL_PATH_CHANG
 export async function createTarArchive(
   directoryPath: string,
   expectedCanonicalPath: string,
+  expectedDevice: string,
+  expectedInode: string,
   maxBytes: number,
 ): Promise<TarArchiveResult> {
   const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
@@ -26,7 +30,16 @@ export async function createTarArchive(
   // chdir binds the worker to one directory object. Verifying that bound cwd
   // before spawning tar prevents a later path replacement from changing input.
   const result = await runCommandBuffered(
-    [process.execPath, "-e", CANONICAL_TAR_WORKER, directoryPath, expectedCanonicalPath, tarBin],
+    [
+      process.execPath,
+      "-e",
+      CANONICAL_TAR_WORKER,
+      directoryPath,
+      expectedCanonicalPath,
+      expectedDevice,
+      expectedInode,
+      tarBin,
+    ],
     {
       discardOutput: { stderr: true },
       maxOutputBytes: { stdout: maxBytes, stderr: 64 * 1024 },

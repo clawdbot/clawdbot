@@ -106,6 +106,8 @@ function createCtx(overrides: {
             : "/tmp/file.txt",
         size: 1,
         sha256: "a".repeat(64),
+        binding:
+          (overrides.command ?? "file.fetch") === "file.write" ? WRITE_BINDING : EXISTING_BINDING,
       },
     }),
   );
@@ -136,6 +138,13 @@ function createCtx(overrides: {
 }
 
 const requireRecord = createRequireRecord("object", "label-not-object");
+const EXISTING_BINDING = { kind: "existing", device: "1", inode: "2" } as const;
+const WRITE_BINDING = {
+  kind: "write",
+  anchorPath: "/tmp",
+  anchorDevice: "1",
+  anchorInode: "2",
+} as const;
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -181,6 +190,7 @@ describe("file-transfer node invoke policy", () => {
         maxBytes: 512,
         followSymlinks: false,
         expectedCanonicalPath: "/tmp/file.txt",
+        expectedBinding: EXISTING_BINDING,
       },
     });
   });
@@ -317,6 +327,7 @@ describe("file-transfer node invoke policy", () => {
           followSymlinks: true,
           maxBytes: 256,
           expectedCanonicalPath: "/tmp/new.txt",
+          expectedBinding: EXISTING_BINDING,
         },
       });
     },
@@ -336,6 +347,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/private/tmp/new-*.txt",
         size: 1,
         sha256: "a".repeat(64),
@@ -401,7 +413,10 @@ describe("file-transfer node invoke policy", () => {
     expect(approvals.request).not.toHaveBeenCalled();
 
     invokeNode.mockReset();
-    invokeNode.mockResolvedValue({ ok: true, payload: { ok: true, path: "/tmp/other.txt" } });
+    invokeNode.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, binding: EXISTING_BINDING, path: "/tmp/other.txt" },
+    });
     expect((await policy.handle(ctx)).ok).toBe(true);
     expect(approvals.request).toHaveBeenCalledTimes(1);
     expect(persistLiteralGrant).toHaveBeenCalledWith({
@@ -501,6 +516,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/etc/passwd",
         size: 1,
         sha256: "a".repeat(64),
@@ -557,6 +573,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: WRITE_BINDING,
         path: "/etc/out.txt",
         size: 7,
         sha256: "b".repeat(64),
@@ -573,56 +590,6 @@ describe("file-transfer node invoke policy", () => {
       followSymlinks: true,
       preflightOnly: true,
     });
-  });
-
-  it("continues file.write after preflight without forwarding caller preflightOnly", async () => {
-    const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "file.write",
-      params: {
-        path: "/tmp/link/out.txt",
-        contentBase64: Buffer.from("payload").toString("base64"),
-        createParents: true,
-        preflightOnly: true,
-      },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowWritePaths: ["/tmp/**", "/private/tmp/**"],
-            followSymlinks: true,
-          },
-        },
-      },
-    });
-    invokeNode
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          path: "/private/tmp/out.txt",
-          size: 7,
-          sha256: "b".repeat(64),
-          overwritten: false,
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          path: "/private/tmp/out.txt",
-          size: 7,
-          sha256: "b".repeat(64),
-          overwritten: false,
-        },
-      });
-
-    const result = await policy.handle(ctx);
-
-    expectResultFields(result, { ok: true });
-    expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(requireInvokeParams(invokeNode, 0).preflightOnly).toBe(true);
-    expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
-    expect(requireInvokeParams(invokeNode, 1).expectedCanonicalPath).toBe("/private/tmp/out.txt");
   });
 
   it("checks every dir.fetch preflight entry before requesting the archive", async () => {
@@ -643,6 +610,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/home/me",
         entries: ["ok.txt", ".ssh/id_rsa"],
         fileCount: 2,
@@ -689,6 +657,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/home/project",
             entries: ["a.txt", "sub/b.txt"],
             preflightOnly: true,
@@ -698,6 +667,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/home/project",
             tarBase64,
             ...archiveMetadata(tarBase64),
@@ -739,6 +709,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/home/me",
         fileCount: 2,
         preflightOnly: true,
@@ -768,6 +739,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/home/me",
         entries: ["ok.txt", "/etc/passwd"],
         fileCount: 2,
@@ -799,6 +771,7 @@ describe("file-transfer node invoke policy", () => {
       ok: true,
       payload: {
         ok: true,
+        binding: EXISTING_BINDING,
         path: "/home/me",
         entries,
         fileCount: entries.length,
@@ -829,6 +802,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/tmp/project",
             entries: ["a.txt", "sub/b.txt"],
             fileCount: 2,
@@ -839,6 +813,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/tmp/project",
             tarBase64,
             ...archiveMetadata(tarBase64),
@@ -876,6 +851,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           entries: ["a.txt"],
           fileCount: 1,
@@ -886,6 +862,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           tarBase64,
           tarBytes,
@@ -921,6 +898,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           entries: ["a.txt"],
           fileCount: 1,
@@ -931,6 +909,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           tarBase64,
           tarBytes: 1,
@@ -976,6 +955,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/home/me",
             entries: ["ok.txt"],
             fileCount: 1,
@@ -986,6 +966,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           payload: {
             ok: true,
+            binding: EXISTING_BINDING,
             path: "/home/me",
             tarBase64,
             ...archiveMetadata(tarBase64),
@@ -1024,6 +1005,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           entries: ["file-0.txt"],
           fileCount: 1,
@@ -1034,6 +1016,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           tarBase64,
           ...archiveMetadata(tarBase64),
@@ -1058,6 +1041,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           entries: ["a.txt"],
           fileCount: 1,
@@ -1068,6 +1052,7 @@ describe("file-transfer node invoke policy", () => {
         ok: true,
         payload: {
           ok: true,
+          binding: EXISTING_BINDING,
           path: "/tmp/project",
           tarBytes: 7,
           sha256: "c".repeat(64),

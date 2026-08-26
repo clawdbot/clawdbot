@@ -163,6 +163,25 @@ describe("handleFileFetch — happy path", () => {
     },
   );
 
+  it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const moved = path.join(tmpRoot, "moved.txt");
+    await fs.writeFile(target, "approved");
+    const preflight = await handleFileFetch({ path: target, preflightOnly: true });
+    expectSuccess(preflight);
+    await fs.rename(target, moved);
+    await fs.writeFile(target, "not approved");
+
+    const result = await handleFileFetch({
+      path: target,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+    expect(await fs.readFile(target, "utf8")).toBe("not approved");
+  });
+
   it("returns a sensible mime type for known extensions", async () => {
     const target = path.join(tmpRoot, "readme.md");
     await fs.writeFile(target, "# heading\n");

@@ -73,10 +73,13 @@ describe("handleDirList — happy path", () => {
         ),
       );
       await fs.symlink(approved, current);
+      const approvedStats = await fs.stat(approved, { bigint: true });
 
       const command = createCanonicalDirListCommand({
         directoryPath: current,
         expectedCanonicalPath: approved,
+        expectedDevice: String(approvedStats.dev),
+        expectedInode: String(approvedStats.ino),
         maxEntries: 5001,
         offset: 0,
       });
@@ -114,11 +117,46 @@ describe("handleDirList — happy path", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")(
+    "rejects a replacement created at the same canonical pathname before binding",
+    async () => {
+      const approved = path.join(tmpRoot, "approved");
+      const moved = path.join(tmpRoot, "moved");
+      await fs.mkdir(approved);
+      await fs.writeFile(path.join(approved, "approved.txt"), "approved");
+      const approvedStats = await fs.stat(approved, { bigint: true });
+      await fs.rename(approved, moved);
+      await fs.mkdir(approved);
+      await fs.writeFile(path.join(approved, "secret.txt"), "secret");
+
+      const command = createCanonicalDirListCommand({
+        directoryPath: approved,
+        expectedCanonicalPath: approved,
+        expectedDevice: String(approvedStats.dev),
+        expectedInode: String(approvedStats.ino),
+        maxEntries: 10,
+        offset: 0,
+      });
+      const child = spawn(command[0]!, command.slice(1), {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      const exit = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", resolve);
+      });
+
+      expect(exit).toBe(78);
+      expect(Buffer.concat(stdout)).toHaveLength(0);
+    },
+  );
+
   it("binds the canonical target before listing entries", async () => {
     await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
 
     const preflight = await handleDirList({ path: tmpRoot, preflightOnly: true });
-    expect(preflight).toEqual({
+    expect(preflight).toMatchObject({
       ok: true,
       path: tmpRoot,
       entries: [],

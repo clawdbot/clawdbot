@@ -2,6 +2,7 @@
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import { readPathBinding, type PathBinding } from "../shared/path-binding.js";
 import { listCanonicalDirectory } from "./dir-list-worker.js";
 import {
   classifyFsSafeReadError,
@@ -21,6 +22,7 @@ type DirListParams = {
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type DirListEntry = {
@@ -39,6 +41,7 @@ type DirListOk = {
   nextPageToken?: string;
   truncated: boolean;
   preflight?: true;
+  binding: PathBinding;
 };
 
 type DirListErrCode =
@@ -113,18 +116,48 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
   if (canonicalPathChange) {
     return canonicalPathChange;
   }
-  if (params.preflightOnly === true) {
-    return { ok: true, path: canonical, entries: [], truncated: false, preflight: true };
-  }
-
   const directory = await statRequiredDirectory(canonical, classifyFsError);
   if (!directory.ok) {
     return directory;
+  }
+  const expectedBinding = readPathBinding(params.expectedBinding);
+  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "existing") {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  if (
+    expectedBinding?.kind === "existing" &&
+    (expectedBinding.device !== directory.identity.device ||
+      expectedBinding.inode !== directory.identity.inode)
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  const boundIdentity = expectedBinding?.kind === "existing" ? expectedBinding : directory.identity;
+  if (params.preflightOnly === true) {
+    return {
+      ok: true,
+      path: canonical,
+      entries: [],
+      truncated: false,
+      preflight: true,
+      binding: { kind: "existing", ...directory.identity },
+    };
   }
 
   const listing = await listCanonicalDirectory({
     directoryPath: canonical,
     expectedCanonicalPath: canonical,
+    expectedDevice: boundIdentity.device,
+    expectedInode: boundIdentity.inode,
     maxEntries,
     offset,
   });
@@ -174,5 +207,6 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     entries,
     nextPageToken,
     truncated,
+    binding: { kind: "existing", ...directory.identity },
   };
 }

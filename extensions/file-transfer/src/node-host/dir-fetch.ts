@@ -1,8 +1,15 @@
 // File Transfer plugin module implements dir fetch behavior.
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  matchesFileIdentity,
+  readPathBinding,
+  type FileIdentity,
+  type PathBinding,
+} from "../shared/path-binding.js";
 import { createTarArchive } from "./dir-fetch-archive.js";
 import {
   classifyFsSafeReadError,
@@ -22,6 +29,7 @@ type DirFetchParams = {
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type DirFetchOk = {
@@ -33,6 +41,7 @@ type DirFetchOk = {
   fileCount: number;
   entries?: string[];
   preflightOnly?: boolean;
+  binding: PathBinding;
 };
 
 type DirFetchErrCode =
@@ -117,9 +126,19 @@ async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
   return entries.toSorted((left, right) => left.localeCompare(right));
 }
 
-async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
+async function listTreeEntries(
+  root: string,
+  maxEntries: number,
+  expectedIdentity: FileIdentity,
+): Promise<string[] | "TOO_MANY"> {
   const results: string[] = [];
   const rootHandle = await fsRoot(root);
+  const boundStats = await fs.stat(rootHandle.rootReal, { bigint: true });
+  if (!matchesFileIdentity(boundStats, expectedIdentity)) {
+    throw Object.assign(new Error("filesystem identity differs from the authorized target"), {
+      code: "CANONICAL_PATH_CHANGED",
+    });
+  }
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
@@ -170,13 +189,38 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   if (!directory.ok) {
     return directory;
   }
+  const expectedBinding = readPathBinding(params.expectedBinding);
+  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "existing") {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  if (
+    expectedBinding?.kind === "existing" &&
+    (expectedBinding.device !== directory.identity.device ||
+      expectedBinding.inode !== directory.identity.inode)
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath: canonical,
+    };
+  }
+  const boundIdentity: FileIdentity =
+    expectedBinding?.kind === "existing" ? expectedBinding : directory.identity;
 
   if (preflightOnly) {
     let entries: string[] | "TOO_MANY";
     try {
-      entries = await listTreeEntries(canonical, 5000);
+      entries = await listTreeEntries(canonical, 5000, boundIdentity);
     } catch (err) {
-      const code = classifyFsError(err);
+      const errorCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
+      const code =
+        errorCode === "CANONICAL_PATH_CHANGED" ? "CANONICAL_PATH_CHANGED" : classifyFsError(err);
       return {
         ok: false,
         code,
@@ -193,7 +237,13 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       };
     }
 
-    const tarBuffer = await createTarArchive(canonical, canonical, maxBytes);
+    const tarBuffer = await createTarArchive(
+      canonical,
+      canonical,
+      boundIdentity.device,
+      boundIdentity.inode,
+      maxBytes,
+    );
     if (tarBuffer === "TOO_LARGE") {
       return {
         ok: false,
@@ -239,6 +289,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       fileCount: entries.length,
       entries,
       preflightOnly: true,
+      binding: { kind: "existing", ...directory.identity },
     };
   }
 
@@ -266,7 +317,13 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   // Capture tar output with a hard byte cap and a wall-clock timeout.
   // SIGTERM if the byte cap is exceeded; SIGKILL if the timeout fires
   // (covers tar hanging on a slow filesystem or symlink loop).
-  const tarBuffer = await createTarArchive(canonical, canonical, maxBytes);
+  const tarBuffer = await createTarArchive(
+    canonical,
+    canonical,
+    boundIdentity.device,
+    boundIdentity.inode,
+    maxBytes,
+  );
 
   if (tarBuffer === "TOO_LARGE") {
     return {
@@ -322,5 +379,6 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     sha256,
     fileCount: entries.length,
     entries,
+    binding: { kind: "existing", ...directory.identity },
   };
 }

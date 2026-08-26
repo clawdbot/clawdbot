@@ -20,6 +20,8 @@ type CanonicalDirListResult =
 export async function listCanonicalDirectory(input: {
   directoryPath: string;
   expectedCanonicalPath: string;
+  expectedDevice: string;
+  expectedInode: string;
   maxEntries: number;
   offset: number;
 }): Promise<CanonicalDirListResult> {

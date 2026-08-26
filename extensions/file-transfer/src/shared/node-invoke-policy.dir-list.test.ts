@@ -8,6 +8,7 @@ vi.mock("./audit.js", () => ({
 }));
 
 const requireRecord = createRequireRecord("object", "label-not-object");
+const EXISTING_BINDING = { kind: "existing", device: "1", inode: "2" } as const;
 
 describe("file-transfer dir.list policy", () => {
   it("reapproves a stale grant before listing and binds the retry", async () => {
@@ -33,7 +34,10 @@ describe("file-transfer dir.list policy", () => {
             },
           };
         }
-        return { ok: true, payload: { ok: true, path: "/tmp/new-project", entries: [] } };
+        return {
+          ok: true,
+          payload: { ok: true, binding: EXISTING_BINDING, path: "/tmp/new-project", entries: [] },
+        };
       },
     );
     const ctx: OpenClawPluginNodeInvokePolicyContext = {
@@ -81,6 +85,7 @@ describe("file-transfer dir.list policy", () => {
         path: "/tmp/project",
         followSymlinks: true,
         expectedCanonicalPath: "/tmp/new-project",
+        expectedBinding: EXISTING_BINDING,
       },
     });
   });

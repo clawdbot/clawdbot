@@ -16,6 +16,7 @@ import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
 } from "./node-invoke-policy-commands.js";
+import { readPathBinding, type PathBinding } from "./path-binding.js";
 import {
   evaluateFilePolicy,
   evaluateFilePolicyConstraints,
@@ -236,6 +237,7 @@ function prepareParams(input: {
   };
   delete next.preflightOnly;
   delete next.expectedCanonicalPath;
+  delete next.expectedBinding;
   if (input.command === "file.fetch") {
     next.maxBytes = readMaxBytes({
       value: input.params.maxBytes,
@@ -588,6 +590,7 @@ type PreflightResult =
       ok: true;
       payload: Record<string, unknown> | null;
       canonicalPath: string;
+      binding: PathBinding;
     }
   | {
       ok: false;
@@ -674,7 +677,19 @@ async function invokePreflight(input: {
       }),
     };
   }
-  return { ok: true, payload, canonicalPath };
+  const binding = readPathBinding(payload?.binding);
+  const expectedBindingKind = input.op === "file.write" ? "write" : "existing";
+  if (!binding || binding.kind !== expectedBindingKind) {
+    return {
+      ok: false,
+      result: policyDeniedResult({
+        op: input.op,
+        code: "FILESYSTEM_IDENTITY_MISSING",
+        message: "node preflight did not return a filesystem identity; update the node and retry",
+      }),
+    };
+  }
+  return { ok: true, payload, canonicalPath, binding };
 }
 
 async function validateCanonicalAuthorization(input: {
@@ -825,7 +840,8 @@ async function runPathPreflight(input: {
   requestedPath: string;
   startedAt: number;
 }): Promise<
-  { ok: true; canonicalPath: string } | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
+  | { ok: true; canonicalPath: string; binding: PathBinding }
+  | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
   const preflight = await invokeAuthorizedPreflight(input);
   if (!preflight.ok) {
@@ -844,7 +860,7 @@ async function runPathPreflight(input: {
   if (denied) {
     return { ok: false, result: denied };
   }
-  return { ok: true, canonicalPath };
+  return { ok: true, canonicalPath, binding: preflight.binding };
 }
 
 async function runDirFetchPreflight(input: {
@@ -855,7 +871,8 @@ async function runDirFetchPreflight(input: {
   requestedPath: string;
   startedAt: number;
 }): Promise<
-  { ok: true; canonicalPath: string } | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
+  | { ok: true; canonicalPath: string; binding: PathBinding }
+  | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
   const preflight = await invokeAuthorizedPreflight({ ...input, kind: "read" });
   if (!preflight.ok) {
@@ -885,7 +902,7 @@ async function runDirFetchPreflight(input: {
   });
   return entryDeny
     ? { ok: false, result: entryDeny }
-    : { ok: true, canonicalPath: preflight.canonicalPath };
+    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
 }
 
 async function handleFileTransferInvoke(
@@ -941,6 +958,7 @@ async function handleFileTransferInvoke(
     };
   }
   let boundCanonicalPath: string | undefined;
+  let boundFilesystemIdentity: PathBinding | undefined;
   if (command === "file.fetch") {
     const preflight = await runPathPreflight({
       ctx,
@@ -955,6 +973,7 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
+    boundFilesystemIdentity = preflight.binding;
   } else if (command === "file.write") {
     const preflight = await runPathPreflight({
       ctx,
@@ -969,6 +988,7 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
+    boundFilesystemIdentity = preflight.binding;
   } else if (command === "dir.fetch") {
     const preflight = await runDirFetchPreflight({
       ctx,
@@ -982,6 +1002,7 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
+    boundFilesystemIdentity = preflight.binding;
   } else if (command === "dir.list") {
     const preflight = await runPathPreflight({
       ctx,
@@ -996,11 +1017,13 @@ async function handleFileTransferInvoke(
       return preflight.result;
     }
     boundCanonicalPath = preflight.canonicalPath;
+    boundFilesystemIdentity = preflight.binding;
   }
 
   if (boundCanonicalPath !== undefined) {
     // The node must reject target drift before the final filesystem effect.
     forwardedParams.expectedCanonicalPath = boundCanonicalPath;
+    forwardedParams.expectedBinding = boundFilesystemIdentity;
   }
 
   const result = await ctx.invokeNode({ params: forwardedParams });
