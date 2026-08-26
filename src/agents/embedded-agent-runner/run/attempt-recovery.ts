@@ -115,13 +115,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   // Mid-turn overflow continues from the persisted tool results and never
   // replays the assistant call. Generic tools must still be fully settled; only
-  // a Code Mode run may continue with lifecycle items active, because its outer
-  // exec result is persisted while the nested call it parked stays owned by the
+  // a batch whose exec result parked a Code Mode run (producer-recorded) may
+  // continue with lifecycle items active — the nested call stays owned by the
   // code-mode run registry and resumes through `wait`, exactly as across turns.
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
   const midTurnBatchSettled =
-    settledEvidence.allToolsProvenSettled ||
-    (attempt.codeModeEngaged === true && settledEvidence.allToolCallsRecorded);
+    settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&

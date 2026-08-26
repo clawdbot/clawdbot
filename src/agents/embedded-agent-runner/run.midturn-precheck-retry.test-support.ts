@@ -60,6 +60,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   asyncStarted?: boolean;
   resultRecorded?: boolean;
   codeModeEngaged?: boolean;
+  codeModeSuspended?: boolean;
 }) {
   const activeCount = params?.activeCount ?? 0;
   const resultRecorded = params?.resultRecorded ?? true;
@@ -84,6 +85,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
         toolCallId: "call-exec",
         replaySafe: false,
         asyncStarted: params?.asyncStarted ?? false,
+        ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
       },
     ],
     itemLifecycle: {
@@ -198,7 +200,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     // a lifecycle item active; the run stays resumable through `wait`.
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
-        makeReplayUnsafeMidTurnOverflow({ activeCount: 1, codeModeEngaged: true }),
+        makeReplayUnsafeMidTurnOverflow({
+          activeCount: 1,
+          codeModeEngaged: true,
+          codeModeSuspended: true,
+        }),
       )
       .mockResolvedValueOnce(makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
@@ -222,7 +228,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("keeps parked nested tool work fail-closed when compaction rotates the session", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeReplayUnsafeMidTurnOverflow({ activeCount: 1, codeModeEngaged: true }),
+      makeReplayUnsafeMidTurnOverflow({
+        activeCount: 1,
+        codeModeEngaged: true,
+        codeModeSuspended: true,
+      }),
     );
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
@@ -246,6 +256,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
     ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
+    [
+      "a direct tool active while Code Mode is merely enabled",
+      { activeCount: 1, codeModeEngaged: true },
+      true,
+    ],
     ["asynchronous tool activity", { asyncStarted: true }, false],
   ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));

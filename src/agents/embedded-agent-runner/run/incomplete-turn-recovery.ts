@@ -254,6 +254,16 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     attempt.itemLifecycle.startedCount > 0 &&
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0;
+  // Producer-recorded fact from the tool completion handler: one of this batch's
+  // exec results parked a Code Mode run, which is the only legitimate reason a
+  // fully recorded batch still shows active lifecycle items.
+  const parkedCodeModeRun =
+    allToolCallsRecorded &&
+    requestedToolCalls.some(({ id }) =>
+      attempt.toolMetas.some(
+        (entry) => entry.toolCallId === id && entry.codeModeSuspended === true,
+      ),
+    );
   const failedToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
@@ -275,6 +285,7 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
     assistant,
     allToolCallsRecorded,
     allToolsProvenSettled,
+    parkedCodeModeRun,
     failedToolNames,
     intentionalTermination,
   };

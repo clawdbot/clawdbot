@@ -138,6 +138,9 @@ function normalizeEmbeddedAttemptToolMetas(
       if (entry.asyncTaskId) {
         normalized.asyncTaskId = entry.asyncTaskId;
       }
+      if (entry.codeModeSuspended === true) {
+        normalized.codeModeSuspended = true;
+      }
       return normalized;
     });
 }
