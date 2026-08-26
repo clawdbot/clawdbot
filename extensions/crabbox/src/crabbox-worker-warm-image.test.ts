@@ -145,8 +145,10 @@ async function provisionWarmProfile(
   provider: WorkerProvider,
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
+  machineClass?: string,
 ) {
   return provider.provision(profile, operationId, {
+    ...(machineClass ? { machineClass } : {}),
     beginNodeEnrollment: async () => ({
       mode: "connect",
       setupCode: "setup-code",
@@ -319,6 +321,38 @@ describe("Crabbox profile warm images", () => {
     await expect(
       provisionWarmProfile(provider, { ...PROFILE, setup: "install-node" }),
     ).rejects.toThrow("Crabbox setup failed");
+
+    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+    expect(calls.at(-1)?.argv[1]).toBe("stop");
+  });
+
+  it("captures and restores placement overrides under their actual machine-class image key", async () => {
+    const { provider, calls } = createWarmProvider();
+    const lease = await provisionWarmProfile(provider, PROFILE, OPERATION_ID, "fast");
+
+    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+
+    const defaultKey = crabboxWarmImageKey(parseCrabboxProfile(PROFILE));
+    const fastKey = crabboxWarmImageKey(parseCrabboxProfile({ ...PROFILE, class: "fast" }));
+    expect(createWarmImageStore().lookup(defaultKey)).toBeUndefined();
+    expect(createWarmImageStore().lookup(fastKey)).toMatchObject({
+      checkpointId: CHECKPOINT_ID,
+      state: "pending",
+    });
+
+    const nextOperation = `provision:v2:${"2".repeat(64)}`;
+    await provisionWarmProfile(provider, PROFILE, nextOperation, "fast");
+    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(operationLeaseId(nextOperation));
+    expect(fork?.[fork.indexOf("--class") + 1]).toBe("fast");
+  });
+
+  it("never snapshots an inspected lease whose effective machine class is unknown", async () => {
+    const { provider, calls } = createWarmProvider();
+    const lease = { leaseId: LEASE_ID, profile: PROFILE };
+
+    await provider.inspect(lease);
+    await provider.destroy(lease);
 
     expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
     expect(calls.at(-1)?.argv[1]).toBe("stop");

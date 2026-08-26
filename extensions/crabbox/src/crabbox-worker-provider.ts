@@ -678,6 +678,7 @@ export function createCrabboxWorkerProvider(
         heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
         id: leaseId,
         idleTimeout: parsed.idleTimeout,
+        machineClass: parsed.class,
         provider: parsed.provider,
       });
       return {
@@ -710,10 +711,17 @@ export function createCrabboxWorkerProvider(
     async destroy(lease): Promise<void> {
       const context = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
-      const eligible = heartbeats.stop(context.id);
+      const heartbeat = heartbeats.stop(context.id);
       const profile = parseCrabboxProfile(lease.profile);
       if (profile.warmImage) {
-        await warmImages.capture({ ...context, profile, eligible });
+        // Lifecycle profiles omit placement class overrides; only successful
+        // provisioning can attest which class owns this reusable image.
+        const machineClass = heartbeat?.machineClass;
+        await warmImages.capture({
+          ...context,
+          profile: machineClass ? { ...profile, class: machineClass } : profile,
+          eligible: machineClass !== undefined,
+        });
       }
       await stopCrabboxLease({
         ...context,
