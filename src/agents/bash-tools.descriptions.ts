@@ -46,6 +46,9 @@ export function describeExecTool(params?: {
   lines.push(
     "IMPORTANT (Windows): Run executables directly; do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths.",
   );
+  lines.push(
+    "Use PowerShell command syntax, not Unix or CMD: `Select-Object -First N` instead of `head -N`, `$env:USERPROFILE` instead of `~`, and `2>$null` instead of `2>nul`. Avoid Unix-only utilities (sed, awk, grep, head, tail).",
+  );
   try {
     const approvalsFile = loadExecApprovals();
     const approvals = resolveExecApprovalsFromFile({
