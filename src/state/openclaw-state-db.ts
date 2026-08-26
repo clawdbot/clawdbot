@@ -85,6 +85,7 @@ import {
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
+import { withOpenClawStateStartupCheckpointConnection } from "./openclaw-state-db-startup-checkpoint.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
@@ -124,7 +125,6 @@ export {
 } from "./openclaw-state-db-maintenance.js";
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-repair.js";
-export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
 export function confirmOpenClawStateDatabaseIntegrity(
@@ -491,6 +491,14 @@ function ensureSchema(
   }
 }
 
+/** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
+export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
+  callback: (db: DatabaseSync) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T {
+  return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
+}
+
 /** Open existing shared state without creating, migrating, chmodding, or configuring it. */
 export async function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
@@ -672,14 +680,6 @@ export function runWithOpenClawStateBusyTimeout<T>(
   }
 }
 
-function acquireOpenClawStateDatabaseForTransaction(
-  options: OpenClawStateDatabaseOptions,
-): OpenClawStateDatabase {
-  return options.database
-    ? openOpenClawStateDatabase(options)
-    : (getOpenClawStateDatabaseIfOpen(options) ?? openOpenClawStateDatabase(options));
-}
-
 /** Run a synchronous immediate transaction against the shared state database. */
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
@@ -692,7 +692,9 @@ export function runOpenClawStateWriteTransaction<T>(
   let database = options.database ?? getOpenClawStateDatabaseIfOpen(options);
   let result: T;
   try {
-    const acquired = acquireOpenClawStateDatabaseForTransaction(options);
+    const acquired = options.database
+      ? openOpenClawStateDatabase(options)
+      : (database ?? openOpenClawStateDatabase(options));
     database = acquired;
     result = runSqliteImmediateTransactionSync(
       acquired.db,

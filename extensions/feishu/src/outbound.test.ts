@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   adaptMessagePresentationForChannel,
@@ -119,7 +122,7 @@ vi.mock("./comment-reaction.js", () => ({
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
 import { buildFeishuPostMessageContent } from "./markdown.js";
-import { feishuOutbound } from "./outbound.js";
+import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER, feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
@@ -3141,6 +3144,234 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  // Regression for #112244 (second-review P1): when the direct `send` action
+  // requests `propagateMediaUploadFailure`, a media-upload failure must re-throw
+  // to the caller instead of being converted to a fallback text success —
+  // otherwise the agent receives an `ok:true` receipt for a message whose
+  // attachment never arrived. No fallback "Media upload failed" text is emitted.
+  // When the caption was already delivered, the re-thrown error preserves that
+  // caption's receipt as the existing partial-delivery outcome (seventeenth-review
+  // P1) so the caller knows the text is visible and does not retry it.
+  it("propagates a media-upload failure instead of falling back to text when requested", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "caption_msg",
+      chatId: "chat_1",
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never),
+    ).rejects.toThrow("upload failed");
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    // No fallback "Media upload failed" text is emitted on top of any caption.
+    expect(sendMessageCall()?.text).not.toContain("Media upload failed");
+  });
+
+  // Regression for #112244 (seventeenth-review P1): when the caption was already
+  // delivered before the media upload failed, the propagated error must preserve
+  // the caption's receipt as the repository's existing partial-delivery outcome
+  // — otherwise the caller treats it as a wholly failed send, retries, and
+  // duplicates the already-visible caption. Pre-fix the catch block threw a plain
+  // Error with no receipt; post-fix it throws a ChannelPartialDeliveryError
+  // carrying the caption's messageId.
+  it("preserves a delivered caption as partial delivery when media upload fails", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "caption_msg",
+      chatId: "chat_1",
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+    expect(partial.deliveryResult.visibleReplySent).toBe(true);
+    expect(partial.deliveryResult.messageIds).toEqual(["caption_msg"]);
+    // The caption was delivered exactly once; no retry/duplicate send occurred.
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+  });
+
+  // Regression for #112244 (seventeenth-review P1, scope guard): a media-upload
+  // failure with NO delivered caption is a wholly failed send, so the propagated
+  // error stays a plain Error (no partial-delivery receipt to preserve).
+  it("propagates a plain error when media upload fails with no delivered caption", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught)).toContain(
+      "Feishu send could not deliver the requested media attachment",
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("still falls back to text on upload failure when propagation is not requested", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "see attachment",
+      // A private/local media URL cannot be resolved to a public reference, so
+      // the fallback renders the generic "Media upload failed" text.
+      mediaUrl: path.join(os.tmpdir(), "openclaw-feishu-fallback-not-requested.png"),
+      accountId: "main",
+    });
+
+    // Default behavior is unchanged: the caption is sent first, then the
+    // fallback text, and a success receipt is returned (other outbound callers
+    // rely on this). The fallback is the second sendMessage call.
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1)?.text).toContain("Media upload failed. Please try again.");
+    expectFeishuResult(result, "text_msg");
+  });
+
+  // Regression for #112244 (third-review P1): the direct `send` action routes
+  // an attachment through the presentation-fallback path (sendPayload →
+  // sendFeishuFallbackPayload → sendMedia) when a card falls back. That path
+  // cannot carry `propagateMediaUploadFailure` through the shared sendPayload
+  // signature, so the action stamps the marker on channelData.feishu and the
+  // fallback payload must honor it — re-throwing the upload failure instead of
+  // returning a fallback-text `ok:true` receipt.
+  it("propagates a media-upload failure through the presentation-fallback path when the marker is set", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        accountId: "main",
+        payload: {
+          text: "see attachment",
+          mediaUrl: "https://example.com/file.png",
+          channelData: {
+            feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+          },
+        },
+      }),
+    ).rejects.toThrow("Feishu send could not deliver the requested media attachment");
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    // No fallback "Media upload failed" text is emitted on top of any caption.
+    expect(
+      sendMessageFeishuMock.mock.calls
+        .map(([args]) => (args as { text?: string })?.text ?? "")
+        .some((text) => text.includes("Media upload failed")),
+    ).toBe(false);
+  });
+
+  it("still falls back to text on the presentation-fallback path when the marker is absent", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        // A private/local media URL cannot be resolved to a public reference,
+        // so the fallback renders the generic "Media upload failed" text.
+        mediaUrl: path.join(os.tmpdir(), "openclaw-feishu-fallback-no-marker.png"),
+      },
+    });
+
+    // Default behavior is unchanged: the caption is sent first, then the
+    // fallback text, and a success receipt is returned.
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1)?.text).toContain("Media upload failed. Please try again.");
+    expectFeishuResult(result, "text_msg");
+  });
+
+  // Regression for #112244 (fourteenth-review P1): the direct `send` action
+  // stamps the propagation marker on channelData.feishu before routing an
+  // attachment through sendPayload. The document-comment sendPayload branch
+  // preserves the marker (so the fallback helper requests propagation), but a
+  // comment target must NOT throw on the strength of that marker alone: the
+  // comment-target media-link fallback renders the media URL as a visible
+  // clickable link, which is established main behavior and NOT the silent
+  // text-only `ok:true` drop issue #112244 removes. Propagation is reserved for
+  // actual media-upload failures (the `sendMediaFeishu` catch), which a comment
+  // target never reaches because it never uploads. With the marker set, the
+  // comment target still renders the visible media-link fallback and returns a
+  // success receipt — the same outcome as the marker-absent case below.
+  it("renders the visible media-link fallback on a document-comment target even when the propagation marker is set", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        mediaUrl: "https://example.com/pipeline.png",
+        channelData: {
+          feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+        },
+      },
+    });
+
+    // The media URL is delivered as a visible comment text link (not a silent
+    // text-only ok), and a success receipt is returned — comment targets keep
+    // their established media-link fallback regardless of the propagation flag.
+    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
+    expectFeishuResult(result, "reply_msg");
+    // No media upload is attempted for a comment target.
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("still degrades a comment attachment to text when the propagation marker is absent", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        mediaUrl: "https://example.com/pipeline.png",
+      },
+    });
+
+    // Default comment behavior is unchanged: the media link is rendered as a
+    // fallback text comment and a success receipt is returned.
+    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
+    expectFeishuResult(result, "reply_msg");
   });
 });
 

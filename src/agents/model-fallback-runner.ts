@@ -37,7 +37,6 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
-  findLiveSessionModelSwitchRedirectIndex,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -51,6 +50,7 @@ import {
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
   resolveFallbackSoonestCooldownExpiry,
+  resolveLiveSessionModelSwitchRedirectIndex,
   resolveModelFallbackCandidateAgentRuntime,
   resolveModelFallbackCandidateHarnessAuthPrecheck,
   resolveNextFallbackCandidateIndex,
@@ -655,7 +655,7 @@ async function runWithModelFallbackInternal<T>(
       ) {
         throw err;
       }
-      const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
+      const liveSwitchTargetIndex = resolveLiveSessionModelSwitchRedirectIndex({
         error: err,
         candidates,
         currentIndex: i,

@@ -555,18 +555,19 @@ export function appendFailedCandidateAttempt(params: {
   });
 }
 
-export function findLiveSessionModelSwitchRedirectIndex(params: {
+export function resolveLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
-    if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return params.currentIndex + 1 + offset;
-    }
+  const targetIndex = params.candidates.findIndex(
+    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
+  );
+  if (targetIndex === -1) {
+    throw params.error;
   }
-  return null;
+  return targetIndex > params.currentIndex ? targetIndex : null;
 }
 
 export function hasDifferentLiveSessionRuntimeSelection(params: {

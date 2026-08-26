@@ -99,6 +99,8 @@ import Testing
 
     @Test(arguments: [
         "failed-start", "failed-stop", "failed-restart", "json-success", "plain-success", "json-failure",
+        "json-failure-with-hints", "json-failure-with-hints-and-exit", "json-failure-hints-only",
+        "not-loaded-start", "not-loaded-stop",
     ])
     func `node lifecycle respects process exit and optional JSON status`(_ scenario: String) async throws {
         let root = try makeTempDirForTests()
@@ -116,6 +118,18 @@ import Testing
             case "$OPENCLAW_NODE_SERVICE_TEST_CASE" in
               failed-*) printf '{"ok":true}'; printf 'cleanup failed' >&2; exit 23 ;;
               json-failure) printf '{"ok":false,"error":"reported failure"}' ;;
+              json-failure-with-hints*)
+                printf '{"ok":false,"error":"Node service not installed.",'
+                printf '"hints":["openclaw node install","openclaw node start","third hint"]}'
+                if [ "$OPENCLAW_NODE_SERVICE_TEST_CASE" = "json-failure-with-hints-and-exit" ]; then exit 1; fi
+                ;;
+              json-failure-hints-only)
+                printf '{"ok":false,"hints":["openclaw node install","openclaw node start"]}'
+                ;;
+              not-loaded-*)
+                printf '{"ok":true,"result":"not-loaded","message":"Node service not loaded.",'
+                printf '"hints":["openclaw node install","openclaw node start"]}'
+                ;;
               plain-success) printf 'service started' ;;
               *) printf '{"ok":true}' ;;
             esac
@@ -123,13 +137,18 @@ import Testing
             try script.write(to: executable, atomically: false, encoding: .utf8)
 
             let action = switch scenario {
-            case "failed-stop": "stop"
+            case "failed-stop", "not-loaded-stop": "stop"
             case "failed-restart": "restart"
             default: "start"
             }
             let expectedError: String? = switch scenario {
             case "failed-start", "failed-stop", "failed-restart": "cleanup failed"
             case "json-failure": "reported failure"
+            case "json-failure-with-hints", "json-failure-with-hints-and-exit":
+                "Node service not installed. (openclaw node install · openclaw node start)"
+            case "json-failure-hints-only": "openclaw node install · openclaw node start"
+            case "not-loaded-start":
+                "Node service not loaded. (openclaw node install · openclaw node start)"
             default: nil
             }
 

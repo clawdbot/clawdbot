@@ -185,12 +185,12 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         required: true,
         label: "stickerIds",
       });
-      await discordMessagingActionRuntime.sendStickerDiscord(
+      const result = await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
         ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, result });
     }
     case "sendMessage": {
       if (!ctx.isActionEnabled("messages")) {

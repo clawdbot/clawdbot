@@ -815,61 +815,96 @@ describe("mattermost inbound user posts", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
-  it("does not enqueue regular user posts as system events", async () => {
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
+  it.each([
+    {
+      label: "plain text",
+      fileIds: [],
+      failedMedia: [],
+      expectedBody: "hello from mattermost",
+    },
+    {
+      label: "an unavailable named attachment",
+      fileIds: ["file-1"],
+      failedMedia: [
+        {
+          contentType: "application/pdf",
+          fileName: "quarterly report.pdf",
+          kind: "document",
+        },
+      ],
+      expectedBody:
+        'hello from mattermost\n\n[mattermost attachment unavailable] "quarterly report.pdf"',
+    },
+  ])(
+    "does not enqueue regular posts with $label as system events",
+    async ({ fileIds, failedMedia, expectedBody }) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      mockState.resolveMattermostMedia.mockResolvedValueOnce(failedMedia);
 
-    const monitor = monitorMattermostProvider({
-      config: testConfig,
-      runtime: testRuntime(),
-      abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
-    });
+      const monitor = monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
 
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-inbound-system-event-regular",
+      await socket.emitMessage({
+        event: "posted",
+        data: {
+          channel_id: "chan-1",
+          channel_name: "town-square",
+          channel_display_name: "Town Square",
+          sender_name: "alice",
+          post: JSON.stringify({
+            id: "post-inbound-system-event-regular",
+            channel_id: "chan-1",
+            user_id: "user-1",
+            message: "hello from mattermost",
+            ...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
+            create_at: 1_714_000_000_000,
+          }),
+        },
+        broadcast: {
           channel_id: "chan-1",
           user_id: "user-1",
-          message: "hello from mattermost",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
-    });
-    socket.emitClose(1000);
-    await monitor;
+        },
+      });
+      socket.emitClose(1000);
+      await monitor;
 
-    expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-    expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
-    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
-    expect(ctx?.BodyForAgent).toBe("hello from mattermost");
-    expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
-    expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
-    expect(ctx?.ConversationRouteContextObserved).toBe(true);
-    expect(ctx?.ConversationRoutePeerId).toBe("chan-1");
-    expect(ctx?.GroupSpace).toBe("team-1");
-    expect(ctx?.NativeChannelId).toBe("chan-1");
-    expect(ctx?.InboundAccessAuthorized).toBe(true);
-    expect(ctx?.OriginatingChannel).toBe("mattermost");
-    expect(ctx?.Provider).toBe("mattermost");
-  });
+      expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
+      const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+      expect(ctx?.BodyForAgent).toBe(expectedBody);
+      if (failedMedia.length > 0) {
+        expect(ctx?.media).toEqual([
+          expect.objectContaining({
+            contentType: "application/pdf",
+            fileName: "quarterly report.pdf",
+          }),
+        ]);
+        expect(ctx?.media?.[0]?.path).toBeUndefined();
+        expect(ctx?.media?.[0]?.url).toBeUndefined();
+      }
+      expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
+      expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
+      expect(ctx?.ConversationRouteContextObserved).toBe(true);
+      expect(ctx?.ConversationRoutePeerId).toBe("chan-1");
+      expect(ctx?.GroupSpace).toBe("team-1");
+      expect(ctx?.NativeChannelId).toBe("chan-1");
+      expect(ctx?.InboundAccessAuthorized).toBe(true);
+      expect(ctx?.OriginatingChannel).toBe("mattermost");
+      expect(ctx?.Provider).toBe("mattermost");
+    },
+  );
 
   it("formats current and pending-history timestamps in the configured user timezone", async () => {
     const socket = new FakeWebSocket();

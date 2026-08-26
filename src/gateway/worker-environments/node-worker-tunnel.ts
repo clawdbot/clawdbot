@@ -572,7 +572,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
             recordNodeSyncPath(entry.environmentId, entry.sessionId, origin, originStartedAt);
             if (origin.kind === "synced") {
-              return origin.result;
+              return await workspace.finalizeSync(request, origin.result);
             }
             const transferred = await exec({
               argv: ["openclaw-internal-workspace-transfer"],
@@ -591,11 +591,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             ) {
               throw new Error("Node workspace transfer failed");
             }
-            return {
+            return await workspace.finalizeSync(request, {
               mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
               remoteWorkspaceDir: transferred.workspaceDir,
               manifestRef: prepared.snapshot.manifestRef,
-            };
+            });
           } finally {
             options.workspaceTransfer.revoke(entry.environmentId, prepared.token);
           }

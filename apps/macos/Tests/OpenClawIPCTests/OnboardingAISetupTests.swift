@@ -1675,6 +1675,19 @@ struct OnboardingAISetupTests {
         #expect(model.detectError?.detail == "expired login")
         #expect(outcome == .notConnected)
         #expect(isPending(defaults))
+
+        model.retryFromScratch()
+
+        #expect(model.phase == .detecting)
+        #expect(model.detectError == nil)
+        #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
+
+        await settleQueuedAISetupTasks()
+
+        #expect(model.phase == .ready)
+        #expect(model.detectError?.detail == "expired login")
+        #expect(OnboardingController.shared.busyReason == nil)
+        #expect(await (harness.recorder.snapshot()).methods == ["openclaw.setup.verify", "openclaw.setup.verify"])
     }
 
     @Test func `completed activation receipt survives verification transport failure`() async throws {
@@ -1708,11 +1721,17 @@ struct OnboardingAISetupTests {
         #expect(!model.connected)
         #expect(pendingState(defaults) == .completed)
 
-        let retryOutcome = await model.verifyPendingConfiguredInference()
-        let requests = await waitForAISetupRequests(recorder, count: 2)
+        model.retryFromScratch()
 
-        #expect(retryOutcome == .connected)
+        #expect(model.phase == .detecting)
+        #expect(model.detectError == nil)
+        #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
+
+        let requests = await waitForAISetupRequests(recorder, count: 2)
+        await settleQueuedAISetupTasks()
+
         #expect(model.connected)
+        #expect(OnboardingController.shared.busyReason == nil)
         #expect(requests.methods == ["openclaw.setup.verify", "openclaw.setup.verify"])
     }
 

@@ -610,6 +610,44 @@ describe("task-executor", () => {
     });
   });
 
+  it("rejects child tasks and cancellation for ended blocked TaskFlows", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Completed without a usable result",
+        status: "blocked",
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-after-blocked-completion",
+        task: "Should be denied",
+      });
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ status: "blocked", endedAt: 20 });
+      expect(listTasksForFlowId(flow.flowId)).toStrictEqual([]);
+    });
+  });
+
   it("refuses to add child tasks once cancellation is requested on a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedTaskFlow({

@@ -5,7 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../src/agents/defaults.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 
 function runBuiltCli(
@@ -706,34 +705,60 @@ describe("cli json stdout contract", () => {
       name: "aliases list",
       args: ["models", "aliases", "list", "--plain"],
       opensStateDatabase: false,
+      expectedStdout: "chat anthropic/claude-sonnet-4-6\n",
     },
     {
       name: "fallbacks list",
       args: ["models", "fallbacks", "list", "--plain"],
       opensStateDatabase: false,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
     },
     {
       name: "image fallbacks list",
       args: ["models", "image-fallbacks", "list", "--plain"],
       opensStateDatabase: false,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
     },
     {
       name: "list control",
       args: ["models", "list", "--plain"],
       opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
     },
     {
       name: "status control",
       args: ["models", "status", "--plain"],
       opensStateDatabase: true,
-      expectedStdout: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}\n`,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
+    },
+    {
+      name: "parent status control",
+      args: ["models", "--status-plain"],
+      opensStateDatabase: true,
+      expectedStdout: "anthropic/claude-sonnet-4-6\n",
     },
   ])("keeps $name stdout exact during a pending state migration", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
         const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "openclaw.json");
         const migrationDiagnostic = "state database schema migration pending";
         await seedPendingStateMigration(stateDir);
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: {
+              defaults: {
+                model: {
+                  primary: "anthropic/claude-sonnet-4-6",
+                  fallbacks: ["anthropic/claude-sonnet-4-6"],
+                },
+                imageModel: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
+                models: { "anthropic/claude-sonnet-4-6": { alias: "chat" } },
+              },
+            },
+          }),
+        );
 
         const result = runBuiltCli(
           tempHome,
@@ -741,14 +766,14 @@ describe("cli json stdout contract", () => {
           {
             CI: "1",
             NO_COLOR: "1",
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_CONFIG_PATH: configPath,
             OPENCLAW_STATE_DIR: stateDir,
           },
           { inheritEnvironment: false },
         );
 
         expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toBe("expectedStdout" in testCase ? testCase.expectedStdout : "");
+        expect(result.stdout).toBe(testCase.expectedStdout);
         expect(result.stdout).not.toContain(migrationDiagnostic);
         expect(result.stderr.includes(migrationDiagnostic)).toBe(testCase.opensStateDatabase);
       },

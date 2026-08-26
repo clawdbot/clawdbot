@@ -2884,7 +2884,6 @@ src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
-src/gateway/embeddings-http.ts	1
 src/gateway/exec-approval-manager.ts	7
 src/gateway/gateway-cli-backend.live-helpers.ts	4
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	7
@@ -2911,7 +2910,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	3
 src/gateway/node-registry.ts	27
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	30
+src/gateway/openai-http.ts	29
 src/gateway/openresponses-http.ts	4
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
