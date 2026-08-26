@@ -5197,6 +5197,7 @@ export const en: TranslationMap = {
       stoppingCurrentRun: "Stopping current run...",
       chatHistoryCleared: "Chat history cleared.",
       exportingThread: "Exporting session...",
+      emptyExport: "There are no messages to export yet.",
       unknownCommand: "Unknown command: `{command}`",
       options: "Options: {options}.",
       sessionUnavailable: "Session capability is unavailable",
