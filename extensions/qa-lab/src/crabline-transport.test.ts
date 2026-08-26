@@ -30,7 +30,7 @@ function requireString(value: unknown, label: string): string {
 
 describe("crabline transport", () => {
   it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),
