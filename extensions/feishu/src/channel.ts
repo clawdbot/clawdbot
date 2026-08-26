@@ -651,6 +651,14 @@ function describeFeishuMessageTool({
     actions.add("react");
     actions.add("reactions");
   }
+  if (
+    accountId
+      ? enabledAccounts.some((account) => isFeishuStickerActionEnabled({ cfg, account }))
+      : areAnyFeishuStickerActionsEnabled(cfg)
+  ) {
+    actions.add("sticker");
+    actions.add("sticker-search");
+  }
   return {
     actions: Array.from(actions),
     capabilities: enabled ? ["presentation"] : [],
@@ -694,6 +702,44 @@ function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
     }
   }
   return false;
+}
+
+function isFeishuStickerActionEnabled(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+}): boolean {
+  if (!params.account.enabled || !params.account.configured) {
+    return false;
+  }
+  const gate = createActionGate(
+    (params.account.config.actions ??
+      (params.cfg.channels?.feishu as { actions?: unknown } | undefined)?.actions) as Record<
+      string,
+      boolean | undefined
+    >,
+  );
+  // Sticker sending is strictly opt-in (defaultValue false): unlike reactions it
+  // needs a configured file_token catalog to do anything, so surfacing the action
+  // without an explicit `actions.sticker: true` would only confuse model callers.
+  return gate("sticker", false);
+}
+
+function areAnyFeishuStickerActionsEnabled(cfg: ClawdbotConfig): boolean {
+  for (const account of listEnabledFeishuAccounts(cfg)) {
+    if (isFeishuStickerActionEnabled({ cfg, account })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The configured, opt-in sticker catalog an agent can search and send from.
+// Feishu has no native keyword sticker-store search, so this is a curated set of
+// drive `file_token`s (obtained via the Feishu API) keyed by a searchable name.
+// The explicit source here is what keeps the sticker action opt-in and
+// permission-safe: with no listed file_token the channel cannot send any sticker.
+function resolveFeishuStickerCatalog(cfg: ClawdbotConfig): NonNullable<FeishuConfig["stickers"]> {
+  return (cfg.channels?.feishu as FeishuConfig | undefined)?.stickers ?? [];
 }
 
 function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
@@ -1943,6 +1989,73 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               accountId: ctx.accountId ?? undefined,
             });
             return jsonActionResult({ ok: true, reactions });
+          }
+
+          if (ctx.action === "sticker-search") {
+            if (!isFeishuStickerActionEnabled({ cfg: ctx.cfg, account })) {
+              throw new Error("Feishu stickers are disabled via actions.sticker.");
+            }
+            const catalog = resolveFeishuStickerCatalog(ctx.cfg);
+            if (catalog.length === 0) {
+              return jsonActionResult({ ok: true, stickers: [] });
+            }
+            const query = readFirstString(ctx.params, ["query", "name"])?.toLowerCase();
+            if (!query) {
+              return jsonActionResult({ ok: true, stickers: catalog });
+            }
+            const matches = catalog.filter(
+              (entry) =>
+                entry.name.toLowerCase().includes(query) ||
+                (entry.description ?? "").toLowerCase().includes(query),
+            );
+            // Return id/name only, never the raw file_token, so the agent is
+            // forced to reference the catalog (and the channel to resolve it),
+            // keeping the opt-in source of truth intact for send authorization.
+            return jsonActionResult({
+              ok: true,
+              stickers: matches.map(({ id, name, description }) => ({ id, name, description })),
+            });
+          }
+
+          if (ctx.action === "sticker") {
+            if (!isFeishuStickerActionEnabled({ cfg: ctx.cfg, account })) {
+              throw new Error("Feishu stickers are disabled via actions.sticker.");
+            }
+            const to = resolveFeishuActionTarget(ctx);
+            if (!to) {
+              throw new Error("Feishu sticker requires a target (to).");
+            }
+            const id = readFirstString(ctx.params, ["id"]);
+            const name = readFirstString(ctx.params, ["name"]);
+            const catalog = resolveFeishuStickerCatalog(ctx.cfg);
+            const entry = catalog.find(
+              (e) =>
+                (id && e.id === id) ||
+                (name && name.toLowerCase() === e.name.toLowerCase()) ||
+                (name && e.name.toLowerCase().includes(name.toLowerCase())),
+            );
+            if (!entry) {
+              throw new Error(
+                "Feishu sticker must reference an id/name listed in channels.feishu.stickers.",
+              );
+            }
+            const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(ctx);
+            const runtime = await loadFeishuChannelRuntime();
+            const result = await runtime.sendStickerFeishu({
+              cfg: ctx.cfg,
+              to,
+              fileToken: entry.fileToken,
+              replyToMessageId,
+              replyInThread,
+              allowTopLevelReplyFallback: true,
+              accountId: ctx.accountId ?? undefined,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "sticker",
+              ...result,
+            });
           }
 
           throw new Error(`Unsupported Feishu action: "${ctx.action}"`);

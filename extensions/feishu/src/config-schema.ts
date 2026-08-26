@@ -13,9 +13,19 @@ import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 export { z };
 
+const StickerEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    fileToken: z.string().min(1),
+    description: z.string().optional(),
+  })
+  .strict();
+
 const ChannelActionsSchema = z
   .object({
     reactions: z.boolean().optional(),
+    sticker: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -224,6 +234,7 @@ const FeishuSharedConfigShape = {
   streaming: FeishuStreamingSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
+  stickers: z.array(StickerEntrySchema).optional(),
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),

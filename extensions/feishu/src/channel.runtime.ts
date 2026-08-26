@@ -27,6 +27,7 @@ import {
   getMessageFeishu as getMessageFeishuImpl,
   sendCardFeishu as sendCardFeishuImpl,
   sendMessageFeishu as sendMessageFeishuImpl,
+  sendStickerFeishu as sendStickerFeishuImpl,
 } from "./send.js";
 
 export const feishuChannelRuntime = {
@@ -49,4 +50,5 @@ export const feishuChannelRuntime = {
   getMessageFeishu: getMessageFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
+  sendStickerFeishu: sendStickerFeishuImpl,
 };

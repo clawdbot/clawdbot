@@ -525,6 +525,8 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   });
 }
 
+export { sendStickerFeishu, type SendFeishuStickerParams } from "./send-sticker.js";
+
 export async function editMessageFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;

@@ -17,6 +17,7 @@ export const messageActionTargetAliases = {
   edit: createMessageMutationTargetAliases(),
   pin: createMessageMutationTargetAliases(),
   unpin: createMessageMutationTargetAliases(),
+  sticker: createMessageMutationTargetAliases(),
   "list-pins": { aliases: ["chatId"] },
   "channel-info": { aliases: ["chatId"] },
 } satisfies NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>;

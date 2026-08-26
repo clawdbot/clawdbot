@@ -20,6 +20,7 @@ const listReactionsFeishuMock = vi.hoisted(() => vi.fn());
 const removeReactionFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const sendStickerFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
@@ -80,6 +81,7 @@ vi.mock("./channel.runtime.js", () => ({
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
+    sendStickerFeishu: sendStickerFeishuMock,
     feishuOutbound: {
       sendText: feishuOutboundSendTextMock,
       sendMedia: feishuOutboundSendMediaMock,
@@ -3111,6 +3113,139 @@ describe("feishuPlugin actions", () => {
         accountId: undefined,
       } as never),
     ).rejects.toThrow('Unsupported Feishu action: "search"');
+  });
+
+  const stickerCfg = {
+    channels: {
+      feishu: {
+        enabled: true,
+        appId: "cli_main",
+        appSecret: "secret_main",
+        actions: {
+          sticker: true,
+        },
+        stickers: [
+          { id: "thumbs-up", name: "thumbs up", fileToken: "file_token_thumbs" },
+          { id: "wave", name: "wave", description: "says hello", fileToken: "file_token_wave" },
+        ],
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "open",
+      },
+    },
+  } as OpenClawConfig;
+
+  it("advertises sticker actions when enabled via actions config", () => {
+    const described = getDescribedActions(stickerCfg);
+    expect(described).toContain("sticker");
+    expect(described).toContain("sticker-search");
+  });
+
+  it("does not advertise sticker actions when disabled", () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          actions: { sticker: false },
+        },
+      },
+    } as OpenClawConfig;
+    expect(getDescribedActions(disabledCfg)).not.toContain("sticker");
+    expect(getDescribedActions(disabledCfg)).not.toContain("sticker-search");
+  });
+
+  it("sends a configured sticker by id, resolving the file_token from the catalog", async () => {
+    sendStickerFeishuMock.mockResolvedValueOnce({ messageId: "om_sticker", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "sticker",
+      params: { to: "chat:oc_group_1", id: "thumbs-up" },
+      cfg: stickerCfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendStickerFeishuMock).toHaveBeenCalledWith({
+      cfg: stickerCfg,
+      to: "chat:oc_group_1",
+      fileToken: "file_token_thumbs",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+      allowTopLevelReplyFallback: true,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_sticker");
+    expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("rejects a sticker id absent from the catalog and never sends the raw file_token", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "sticker",
+        params: { to: "chat:oc_group_1", id: "unknown", fileToken: "file_token_arbitrary" },
+        cfg: stickerCfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("must reference an id/name listed in channels.feishu.stickers");
+    expect(sendStickerFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects sticker send when disabled via actions config", async () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          actions: { sticker: false },
+          stickers: [{ id: "thumbs-up", name: "thumbs up", fileToken: "file_token_thumbs" }],
+        },
+      },
+    } as OpenClawConfig;
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "sticker",
+        params: { to: "chat:oc_group_1", id: "thumbs-up" },
+        cfg: disabledCfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu stickers are disabled via actions.sticker");
+    expect(sendStickerFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("searches the sticker catalog by name/description without leaking file_tokens", async () => {
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "sticker-search",
+      params: { query: "hello" },
+      cfg: stickerCfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const stickers = resultDetails(result).stickers as unknown[];
+    expect(requireArray(stickers, "sticker search results")).toEqual([
+      { id: "wave", name: "wave", description: "says hello" },
+    ]);
+  });
+
+  it("returns every configured sticker when no search query is given", async () => {
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "sticker-search",
+      params: {},
+      cfg: stickerCfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const stickers = resultDetails(result).stickers as unknown[];
+    expect(requireArray(stickers, "sticker search results")).toHaveLength(2);
+    expect((stickers as { id: string }[]).map((entry) => entry.id)).toEqual(["thumbs-up", "wave"]);
   });
 });
 
