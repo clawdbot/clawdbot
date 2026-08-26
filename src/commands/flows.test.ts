@@ -225,12 +225,22 @@ describe("flows commands", () => {
         createdAt: 100,
         updatedAt: 200,
       });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command-ended-blocked",
+        goal: "Completed blocked work",
+        status: "blocked",
+        cancelRequestedAt: 150,
+        createdAt: 100,
+        updatedAt: 150,
+        endedAt: 150,
+      });
 
       const runtime = createRuntime();
       await flowsListCommand({}, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
-        "TaskFlow pressure: 1 active · 0 blocked · 1 cancel-requested · 1 total",
+        "TaskFlow pressure: 1 active · 1 blocked · 1 cancel-requested · 2 total",
       );
     });
   });

@@ -1924,7 +1924,10 @@ describe("task-registry", () => {
     });
   });
 
-  it("rejects parent flow links for terminal flows", async () => {
+  it.each([
+    { status: "cancelled" as const, endedAt: undefined },
+    { status: "blocked" as const, endedAt: 42 },
+  ])("rejects parent flow links for $status flows", async ({ status, endedAt }) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -1934,7 +1937,8 @@ describe("task-registry", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/task-registry",
         goal: "Completed flow",
-        status: "cancelled",
+        status,
+        endedAt,
       });
 
       expect(() =>
@@ -1945,7 +1949,7 @@ describe("task-registry", () => {
           runId: "terminal-flow-link",
           task: "Should be denied",
         }),
-      ).toThrow("Parent flow is already cancelled.");
+      ).toThrow(`Parent flow is already ${status}.`);
     });
   });
 
@@ -3561,6 +3565,35 @@ describe("task-registry", () => {
         status: "running",
       });
     });
+  });
+
+  it("prunes expired ended TaskFlows during scheduled maintenance", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        vi.useFakeTimers();
+        const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/scheduled-task-flow-maintenance",
+          goal: "Completed without a usable result",
+          status: "blocked",
+          createdAt: endedAt,
+          updatedAt: endedAt,
+          endedAt,
+        });
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        try {
+          startTaskRegistryMaintenance();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await waitForFast(() => expect(getTaskFlowById(flow.flowId)).toBeUndefined());
+        } finally {
+          stopTaskRegistryMaintenance();
+        }
+      },
+      { durableStore: true },
+    );
   });
 
   it("keeps scheduled maintenance root-admitted until session cleanup inspection settles", async () => {
