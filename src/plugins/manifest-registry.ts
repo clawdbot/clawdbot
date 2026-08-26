@@ -34,6 +34,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestBackupResource,
   PluginManifestDoctorContract,
 } from "./manifest-types.js";
 import {
@@ -217,6 +218,7 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
 
 export type PluginManifestRecord = {
   id: string;
+  backupResources?: PluginManifestBackupResource[];
   name?: string;
   description?: string;
   catalog?: PluginManifestCatalog;
@@ -562,6 +564,7 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
+    backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -1113,6 +1116,9 @@ export function loadPluginManifestRegistryCore(
         pluginId: candidate.diagnosticIdHint ?? candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
+        ...("diagnosticCode" in manifestRes && manifestRes.diagnosticCode
+          ? { code: manifestRes.diagnosticCode }
+          : {}),
       });
       continue;
     }

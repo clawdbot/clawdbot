@@ -2496,7 +2496,6 @@ src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	2
 src/commands/backup-shared.ts	1
-src/commands/backup-verify-manifest.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/channel-plugin-resolution.ts	1
 src/commands/channel-setup/config-compatibility.ts	2
@@ -3149,7 +3148,7 @@ src/infra/approval-handler-runtime.ts	15
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	6
 src/infra/backup-create-stream.ts	3
-src/infra/backup-create.ts	3
+src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	4
 src/infra/backup-volatile-stat-cache.ts	1
 src/infra/bonjour-discovery.ts	5
