@@ -19,7 +19,7 @@ export type SenderGateVerdict =
 
 export type MailAuthenticator = typeof authenticate;
 
-export function matchesImapSender(sender: string, entries: readonly string[]): boolean {
+function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
   if (at < 1) {
     return false;
@@ -82,7 +82,7 @@ function matchingSenderToken(
 
 type AuthenticationHeader = { authservId: string; dmarc?: string; spf?: string };
 
-export function parseImapAuthResults(value: string): AuthenticationHeader | undefined {
+function parseImapAuthResults(value: string): AuthenticationHeader | undefined {
   const unfolded = value.replace(/\r?\n[\t ]+/gu, " ");
   const separator = unfolded.indexOf(";");
   if (separator < 1) {
@@ -111,7 +111,7 @@ function authenticationHeaders(mail: ParsedMail): AuthenticationHeader[] {
     });
 }
 
-export function mapImapAuthStrength(
+function mapImapAuthStrength(
   result: AuthenticateResult | undefined,
   headers: readonly AuthenticationHeader[],
   account: ImapAccountConfig,

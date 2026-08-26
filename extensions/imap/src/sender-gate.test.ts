@@ -3,12 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
 import { createImapAuthResult } from "./imap-test-support.js";
 import { renderImapPrompt } from "./prompt.js";
-import {
-  evaluateImapSender,
-  mapImapAuthStrength,
-  matchesImapSender,
-  parseImapAuthResults,
-} from "./sender-gate.js";
+import { evaluateImapSender } from "./sender-gate.js";
 
 function account(overrides: Record<string, unknown> = {}) {
   return resolveImapConfig({
@@ -36,8 +31,18 @@ describe("IMAP sender admission", () => {
     ["person@example.com", ["@EXAMPLE.com"], true],
     ["trusted@evil.example", ["trusted@example.com"], false],
     ["Trusted@example.com", ["trusted@example.com"], false],
-  ])("matches sender %s against the actual addr-spec", (sender, entries, accepted) => {
-    expect(matchesImapSender(sender, entries)).toBe(accepted);
+  ])("matches sender %s against the actual addr-spec", async (sender, entries, accepted) => {
+    const mail = await message([`From: ${sender}`, "To: reader@example.com"]);
+    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const verdict = await evaluateImapSender({
+      ...mail,
+      account: account({ allowedSenders: entries }),
+      authenticator,
+    });
+    expect(verdict.accepted).toBe(accepted);
+    if (!accepted) {
+      expect(verdict.reason).toBe("sender-not-allowed");
+    }
   });
 
   it("rejects a spoofed display name and ignores Reply-To", async () => {
@@ -68,23 +73,29 @@ describe("IMAP sender admission", () => {
   });
 
   it.each(["neutral", "temperror", "none"] as const)(
-    "never treats DMARC %s as verified",
-    (result) => {
-      expect(mapImapAuthStrength(createImapAuthResult(result), [], account()).strength).not.toBe(
-        "verified",
-      );
+    "never dispatches on DMARC %s at the default verified threshold",
+    async (result) => {
+      const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+      const authenticator = vi.fn(async () => createImapAuthResult(result));
+      await expect(
+        evaluateImapSender({ ...mail, account: account(), authenticator }),
+      ).resolves.toMatchObject({ accepted: false });
     },
   );
 
-  it("does not verify a passing DKIM signature that left message body bytes unsigned", () => {
+  it("does not verify a passing DKIM signature that left message body bytes unsigned", async () => {
     const result = createImapAuthResult("pass");
     if (result.dmarc) {
       result.dmarc.alignment.dkim.underSized = 32;
     }
-    expect(mapImapAuthStrength(result, [], account()).strength).not.toBe("verified");
+    const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+    const authenticator = vi.fn(async () => result);
+    await expect(
+      evaluateImapSender({ ...mail, account: account(), authenticator }),
+    ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
   });
 
-  it("accepts only configured Authentication-Results authorities", () => {
+  it("accepts only configured Authentication-Results authorities", async () => {
     const configured = account({
       senderAuth: {
         min: "asserted",
@@ -92,24 +103,25 @@ describe("IMAP sender admission", () => {
         acceptTrustedAuthservId: true,
       },
     });
-    expect(parseImapAuthResults("mx.example.com; dmarc=pass header.from=example.com")).toEqual({
-      authservId: "mx.example.com",
-      dmarc: "pass",
+    const authenticator = vi.fn(async () => createImapAuthResult("none"));
+    const untrusted = await message([
+      "From: trusted@example.com",
+      "Authentication-Results: attacker.example; dmarc=pass",
+    ]);
+    await expect(
+      evaluateImapSender({ ...untrusted, account: configured, authenticator }),
+    ).resolves.toMatchObject({ accepted: false, reason: "unverified-authentication" });
+    const trusted = await message([
+      "From: trusted@example.com",
+      "Authentication-Results: mx.example.com; dmarc=pass header.from=example.com",
+    ]);
+    await expect(
+      evaluateImapSender({ ...trusted, account: configured, authenticator }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      strength: "asserted",
+      reason: "trusted-authserv-dmarc-pass",
     });
-    expect(
-      mapImapAuthStrength(
-        createImapAuthResult("none"),
-        [{ authservId: "evil.example", dmarc: "pass" }],
-        configured,
-      ),
-    ).toMatchObject({ strength: "unverified" });
-    expect(
-      mapImapAuthStrength(
-        createImapAuthResult("none"),
-        [{ authservId: "mx.example.com", dmarc: "pass" }],
-        configured,
-      ),
-    ).toMatchObject({ strength: "asserted" });
   });
 
   it("binds plus-address tokens to an already-allowed sender", async () => {

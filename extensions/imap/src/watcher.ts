@@ -50,6 +50,7 @@ export class ImapAccountWatcher {
   private failures = 0;
   private authFailures = 0;
   private reconnectPending = false;
+  private sweepPending = false;
 
   constructor(private readonly options: ImapWatcherOptions) {}
 
@@ -216,7 +217,14 @@ export class ImapAccountWatcher {
 
   private requestSweep(): void {
     const client = this.client;
-    if (this.stopping || !client || this.activeSweep) {
+    if (this.stopping || !client) {
+      return;
+    }
+    if (this.activeSweep) {
+      // A wakeup during an active sweep must queue a follow-up sweep: the running
+      // sweep snapshotted its UID range, so dropping the wakeup would strand the
+      // new message until the next unrelated event or reconnect.
+      this.sweepPending = true;
       return;
     }
     this.activeSweep = this.sweep(client)
@@ -229,6 +237,10 @@ export class ImapAccountWatcher {
       })
       .finally(() => {
         this.activeSweep = undefined;
+        if (this.sweepPending && !this.stopping) {
+          this.sweepPending = false;
+          this.requestSweep();
+        }
       });
   }
 

@@ -15,6 +15,7 @@ class ScriptedImapServer {
   uidValidity = "17";
   connectionCount = 0;
   rejectAuthentication = false;
+  fetchGate: Promise<void> | undefined;
   private readonly server: Server;
 
   constructor(private readonly supportsIdle = true) {
@@ -51,7 +52,9 @@ class ScriptedImapServer {
 
   async close(): Promise<void> {
     this.disconnect();
-    await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      this.server.close(() => resolve());
+    });
   }
 
   private accept(socket: Socket): void {
@@ -96,20 +99,30 @@ class ScriptedImapServer {
           socket.write("+ idling\r\n");
         } else if (upper === "UID" && subcommand?.toUpperCase() === "FETCH") {
           const minimum = Number(line.split(" ")[3]?.split(":")[0]);
+          // Snapshot the response at command time: a held response must not absorb
+          // messages appended while the fetch is in flight.
           const selected = this.messages.filter((entry) => entry.uid >= minimum);
           const matches = selected.length ? selected : this.messages.slice(-1);
-          for (const mail of matches) {
-            const date = new Date()
-              .toUTCString()
-              .slice(5)
-              .replace(/ /u, "-")
-              .replace(/ /u, "-")
-              .replace(" GMT", " +0000");
-            socket.write(
-              `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`,
-            );
+          const respond = () => {
+            for (const mail of matches) {
+              const date = new Date()
+                .toUTCString()
+                .slice(5)
+                .replace(/ /u, "-")
+                .replace(/ /u, "-")
+                .replace(" GMT", " +0000");
+              socket.write(
+                `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`,
+              );
+            }
+            socket.write(`${tag} OK FETCH completed\r\n`);
+          };
+          const gate = this.fetchGate;
+          if (gate) {
+            void gate.then(respond);
+          } else {
+            respond();
           }
-          socket.write(`${tag} OK FETCH completed\r\n`);
         } else {
           socket.write(`${tag} OK completed\r\n`);
         }
@@ -233,6 +246,30 @@ describe("IMAP watcher protocol boundary", () => {
     expect(server.connectionCount).toBe(2);
     expect(dispatchHookAgentTurn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: "hook:imap:inbox:17:2" }),
+    );
+  });
+
+  it("coalesces a wakeup that arrives during an active sweep", async () => {
+    const { server, state, dispatchHookAgentTurn } = await startWatcher();
+    await vi.waitFor(async () =>
+      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 }),
+    );
+    let releaseFetch = () => {};
+    server.fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    server.append("From: trusted@example.com\r\nSubject: First\r\n\r\nHeld sweep");
+    await vi.waitFor(() =>
+      expect(server.commands.some((command) => /UID FETCH/u.test(command))).toBe(true),
+    );
+    server.append("From: trusted@example.com\r\nSubject: Second\r\n\r\nDuring sweep");
+    server.fetchGate = undefined;
+    releaseFetch();
+    await vi.waitFor(() => expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(2), {
+      timeout: 5_000,
+    });
+    expect(dispatchHookAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "hook:imap:inbox:17:3" }),
     );
   });
 
