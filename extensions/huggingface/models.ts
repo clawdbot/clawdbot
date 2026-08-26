@@ -132,18 +132,16 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
     const providerWithContext = providers.find(
       (provider) => typeof provider?.context_length === "number" && provider.context_length > 0,
     );
-    const model =
-      catalogById.get(id) ??
-      ({
-        id,
-        name: displayNameFromApiEntry(entry),
-        reasoning: isReasoningModelHeuristic(id),
-        input:
-          Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
-        cost: HUGGINGFACE_DEFAULT_COST,
-        contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
-      } satisfies ModelDefinitionConfig);
+    const model: ModelDefinitionConfig = catalogById.get(id) ?? {
+      id,
+      name: displayNameFromApiEntry(entry),
+      reasoning: isReasoningModelHeuristic(id),
+      input:
+        Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
+      cost: HUGGINGFACE_DEFAULT_COST,
+      contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
+    };
     models.push({
       ...model,
       contextWindow: providerWithContext?.context_length ?? model.contextWindow,
