@@ -592,13 +592,6 @@ export function projectChatTranscript(
       }
     }
   }
-  if (props.runStatus?.phase === "interrupted") {
-    transcriptRows.push({
-      kind: "content",
-      key: `interrupted:${props.runStatus.occurredAt}`,
-      content: renderTurnTerminalStatusRow("interrupted"),
-    });
-  }
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
