@@ -212,6 +212,35 @@ type ReplyDispatcherWithTypingResult = {
   markRunComplete: () => void;
 };
 
+type NormalizeReplyPayloadInternalOptions = Pick<
+  ReplyDispatcherOptions,
+  | "responsePrefix"
+  | "responsePrefixContext"
+  | "responsePrefixContextProvider"
+  | "onHeartbeatStrip"
+  | "transformReplyPayload"
+> & {
+  conversationContext?: string;
+  onSkip?: (reason: NormalizeReplySkipReason) => void;
+};
+
+function normalizeReplyPayloadInternal(
+  payload: ReplyPayload,
+  opts: NormalizeReplyPayloadInternalOptions,
+): NormalizeReplyOutcome {
+  // Prefer dynamic context provider over static context
+  const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
+
+  return normalizeReplyPayloadOutcome(payload, {
+    responsePrefix: opts.responsePrefix,
+    responsePrefixContext: prefixContext,
+    onHeartbeatStrip: opts.onHeartbeatStrip,
+    transformReplyPayload: opts.transformReplyPayload,
+    conversationContext: opts.conversationContext,
+    onSkip: opts.onSkip,
+  });
+}
+
 /** Normalize through a dispatcher's exact owner before TTS or other visible side effects. */
 export function prepareReplyPayloadForDispatcher(
   dispatcher: ReplyDispatcher,
@@ -317,10 +346,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     payload: ReplyPayload,
     notifySkip: boolean,
   ) =>
-    normalizeReplyPayloadOutcome(payload, {
+    normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
-      responsePrefixContext:
-        options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
+      responsePrefixContext: options.responsePrefixContext,
+      responsePrefixContextProvider: options.responsePrefixContextProvider,
       transformReplyPayload: options.transformReplyPayload,
       conversationContext: conversationContextsByDispatcher.get(dispatcher),
       onHeartbeatStrip: options.onHeartbeatStrip,
