@@ -1,5 +1,12 @@
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { WebSocketServer } from "ws";
+import { GatewayClient } from "../../../packages/gateway-client/src/index.js";
+import {
+  PROTOCOL_VERSION,
+  type BoardSnapshot,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -18,6 +25,13 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../methods/registry.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import { createBoardHarness as createHarness } from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -99,6 +113,163 @@ describe("board gateway runtime boundaries", () => {
     );
   });
 
+  it("fences awaited board mutation through Gateway dispatch when its root retires", async () => {
+    const documentStarted = createDeferred();
+    const releaseDocument = createDeferred<{ html: string; cspSandbox: "scripts" }>();
+    const harness = createHarness(async () => {
+      documentStarted.resolve();
+      return await releaseDocument.promise;
+    });
+    const handler = harness.handlers["board.widget.put"];
+    if (!handler) {
+      throw new Error("board.widget.put handler missing");
+    }
+    const methodRegistry = createGatewayMethodRegistry(
+      createCoreGatewayMethodDescriptors({ "board.widget.put": handler }),
+    );
+    const events: string[] = [];
+    const connected = createDeferred();
+    const gatewayClients = new Set<GatewayWsClient>();
+    const { broadcast } = createGatewayBroadcaster({ clients: gatewayClients });
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    server.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "board-authority-proof", ts: Date.now() },
+        }),
+      );
+      socket.on("message", (data) => {
+        const request = JSON.parse(rawDataToString(data)) as {
+          id: string;
+          method: string;
+          params?: unknown;
+          type: "req";
+        };
+        if (request.method === "connect") {
+          gatewayClients.add({
+            socket,
+            connect: {
+              role: "operator",
+              scopes: ["operator.admin"],
+            } as GatewayWsClient["connect"],
+            connId: "board-authority-proof",
+            usesSharedGatewayAuth: false,
+          });
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: request.id,
+              ok: true,
+              payload: {
+                type: "hello-ok",
+                protocol: PROTOCOL_VERSION,
+                server: { version: "board-authority-proof", connId: "board-authority-proof" },
+                features: { methods: ["board.widget.put"], events: ["board.changed"] },
+                snapshot: {
+                  presence: [],
+                  health: {},
+                  stateVersion: { presence: 1, health: 1 },
+                  uptimeMs: 1,
+                },
+                auth: { role: "operator", scopes: ["operator.admin"] },
+                policy: {
+                  maxPayload: 512 * 1024,
+                  maxBufferedBytes: 1024 * 1024,
+                  tickIntervalMs: 60_000,
+                },
+              },
+            }),
+          );
+          return;
+        }
+        void handleGatewayRequest({
+          req: request,
+          respond: (ok, payload, error) => {
+            socket.send(
+              JSON.stringify({
+                type: "res",
+                id: request.id,
+                ok,
+                ...(payload === undefined ? {} : { payload }),
+                ...(error === undefined ? {} : { error }),
+              }),
+            );
+          },
+          client: null,
+          isWebchatConnect: () => false,
+          context: {
+            broadcast,
+            getRuntimeConfig: () => ({
+              agents: { list: [{ id: "main" }] },
+              tools: { exec: { mode: "ask" } },
+            }),
+            logGateway: { warn: vi.fn() },
+          } as unknown as GatewayRequestContext,
+          methodRegistry,
+        });
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("board authority proof server did not get a TCP address");
+    }
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${address.port}`,
+      onEvent: (event) => events.push(event.event ?? ""),
+      onHelloOk: () => connected.resolve(),
+      onConnectError: (error) => connected.reject(error),
+    });
+    try {
+      client.start();
+      await connected.promise;
+      const request = client.request(
+        "board.widget.put",
+        {
+          sessionKey: "session",
+          name: "canvas",
+          content: { kind: "canvas-doc", docId: "canvas-doc" },
+        },
+        { timeoutMs: null },
+      );
+      const requestOutcome = request.then(
+        () => ({ error: undefined }),
+        (error: unknown) => ({ error }),
+      );
+      await documentStarted.promise;
+
+      resetGatewayWorkAdmission();
+      releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
+
+      const { error } = await requestOutcome;
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("board request authority is no longer active");
+      expect(harness.store.getSnapshot("session").widgets).toEqual([]);
+      expect(events).not.toContain("board.changed");
+
+      await client.request("board.widget.put", {
+        sessionKey: "session",
+        name: "live",
+        content: { kind: "canvas-doc", docId: "live-canvas-doc" },
+      });
+      expect(harness.store.getSnapshot("session").widgets).toMatchObject([{ name: "live" }]);
+      expect(events).toContain("board.changed");
+    } finally {
+      client.stop();
+      gatewayClients.clear();
+      for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it.each([
     {
       name: "layout update before applyOps",
@@ -114,26 +285,6 @@ describe("board gateway runtime boundaries", () => {
         return {
           response,
           verify: () => expect(harness.store.getSnapshot("session").tabs).toEqual([]),
-        };
-      },
-    },
-    {
-      name: "Canvas widget after document materialization",
-      run: async () => {
-        const harness = createHarness(async () => {
-          resetGatewayWorkAdmission();
-          return { html: "<p>canvas</p>", cspSandbox: "scripts" };
-        });
-        const response = await runWithGatewayRootWorkAdmissionForTest(() =>
-          harness.invoke("board.widget.put", {
-            sessionKey: "session",
-            name: "canvas",
-            content: { kind: "canvas-doc", docId: "canvas-doc" },
-          }),
-        );
-        return {
-          response,
-          verify: () => expect(harness.store.getSnapshot("session").widgets).toEqual([]),
         };
       },
     },
