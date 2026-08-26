@@ -331,6 +331,41 @@ describe("opencode-go provider plugin", () => {
     expect(modelIds).not.toContain("hy3-preview");
   });
 
+  it("skips unrelated scoped discovery even when OpenCode credentials are configured", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const resolveProviderApiKey = vi.fn(() => ({
+      apiKey: "configured-opencode-key",
+      discoveryApiKey: "configured-opencode-key",
+    }));
+
+    try {
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          providerIds: ["anthropic"],
+          resolveProviderApiKey,
+        } as never),
+      ).resolves.toBeNull();
+      expect(resolveProviderApiKey).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await expect(
+        provider.catalog?.run({
+          config: {},
+          env: {},
+          providerIds: ["opencode-go"],
+          resolveProviderApiKey: () => ({ apiKey: "configured-opencode-key" }),
+        } as never),
+      ).resolves.toMatchObject({
+        provider: { apiKey: "configured-opencode-key" },
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("never fetches either catalog when no shared OpenCode key is configured", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch");

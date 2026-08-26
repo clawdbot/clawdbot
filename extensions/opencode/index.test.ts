@@ -252,6 +252,44 @@ describe("opencode provider plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not resolve OpenCode credentials or download metadata for another provider scope", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unexpected fetch"));
+    const resolveProviderApiKey = vi.fn(
+      (): { apiKey: string; discoveryApiKey: string | undefined } => ({
+        apiKey: "configured-opencode-key",
+        discoveryApiKey: "configured-opencode-key",
+      }),
+    );
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        providerIds: ["anthropic"],
+        resolveProviderApiKey,
+      } as never),
+    ).resolves.toBeNull();
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    resolveProviderApiKey.mockReturnValueOnce({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      discoveryApiKey: undefined,
+    });
+    const ownScope = await provider.catalog?.run({
+      config: {},
+      env: {},
+      providerIds: ["opencode"],
+      resolveProviderApiKey,
+    } as never);
+    expect(ownScope).toMatchObject({ provider: { apiKey: NON_ENV_SECRETREF_MARKER } });
+    expect(resolveProviderApiKey).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("downloads upstream metadata only after an explicitly selected provider is configured", async () => {
     vi.stubEnv("OPENCODE_API_KEY", undefined);
     vi.stubEnv("OPENCODE_ZEN_API_KEY", undefined);
