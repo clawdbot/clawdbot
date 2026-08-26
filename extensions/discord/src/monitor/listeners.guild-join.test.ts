@@ -165,6 +165,19 @@ describe("Discord guild join introductions", () => {
     expect(mocks.hasAnyChannelPermissionDiscord).toHaveBeenCalledTimes(2);
   });
 
+  it("skips a writable policy-denied system channel for an allowed fallback", async () => {
+    await createListener({
+      guildEntries: {
+        "guild-1": { channels: { "fallback-channel": { enabled: true } } },
+      },
+    }).handle(guildCreateEvent(), createClient());
+
+    expect(reportChannelRoomJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ deliverTo: "channel:fallback-channel", roomAllowed: true }),
+    );
+    expect(mocks.hasAnyChannelPermissionDiscord).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the room metadata when Discord denies message-history access", async () => {
     mocks.readMessagesDiscord.mockRejectedValue(new Error("Missing ReadMessageHistory"));
 

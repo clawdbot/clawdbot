@@ -55,7 +55,17 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
       accountId: this.params.accountId,
       rest: client.rest,
     };
+    const guildInfo = resolveDiscordGuildEntry({
+      guild: new Guild(client, data),
+      guildId: data.id,
+      guildEntries: this.params.guildEntries,
+    });
+    const guildConfigured =
+      !this.params.guildEntries ||
+      Object.keys(this.params.guildEntries).length === 0 ||
+      Boolean(guildInfo);
     let targetChannel: (typeof textChannels)[number] | undefined;
+    let roomAllowed = false;
     for (const channel of candidateChannels) {
       if (
         (await canViewDiscordGuildChannel(
@@ -72,8 +82,31 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
           discordOptions,
         ))
       ) {
-        targetChannel = channel;
-        break;
+        // Keep the first denied room for a recorded skip, but keep seeking an allowed destination.
+        targetChannel ??= channel;
+        const channelConfig = resolveDiscordChannelConfig({
+          guildInfo,
+          channelId: channel.id,
+          channelName: channel.name,
+          channelSlug: normalizeDiscordSlug(channel.name),
+        });
+        roomAllowed =
+          guildConfigured &&
+          resolveDiscordPreflightChannelAccess({
+            isGuildMessage: true,
+            isGroupDm: false,
+            groupPolicy: this.params.groupPolicy,
+            messageChannelId: channel.id,
+            displayChannelName: channel.name,
+            displayChannelSlug: normalizeDiscordDisplaySlug(channel.name),
+            guildInfo,
+            channelConfig,
+            channelMatchMeta: `guild=${data.id} channel=${channel.id}`,
+          }).allowed;
+        if (roomAllowed) {
+          targetChannel = channel;
+          break;
+        }
       }
     }
     if (!targetChannel) {
@@ -87,35 +120,6 @@ export class DiscordGuildJoinIntroductionListener extends GuildCreateListener {
       return;
     }
     const selectedChannel = targetChannel;
-
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: new Guild(client, data),
-      guildId: data.id,
-      guildEntries: this.params.guildEntries,
-    });
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: selectedChannel.id,
-      channelName: selectedChannel.name,
-      channelSlug: normalizeDiscordSlug(selectedChannel.name),
-    });
-    const guildConfigured =
-      !this.params.guildEntries ||
-      Object.keys(this.params.guildEntries).length === 0 ||
-      Boolean(guildInfo);
-    const roomAllowed =
-      guildConfigured &&
-      resolveDiscordPreflightChannelAccess({
-        isGuildMessage: true,
-        isGroupDm: false,
-        groupPolicy: this.params.groupPolicy,
-        messageChannelId: selectedChannel.id,
-        displayChannelName: selectedChannel.name,
-        displayChannelSlug: normalizeDiscordDisplaySlug(selectedChannel.name),
-        guildInfo,
-        channelConfig,
-        channelMatchMeta: `guild=${data.id} channel=${selectedChannel.id}`,
-      }).allowed;
 
     await reportChannelRoomJoin({
       cfg: this.params.cfg,

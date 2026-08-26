@@ -159,6 +159,9 @@ export async function reportChannelRoomJoin(
           kind: "agentTurn",
           message,
           timeoutSeconds: CHANNEL_JOIN_INTRO_TIMEOUT_SECONDS,
+          externalContentSource: "webhook",
+          // Untrusted room evidence can never authorize tools; cron owns message delivery.
+          toolsAllow: [],
         },
         delivery: {
           mode: "announce",
