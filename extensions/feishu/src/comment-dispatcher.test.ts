@@ -29,7 +29,8 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./comment-dispatcher-runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
   createReplyPrefixContext: createReplyPrefixContextMock,
 }));
 
@@ -59,7 +60,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./client.js");
-    vi.doUnmock("./comment-dispatcher-runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-outbound");
     vi.doUnmock("./comment-reaction.js");
     vi.doUnmock("./drive.js");
     vi.doUnmock("./runtime.js");

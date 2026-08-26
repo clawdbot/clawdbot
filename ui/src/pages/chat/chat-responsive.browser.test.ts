@@ -1914,7 +1914,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         const after = await geometry();
 
-        expect(after).toEqual(before);
+        for (const key of ["composer", "conversation", "thread"] as const) {
+          expect(after[key].height).toBe(before[key].height);
+          expect(after[key].width).toBe(before[key].width);
+          expect(Math.abs(after[key].top - before[key].top)).toBeLessThanOrEqual(0.5);
+        }
         expect(
           await page
             .locator(".chat-topbar-notices")

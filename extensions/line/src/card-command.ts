@@ -8,10 +8,9 @@ import {
   createImageCard,
   createInfoCard,
   createListCard,
-  createReceiptCard,
-  type CardAction,
-  type ListItem,
-} from "./flex-templates.js";
+} from "./flex-templates/basic-cards.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { CardAction, ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
 import type { LineChannelData } from "./types.js";
 
