@@ -11,7 +11,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -636,6 +636,75 @@ describe("canonical session message recovery", () => {
       expect(request).not.toHaveBeenCalled();
     },
   );
+
+  it("starts a fresh history request after a pre-final request resolves stale", async () => {
+    const runId = "run-with-pre-final-history";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Finish after the stale snapshot" }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persistedReply = {
+      role: "assistant",
+      content: [{ type: "text", text: "The post-final snapshot contains this reply." }],
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
+    const staleHistory = createDeferred<ChatHistoryResult>();
+    const freshHistory = createDeferred<ChatHistoryResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(staleHistory.promise)
+      .mockReturnValueOnce(freshHistory.promise);
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const sessionInfo = {
+      key: state.sessionKey,
+      kind: "direct" as const,
+      updatedAt: 2,
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "done",
+    };
+
+    const preFinalLoad = loadChatHistory(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+      },
+    });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleHistory.resolve({ messages: [prompt], sessionId: "selected-session", sessionInfo });
+    await preFinalLoad;
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish after the stale snapshot" },
+    ]);
+
+    freshHistory.resolve({
+      messages: [prompt, persistedReply],
+      sessionId: "selected-session",
+      sessionInfo,
+    });
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Finish after the stale snapshot" },
+      { role: "assistant", text: "The post-final snapshot contains this reply." },
+    ]);
+  });
 
   it("does not reload for a background run's message-less final", () => {
     const request = vi.fn();

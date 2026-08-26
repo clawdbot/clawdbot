@@ -515,9 +515,12 @@ export function handlePageGatewayEvent(
     ) {
       // Only the first owned completion can recover history. Replayed, yielded,
       // or background-run terminals must not repeat I/O or disturb the foreground pane.
-      void loadChatHistory(state, { deferBranches: !isPresented() }).finally(() =>
-        state.requestUpdate?.(),
-      );
+      // The terminal boundary must observe a request started after persistence;
+      // an older coalesced snapshot can legitimately finish without the reply.
+      void loadChatHistory(state, {
+        deferBranches: !isPresented(),
+        supersedeInFlight: true,
+      }).finally(() => state.requestUpdate?.());
     }
     if (terminalPayload) {
       if (outboxScope) {
