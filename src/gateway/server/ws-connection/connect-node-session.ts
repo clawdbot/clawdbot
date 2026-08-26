@@ -138,15 +138,14 @@ export async function prepareGatewayNodeConnect(
     }
     throw error;
   }
-  // SSH verification proves machine ownership, an admin-minted setup code
-  // records that admin's consent to this machine's initial declared surface,
-  // and a silent approval proved same-host local-grade auth — the operator
-  // themselves. Approve those initial surfaces directly; headless connects
-  // have no approval UI to consume the silent hint, so leaving them pending
-  // strands the node (#128446). "trusted-cidr" stays on the manual prompt:
-  // network origin alone must not approve a command surface. Later manifest
-  // upgrades still prompt for every route.
-  if (deviceApprovedNonInteractively && !pairedNode && reconciliation.pendingPairing) {
+  // SSH verification proves machine ownership, while an admin-minted setup code
+  // records that admin's consent to this machine's initial declared surface.
+  // Approve either initial surface directly; later manifest upgrades still prompt.
+  if (
+    (deviceApprovedVia === "ssh-verified" || deviceApprovedVia === "bootstrap") &&
+    !pairedNode &&
+    reconciliation.pendingPairing
+  ) {
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
