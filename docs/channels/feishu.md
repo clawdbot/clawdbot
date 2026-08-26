@@ -663,7 +663,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
-| `channels.feishu.actions.sticker`                        | Enable sending stickers previously received by the bot                               | `false`                              |
+| `channels.feishu.actions.sticker`                        | Enable received-sticker sending and configured sticker search                        | `false`                              |
+| `channels.feishu.stickerSets`                            | Searchable received-sticker keys and keywords, grouped by bot app ID                 | none                                 |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
@@ -781,6 +782,56 @@ same `accountId` that received the sticker.
 Only stickers previously received by that bot can be sent. Uploading new
 stickers, downloading sticker resources, and searching the sticker store are
 not supported.
+
+### Sticker keyword search
+
+Add a curated sticker set to let the agent find a received sticker by keyword.
+First send each sticker to the bot and ask it for the received `file_key`.
+Then add keys and your own labels to the existing Feishu configuration:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { sticker: true },
+      stickerSets: {
+        cli_work: {
+          file_received_key: ["thumbs up", "赞", "👍"],
+        },
+      },
+    },
+  },
+}
+```
+
+Replace `cli_work` with the bot's actual app ID and `file_received_key` with
+the key received by that bot. `stickerSets` belongs directly under
+`channels.feishu`, not inside an account. The selected account can search only
+the set matching its app ID; changing an account to a different bot does not
+reuse the previous bot's set. Accounts using the same bot share its set.
+Keep any existing account-level action gates as described above.
+
+Ask the agent to “send a thumbs up sticker.” It can use the shared `message`
+tool with `action: "sticker-search"`, `query: "thumbs up"`, and the intended
+`accountId`, then send a returned `fileId` with `action: "sticker"` on that
+same account. Search is available only when stickers are enabled and the bot
+has a nonempty configured set.
+
+Search matches a case-insensitive substring of an explicit keyword, including
+Chinese labels and emoji, in sticker-key order. It does not infer a sticker's
+meaning, search Feishu's store, or automatically collect received stickers.
+Results include the matching `keyword` and reusable `fileId`. No matches
+produce an empty list; `truncated: true` means matching entries were omitted
+by the result limit or output budget. Narrow the query to find other matches.
+
+Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
+Store keywords without leading or trailing whitespace; each must be nonempty
+and at most 64 Unicode characters. File keys must be canonical received keys,
+at most 512 Unicode characters. Each key appears only once in its bot's map.
+Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
+and accepts integers from 1 through 10; search results are also capped at
+3 KiB of JSON output. Removing a set removes it from search; no separate
+sticker database or cache is created.
 
 ### Threads and replies
 

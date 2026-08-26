@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+import { FeishuStickerSetsSchema } from "./sticker-catalog.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 export { z };
 
@@ -260,6 +261,7 @@ const FeishuConfigSchemaBase = z
   .object({
     enabled: z.boolean().optional(),
     defaultAccount: z.string().optional(),
+    stickerSets: FeishuStickerSetsSchema.optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
