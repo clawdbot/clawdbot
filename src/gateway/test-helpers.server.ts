@@ -359,6 +359,9 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
@@ -480,9 +483,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
   gatewayReplyRuntimePrepared = false;
-  agentDiscoveryMock.enabled = false;
-  agentDiscoveryMock.discoverCalls = 0;
-  agentDiscoveryMock.models = [];
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
