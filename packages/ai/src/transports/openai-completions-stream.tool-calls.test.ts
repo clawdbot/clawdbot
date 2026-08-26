@@ -337,7 +337,7 @@ describe("openai completions stream", () => {
         }
       }
 
-      const result = await stream.result();
+      const result = await (await stream).result();
       const cleanTerminal = done || Boolean(finishReason);
       expect(terminalEvent).toBe(cleanTerminal ? "done" : "error");
       expect(result.stopReason).toBe(cleanTerminal ? "stop" : "error");
