@@ -586,6 +586,7 @@ export async function coordinateSubagentContinuation(params: {
           },
           {
             agentSessionKey: params.targetRequesterSessionKey,
+            ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
             agentChannel: params.targetRequesterOrigin?.channel ?? undefined,
             agentAccountId: params.targetRequesterOrigin?.accountId ?? undefined,
             agentTo: params.targetRequesterOrigin?.to ?? undefined,

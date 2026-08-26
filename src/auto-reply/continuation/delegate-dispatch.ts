@@ -460,6 +460,7 @@ export async function dispatchToolDelegates(
 
     const spawnCtx: SpawnSubagentContext = {
       agentSessionKey: sessionKey,
+      ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
       agentChannel: ctx.agentChannel,
       agentAccountId: ctx.agentAccountId,
       agentTo: ctx.agentTo,

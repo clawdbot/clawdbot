@@ -18,8 +18,8 @@ import { describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
-  emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
+  startDynamicToolDiagnosticExecution,
 } from "./dynamic-tool-diagnostics.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
 import {
@@ -47,6 +47,12 @@ const testing = {
     dynamicToolBuildState.openClawCodingToolsFactory = factory;
   },
 };
+
+function emitDynamicToolStartedDiagnostic(
+  params: Parameters<typeof startDynamicToolDiagnosticExecution>[0],
+): void {
+  startDynamicToolDiagnosticExecution(params, () => undefined);
+}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();

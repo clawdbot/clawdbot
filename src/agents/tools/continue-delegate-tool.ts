@@ -390,6 +390,7 @@ function prepareAcceptedDelegateArtifactPolicy(params: {
  */
 export function createContinueDelegateTool(opts: {
   agentSessionKey?: string;
+  runId?: string;
   prepareArtifactPolicy?: typeof prepareDelegateArtifactPolicy;
 }): AnyAgentTool {
   return {
@@ -586,6 +587,7 @@ export function createContinueDelegateTool(opts: {
       const delegate: PendingContinuationDelegate = {
         task,
         delayMs,
+        ...(opts.runId ? { originRunId: opts.runId } : {}),
         ...(artifactMode !== "forbidden" ? { firstArmedAt: acceptedAt } : {}),
         ...(mode !== "normal" ? { mode } : {}),
         ...attachmentFields,

@@ -1,7 +1,13 @@
 /**
  * Trusted diagnostics emitted around Codex dynamic tool execution lifecycle.
  */
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  emitTrustedDiagnosticEvent,
+  freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 type DynamicToolDiagnosticContext = {
@@ -10,19 +16,35 @@ type DynamicToolDiagnosticContext = {
   runId?: string | undefined;
   sessionId?: string | undefined;
   sessionKey?: string | undefined;
+  trace?: DiagnosticTraceContext | undefined;
 };
 
-/** Emits a start event for one Codex dynamic tool call. */
-export function emitDynamicToolStartedDiagnostic(params: DynamicToolDiagnosticContext): void {
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.started",
+function dynamicToolDiagnosticEventBase(params: DynamicToolDiagnosticContext) {
+  return {
     agentId: params.agentId,
     runId: params.runId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    trace: params.trace,
     toolName: params.call.tool,
     toolCallId: params.call.callId,
+  };
+}
+
+/** Starts one diagnostic child and installs it around the dynamic handler. */
+export function startDynamicToolDiagnosticExecution<T>(
+  params: DynamicToolDiagnosticContext,
+  execute: () => T,
+) {
+  const trace = freezeDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope());
+  emitTrustedDiagnosticEvent({
+    type: "tool.execution.started",
+    ...dynamicToolDiagnosticEventBase({ ...params, trace }),
   });
+  return {
+    trace,
+    execution: runWithDiagnosticTraceContext(trace, execute),
+  };
 }
 
 /** Emits an error event for one Codex dynamic tool call. */
@@ -34,12 +56,7 @@ export function emitDynamicToolErrorDiagnostic(
 ): void {
   emitTrustedDiagnosticEvent({
     type: "tool.execution.error",
-    agentId: params.agentId,
-    runId: params.runId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    toolName: params.call.tool,
-    toolCallId: params.call.callId,
+    ...dynamicToolDiagnosticEventBase(params),
     durationMs: params.durationMs,
     errorCategory: "codex_dynamic_tool_error",
     terminalReason: params.terminalReason ?? "failed",
@@ -58,12 +75,7 @@ export function emitDynamicToolTerminalDiagnostic(
   if (terminalType === "completed") {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.completed",
-      agentId: params.agentId,
-      runId: params.runId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      toolName: params.call.tool,
-      toolCallId: params.call.callId,
+      ...dynamicToolDiagnosticEventBase(params),
       durationMs: params.durationMs,
     });
     return;
@@ -71,12 +83,7 @@ export function emitDynamicToolTerminalDiagnostic(
   if (terminalType === "blocked") {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
-      agentId: params.agentId,
-      runId: params.runId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      toolName: params.call.tool,
-      toolCallId: params.call.callId,
+      ...dynamicToolDiagnosticEventBase(params),
       deniedReason: "plugin-before-tool-call",
       reason: "Tool call blocked",
     });
