@@ -324,6 +324,7 @@ function createChatHeaderState(
   overrides: {
     model?: string | null;
     modelProvider?: string | null;
+    modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
     models?: ModelCatalogEntry[];
     defaultsThinkingDefault?: string;
     thinkingDefault?: string;
@@ -408,6 +409,7 @@ function createChatHeaderState(
       return createSessionsListResult({
         model: currentModel,
         modelProvider: currentModelProvider,
+        modelOverrideSource: overrides.modelOverrideSource,
         defaultsThinkingDefault: overrides.defaultsThinkingDefault,
         thinkingDefault: overrides.thinkingDefault,
         omitSessionFromList,
@@ -434,6 +436,7 @@ function createChatHeaderState(
   const initialSessionsResult = createSessionsListResult({
     model: currentModel,
     modelProvider: currentModelProvider,
+    modelOverrideSource: overrides.modelOverrideSource,
     defaultsThinkingDefault: overrides.defaultsThinkingDefault,
     thinkingDefault: overrides.thinkingDefault,
     omitSessionFromList,
@@ -6425,10 +6428,12 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("omits inherited provenance and resets an override from the provenance row", () => {
+  it("hides the provenance footer for an inherited default and resets a recorded pin", () => {
     const { state } = createChatHeaderState({
-      model: null,
-      models: createOpenAiModelCatalog(),
+      model: "gpt-5",
+      modelProvider: "openai",
+      modelOverrideSource: null,
+      models: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }, ...createOpenAiModelCatalog()],
     });
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
@@ -6436,13 +6441,16 @@ describe("chat model controls", () => {
     expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
     expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
-    renderModelControls(
-      state,
-      { modelOverrides: { main: "openai/gpt-5.4" }, onModelSelect },
-      container,
-    );
+    state.sessionsResult = createSessionsListResult({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
+    renderModelControls(state, { onModelSelect }, container);
 
-    expect(container.querySelector(".chat-controls__model-provenance")).not.toBeNull();
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
+      "Only for this session",
+    );
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
@@ -6451,12 +6459,64 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Use default");
+    expect(reset?.textContent?.trim()).toBe("Use default (GPT-5)");
     reset?.focus();
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
     expect(details?.open).toBe(false);
     expect(document.activeElement).toBe(modelSelect);
+    container.remove();
+  });
+
+  // Settings can move the agent default onto — and back off — a session's pinned
+  // model. Provenance must survive both moves, and the default row must stay a live
+  // way to clear the pin while the two values coincide.
+  it("keeps a session pin selectable and clearable when the agent default becomes the pinned model", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+      models: createOpenAiModelCatalog(),
+    });
+    const onModelSelect = vi.fn(async () => true);
+    // The agent default moves onto the very model this session pinned.
+    state.sessionsResult = {
+      ...expectDefined(state.sessionsResult, "sessions result"),
+      defaults: {
+        ...expectDefined(state.sessionsResult, "sessions result").defaults,
+        model: "gpt-5.4",
+        modelProvider: "openai",
+      },
+    };
+    const container = renderModelControls(state, { onModelSelect });
+    document.body.append(container);
+
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
+      "Only for this session",
+    );
+    const defaultRow = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.4"]',
+    );
+    expect(defaultRow?.dataset.chatModelDefault).toBe("true");
+    // Pre-fix this row was already the selected "inherited" sentinel, so the click
+    // was swallowed and the stored pin survived forever.
+    defaultRow?.click();
+    expect(onModelSelect).toHaveBeenCalledWith("", "main");
+
+    // The default moves away again; the untouched pin is still a pin.
+    onModelSelect.mockClear();
+    state.sessionsResult = {
+      ...expectDefined(state.sessionsResult, "sessions result"),
+      defaults: {
+        ...expectDefined(state.sessionsResult, "sessions result").defaults,
+        model: "gpt-5",
+        modelProvider: "openai",
+      },
+    };
+    renderModelControls(state, { onModelSelect }, container);
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
+      "Only for this session",
+    );
     container.remove();
   });
 
@@ -6665,6 +6725,34 @@ describe("chat model controls", () => {
     ).filter((option) => !option.hidden);
     expect(visibleOptions).toHaveLength(1);
     expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+  });
+
+  it("leaves digit keys to the model search and selects the numbered row from the picker", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onModelSelect });
+    document.body.append(container);
+
+    const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
+    details!.open = true;
+    search!.value = "claude";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(search!.value).toBe("claude");
+
+    details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
+    container.remove();
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
@@ -7425,7 +7513,6 @@ describe("chat model controls", () => {
         },
       ),
       refresh: async () => {},
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7500,7 +7587,6 @@ describe("chat model controls", () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7549,7 +7635,6 @@ describe("chat model controls", () => {
         },
       ),
       refresh: async () => {},
-      setModelOverride: vi.fn(),
       patchRowLocal: vi.fn(),
     };
     const host = {
@@ -7603,13 +7688,6 @@ describe("chat model controls", () => {
           },
         ),
         refresh: async () => {},
-        setModelOverride: vi.fn((key: string, value: string | null | undefined) => {
-          if (value === undefined) {
-            delete modelOverrides[key];
-          } else {
-            modelOverrides[key] = value;
-          }
-        }),
         patchRowLocal: vi.fn(),
       };
       const host = {

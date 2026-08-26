@@ -24,7 +24,7 @@ function createState(result: ChatHistoryResult): TestState {
     sessionKey: "main",
   });
   const sessions: TestSessions = {
-    setModelOverride: vi.fn(),
+    refreshReplacement: vi.fn(async () => undefined),
     reconcileRunTerminal: vi.fn(),
   };
   return {

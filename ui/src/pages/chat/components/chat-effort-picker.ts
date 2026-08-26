@@ -6,7 +6,10 @@ import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import {
+  normalizeThinkingOptionValue,
+  type ChatThinkingSelectState,
+} from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 type ChatEffortPickerParams = {
@@ -34,6 +37,17 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     return nothing;
   }
   const selection = params.thinking.selection;
+  const rankedThinkingStops = sliderStops.filter(
+    (stop) => normalizeThinkingOptionValue(stop.value) !== "off",
+  );
+  const rankedThinkingIndex = rankedThinkingStops.findIndex(
+    (stop) => stop.value === selection.value,
+  );
+  const effortFill =
+    rankedThinkingIndex >= 0 && rankedThinkingStops.length > 0
+      ? (rankedThinkingIndex + 1) / rankedThinkingStops.length
+      : 0;
+  const effortIsOff = normalizeThinkingOptionValue(selection.value) === "off";
   const hasThinkingOverride = selection.source === "override";
   const selectedThinkingValue = hasThinkingOverride ? selection.value : "";
   const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
@@ -166,6 +180,23 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       >
         ${params.fastMode.active
           ? html`<span class="chat-controls__effort-zap" aria-hidden="true">${icons.zap}</span>`
+          : nothing}
+        ${showReasoning
+          ? html`
+              <span
+                class="chat-controls__effort-brain ${effortIsOff
+                  ? "chat-controls__effort-brain--off"
+                  : ""}"
+                style=${`--chat-effort-fill: ${effortFill * 100}%`}
+                aria-hidden="true"
+              >
+                <span class="chat-controls__effort-brain-outline">${icons.brain}</span>
+                <span class="chat-controls__effort-brain-fill">${icons.brain}</span>
+                ${params.fastMode.active
+                  ? html`<span class="chat-controls__effort-fast-badge">${icons.zap}</span>`
+                  : nothing}
+              </span>
+            `
           : nothing}
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"

@@ -107,12 +107,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: nil)
         self.isMenuOpen = false
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         // Leaving the menu attached makes subsequent left clicks open AppKit's menu.
         self.statusItem?.menu = nil
         self.statusItem?.button?.highlight(self.isChatWindowVisible)
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: item)
     }
 
     /// Accessibility/keyboard activation path; pointer clicks are consumed by the
@@ -218,7 +223,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             isPaused: self.state.isPaused,
             connection: connection,
             quickChatEnabled: self.state.quickChatEnabled,
-            canvasEnabled: self.state.canvasEnabled,
             voiceWakeSupported: voiceWakeSupported,
             debugEnabled: self.state.debugPaneEnabled,
             updateReady: self.updater.isAvailable && self.updater.updateStatus.isUpdateReady,
@@ -247,8 +251,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.activityStore.current
             _ = self.activityStore.mainSessionKey
             _ = HealthStore.shared.state
-            _ = HealthStore.shared.isRefreshing
-            _ = HealthStore.shared.lastSuccess
             _ = HealthStore.shared.degradedSummary
             _ = MacNodeChannelStatusStore.shared.state
             _ = self.nodes.nodes

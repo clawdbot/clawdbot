@@ -89,6 +89,9 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
+                hasActiveRun: true,
+                activeRunIds: ["stale-run"],
+                status: "completed",
                 updatedAt,
               },
             ]),
@@ -126,6 +129,11 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
+        const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
+        await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
+        await expect
+          .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())
+          .toBe(0);
         await expectVisibleLastActivity("composer");
         await captureProof(page, "composer-attached-wide.png");
 

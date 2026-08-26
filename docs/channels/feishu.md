@@ -648,6 +648,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
 | `channels.feishu.accounts.<id>.replyToMode`              | Per-account reply-reference mode                                                     | inherited                            |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
+| `channels.feishu.accounts.<id>.actions.sticker`          | Per-account sticker action override                                                  | inherited                            |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
@@ -662,6 +663,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
+| `channels.feishu.actions.sticker`                        | Enable sending stickers previously received by the bot                               | `false`                              |
 | `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
@@ -705,6 +707,10 @@ repair it before starting the gateway.
 - ✅ Video/media
 - ✅ Stickers
 
+Received stickers expose their reusable `file_key` to the agent as
+`<sticker key="..."/>`. Feishu/Lark does not support downloading sticker
+resources, so OpenClaw preserves the key without fetching an attachment.
+
 Inbound Feishu/Lark audio messages are normalized as media placeholders instead
 of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
 downloads the voice-note resource and runs shared audio transcription before the
@@ -722,6 +728,7 @@ resource payload.
 - ✅ Audio
 - ✅ Video/media
 - ✅ Interactive cards (including streaming updates)
+- ✅ Stickers previously received by the same bot (requires `actions.sticker`)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
 Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
@@ -731,6 +738,49 @@ transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
 delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
 replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
 conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
+### Sticker replies
+
+Enable the sticker action to let the agent resend stickers:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { sticker: true },
+    },
+  },
+}
+```
+
+For one account only, set `channels.feishu.accounts.<id>.actions.sticker: true`
+instead. An account-level `actions` object **replaces**, rather than merges
+with, the channel-level object. Repeat any action gates you want to preserve.
+For example, keep reactions disabled while enabling stickers for `work`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { reactions: false },
+      accounts: {
+        work: {
+          actions: { reactions: false, sticker: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Send a sticker to that bot first, then ask it to resend the sticker.
+The shared `message` tool uses `action: "sticker"` with the received `file_key`
+in `fileId` or the first entry of `stickerId`. In multi-account setups, use the
+same `accountId` that received the sticker.
+
+Only stickers previously received by that bot can be sent. Uploading new
+stickers, downloading sticker resources, and searching the sticker store are
+not supported.
 
 ### Threads and replies
 

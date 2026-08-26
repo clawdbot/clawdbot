@@ -343,16 +343,6 @@ export interface ClawhubPromotionClaims {
   slug: string;
 }
 
-export interface ClawhubPromotionsFeedState {
-  etag: string | null;
-  feed_sequence: number | null;
-  last_checked_at_ms: number | null;
-  notified_slugs_json: Generated<string>;
-  payload_json: string | null;
-  state_key: string;
-  updated_at_ms: number;
-}
-
 export interface ConfigHealthEntries {
   config_path: string;
   last_known_good_json: string | null;
@@ -479,11 +469,6 @@ export interface CronRunReceipts {
   request_run_id: string | null;
   started_at_ms: number;
   status: string;
-  store_key: string;
-}
-
-export interface CronStoreEpochs {
-  store_epoch: Generated<number>;
   store_key: string;
 }
 
@@ -935,17 +920,6 @@ export interface MigrationSources {
   target_table: string;
 }
 
-export interface ModelCatalogRemote {
-  bundle_json: string;
-  checked_at: number;
-  etag: string | null;
-  generated_at: number;
-  id: Generated<number>;
-  last_modified: string | null;
-  min_version: string | null;
-  source_url: string;
-}
-
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -954,22 +928,6 @@ export interface NativeHookRelayBridges {
   relay_id: string;
   token: string;
   updated_at_ms: number;
-}
-
-export interface NodeHostConfig {
-  config_key: string;
-  display_name: string | null;
-  gateway_cloudflare_access_json: string | null;
-  gateway_context_path: string | null;
-  gateway_host: string | null;
-  gateway_port: number | null;
-  gateway_tls: number | null;
-  gateway_tls_fingerprint: string | null;
-  installed_apps_sharing: Generated<number>;
-  node_id: string;
-  token: string | null;
-  updated_at_ms: number;
-  version: number;
 }
 
 export interface NodeWorkerLaunchContainers {
@@ -1011,15 +969,6 @@ export interface OfficialExternalPluginCatalogSnapshots {
   trust_signature_count: number | null;
   trust_threshold: number | null;
   trust_verified_at: string | null;
-  updated_at_ms: number;
-}
-
-export interface OnboardingRecommendations {
-  accepted_at_ms: number | null;
-  config_key: string;
-  inventory_hash: string;
-  matches_json: string;
-  offered_at_ms: number;
   updated_at_ms: number;
 }
 
@@ -1246,19 +1195,6 @@ export interface SessionWatchCursors {
   watcher_session_key: string;
 }
 
-export interface SidebarSections {
-  position: number;
-  section_id: string;
-}
-
-export interface SkillCuratorState {
-  id: Generated<number>;
-  last_attempt_at_ms: number;
-  last_error: string | null;
-  last_result_json: string;
-  last_success_at_ms: number | null;
-}
-
 export interface SkillUploadChunks {
   byte_offset: number;
   chunk_blob: Uint8Array;
@@ -1461,61 +1397,11 @@ export interface TaskRuns {
   tool_use_count: number | null;
 }
 
-export interface TuiLastSessions {
-  scope_key: string;
-  session_key: string;
-  updated_at: number;
-}
-
-export interface UpdateCheckState {
-  auto_first_seen_at: string | null;
-  auto_first_seen_tag: string | null;
-  auto_first_seen_version: string | null;
-  auto_install_id: string | null;
-  auto_last_attempt_at: string | null;
-  auto_last_attempt_version: string | null;
-  auto_last_success_at: string | null;
-  auto_last_success_version: string | null;
-  last_available_tag: string | null;
-  last_available_version: string | null;
-  last_checked_at: string | null;
-  last_notified_tag: string | null;
-  last_notified_version: string | null;
-  state_key: string;
-  updated_at_ms: number;
-}
-
 export interface UserPreferences {
   pref_key: string;
   profile_id: string;
   updated_at_ms: number;
   value_json: string;
-}
-
-export interface VoicewakeRoutingConfig {
-  config_key: string;
-  default_target_agent_id: string | null;
-  default_target_mode: string;
-  default_target_session_key: string | null;
-  updated_at_ms: number;
-  version: number;
-}
-
-export interface VoicewakeRoutingRoutes {
-  config_key: string;
-  position: number;
-  target_agent_id: string | null;
-  target_mode: string;
-  target_session_key: string | null;
-  trigger: string;
-  updated_at_ms: number;
-}
-
-export interface VoicewakeTriggers {
-  config_key: string;
-  position: number;
-  trigger: string;
-  updated_at_ms: number;
 }
 
 export interface WebPushSubscriptions {
@@ -1525,14 +1411,6 @@ export interface WebPushSubscriptions {
   endpoint_hash: string;
   p256dh: string;
   subscription_id: string;
-  updated_at_ms: number;
-}
-
-export interface WebPushVapidKeys {
-  key_id: string;
-  private_key: string;
-  public_key: string;
-  subject: string;
   updated_at_ms: number;
 }
 
@@ -1791,7 +1669,6 @@ export interface DB {
   claw_package_refs: ClawPackageRefs;
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
-  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
   config_revision_keys: ConfigRevisionKeys;
@@ -1799,7 +1676,6 @@ export interface DB {
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   cron_run_receipts: CronRunReceipts;
-  cron_store_epochs: CronStoreEpochs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1832,13 +1708,10 @@ export interface DB {
   meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
-  model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
-  node_host_config: NodeHostConfig;
   node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
-  onboarding_recommendations: OnboardingRecommendations;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
@@ -1857,8 +1730,6 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
-  sidebar_sections: SidebarSections;
-  skill_curator_state: SkillCuratorState;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
@@ -1870,14 +1741,8 @@ export interface DB {
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
-  tui_last_sessions: TuiLastSessions;
-  update_check_state: UpdateCheckState;
   user_preferences: UserPreferences;
-  voicewake_routing_config: VoicewakeRoutingConfig;
-  voicewake_routing_routes: VoicewakeRoutingRoutes;
-  voicewake_triggers: VoicewakeTriggers;
   web_push_subscriptions: WebPushSubscriptions;
-  web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;

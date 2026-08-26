@@ -130,7 +130,7 @@ export async function prepareGatewayKernelState(params: {
       ? createDesktopSessionRegistry()
       : undefined;
   const nodeDesktopStreamBroker =
-    nodeDesktopObserveAvailable || workerDesktopObserveAvailable
+    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
       ? (
           await startupTrace.measure(
             "node-desktop.runtime-import",
@@ -156,6 +156,7 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
+            getPortalRuntime: () => pluginGatewayContext.current,
             desktopSessionRegistry,
             ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,

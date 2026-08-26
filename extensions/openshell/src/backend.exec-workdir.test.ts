@@ -2,21 +2,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import {
-  createSandboxBrowserConfig,
-  createSandboxPruneConfig,
-  createSandboxSshConfig,
-  createSandboxTestContext,
-} from "openclaw/plugin-sdk/test-fixtures";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
 const sdkMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
@@ -49,32 +44,6 @@ vi.mock("./cli.js", async (importOriginal) => {
 });
 
 const tempWorkspaces: TempWorkspace[] = [];
-
-function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
-  return {
-    mode: "all",
-    backend: "openshell",
-    scope: "session",
-    workspaceAccess: "rw",
-    workspaceRoot: "/tmp/openclaw-sandboxes",
-    dockerTmpfsSource: "configured",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      network: "none",
-      capDrop: [],
-      binds: [],
-      env: {},
-    },
-    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
-    browser: createSandboxBrowserConfig(),
-    tools: { allow: ["*"], deny: [] },
-    prune: createSandboxPruneConfig(),
-  };
-}
 
 async function createOpenShellBackendFixture(params: {
   workspaceDir: string;
@@ -152,18 +121,9 @@ describe("openshell backend exec workdir validation", () => {
       await fs.mkdir(protectedPath, { recursive: true });
       await fs.writeFile(path.join(protectedPath, "private.txt"), "host-only", "utf8");
     }
-    const backendFactory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-        mode: "mirror",
-      }),
-    });
-    const backend = await backendFactory({
-      sessionKey: "agent:main:turn",
+    const backend = await createOpenShellBackendFixture({
       scopeKey: "agent:somalley_alice:dashboard-8",
       workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg: createOpenShellBackendSandboxConfig(),
     });
 
     await expect(backend.validateWorkdir?.("/workspace")).resolves.toBe("/workspace");
@@ -241,18 +201,9 @@ describe("openshell backend exec workdir validation", () => {
     tempWorkspaces.push(workspace);
     const workspaceDir = workspace.dir;
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
-    const backendFactory = createOpenShellSandboxBackendFactory({
-      pluginConfig: resolveOpenShellPluginConfig({
-        command: "openshell",
-        mode: "mirror",
-      }),
-    });
-    const backend = await backendFactory({
-      sessionKey: "agent:main:turn",
+    const backend = await createOpenShellBackendFixture({
       scopeKey: "agent:main",
       workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg: createOpenShellBackendSandboxConfig(),
     });
 
     await expect(backend.validateWorkdir?.("/workspace")).resolves.toBe("/workspace");

@@ -102,6 +102,7 @@ describe("DashboardsPage", () => {
       expect.any(Function),
     );
     expect(refreshList).not.toHaveBeenCalled();
+    const retiredListener = listListeners.get("all")!;
 
     selectionState.scopeId = "writer";
     selectionListeners.forEach((listener) => listener());
@@ -122,13 +123,44 @@ describe("DashboardsPage", () => {
       error: null,
     });
     await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
-    listListeners.get("all")?.({
+    retiredListener({
       result: result(row("agent:main:retired", "Retired")),
       agentId: null,
       loading: false,
-      error: null,
+      error: "Retired scope refresh failed",
     });
     await element.updateComplete;
     expect(element.textContent).not.toContain("Retired");
+
+    const writerListener = listListeners.get("writer")!;
+    writerListener({
+      result: result(row("agent:writer:current", "Writer dashboard")),
+      agentId: "writer",
+      loading: false,
+      error: "Writer refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("Writer dashboard");
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
+    refreshList.mockClear();
+    element.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(refreshList).toHaveBeenCalledOnce();
+    expect(refreshList).toHaveBeenLastCalledWith({
+      limit: 50,
+      boardFace: "dashboard",
+      archivedFilter: "all",
+      agentId: "writer",
+      force: true,
+    });
+
+    element.remove();
+    writerListener({
+      result: null,
+      agentId: "writer",
+      loading: false,
+      error: "Detached refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).not.toContain("Detached refresh failed");
   });
 });

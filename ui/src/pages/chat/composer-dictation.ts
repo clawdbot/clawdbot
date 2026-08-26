@@ -43,7 +43,7 @@ type DictationSessionResult = {
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
   onLevel: (level: number) => void;
-  onPartial: (text: string) => void;
+  onTranscriptChange: () => void;
   onReady: () => void;
 };
 
@@ -124,7 +124,6 @@ class ComposerDictationSession {
   private closePromise: Promise<void> | null = null;
   private stopped = false;
   private discarded = false;
-  private closed = false;
   private failed = false;
 
   constructor(
@@ -201,7 +200,6 @@ class ComposerDictationSession {
     });
     await this.appendChain;
     await this.closeRemote();
-    this.cleanupEvents();
   }
 
   async cancel(): Promise<void> {
@@ -210,7 +208,6 @@ class ComposerDictationSession {
     await this.startPromise?.catch(() => undefined);
     await this.appendChain;
     await this.closeRemote();
-    this.cleanupEvents();
   }
 
   markGatewayDisconnected(): boolean {
@@ -218,7 +215,7 @@ class ComposerDictationSession {
   }
 
   private appendAudio(samples: Float32Array): void {
-    if (this.closed) {
+    if (this.stopped) {
       return;
     }
     if (!this.sessionId) {
@@ -259,26 +256,30 @@ class ComposerDictationSession {
 
   private handleEvent(frame: GatewayEventFrame): void {
     const payload = eventPayload(frame);
-    if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId || this.closed) {
+    if (
+      !payload ||
+      payload.transcriptionSessionId !== this.transcriptionSessionId ||
+      this.stopped
+    ) {
       return;
     }
     if (payload.type === "partial" && typeof payload.text === "string") {
       this.currentPartial = payload.text.trim();
-      this.callbacks.onPartial(this.currentPartial);
+      this.callbacks.onTranscriptChange();
       return;
     }
     if (payload.type === "transcript" && typeof payload.text === "string") {
       const text = payload.text.trim();
       if (payload.final !== true) {
         this.currentPartial = text;
-        this.callbacks.onPartial(text);
+        this.callbacks.onTranscriptChange();
         return;
       }
       if (text) {
         this.finalTranscripts.push(text);
         this.currentPartial = "";
       }
-      this.callbacks.onPartial("");
+      this.callbacks.onTranscriptChange();
       return;
     }
     if (payload.type === "error") {
@@ -318,18 +319,15 @@ class ComposerDictationSession {
     this.stopped = true;
     this.abortController.abort();
     this.inputPump.stop();
+    // Retire UI events immediately; queued audio may still drain into remote close.
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     this.inputMeter?.stop();
     this.inputMeter = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
     await this.context?.close();
     this.context = null;
-  }
-
-  private cleanupEvents(): void {
-    this.closed = true;
-    this.unsubscribe?.();
-    this.unsubscribe = null;
   }
 
   private closeRemote(): Promise<void> {
@@ -348,7 +346,6 @@ export class ComposerDictationController {
   readonly inputLevel = new RealtimeTalkLevelSignal();
   private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
-  private partialTranscript = "";
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
   private pointerBounds: DOMRect | null = null;
@@ -383,8 +380,8 @@ export class ComposerDictationController {
     return this.phase !== "idle";
   }
 
-  get partial(): string {
-    return this.partialTranscript;
+  get transcript(): string {
+    return this.session?.transcriptSnapshot() ?? "";
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -449,9 +446,6 @@ export class ComposerDictationController {
     document.addEventListener("pointercancel", this.handleDocumentPointerCancel);
     document.addEventListener("pointerup", this.handleSuppressedPointerRelease);
     document.addEventListener("pointercancel", this.handleSuppressedPointerRelease);
-    document.addEventListener("keydown", this.handleDocumentKeyDown);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    window.addEventListener("blur", this.handleWindowBlur);
     return true;
   }
 
@@ -506,7 +500,7 @@ export class ComposerDictationController {
     }
     if (this.phase === "pressing" || this.phase === "holding") {
       const cleanTap = this.phase === "pressing";
-      this.clearGesture();
+      this.clearPointerGesture();
       this.setPhase("idle");
       if (cleanTap) {
         this.options.onTap?.();
@@ -572,7 +566,7 @@ export class ComposerDictationController {
       return;
     }
     if (this.options.dictationAvailable === false) {
-      this.clearGesture();
+      this.clearPointerGesture();
       this.setPhase("idle");
       this.options.onDictationUnavailable?.();
       // The held pointer still owns a synthetic click. Its release expires this
@@ -592,10 +586,7 @@ export class ComposerDictationController {
         void this.stop({ commit: true });
       },
       onLevel: (level) => this.inputLevel.set(level),
-      onPartial: (text) => {
-        this.partialTranscript = text;
-        this.options.onStateChange();
-      },
+      onTranscriptChange: () => this.options.onStateChange(),
       onReady: () => {
         if (this.session === session && this.phase === "connecting") {
           this.setPhase("recording");
@@ -619,7 +610,7 @@ export class ComposerDictationController {
       return Promise.resolve(false);
     }
     const wasActive = this.active;
-    this.clearGesture();
+    this.clearPointerGesture();
     const session = this.session;
     if (!session) {
       this.reset();
@@ -641,14 +632,8 @@ export class ComposerDictationController {
   }
 
   private reset(): void {
-    this.partialTranscript = "";
     this.inputLevel.set(0);
     this.setPhase("idle");
-  }
-
-  private clearGesture(): void {
-    this.clearPointerGesture();
-    this.clearLifecycleListeners();
   }
 
   private clearPointerGesture(): void {
@@ -670,12 +655,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointermove", this.handleDocumentPointerMove);
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
     document.removeEventListener("pointercancel", this.handleDocumentPointerCancel);
-  }
-
-  private clearLifecycleListeners(): void {
-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    window.removeEventListener("blur", this.handleWindowBlur);
   }
 
   private expireClickSuppression(): void {
@@ -703,6 +682,15 @@ export class ComposerDictationController {
   private setPhase(phase: DictationPhase): void {
     if (this.phase === phase) {
       return;
+    }
+    if (this.phase === "idle") {
+      document.addEventListener("keydown", this.handleDocumentKeyDown);
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      window.addEventListener("blur", this.handleWindowBlur);
+    } else if (phase === "idle") {
+      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      window.removeEventListener("blur", this.handleWindowBlur);
     }
     this.phase = phase;
     this.options.onStateChange();

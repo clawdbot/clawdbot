@@ -8,6 +8,8 @@ import type {
   WorkerHelloOk,
   WorkerLiveEventParams,
   WorkerLiveEventResponseFrame,
+  WorkerPortalParams,
+  WorkerPortalResponseFrame,
   WorkerProtocolCloseReason,
   WorkerSessionsSendParams,
   WorkerSessionsSendResponseFrame,
@@ -231,6 +233,10 @@ export class WorkerConnection {
     params: WorkerGitHubPublishParams,
   ): Promise<WorkerGitHubPublishResponseFrame> {
     return this.requestDurableSessionOperation(() => this.frames.request("github-publish", params));
+  }
+
+  requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
+    return this.frames.request("portal", params);
   }
 
   private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {

@@ -86,7 +86,7 @@ describe("broadcast serialization failures", () => {
     ]);
   });
 
-  it("keeps a real healthy peer delivering while skipping a silently closing peer", async () => {
+  it("keeps a real healthy peer delivering while rejecting closing and failed peers", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(server, "listening");
     const address = server.address() as AddressInfo;
@@ -98,6 +98,7 @@ describe("broadcast serialization failures", () => {
       return { peer, socket };
     };
     const retired = await connectPeer();
+    const broken = await connectPeer();
     const healthy = await connectPeer();
     const delivered: Array<{ event: string; seq: number }> = [];
     healthy.peer.on("message", (data: RawData) => {
@@ -110,25 +111,40 @@ describe("broadcast serialization failures", () => {
       usesSharedGatewayAuth: false,
     });
     const retiredClient = makeRealClient("real-retired", retired.socket);
+    const brokenClient = makeRealClient("real-broken", broken.socket);
     const healthyClient = makeRealClient("real-healthy", healthy.socket);
-    const clients = new Set([retiredClient, healthyClient]);
+    const clients = new Set([retiredClient, brokenClient, healthyClient]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     try {
+      warnSpy.mockClear();
+      const brokenPeerClosed = vi.fn();
+      broken.peer.once("close", brokenPeerClosed);
+      vi.spyOn(broken.socket, "send").mockImplementationOnce(() => {
+        throw new Error("injected synchronous send failure");
+      });
       retired.socket.close(1000, "retiring peer");
       expect(retired.socket.readyState).toBe(WebSocket.CLOSING);
       const bufferedAtClose = retired.socket.bufferedAmount;
 
-      broadcast("skills.changed", { reason: "fanout" });
+      broadcast("chat", {
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      });
       broadcastToConnIds("skills.changed", { reason: "targeted" }, new Set(["real-healthy"]));
       await vi.waitFor(() => expect(delivered).toHaveLength(2));
+      await vi.waitFor(() => expect(brokenPeerClosed).toHaveBeenCalledOnce());
 
       expect(retired.socket.bufferedAmount).toBe(bufferedAtClose);
       expect(clients.has(retiredClient)).toBe(true);
       expect(delivered.map(({ event, seq }) => ({ event, seq }))).toEqual([
-        { event: "skills.changed", seq: 1 },
+        { event: "chat", seq: 1 },
         { event: "skills.changed", seq: 2 },
       ]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("real-broken: injected synchronous send failure"),
+        { event: "chat" },
+      );
 
       let callbackError: Error | undefined;
       retired.socket.send("dependency-callback-proof", (error) => {
@@ -138,6 +154,7 @@ describe("broadcast serialization failures", () => {
       await vi.waitFor(() => expect(callbackError).toBeInstanceOf(Error));
     } finally {
       retired.peer.terminate();
+      broken.peer.terminate();
       healthy.peer.terminate();
       for (const activeSocket of server.clients) {
         activeSocket.terminate();

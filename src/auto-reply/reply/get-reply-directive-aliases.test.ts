@@ -170,7 +170,7 @@ describe("reply directive aliases", () => {
         cleaned: "",
         hasModelDirective: true,
         rawModelDirective: "fable",
-        modelSessionOnly: true,
+        modelScope: "session",
       },
     },
     {
@@ -181,7 +181,6 @@ describe("reply directive aliases", () => {
         rawModelDirective: "anthropic/claude-opus-4-6",
         rawModelProfile: undefined,
         rawModelRuntime: undefined,
-        modelSessionOnly: false,
       },
     },
     {
@@ -192,7 +191,6 @@ describe("reply directive aliases", () => {
         rawModelDirective: "fable",
         rawModelProfile: undefined,
         rawModelRuntime: undefined,
-        modelSessionOnly: false,
       },
     },
     {
@@ -203,7 +201,7 @@ describe("reply directive aliases", () => {
         rawModelDirective: "anthropic/claude-opus-4-6",
         rawModelProfile: "work",
         rawModelRuntime: "codex",
-        modelSessionOnly: true,
+        modelScope: "session",
       },
     },
   ])("routes model scope at the full reply boundary: $body", async ({ body, expected }) => {
@@ -408,7 +406,7 @@ describe("reply directive aliases", () => {
       hasModelDirective: true,
       rawModelDirective: "fable",
       rawModelRuntime: undefined,
-      modelSessionOnly: true,
+      modelScope: "session",
     });
   });
 

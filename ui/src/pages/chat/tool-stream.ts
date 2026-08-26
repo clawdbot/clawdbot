@@ -95,7 +95,7 @@ export type ToolStreamHost = {
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
   requestUpdate?: () => void;
-  sessions: Pick<SessionCapability, "setModelOverride">;
+  sessions: Pick<SessionCapability, "refreshReplacement">;
 };
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
@@ -220,35 +220,18 @@ function readLiveDiffStat(value: unknown): DiffStat | undefined {
     : undefined;
 }
 
-function resolveSessionStatusModelOverride(
-  details: Record<string, unknown> | null,
-): string | null | undefined {
-  if (details?.changedModel !== true) {
-    return undefined;
-  }
-  if (Object.hasOwn(details, "modelOverride")) {
-    const override = toTrimmedString(details.modelOverride);
-    return override;
-  }
-  const model = toTrimmedString(details.model);
-  if (!model) {
-    return undefined;
-  }
-  const provider = toTrimmedString(details.modelProvider);
-  return provider ? `${provider}/${model}` : model;
-}
-
-function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<string, unknown>) {
+function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, unknown>) {
   const details = readRecord(readRecord(data.result)?.details);
-  const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
-  if (!uiSessionEventMatches(host, targetSessionKey, toTrimmedString(details?.agentId))) {
+  if (details?.changedModel !== true) {
     return;
   }
-  const override = resolveSessionStatusModelOverride(details);
-  if (override === undefined) {
+  const targetSessionKey = toTrimmedString(details.sessionKey) ?? host.sessionKey;
+  const agentId = toTrimmedString(details.agentId);
+  if (!agentId || !uiSessionEventMatches(host, targetSessionKey, agentId)) {
     return;
   }
-  host.sessions.setModelOverride(targetSessionKey, override);
+  // Results can be replayed from history; read current truth without replacing pending UI intent.
+  void host.sessions.refreshReplacement(agentId);
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -1150,7 +1133,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
-    syncSessionStatusModelOverride(host, data);
+    refreshSessionStatusModel(host, data);
   }
 
   const now = Date.now();

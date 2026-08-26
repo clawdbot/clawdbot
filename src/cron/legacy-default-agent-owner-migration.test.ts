@@ -12,7 +12,6 @@ import { CronService } from "./service.js";
 import * as cronStoreModule from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { loadCronRows, replaceCronRows } from "./store/row-codec.js";
-import { ensureCronStoreEpochSchema } from "./store/schema.js";
 import type { CronStoreFile } from "./types.js";
 
 afterEach(() => {
@@ -33,7 +32,7 @@ function fixture(label: string) {
   return { env, storePath, storeKey, database };
 }
 
-it("preserves undecodable JSON and bumps the epoch once", async () => {
+it("preserves undecodable JSON while assigning its owner", async () => {
   const { env, storePath, storeKey, database } = fixture("openclaw-cron-owner-");
   database
     .prepare("UPDATE cron_jobs SET agent_id = ' ', job_json = ? WHERE store_key = ?")
@@ -44,13 +43,6 @@ it("preserves undecodable JSON and bumps the epoch once", async () => {
     agent_id: "ops",
     job_json: "{malformed",
   });
-  expect(
-    (
-      database
-        .prepare("SELECT store_epoch FROM cron_store_epochs WHERE store_key = ?")
-        .get(storeKey) as { store_epoch: number }
-    ).store_epoch,
-  ).toBe(1);
 });
 
 it("preserves a session-scoped owner stored only in job JSON", async () => {
@@ -73,16 +65,6 @@ it("preserves a session-scoped owner stored only in job JSON", async () => {
     sessionKey: "agent:research:main",
   });
   expect(preservedJobJson).not.toHaveProperty("agentId");
-});
-
-it("rolls back the row when the epoch bump fails", async () => {
-  const { env, storePath, storeKey, database } = fixture("openclaw-cron-atomic-");
-  ensureCronStoreEpochSchema(database);
-  database.exec(`CREATE TRIGGER fail_epoch BEFORE UPDATE OF store_epoch ON cron_store_epochs
-      BEGIN SELECT RAISE(ABORT, 'synthetic epoch failure'); END`);
-
-  await expect(migrate(storePath, env)).rejects.toThrow("synthetic epoch failure");
-  expect(loadCronRows(database, storeKey)[0]?.agent_id).toBeNull();
 });
 
 it("materializes before scheduler startup", async () => {

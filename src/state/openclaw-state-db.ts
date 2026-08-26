@@ -55,12 +55,13 @@ import {
 } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
+  assertOpenClawStateDatabaseV10ForMigration,
+  assertOpenClawStateDatabaseV11ForMigration,
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
   assertOpenClawStateDatabaseV7ForMigration,
   assertOpenClawStateDatabaseV8ForMigration,
   assertOpenClawStateDatabaseV9ForMigration,
-  assertOpenClawStateDatabaseV10ForMigration,
   assertSupportedSchemaVersion,
   markCurrentStateSchemaVersion,
   resolveDatabasePath,
@@ -83,6 +84,7 @@ import {
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
+import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import { withOpenClawStateStartupCheckpointConnection } from "./openclaw-state-db-startup-checkpoint.js";
 import { runRetiredStateTableMigrations } from "./openclaw-state-db-table-retirements.js";
@@ -98,16 +100,14 @@ import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibi
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 
-const STATE_MIGRATION_ASSERTIONS = new Map<
-  number,
-  typeof assertOpenClawStateDatabaseV5ForMigration
->([
+const STATE_MIGRATION_ASSERTIONS = new Map([
   [5, assertOpenClawStateDatabaseV5ForMigration],
   [6, assertOpenClawStateDatabaseV6ForMigration],
   [7, assertOpenClawStateDatabaseV7ForMigration],
   [8, assertOpenClawStateDatabaseV8ForMigration],
   [9, assertOpenClawStateDatabaseV9ForMigration],
   [10, assertOpenClawStateDatabaseV10ForMigration],
+  [11, assertOpenClawStateDatabaseV11ForMigration],
 ]);
 
 export {
@@ -208,6 +208,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         }
         dropLegacyStateTables(db);
         applied.push(...runRetiredStateTableMigrations(db, previousVersion));
+        if (migrateSingletonStateFoldInV12(db, previousVersion)) {
+          applied.push("Folded singleton state tables into config_machine_state (v12)");
+        }
         if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
           applied.push("Migrated cloud worker placements to execution modes");
         }
@@ -413,6 +416,7 @@ function ensureSchema(
         }
         dropLegacyStateTables(db);
         runRetiredStateTableMigrations(db, previousVersion);
+        migrateSingletonStateFoldInV12(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);

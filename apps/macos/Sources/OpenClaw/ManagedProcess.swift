@@ -18,6 +18,8 @@ final class ManagedProcess: @unchecked Sendable {
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
         private var childHandles: [FileHandle]
+        private var startResult: Result<pid_t, StartFailure>?
+        private var startWaiters: [UUID: CheckedContinuation<pid_t, any Error>] = [:]
         private var abortiveTerminationRequested = false
         private var finished = false
 
@@ -35,6 +37,38 @@ final class ManagedProcess: @unchecked Sendable {
 
         func requestAbortiveTermination() {
             self.lock.withLock { self.abortiveTerminationRequested = true }
+        }
+
+        func publishStart(_ result: Result<pid_t, StartFailure>) {
+            let waiters = self.lock.withLock {
+                guard self.startResult == nil else { return [CheckedContinuation<pid_t, any Error>]() }
+                self.startResult = result
+                defer { self.startWaiters.removeAll() }
+                return Array(self.startWaiters.values)
+            }
+            for waiter in waiters {
+                waiter.resume(with: result.mapError { $0 as any Error })
+            }
+        }
+
+        func waitUntilStarted() async throws -> pid_t {
+            let id = UUID()
+            let pid = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    let result: Result<pid_t, any Error>? = self.lock.withLock {
+                        if Task.isCancelled { return .failure(CancellationError()) }
+                        if let result = self.startResult { return result.mapError { $0 as any Error } }
+                        self.startWaiters[id] = continuation
+                        return nil
+                    }
+                    if let result { continuation.resume(with: result) }
+                }
+            } onCancel: {
+                let waiter = self.lock.withLock { self.startWaiters.removeValue(forKey: id) }
+                waiter?.resume(throwing: CancellationError())
+            }
+            try Task.checkCancellation()
+            return pid
         }
 
         func closeChildHandles() {
@@ -57,7 +91,6 @@ final class ManagedProcess: @unchecked Sendable {
     }
 
     private let state: State
-    private let startEvents: AsyncStream<Result<pid_t, StartFailure>>
     private let wakeContinuation: AsyncStream<WakeReason>.Continuation
     let completionTask: Task<TerminationStatus?, Never>
 
@@ -67,12 +100,10 @@ final class ManagedProcess: @unchecked Sendable {
 
     private init(
         state: State,
-        startEvents: AsyncStream<Result<pid_t, StartFailure>>,
         wakeContinuation: AsyncStream<WakeReason>.Continuation,
         completionTask: Task<TerminationStatus?, Never>)
     {
         self.state = state
-        self.startEvents = startEvents
         self.wakeContinuation = wakeContinuation
         self.completionTask = completionTask
     }
@@ -92,7 +123,6 @@ final class ManagedProcess: @unchecked Sendable {
             .send(signal: .terminate, toProcessGroup: true, allowedDurationToNextStep: .milliseconds(250)),
         ]
         let state = State(childHandles: childHandles)
-        let (startEvents, startContinuation) = AsyncStream.makeStream(of: Result<pid_t, StartFailure>.self)
         let (wakeEvents, wakeContinuation) = AsyncStream.makeStream(
             of: WakeReason.self,
             bufferingPolicy: .bufferingNewest(1))
@@ -106,15 +136,22 @@ final class ManagedProcess: @unchecked Sendable {
                 { execution in
                     let pid = pid_t(execution.processIdentifier.value)
                     state.closeChildHandles()
-                    startContinuation.yield(.success(pid))
+                    // Startup is a replayable lifecycle fact; cancelling one waiter
+                    // must not consume it or cancel the independently owned child.
+                    state.publishStart(.success(pid))
 
                     let exitSource = DispatchSource.makeProcessSource(
                         identifier: pid,
                         eventMask: .exit,
                         queue: .global(qos: .userInitiated))
-                    exitSource.setEventHandler { wakeContinuation.yield(.exited) }
+                    let didExit: @Sendable () -> Void = {
+                        // Stop reuse at leader exit; completion still joins descendant cleanup.
+                        state.finish()
+                        wakeContinuation.yield(.exited)
+                    }
+                    exitSource.setEventHandler(handler: didExit)
                     exitSource.resume()
-                    if State.hasExited(pid) { wakeContinuation.yield(.exited) }
+                    if State.hasExited(pid) { didExit() }
                     var wakeIterator = wakeEvents.makeAsyncIterator()
                     let wakeReason = await wakeIterator.next() ?? .terminate(gracefully: true)
                     exitSource.cancel()
@@ -152,14 +189,13 @@ final class ManagedProcess: @unchecked Sendable {
             } catch {
                 state.closeChildHandles()
                 let message = (error as? SubprocessError)?.description ?? error.localizedDescription
-                startContinuation.yield(.failure(StartFailure(message: message)))
+                state.publishStart(.failure(StartFailure(message: message)))
                 state.finish()
                 return nil
             }
         }
         return ManagedProcess(
             state: state,
-            startEvents: startEvents,
             wakeContinuation: wakeContinuation,
             completionTask: task)
     }
@@ -189,8 +225,7 @@ final class ManagedProcess: @unchecked Sendable {
     }
 
     func waitUntilStarted() async throws -> pid_t {
-        var iterator = self.startEvents.makeAsyncIterator()
-        return try await iterator.next()!.get()
+        try await self.state.waitUntilStarted()
     }
 
     func requestTermination(gracefully: Bool = true) {

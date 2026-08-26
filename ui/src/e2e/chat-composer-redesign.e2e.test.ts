@@ -224,6 +224,7 @@ suite.define(() => {
       const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const mobileDictation = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
       const captureMobileState = async (fileName: string) => {
@@ -632,11 +633,9 @@ suite.define(() => {
       await expect.poll(() => stop.count()).toBe(0);
 
       await textarea.fill("");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
-        .toBe(true);
-      await expect.poll(() => emptySend.isVisible()).toBe(true);
-      await expect.poll(() => emptySend.isDisabled()).toBe(true);
+      await expect.poll(() => mobileDictation.isVisible()).toBe(true);
+      const mobileTalk = page.getByRole("button", { name: "Tap to talk" });
+      await expect.poll(() => mobileTalk.isVisible()).toBe(true);
       await captureMobileState("mobile-composer-idle.png");
       // Send holds its place with nothing to send: it goes unavailable rather
       // than disappearing, so the composer never looks like it lost the control
@@ -644,8 +643,8 @@ suite.define(() => {
       await expect
         .poll(async () => {
           const [voiceRect, sendRect] = await Promise.all([
-            voice.boundingBox(),
-            emptySend.boundingBox(),
+            mobileDictation.boundingBox(),
+            mobileTalk.boundingBox(),
           ]);
           return voiceRect && sendRect ? sendRect.x - (voiceRect.x + voiceRect.width) : null;
         })
@@ -683,7 +682,7 @@ suite.define(() => {
         mobileModelSettings.boundingBox(),
         settings.boundingBox(),
         contextUsage.boundingBox(),
-        voice.boundingBox(),
+        mobileDictation.boundingBox(),
       ]);
       expect(mobileAttachBox).not.toBeNull();
       expect(mobileModelSettingsBox).not.toBeNull();
@@ -724,7 +723,7 @@ suite.define(() => {
         .poll(async () => {
           const [polledAttachBox, polledVoiceBox] = await Promise.all([
             attach.boundingBox(),
-            voice.boundingBox(),
+            mobileDictation.boundingBox(),
           ]);
           if (!polledAttachBox || !polledVoiceBox) {
             return Number.POSITIVE_INFINITY;

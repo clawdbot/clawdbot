@@ -6,7 +6,6 @@ import {
   parsePortFromArgs,
   renderRuntimeHints,
   renderGatewayServiceStartHints,
-  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
 } from "./shared.js";
 
@@ -59,19 +58,6 @@ describe("renderGatewayServiceStartHints", () => {
         {} as NodeJS.ProcessEnv,
       ).join("\n"),
     ).toContain("logged-in macOS GUI session");
-  });
-
-  it("resolves daemon container context from either env key", () => {
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
   });
 
   it("prepends a single container restart hint when OPENCLAW_CONTAINER is set", () => {

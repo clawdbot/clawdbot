@@ -184,8 +184,15 @@ export function renderProjectChip(params: {
           >${params.projectId ? icons.gitBranch : icons.folder}</span
         >
         <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
+          aria-hidden="true"
           >${icons.chevronDown}</span
+        >
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
+          aria-hidden="true"
+          >${icons.chevronsUpDown}</span
         >
       </button>
     </span>

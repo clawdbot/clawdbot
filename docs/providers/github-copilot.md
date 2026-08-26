@@ -323,13 +323,16 @@ the Copilot API and picks the best one automatically.
 
 1. OpenClaw resolves your GitHub token (from env vars or auth profile).
 2. Validates Copilot access and resolves the account-specific API endpoint.
-3. Queries the Copilot `/models` endpoint to discover available embedding models.
+3. Queries the Copilot `/models` endpoint to discover available embedding models,
+   with a 10-second deadline that includes reading the response body.
 4. Picks the best model (preference order: `text-embedding-3-small`,
    `text-embedding-3-large`, `text-embedding-ada-002`).
 5. Sends embedding requests to the Copilot `/embeddings` endpoint.
 
-Model availability depends on your GitHub plan. If no embedding models are
-available, OpenClaw skips Copilot and tries the next provider.
+Model availability depends on your GitHub plan. If discovery fails or no
+embedding models are available, OpenClaw uses `memory.search.fallback` only
+when you explicitly configure another provider. Otherwise, setup reports the
+error instead of silently selecting a different provider.
 
 ## Related
 
