@@ -41,6 +41,50 @@ describe("memory embedding policy", () => {
     expect(batches[0]).toHaveLength(4);
   });
 
+  it("caps the number of chunks per batch even when the byte budget is not exhausted", () => {
+    // Short (e.g. Chinese) chunks stay far below the byte budget, but some
+    // providers reject more than a fixed number of items per request.
+    const chunks = Array.from({ length: 25 }, (_, index) => chunk(`\u6761\u76ee${index}`));
+
+    const batches = buildMemoryEmbeddingBatches(chunks, 8000);
+
+    expect(batches).toHaveLength(3);
+    expect(batches.map((batch) => batch.length)).toEqual([10, 10, 5]);
+    expect(batches.flat()).toEqual(chunks);
+  });
+
+  it("honors a custom per-batch item limit", () => {
+    const chunks = Array.from({ length: 7 }, (_, index) => chunk(`item-${index}`));
+
+    const batches = buildMemoryEmbeddingBatches(chunks, 8000, 3);
+
+    expect(batches).toHaveLength(3);
+    expect(batches.map((batch) => batch.length)).toEqual([3, 3, 1]);
+  });
+
+  it("splits on whichever limit is hit first: byte budget or item count", () => {
+    const small = "s".repeat(100);
+    const large = "l".repeat(4000);
+    const chunks = [
+      chunk(small),
+      chunk(small),
+      chunk(large),
+      chunk(large),
+      chunk(small),
+      chunk(small),
+    ];
+
+    const batches = buildMemoryEmbeddingBatches(chunks, 8000, 3);
+
+    // No batch exceeds either 3 items or 8000 bytes, and order is preserved.
+    for (const batch of batches) {
+      expect(batch.length).toBeLessThanOrEqual(3);
+      const bytes = batch.reduce((sum, item) => sum + Buffer.byteLength(item.text, "utf8"), 0);
+      expect(bytes).toBeLessThanOrEqual(8000);
+    }
+    expect(batches.flat()).toEqual(chunks);
+  });
+
   it("filters empty chunks before embedding", () => {
     const chunks = filterNonEmptyMemoryChunks([chunk("\n\n"), chunk("hello"), chunk("   ")]);
 
@@ -279,6 +323,19 @@ describe("memory embedding policy", () => {
       ),
     ).toBe(true);
     expect(isStructuredInputTooLargeMemoryEmbeddingError("connection reset by peer")).toBe(false);
+  });
+
+  it("treats provider item-count and 413 errors as splittable", () => {
+    const splittableMessages = [
+      "Embeddings API input limit exceeded: max 10, got 58.",
+      "BadRequest: too many inputs in embeddings request",
+      "HTTP 413 Payload Too Large",
+      "request entity too large (413)",
+    ];
+
+    for (const message of splittableMessages) {
+      expect(isSplittableMemoryEmbeddingTransportError(message)).toBe(true);
+    }
   });
 
   it("caps retry jittered delays", () => {

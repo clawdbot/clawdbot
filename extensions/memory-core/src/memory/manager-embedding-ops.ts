@@ -37,6 +37,7 @@ import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
+  DEFAULT_MEMORY_EMBEDDING_BATCH_MAX_ITEMS,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
@@ -57,6 +58,19 @@ const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
+
+function resolveEmbeddingBatchMaxItems(): number {
+  const raw = process.env.OPENCLAW_MEMORY_EMBEDDING_BATCH_MAX_ITEMS;
+  if (raw != null && raw.trim() !== "") {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_MEMORY_EMBEDDING_BATCH_MAX_ITEMS;
+}
+
+const EMBEDDING_BATCH_MAX_ITEMS = resolveEmbeddingBatchMaxItems();
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -261,7 +275,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const missingChunks = missing.map((m) => m.chunk);
-    const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
+    const batches = buildMemoryEmbeddingBatches(
+      missingChunks,
+      EMBEDDING_BATCH_MAX_TOKENS,
+      EMBEDDING_BATCH_MAX_ITEMS,
+    );
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");

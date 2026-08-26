@@ -49,19 +49,36 @@ export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunk
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
 }
 
+/**
+ * Default maximum number of chunks per embedding request.
+ *
+ * Some embedding providers (notably the Volcengine Ark / Doubao `/embeddings`
+ * gateway) enforce a hard server-side cap on the number of items in a single
+ * `input` array and reject larger batches with HTTP 400
+ * (`Embeddings API input limit exceeded: max 10, got N`), regardless of the
+ * total payload byte size. The byte budget alone cannot protect against this
+ * because short (e.g. Chinese) chunks pack dozens of items well under the byte
+ * limit. Ten is a safe default for those providers and only costs a few extra
+ * round trips for providers without an item cap.
+ */
+export const DEFAULT_MEMORY_EMBEDDING_BATCH_MAX_ITEMS = 10;
+
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],
   maxTokens: number,
+  maxItems: number = DEFAULT_MEMORY_EMBEDDING_BATCH_MAX_ITEMS,
 ): T[][] {
   const batches: T[][] = [];
   let current: T[] = [];
   let currentTokens = 0;
+  const itemLimit = Math.max(1, Math.floor(maxItems));
 
   for (const chunk of chunks) {
     const estimate = chunk.embeddingInput
       ? estimateStructuredEmbeddingInputBytes(chunk.embeddingInput)
       : estimateUtf8Bytes(chunk.text);
-    const wouldExceed = current.length > 0 && currentTokens + estimate > maxTokens;
+    const wouldExceed =
+      current.length > 0 && (currentTokens + estimate > maxTokens || current.length >= itemLimit);
     if (wouldExceed) {
       batches.push(current);
       current = [];
@@ -88,7 +105,7 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
 
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|input limit exceeded|too many inputs|embeddings api input limit|max \d+ items|413|payload too large|request too large)/i;
 
 export function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
