@@ -21,6 +21,7 @@ suite.define(() => {
       const url = new URL(route.request().url());
       requestedMediaUrls.push(url);
       if (url.searchParams.get("meta") === "1") {
+        expect(route.request().headers().authorization).toBe("Bearer e2e-device-token");
         await route.fulfill({
           contentType: "application/json",
           body: JSON.stringify({
@@ -62,13 +63,19 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const audio = page.locator(".chat-assistant-attachment-card audio");
-      await audio.waitFor({ state: "attached", timeout: 10_000 });
-      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+      const attachment = page.locator(".chat-assistant-attachment-card--compact");
+      await attachment.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(1);
       expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
       expect(requestedMediaUrls[0]?.searchParams.get("source")).toBe(source);
-      expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe("ticket-dollar-home");
-      expect(requestedMediaUrls[1]?.searchParams.get("source")).toBe(source);
+      const downloadHref = await attachment
+        .locator(".chat-assistant-attachment-card__download")
+        .getAttribute("href");
+      expect(downloadHref).toBeTruthy();
+      const downloadUrl = new URL(downloadHref ?? "", suite.server.baseUrl);
+      expect(downloadUrl.searchParams.get("mediaTicket")).toBe("ticket-dollar-home");
+      expect(downloadUrl.searchParams.get("source")).toBe(source);
+      expect(await attachment.locator("audio, video").count()).toBe(0);
       expect(await page.getByText("Outside allowed folders").count()).toBe(0);
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
