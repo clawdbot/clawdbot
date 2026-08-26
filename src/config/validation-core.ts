@@ -44,6 +44,7 @@ import {
   mergeUnsupportedMutableSecretRefIssues,
   withConfigIssuePath,
 } from "./validation-issues.js";
+import { checkConfigNestingDepth } from "./validation-nesting-guard.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
@@ -354,6 +355,22 @@ export function validateConfigObjectRaw(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
+  // Guard against pathological nesting before Zod safeParse: strictObject emits
+  // one issue per unknown key at each level, so a deeply-nested input makes Zod
+  // allocate O(n²) path elements and exhausts the heap before error reporting.
+  const nestingCheck = checkConfigNestingDepth(normalizedRaw, "Config");
+  if (!nestingCheck.ok) {
+    return {
+      ok: false,
+      issues: mergeUnsupportedMutableSecretRefIssues(
+        policyIssues,
+        nestingCheck.issues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })) satisfies ConfigValidationIssue[],
+      ),
+    };
+  }
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success || mcpServerNameIssues.length > 0) {
     const schemaIssues = validated.success
