@@ -521,7 +521,7 @@ suite.define(() => {
       width: 900,
     });
     const navigation = page.locator(".shell-nav");
-    const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
+    const drawer = navigation.locator(".sidebar");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
     const readFocusLocation = () =>
@@ -535,7 +535,7 @@ suite.define(() => {
       });
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
-    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
+    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(1);
     await expect.poll(() => dialog.isVisible()).toBe(false);
     await page.locator(".shell-skip-link").focus();
     await page.keyboard.press("Tab");
@@ -546,15 +546,7 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
-    const afterShowMarker = "data-e2e-after-show";
-    await drawer.evaluate((element, marker) => {
-      element.removeAttribute(marker);
-      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
-        once: true,
-      });
-    }, afterShowMarker);
     await page.keyboard.press("Enter");
-    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
     await expect.poll(readFocusLocation).toBe("navigation");
 
     await expect
@@ -606,7 +598,7 @@ suite.define(() => {
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
-    await expect.poll(() => drawer.count()).toBe(0);
+    await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
   it.each(["dark", "light"] as const)(
@@ -619,7 +611,7 @@ suite.define(() => {
         scenario: TOAST_SCENARIO,
         width: 390,
       });
-      const drawer = page.locator("openclaw-modal-dialog.nav-drawer");
+      const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
       await page.locator(".chat-pane__nav-toggle").first().click();
       await expect.poll(() => dialog.isVisible()).toBe(true);
@@ -649,10 +641,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await expect.poll(() => drawer.count()).toBe(0);
       }
-      const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
-      await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      const retainedToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
       const [toastBounds, composerBounds] = await Promise.all([
-        handedOffToast.boundingBox(),
+        retainedToast.boundingBox(),
         page.locator(".agent-chat__composer-shell").boundingBox(),
       ]);
       if (!toastBounds || !composerBounds) {
@@ -660,8 +652,8 @@ suite.define(() => {
       }
       expect(Math.round(toastBounds.y)).toBe(20);
       expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
-      await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
-      await expect.poll(() => handedOffToast.isVisible()).toBe(false);
+      await retainedToast.getByRole("button", { name: "Dismiss" }).click();
+      await expect.poll(() => retainedToast.isVisible()).toBe(false);
     },
   );
 
