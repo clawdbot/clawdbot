@@ -31,12 +31,7 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  legacyInteractiveReplyToPresentation,
-  normalizeLegacyInteractiveReply,
-  normalizeMessagePresentation,
-  resolveLegacyInteractiveTextFallback,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
@@ -98,6 +93,7 @@ import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
   isFeishuCardWithinEnvelope,
+  resolveFeishuRichReply,
 } from "./presentation-card.js";
 import {
   assertFeishuChatReadAllowed,
@@ -1356,10 +1352,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const textCard = readNativeFeishuCardJson(text, {
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
-            const interactive = normalizeLegacyInteractiveReply(ctx.params.interactive);
-            const presentation =
-              normalizeMessagePresentation(ctx.params.presentation) ??
-              (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
+            const { interactive, presentation } = resolveFeishuRichReply(ctx.params);
             // send promotes every attachment alias (path/filePath/mediaUrl/fileUrl/
             // image/mediaUrls/attachments[]) to a canonical mediaUrl and rejects
             // unsupported buffer/base64 payloads or multiple attachments instead
