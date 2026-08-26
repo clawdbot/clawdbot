@@ -88,6 +88,7 @@ const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/
 const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
 const UPGRADE_SURVIVOR_DOCKER_E2E_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
+const PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
@@ -2501,17 +2502,20 @@ docker_e2e_docker_run_cmd run demo
   it("lets upgrade survivor fixture registries resolve transitive public packages", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const registryHelper = readFileSync(PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH, "utf8");
 
     for (const script of [runner, publishedRunner]) {
-      expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
-      expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
-      expect(script).toContain(
-        "read -r plugin_package_name plugin_package_version plugin_package_tarball",
-      );
-      expect(script).not.toContain("read -r package_name package_version package_tarball");
+      expect(script).toContain("source scripts/e2e/lib/prepublish-plugin-registry.sh");
+      expect(script).toContain("openclaw_prepublish_plugin_registry_start");
     }
-    expect(runner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"');
-    expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
+    expectTextToIncludeAll(registryHelper, [
+      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$candidate_version"',
+      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"',
+      'export npm_config_registry="$NPM_CONFIG_REGISTRY"',
+    ]);
+    expect(runner).not.toContain("PREPUBLISH_PLUGIN_REGISTRY_MANIFEST=");
+    expect(publishedRunner).not.toContain("PREPUBLISH_PLUGIN_REGISTRY_MANIFEST=");
   });
 
   it("starts the upgrade survivor plugin registry before updates with scenario-owned config", () => {
@@ -2607,19 +2611,11 @@ docker_e2e_docker_run_cmd run demo
       expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
       expect(script).not.toContain("/__fixture__/requests");
       expect(script).not.toContain("https://clawhub.ai");
-      const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
-      const fixtureDirectoryIndex = script.indexOf(
-        'mkdir -p "$fixture_root"',
-        emptyRegistryGuardIndex,
-      );
-      const registryServerIndex = script.indexOf(
-        "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
-      );
-      expect(emptyRegistryGuardIndex).toBeGreaterThanOrEqual(0);
+      const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
+      const registryStartIndex = script.indexOf("openclaw_prepublish_plugin_registry_start");
       expect(fixtureDirectoryIndex).toBeGreaterThanOrEqual(0);
-      expect(registryServerIndex).toBeGreaterThanOrEqual(0);
-      expect(emptyRegistryGuardIndex).toBeLessThan(fixtureDirectoryIndex);
-      expect(fixtureDirectoryIndex).toBeLessThan(registryServerIndex);
+      expect(registryStartIndex).toBeGreaterThanOrEqual(0);
+      expect(fixtureDirectoryIndex).toBeLessThan(registryStartIndex);
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
     expectTextToIncludeAll(publishedRunner, [
@@ -3880,12 +3876,17 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("serves the version-matched Codex candidate during package onboarding", () => {
     const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+    const registryHelper = readFileSync(PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
-      "node scripts/e2e/lib/plugins/npm-registry-server.mjs",
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
+      "source scripts/e2e/lib/prepublish-plugin-registry.sh",
+      "openclaw_prepublish_plugin_registry_start",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='[\"@openclaw/codex\"]'",
+    ]);
+    expectTextToIncludeAll(registryHelper, [
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$candidate_version"',
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(

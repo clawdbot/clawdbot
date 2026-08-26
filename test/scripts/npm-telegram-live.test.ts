@@ -180,6 +180,28 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
   });
 
+  it("serves the verified prerelease registry inside the recovery container", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const recoveryRun = script.slice(
+      script.indexOf('run_logged_print_heartbeat "npm-telegram-live-suite"'),
+    );
+
+    expect(script).toContain(
+      '-v "$resolved_prepublish_plugin_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"',
+    );
+    expect(recoveryRun).toContain(
+      '${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"}',
+    );
+    expect(script).toContain(
+      "-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
+    );
+    expect(recoveryRun).toContain("source scripts/e2e/lib/prepublish-plugin-registry.sh");
+    expect(recoveryRun).toContain("openclaw_prepublish_plugin_registry_start");
+    expect(recoveryRun.indexOf("openclaw_prepublish_plugin_registry_start")).toBeLessThan(
+      recoveryRun.indexOf('echo "Running installed-package onboarding recovery hot path..."'),
+    );
+  });
+
   it("keeps live Docker artifacts isolated by default", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
