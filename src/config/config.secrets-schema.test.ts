@@ -72,13 +72,30 @@ describe("config secret refs schema", () => {
     }
   });
 
-  it.each(["allowedHosts", "bypassHosts"])("rejects empty secret egress %s entries", (field) => {
+  it.each(
+    (["allowedHosts", "bypassHosts"] as const).flatMap((field) =>
+      ["", "https://api.example.com", "api.example.com:443", "*.example.com", "bad host"].map(
+        (host) => ({ field, host }),
+      ),
+    ),
+  )("rejects invalid secret egress $field entry $host", ({ field, host }) => {
     const result = validateConfigObjectRaw({
-      secrets: { egressProxy: { enabled: false, [field]: [""] } },
+      secrets: { egressProxy: { enabled: false, [field]: [host] } },
     });
 
     expect(result.ok).toBe(false);
   });
+
+  it.each(["allowedHosts", "bypassHosts"] as const)(
+    "accepts exact hostname and IP secret egress %s entries",
+    (field) => {
+      const result = validateConfigObjectRaw({
+        secrets: { egressProxy: { enabled: false, [field]: ["API.example.com.", "127.0.0.1"] } },
+      });
+
+      expect(result.ok).toBe(true);
+    },
+  );
 
   it("rejects store refs outside the env-name grammar", () => {
     expect(
