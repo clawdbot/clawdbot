@@ -885,3 +885,146 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     ]);
   });
 });
+
+describe("createLifecycleEventBroadcastHandler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    loadGatewaySessionRowMock.mockReturnValue(sessionRow);
+    runtimeConfigState.value = {};
+    sessionRow.key = "agent:main:main";
+  });
+  it("projects swarm phase and log payload fields", async () => {
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    await handler({
+      sessionKey: "agent:main:main",
+      reason: "swarm-note",
+      swarmGroupId: "swarm:agent:main:main:run-1",
+      kind: "phase",
+      text: "Research",
+    } as never);
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        swarmGroupId: "swarm:agent:main:main:run-1",
+        kind: "phase",
+        text: "Research",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+
+    try {
+      await handler({
+        sessionKey: "agent:main:main",
+        reason: "rename",
+        label: "Renamed session",
+      });
+      await Promise.resolve();
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        label: "Renamed session",
+        reason: "rename",
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each([
+    { name: "projects configured persisted state without publishing its goal" },
+    { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
+  ])("$name", async ({ agentId }) => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
+    sessionRow.key = "global";
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 2,
+      tokenStart: 0,
+      tokensUsed: 3,
+      continuationTurns: 0,
+    };
+    loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
+    const activeRun = {
+      ...createActiveRun(true),
+      agentId: "ops",
+      sessionKey: "global",
+    };
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map([["run-before-finalize", activeRun]]),
+    });
+
+    await handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
+
+    expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "global",
+        hasActiveRun: true,
+        activeRunIds: ["run-before-finalize"],
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+    const payload = broadcastToConnIds.mock.calls[0]?.[1];
+    if (agentId) {
+      expect(payload).toMatchObject({ agentId: "ops", goal });
+    } else {
+      expect(payload).not.toHaveProperty("agentId");
+      expect(payload).not.toHaveProperty("goal");
+      expect(payload).not.toHaveProperty("session.goal");
+    }
+  });
+
+  it("publishes only a private invalidation for a retired fixed-store lifecycle owner", () => {
+    runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["research"]);
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({ sessionKey: "global", reason: "updated" });
+
+    expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "global", reason: "updated" }),
+      new Set(["conn-events"]),
+      {
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global"],
+      },
+    );
+    expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
+  });
+});

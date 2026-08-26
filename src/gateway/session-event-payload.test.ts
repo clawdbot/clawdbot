@@ -244,3 +244,18 @@ it("projects effective reasoning level for session change subscribers", () => {
     effectiveReasoningLevel: "stream",
   });
 });
+
+it("omits unknown effective reasoning from event payloads", () => {
+  const sessionRow = {
+    key: "agent:main:main",
+    kind: "direct" as const,
+    updatedAt: 6,
+  };
+
+  expect(buildGatewaySessionEventFields({ sessionRow })).not.toHaveProperty(
+    "effectiveReasoningLevel",
+  );
+  expect(buildGatewaySessionSnapshot({ sessionRow, includeSession: true })).not.toHaveProperty(
+    "effectiveReasoningLevel",
+  );
+});
