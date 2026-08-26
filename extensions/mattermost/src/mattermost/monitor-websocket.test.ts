@@ -203,6 +203,43 @@ describe("mattermost websocket monitor", () => {
     });
   });
 
+  it("reports a transient pre-authentication close without asserting a token failure", async () => {
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "valid-token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+    });
+
+    queueMicrotask(() => {
+      socket.emitOpen();
+      // A restarting server or resetting proxy closes mid-authentication with
+      // the same client-visible shape as a token rejection.
+      socket.emitClose(1001, "server restarting");
+    });
+
+    let failure: unknown;
+    try {
+      await connectOnce();
+    } catch (caught) {
+      failure = caught;
+    }
+    expect(failure).toMatchObject({
+      name: "WebSocketClosedBeforeAuthenticationError",
+      code: 1001,
+      reason: "server restarting",
+    });
+    // The client cannot distinguish the causes, so the diagnostic must keep
+    // both visible instead of pinning the close on the token alone.
+    const message = (failure as Error).message;
+    expect(message).toContain("closed before authentication completed (code 1001)");
+    expect(message).toContain("bot token");
+    expect(message).toContain("connection dropped");
+  });
+
   it("backs off across attempts when authentication never completes", async () => {
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",

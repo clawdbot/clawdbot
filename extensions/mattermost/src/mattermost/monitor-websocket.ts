@@ -112,8 +112,10 @@ class WebSocketClosedBeforeAuthenticationError extends Error {
     public readonly code: number,
     public readonly reason?: string,
   ) {
+    // A rejected token and a transient drop (server restart, proxy reset) close
+    // with the same pre-auth shape; the message must not assert a single cause.
     super(
-      `websocket closed before authentication completed (code ${code}) — check the Mattermost bot token`,
+      `websocket closed before authentication completed (code ${code}) — either the bot token was rejected or the connection dropped (server restart, proxy reset); check the Mattermost bot token if this repeats`,
     );
     this.name = "WebSocketClosedBeforeAuthenticationError";
   }
