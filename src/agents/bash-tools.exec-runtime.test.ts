@@ -228,6 +228,33 @@ describe("sandbox exec preparation failures", () => {
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
   });
 
+  it("rejects a sandbox without a backend-owned exec specification", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
+      runtimeManagedRun(input),
+    );
+
+    await expect(
+      runExecProcess({
+        command: "sandbox-command",
+        workdir: "/tmp",
+        env: { EXAMPLE_VALUE: "synthetic-runtime-sandbox-value" },
+        sandbox: {
+          containerName: "sandbox",
+          workspaceDir: "/workspace",
+          containerWorkdir: "/workspace",
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+      }),
+    ).rejects.toThrow("sandbox backend does not provide buildExecSpec");
+
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
   it("settles the registered session once when buildExecSpec rejects", async () => {
     const registry = await import("./bash-process-registry.js");
     const sessionSlugs = await import("./session-slug.js");

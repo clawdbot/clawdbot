@@ -27,11 +27,11 @@ import { resolveSandboxAgentId } from "./shared.js";
 import {
   buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
-  buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
   type SshSandboxSession,
@@ -39,6 +39,7 @@ import {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
+  cleanup: (status: "completed" | "failed") => Promise<void>;
 };
 
 type ResolvedSshRuntimePaths = {
@@ -208,7 +209,7 @@ class SshSandboxBackendImpl {
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: remoteWorkdir,
-          env,
+          env: {},
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
@@ -216,25 +217,31 @@ class SshSandboxBackendImpl {
           if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
             await this.refreshRemoteSkillsWorkspace(sshSession);
           }
+          const prepared = await prepareSshSandboxExec({
+            session: sshSession,
+            remoteCommand,
+            env,
+            tty: usePty,
+          });
           return {
-            argv: buildSshSandboxArgv({
-              session: sshSession,
-              remoteCommand,
-              tty: usePty,
-            }),
+            argv: prepared.argv,
             env: sanitizeEnvVars(process.env).allowed,
             stdinMode: "pipe-open",
-            finalizeToken: { sshSession } satisfies PendingExec,
+            finalizeToken: { sshSession, cleanup: prepared.cleanup } satisfies PendingExec,
           };
         } catch (error) {
           await disposeSshSandboxSession(sshSession);
           throw error;
         }
       },
-      finalizeExec: async ({ token }) => {
-        const sshSession = (token as PendingExec | undefined)?.sshSession;
-        if (sshSession) {
-          await disposeSshSandboxSession(sshSession);
+      finalizeExec: async ({ token, status }) => {
+        const pending = token as PendingExec | undefined;
+        if (pending) {
+          try {
+            await pending.cleanup(status);
+          } finally {
+            await disposeSshSandboxSession(pending.sshSession);
+          }
         }
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),

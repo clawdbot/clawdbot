@@ -14,6 +14,7 @@ import type {
 import {
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
@@ -45,6 +46,7 @@ type CreateOpenShellSandboxBackendFactoryParams = {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
+  cleanup: (status: "completed" | "failed") => Promise<void>;
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -335,8 +337,8 @@ class OpenShellSandboxBackendImpl {
           finalizeToken: pending.token,
         };
       },
-      finalizeExec: async ({ token }) => {
-        await this.finalizeExec(token as PendingExec | undefined);
+      finalizeExec: async ({ token, status }) => {
+        await this.finalizeExec(token as PendingExec | undefined, status);
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
@@ -374,25 +376,27 @@ class OpenShellSandboxBackendImpl {
     const remoteCommand = buildValidatedExecRemoteCommand({
       command: params.command,
       workdir: remoteWorkdir,
-      env: params.env,
+      env: {},
     });
     await (preparedWorkspace ?? this.prepareRemoteWorkspaceForExec());
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
     });
-    return {
-      argv: [
-        "ssh",
-        "-F",
-        sshSession.configPath,
-        ...(params.usePty
-          ? ["-tt", "-o", "RequestTTY=force", "-o", "SetEnv=TERM=xterm-256color"]
-          : ["-T", "-o", "RequestTTY=no"]),
-        sshSession.host,
+    try {
+      const prepared = await prepareSshSandboxExec({
+        session: sshSession,
         remoteCommand,
-      ],
-      token: { sshSession },
-    };
+        env: params.env,
+        tty: params.usePty,
+      });
+      return {
+        argv: prepared.argv,
+        token: { sshSession, cleanup: prepared.cleanup },
+      };
+    } catch (error) {
+      await disposeSshSandboxSession(sshSession);
+      throw error;
+    }
   }
 
   async validateWorkdir(workdir: string): Promise<string | null> {
@@ -474,14 +478,21 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  async finalizeExec(token?: PendingExec): Promise<void> {
+  async finalizeExec(
+    token: PendingExec | undefined,
+    status: "completed" | "failed",
+  ): Promise<void> {
     try {
       if (this.params.execContext.config.mode === "mirror") {
         await this.syncWorkspaceFromRemote();
       }
     } finally {
       if (token?.sshSession) {
-        await disposeSshSandboxSession(token.sshSession);
+        try {
+          await token.cleanup(status);
+        } finally {
+          await disposeSshSandboxSession(token.sshSession);
+        }
       }
     }
   }

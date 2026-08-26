@@ -20,6 +20,7 @@ import { resolveOpenShellPluginConfig } from "./config.js";
 const sdkMocks = vi.hoisted(() => ({
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
+  prepareSshSandboxExec: vi.fn(),
 }));
 
 const cliMocks = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ vi.mock("openclaw/plugin-sdk/sandbox", async (importOriginal) => {
     ...actual,
     runSshSandboxCommand: sdkMocks.runSshSandboxCommand,
     disposeSshSandboxSession: sdkMocks.disposeSshSandboxSession,
+    prepareSshSandboxExec: sdkMocks.prepareSshSandboxExec,
   };
 });
 
@@ -86,6 +88,18 @@ describe("openshell backend exec workdir validation", () => {
       stdout: "",
       stderr: "",
     });
+    sdkMocks.prepareSshSandboxExec.mockImplementation(
+      async (params: { session: { command: string; configPath: string; host: string } }) => ({
+        argv: [
+          params.session.command,
+          "-F",
+          params.session.configPath,
+          params.session.host,
+          "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
+        ],
+        cleanup: async () => {},
+      }),
+    );
     sdkMocks.runSshSandboxCommand.mockImplementation(async ({ remoteCommand }) => ({
       stdout: String(remoteCommand).includes("openclaw-validate-workdir")
         ? Buffer.from("/workspace\n")
