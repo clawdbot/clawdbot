@@ -1,50 +1,16 @@
 // Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+  type EmbeddingInput,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-
-type MemoryEmbeddingTextPart = {
-  type: "text";
-  text: string;
-};
-
-type MemoryEmbeddingInlineDataPart = {
-  type: "inline-data";
-  mimeType: string;
-  data: string;
-};
-
-type MemoryEmbeddingInput = {
-  text: string;
-  parts?: Array<MemoryEmbeddingTextPart | MemoryEmbeddingInlineDataPart>;
-};
 
 type MemoryEmbeddingChunk = {
   text: string;
-  embeddingInput?: MemoryEmbeddingInput;
+  embeddingInput?: EmbeddingInput;
 };
-
-function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return Buffer.byteLength(text, "utf8");
-}
-
-function estimateStructuredEmbeddingInputBytes(input: MemoryEmbeddingInput): number {
-  if (!input.parts?.length) {
-    return estimateUtf8Bytes(input.text);
-  }
-  let total = 0;
-  for (const part of input.parts) {
-    if (part.type === "text") {
-      total += estimateUtf8Bytes(part.text);
-    } else {
-      total += estimateUtf8Bytes(part.mimeType);
-      total += estimateUtf8Bytes(part.data);
-    }
-  }
-  return total;
-}
 
 export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunks: T[]): T[] {
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
@@ -169,6 +135,6 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   }
 }
 
-export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): MemoryEmbeddingInput[] {
+export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {
   return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

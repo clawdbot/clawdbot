@@ -50,6 +50,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as chatDisplayProjection from "./chat-display-projection.js";
 import { assertPluginMetadataSnapshotConsistency } from "./plugin-metadata.test-helpers.js";
 import {
   createDirectChatContext,
@@ -6888,6 +6889,47 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
       expect(olderPage.payload?.hasMore).toBe(false);
       expect(olderPage.payload?.nextOffset).toBeUndefined();
+    });
+  });
+
+  test("chat.history fills sparse pages without repeatedly projecting scanned transcript rows", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const startedAt = Date.now();
+      const events = Array.from({ length: 1_500 }, (_, index) =>
+        createTextTranscriptEvent(
+          index % 50 === 0 ? "user" : "assistant",
+          index % 50 === 0 ? `visible ${index / 50}` : "NO_REPLY",
+          { timestamp: startedAt + index },
+        ),
+      );
+      await writeMainSessionTranscript(events);
+
+      let projectedRows = 0;
+      const project = chatDisplayProjection.projectChatDisplayMessagesWithState;
+      const projectionSpy = vi
+        .spyOn(chatDisplayProjection, "projectChatDisplayMessagesWithState")
+        .mockImplementation((messages, options) => {
+          projectedRows += messages.length;
+          return project(messages, options);
+        });
+
+      try {
+        const page = await rpcReq<{
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+        }>(ws, "chat.history", makeMainSessionParams({ limit: 25, offset: 0 }));
+        expect(page.ok).toBe(true);
+        expect(page.payload?.messages?.map(readOpenClawSeq)).toEqual(
+          Array.from({ length: 25 }, (_, index) => (index + 5) * 50 + 1),
+        );
+        expect(page.payload).toMatchObject({ hasMore: true, nextOffset: 1_250 });
+        expect(projectedRows).toBeGreaterThan(0);
+        expect(projectedRows).toBeLessThanOrEqual(events.length * 2);
+      } finally {
+        projectionSpy.mockRestore();
+      }
     });
   });
 

@@ -59,6 +59,7 @@ function findOpenAgentDatabase(
 export function withOpenClawAgentDatabaseReadOnly<T>(
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
+  behavior: { throwOnMissingTable?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -82,7 +83,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     try {
       return { found: true, value: operation(opened) };
     } catch (error) {
-      if (isMissingTableError(error)) {
+      if (isMissingTableError(error) && !behavior.throwOnMissingTable) {
         return { found: false, reason: "table-missing" };
       }
       throw error;
@@ -104,7 +105,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     try {
       return { found: true, value: operation({ agentId, db, path: pathname }) };
     } catch (error) {
-      if (isMissingTableError(error)) {
+      if (isMissingTableError(error) && !behavior.throwOnMissingTable) {
         return { found: false, reason: "table-missing" };
       }
       throw error;

@@ -59,6 +59,11 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
   },
+  {
+    id: "absolutely",
+    labelKey: "configView.themes.absolutely.label",
+    descriptionKey: "configView.themes.absolutely.description",
+  },
 ];
 
 const ACCENT_PRESETS = [
@@ -211,11 +216,6 @@ export function renderAppearanceSection(
                   >
                     ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
-                    ${opt.id === props.theme
-                      ? html`<span class="settings-theme-card__check" aria-hidden="true"
-                          >${icons.check}</span
-                        >`
-                      : nothing}
                   </button>
                 `,
               )}
