@@ -1821,6 +1821,10 @@ export const en: TranslationMap = {
         label: "Dash",
         description: "Chocolate blueprint",
       },
+      absolutely: {
+        label: "Absolutely",
+        description: "Clay on graphite",
+      },
     },
     textSizes: {
       small: "Small",

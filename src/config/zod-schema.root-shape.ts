@@ -220,7 +220,13 @@ export const OpenClawSchemaShape = {
       prefs: z
         .strictObject({
           theme: z
-            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
+            .union([
+              z.literal("claw"),
+              z.literal("knot"),
+              z.literal("dash"),
+              z.literal("absolutely"),
+              z.literal("custom"),
+            ])
             .optional(),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])

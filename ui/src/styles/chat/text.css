@@ -19,6 +19,7 @@
 }
 
 .chat-text {
+  font-family: var(--font-chat);
   font-size: var(--chat-text-size);
   line-height: 1.5;
   color: var(--chat-text);
