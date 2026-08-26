@@ -99,7 +99,7 @@ next Plugin SDK major.
 
 ### Plugin state migration declarations
 
-Channel plugins should declare `doctorContract.stateMigrations: true` in
+Plugins should declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
 artifact. Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from

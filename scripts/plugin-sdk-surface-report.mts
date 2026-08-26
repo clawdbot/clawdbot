@@ -415,7 +415,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -4: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +2: bounded ask_user owner-order map builder and option resolver.
-      2580,
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      2582,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
