@@ -105,13 +105,7 @@ describe("SessionManager persistence compatibility", () => {
     const persistedMessages = (await loadTranscriptEvents(scope))
       .filter((event) => (event as { type?: unknown }).type === "message")
       .map((event) => (event as { message: unknown }).message);
-    expect(persistedMessages).toEqual([
-      tagged,
-      codeExample,
-      indentedCode,
-      malformed,
-      laterLiteral,
-    ]);
+    expect(persistedMessages).toEqual([tagged, codeExample, indentedCode, malformed, laterLiteral]);
     expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
       tagged,
       codeExample,

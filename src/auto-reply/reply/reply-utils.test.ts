@@ -1690,12 +1690,9 @@ describe("parseReplyDirectives malformed reply prefixes", () => {
     "answer part A msg [[E1008]timeout] answer part B",
     "Visible reply\n[[reply_to_current] literally",
     "answer ending [",
-  ])(
-    "preserves unrelated malformed bracket text: %s",
-    (text) => {
-      expect(parseReplyDirectives(text).text).toBe(text);
-    },
-  );
+  ])("preserves unrelated malformed bracket text: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
+  });
 });
 
 describe("extractShortModelName", () => {
