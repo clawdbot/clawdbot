@@ -143,6 +143,12 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
     emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
     emitAssistantTextEnd({ emit });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current] Visible reply" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
     await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
