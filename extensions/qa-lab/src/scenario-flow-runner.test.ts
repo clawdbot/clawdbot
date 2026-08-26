@@ -129,7 +129,11 @@ function readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents: unknown[]): 
   };
 }
 
-const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+const planningEvidenceCoverageIds = new Set([
+  "agent-runtime.external-harness-selection-planning",
+  "openai.codex-harness-no-meta-leak",
+  "openai.codex-harness-planning",
+]);
 
 type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
   execution: Extract<QaScenarioExecution, { kind: "flow" }> & { flow?: QaScenarioFlow };
@@ -200,14 +204,11 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText: expectedReply,
-      failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
+      failureMessage: "missing successful current-attempt progress_card update",
       currentSummary: {
         eventCursor: 9,
-        assistantMirrors: [
-          { identity: "current-turn:plan", text: `Codex plan:\n${internalMarker}` },
-          { identity: "current-turn:assistant", text: expectedReply },
-        ],
-        successfulToolCallCounts: {},
+        assistantMirrors: [{ identity: "current-turn:assistant", text: expectedReply }],
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -216,14 +217,11 @@ function createPlanningEvidenceFixture(
     return {
       scenario,
       outboundText,
-      failureMessage: "missing Codex App Server plan signal",
+      failureMessage: "missing Codex harness progress_card signal",
       currentSummary: {
         eventCursor: 9,
-        assistantMirrors: [
-          { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
-          { identity: "current-turn:assistant", text: outboundText },
-        ],
-        successfulToolCallCounts: {},
+        assistantMirrors: [{ identity: "current-turn:assistant", text: outboundText }],
+        successfulToolCallCounts: { progress_card: 1 },
       },
     };
   }
@@ -244,16 +242,14 @@ function createPlanningEvidenceFixture(
 function runPlanningEvidenceFixture(
   fixture: PlanningEvidenceFixture,
   currentSummary = fixture.currentSummary,
+  gatewayEvidence?: { cardStep?: string; visibleAssistantText?: string },
 ) {
   const state = createQaBusState();
   const readOptions: unknown[] = [];
   const summaries = [
     {
       eventCursor: 7,
-      assistantMirrors: [
-        { identity: "old-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
-        { identity: "old-turn:assistant", text: fixture.outboundText },
-      ],
+      assistantMirrors: [{ identity: "old-turn:assistant", text: fixture.outboundText }],
       successfulToolCallCounts: { progress_card: 1 },
     },
     currentSummary,
@@ -273,6 +269,30 @@ function runPlanningEvidenceFixture(
       env: {
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.6-luna",
+        gateway: {
+          call: async (method: string) =>
+            method === "progressCard.get"
+              ? {
+                  card: {
+                    revision: 1,
+                    steps: [
+                      {
+                        step:
+                          gatewayEvidence?.cardStep ??
+                          fixture.scenario.execution.config?.internalMarker,
+                      },
+                    ],
+                  },
+                }
+              : {
+                  messages: [
+                    {
+                      role: "assistant",
+                      content: gatewayEvidence?.visibleAssistantText ?? fixture.outboundText,
+                    },
+                  ],
+                },
+        },
       },
       readSessionTranscriptSummary: async (...args: unknown[]) => {
         readOptions.push(args[2]);
@@ -681,6 +701,36 @@ describe("scenario-flow-runner", () => {
 
       await expect(result).rejects.toThrow(fixture.failureMessage);
       expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
+    },
+  );
+
+  it.each([
+    {
+      name: "the durable progress card omits the requested marker",
+      gatewayEvidence: { cardStep: "different step" },
+      failureMessage: "missing marked durable progress_card evidence",
+    },
+    {
+      name: "Gateway history exposes a synthetic Codex plan assistant message",
+      gatewayEvidence: { visibleAssistantText: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
+      failureMessage: "Codex plan leaked into visible Gateway history",
+    },
+  ])(
+    "rejects Codex no-meta-leak evidence when $name",
+    async ({ gatewayEvidence, failureMessage }) => {
+      const scenario = readQaScenarioById("codex-harness-no-meta-leak");
+      if (scenario.execution.kind !== "flow") {
+        throw new Error("Codex no-meta-leak scenario has no flow");
+      }
+      const fixture = createPlanningEvidenceFixture(scenario as PlanningEvidenceScenario);
+
+      const { result } = runPlanningEvidenceFixture(
+        fixture,
+        fixture.currentSummary,
+        gatewayEvidence,
+      );
+
+      await expect(result).rejects.toThrow(failureMessage);
     },
   );
 

@@ -2613,7 +2613,24 @@ describe("runCodexAppServerAttempt", () => {
     ).toHaveLength(2);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+    expect(persistedProgressCardInputs[0]).toEqual({ markdown: "Plan restored", plan });
+    expect(result.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "progress_card",
+        isError: false,
+      }),
+    );
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          message.role === "assistant" &&
+          (message as { __openclaw?: { mirrorIdentity?: string } }).__openclaw?.mirrorIdentity ===
+            "turn-1:plan",
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
 
   it("does not inject plan state after compaction when the turn has no plan", async () => {
