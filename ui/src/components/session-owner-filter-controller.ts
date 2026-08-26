@@ -1,10 +1,26 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
+
+type SessionOwnerFilterContext = {
+  gateway: {
+    connection: { gatewayUrl: string };
+    snapshot: { selfUser?: { id: string } | null };
+  };
+  sessions: Pick<
+    SessionCapability,
+    "canonicalListRevision" | "setInvolvingMeFilter" | "setOwnerFilter"
+  >;
+};
+
+type PendingFacetRefresh = {
+  revision: number;
+  scope: string;
+  settled: boolean;
+};
 
 export class SessionOwnerFilterController implements ReactiveController {
   ownerId: string | null = null;
@@ -12,16 +28,32 @@ export class SessionOwnerFilterController implements ReactiveController {
   private scope: string | null = null;
   private ownerFacetResolved = false;
   private ownerOptions: readonly { id: string }[] = [];
+  private pendingFacetRefresh: PendingFacetRefresh | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly getContext: () => ApplicationContext<RouteId> | undefined,
+    private readonly getContext: () => SessionOwnerFilterContext | undefined,
   ) {
     host.addController(this);
   }
 
   hostUpdated(): void {
     this.restore();
+    const pending = this.pendingFacetRefresh;
+    const context = this.getContext();
+    if (
+      pending?.settled &&
+      pending.scope === this.scope &&
+      context &&
+      context.sessions.canonicalListRevision > pending.revision
+    ) {
+      this.pendingFacetRefresh = null;
+      this.host.requestUpdate();
+      return;
+    }
+    if (pending) {
+      return;
+    }
     if (
       this.ownerFacetResolved &&
       this.ownerId &&
@@ -32,11 +64,15 @@ export class SessionOwnerFilterController implements ReactiveController {
   }
 
   observeOwnerFacet(resolved: boolean, options: readonly { id: string }[]): void {
+    if (this.pendingFacetRefresh) {
+      return;
+    }
     this.ownerFacetResolved = resolved;
     this.ownerOptions = options;
   }
 
   set(ownerId: string | null, involvingMe = false): void {
+    this.pendingFacetRefresh = null;
     this.ownerId = involvingMe ? null : ownerId?.trim() || null;
     this.involvingMe = involvingMe;
     const context = this.getContext();
@@ -74,7 +110,20 @@ export class SessionOwnerFilterController implements ReactiveController {
     }
     this.host.requestUpdate();
     if (previousScope !== null || this.ownerId || this.involvingMe) {
-      void this.applyRequest();
+      const pending = {
+        revision: context.sessions.canonicalListRevision,
+        scope: nextScope,
+        settled: false,
+      };
+      this.pendingFacetRefresh = pending;
+      this.ownerFacetResolved = false;
+      this.ownerOptions = [];
+      void this.applyRequest().finally(() => {
+        if (this.pendingFacetRefresh === pending) {
+          pending.settled = true;
+          this.host.requestUpdate();
+        }
+      });
     }
   }
 
