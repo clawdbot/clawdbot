@@ -102,11 +102,18 @@ export const HOOK_MAPPING_FAN_OUT_MAX_ITEMS = 200;
 const GMAIL_HOOK_BATCH_MAX_MESSAGES = 100;
 const GMAIL_HOOK_JSON_ESCAPING_FACTOR = 3;
 const GMAIL_HOOK_PER_MESSAGE_OVERHEAD_BYTES = 8 * 1024;
+// Hard ceiling on the derived allowance: hooks.gmail.maxBytes is
+// operator-controlled and unbounded, and the batch multiplier would otherwise
+// amplify a large-but-valid setting into a hundreds-of-megabytes in-memory
+// request buffer for authenticated callers. 32 MiB covers ~100 KB per-message
+// settings; larger configs fall back to this bound.
+const GMAIL_HOOK_MAX_BODY_BYTES_CEILING = 32 * 1024 * 1024;
 
 function resolveGmailHookMaxBodyBytes(maxBytes: number): number {
-  return (
+  return Math.min(
+    GMAIL_HOOK_MAX_BODY_BYTES_CEILING,
     GMAIL_HOOK_BATCH_MAX_MESSAGES *
-    (maxBytes * GMAIL_HOOK_JSON_ESCAPING_FACTOR + GMAIL_HOOK_PER_MESSAGE_OVERHEAD_BYTES)
+      (maxBytes * GMAIL_HOOK_JSON_ESCAPING_FACTOR + GMAIL_HOOK_PER_MESSAGE_OVERHEAD_BYTES),
   );
 }
 

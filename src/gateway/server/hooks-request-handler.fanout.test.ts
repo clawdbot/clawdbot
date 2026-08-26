@@ -1,6 +1,9 @@
 // Fan-out hook dispatch tests protect the batched-producer contract: every
 // pushed item ends in its own dispatch, retries replay instead of duplicating,
 // and gmail-path bodies are bounded by the provisioned producer contract.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
@@ -197,6 +200,27 @@ describe("hook fan-out dispatch", () => {
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
+  test("dispatches identical items separately and replays each on redelivery", async () => {
+    // Two batch elements can render byte-identical actions (generic payloads;
+    // impossible for gmail ids). Both must run, and a redelivery must replay
+    // both instead of dispatching a third run.
+    let runSeq = 0;
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      dispatchAgentHook: () => ({ ok: true as const, runId: `run-${runSeq++}` }),
+    });
+    const payload = { messages: [gmailMessage("twin"), gmailMessage("twin")] };
+
+    const response = await postGmailPayload(handler, payload);
+    expect(response.res.statusCode).toBe(200);
+    const body = JSON.parse(response.getBody()) as { runIds?: string[] };
+    expect(body.runIds).toEqual(["run-0", "run-1"]);
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
+
+    const retry = await postGmailPayload(handler, payload);
+    expect(JSON.parse(retry.getBody())).toMatchObject({ runIds: ["run-0", "run-1"] });
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
+  });
+
   test("bounds fan-out and records the dropped tail", async () => {
     const { handler, dispatchAgentHook, logHooks } = createFanOutHandler();
     const messages = Array.from({ length: 205 }, (_, index) => gmailMessage(`m${index}`));
@@ -206,6 +230,63 @@ describe("hook fan-out dispatch", () => {
     expect(response.res.statusCode).toBe(200);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(200);
     expect(logHooks.warn).toHaveBeenCalledWith(expect.stringContaining("dropped 5 items"));
+  });
+
+  test("mixed per-item transform kinds dispatch both wakes and agents", async () => {
+    const transformsDir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-fanout-transform-"));
+    try {
+      fs.mkdirSync(path.join(transformsDir, "hooks", "transforms"), { recursive: true });
+      fs.writeFileSync(
+        path.join(transformsDir, "hooks", "transforms", "mixed.mjs"),
+        'export default (ctx) => ctx.payload.messages[0].kind === "wake" ? { kind: "wake", text: `wake:${ctx.payload.messages[0].id}` } : {};',
+      );
+      const canonical = createHooksConfig();
+      const hooksConfig: HooksConfigResolved = {
+        ...canonical,
+        mappings: resolveHookMappings(
+          {
+            mappings: [
+              {
+                id: "mixed",
+                match: { path: "gmail" },
+                action: "agent",
+                forEach: "messages",
+                sessionKey: "hook:gmail:{{messages[0].id}}",
+                messageTemplate: "agent:{{messages[0].id}}",
+                transform: { module: "mixed.mjs" },
+              },
+            ],
+            allowRequestSessionKey: true,
+            allowedSessionKeyPrefixes: ["hook:gmail:"],
+          },
+          { configDir: transformsDir },
+        ),
+        sessionPolicy: {
+          ...canonical.sessionPolicy,
+          allowRequestSessionKey: true,
+          allowedSessionKeyPrefixes: ["hook:gmail:"],
+        },
+      };
+      const { handler, dispatchAgentHook, dispatchWakeHook } = createFanOutHandler({ hooksConfig });
+
+      const response = await postGmailPayload(handler, {
+        messages: [
+          { id: "w1", kind: "wake" },
+          { id: "a1", kind: "agent" },
+        ],
+      });
+
+      expect(response.res.statusCode).toBe(200);
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(1);
+      expect(dispatchWakeHook.mock.calls[0]?.[0]).toMatchObject({ text: "wake:w1" });
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+      expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+        message: "agent:a1",
+        sessionKey: "hook:gmail:a1",
+      });
+    } finally {
+      fs.rmSync(transformsDir, { recursive: true, force: true });
+    }
   });
 
   test("derives the gmail body bound from the provisioned producer contract", async () => {
@@ -227,6 +308,13 @@ describe("hook fan-out dispatch", () => {
       hooks: { ...baseHooks, gmail: { maxBytes: 50_000 } },
     } as never);
     expect(larger?.maxBodyBytesByPath.get("gmail")).toBe(100 * (50_000 * 3 + 8_192));
+
+    // Operator-controlled maxBytes must not amplify into an unbounded
+    // in-memory request allowance.
+    const huge = resolveHooksConfig({
+      hooks: { ...baseHooks, gmail: { maxBytes: 1_048_576 } },
+    } as never);
+    expect(huge?.maxBodyBytesByPath.get("gmail")).toBe(32 * 1024 * 1024);
   });
 
   test("reads gmail-path bodies with the producer-derived bound", async () => {

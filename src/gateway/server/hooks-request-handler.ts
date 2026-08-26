@@ -591,34 +591,11 @@ export function createHooksRequestHandler(
             res.end();
             return true;
           }
-          if (mapped.actions[0]?.kind === "wake") {
-            let wakeMode: "now" | "next-heartbeat" = "now";
-            for (const action of mapped.actions) {
-              if (action.kind !== "wake") {
-                continue;
-              }
-              const target = resolveTargetAgentOrRespond(action.agentId, "mapping");
-              if (!target) {
-                return true;
-              }
-              const dispatched = dispatchWakeActionOrRespond(
-                {
-                  text: action.text,
-                  mode: action.mode,
-                  sessionKey: action.sessionKey,
-                },
-                target.effectiveAgentId,
-                action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
-              );
-              if (!dispatched) {
-                return true;
-              }
-              wakeMode = action.mode;
-            }
-            sendJson(res, 200, { ok: true, mode: wakeMode });
-            return true;
-          }
-
+          // Within-batch duplicates: content identity alone would collapse two
+          // identical rendered items into one dispatch while the response
+          // claims both ran. Numbering repeated scopes keeps one replay entry
+          // per occurrence, and identical redeliveries renumber identically.
+          const fanOutScopeOccurrences = new Map<string, number>();
           // Resolves policy for one mapped agent action and returns its
           // dispatch closure; a null return means an error response was sent.
           const prepareMappedAgentDispatchOrRespond = (
@@ -665,6 +642,26 @@ export function createHooksRequestHandler(
             if (dispatchSessionKey === null) {
               return null;
             }
+            const dispatchScope: Record<string, unknown> = {
+              agentId: target.effectiveAgentId,
+              sessionKey: action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+              message: action.message,
+              name: action.name ?? "Hook",
+              wakeMode: action.wakeMode,
+              sessionMode: action.sessionMode,
+              deliver,
+              channel,
+              to: action.to ?? null,
+              model: action.model ?? null,
+              thinking: action.thinking ?? null,
+              timeoutSeconds: action.timeoutSeconds ?? null,
+            };
+            if (mapped.fanout) {
+              const fingerprint = JSON.stringify(dispatchScope);
+              const occurrence = fanOutScopeOccurrences.get(fingerprint) ?? 0;
+              fanOutScopeOccurrences.set(fingerprint, occurrence + 1);
+              dispatchScope.occurrence = occurrence;
+            }
             const replayKey = buildHookReplayCacheKey({
               pathKey: subPath || "mapping",
               token,
@@ -675,21 +672,7 @@ export function createHooksRequestHandler(
               idempotencyKey: mapped.fanout
                 ? (idempotencyKey ?? HOOK_FAN_OUT_DERIVED_IDEMPOTENCY)
                 : idempotencyKey,
-              dispatchScope: {
-                agentId: target.effectiveAgentId,
-                sessionKey:
-                  action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
-                message: action.message,
-                name: action.name ?? "Hook",
-                wakeMode: action.wakeMode,
-                sessionMode: action.sessionMode,
-                deliver,
-                channel,
-                to: action.to ?? null,
-                model: action.model ?? null,
-                thinking: action.thinking ?? null,
-                timeoutSeconds: action.timeoutSeconds ?? null,
-              },
+              dispatchScope,
             });
             return () =>
               dispatchAgentHookWithReplay(replayKey, now, () =>
@@ -721,11 +704,29 @@ export function createHooksRequestHandler(
               );
           };
 
+          // One pass over every action so a per-item transform emitting mixed
+          // kinds loses nothing: wakes enqueue immediately (no replay
+          // identity — a producer retry after a partial agent failure
+          // re-enqueues them), agents collect for dispatch.
           const dispatches: Array<
             () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>
           > = [];
+          let wakeMode: "now" | "next-heartbeat" | undefined;
           for (const action of mapped.actions) {
-            if (action.kind !== "agent") {
+            if (action.kind === "wake") {
+              const target = resolveTargetAgentOrRespond(action.agentId, "mapping");
+              if (!target) {
+                return true;
+              }
+              const dispatched = dispatchWakeActionOrRespond(
+                { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
+                target.effectiveAgentId,
+                action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
+              );
+              if (!dispatched) {
+                return true;
+              }
+              wakeMode = action.mode;
               continue;
             }
             const prepared = prepareMappedAgentDispatchOrRespond(action);
@@ -734,7 +735,12 @@ export function createHooksRequestHandler(
             }
             dispatches.push(prepared);
           }
+          if (dispatches.length === 0) {
+            sendJson(res, 200, { ok: true, mode: wakeMode ?? "now" });
+            return true;
+          }
           if (!mapped.fanout) {
+            // Non-fanout mappings produce exactly one action.
             const dispatched = await dispatches[0]!();
             sendAgentDispatchResult(res, dispatched);
             return true;
