@@ -1,5 +1,6 @@
 // Slack tests cover members plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
+import { WebClient } from "@slack/web-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
@@ -148,15 +149,16 @@ describe("registerSlackMemberEvents", () => {
       topic: "Current release: 42",
     }));
     harness.ctx.resolveUserName = vi.fn(async () => ({ name: "Morgan" }));
-    const readHistory = vi.fn().mockResolvedValue({
-      messages: [
-        { user: "U_NEW", text: "Release 42 is ready" },
-        { user: "U_OLD", text: "Watch the rollback checklist" },
-      ],
-    });
-    harness.ctx.app.client = {
-      conversations: { history: readHistory },
-    } as typeof harness.ctx.app.client;
+    harness.ctx.app.client = new WebClient("xoxb-test");
+    const readHistory = vi
+      .spyOn(harness.ctx.app.client.conversations, "history")
+      .mockResolvedValue({
+        ok: true,
+        messages: [
+          { user: "U_NEW", text: "Release 42 is ready" },
+          { user: "U_OLD", text: "Watch the rollback checklist" },
+        ],
+      });
     registerSlackMemberEvents({ ctx: harness.ctx });
     const handler = harness.getHandler("member_joined_channel");
     if (!handler) {
@@ -231,9 +233,10 @@ describe("registerSlackMemberEvents", () => {
     const harness = initSlackHarness({ channelType: "group" });
     harness.ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
     harness.ctx.accountId = "default";
-    harness.ctx.app.client = {
-      conversations: { history: vi.fn().mockRejectedValue(new Error("missing_scope")) },
-    } as typeof harness.ctx.app.client;
+    harness.ctx.app.client = new WebClient("xoxb-test");
+    vi.spyOn(harness.ctx.app.client.conversations, "history").mockRejectedValue(
+      new Error("missing_scope"),
+    );
     registerSlackMemberEvents({ ctx: harness.ctx });
     const handler = harness.getHandler("member_joined_channel");
     if (!handler) {
