@@ -432,13 +432,25 @@ function createQaNativeOutputForwarder() {
     stdout: { decoder: new StringDecoder("utf8"), pending: "" },
     stderr: { decoder: new StringDecoder("utf8"), pending: "" },
   };
+  const authTagAssignmentState = (text: string): "prefix" | "array" | undefined => {
+    for (const match of text.matchAll(/(?:^|[^\w])"?authTag"?/giu)) {
+      const suffix = text.slice(match.index + match[0].length);
+      if (/^\s*[:=]\s*\[/u.test(suffix)) {
+        return "array";
+      }
+      if (/^\s*(?:[:=]\s*)?$/u.test(suffix)) {
+        return "prefix";
+      }
+    }
+    return undefined;
+  };
   const endsMultilineSecret = (kind: MultilineSecret, text: string) =>
     kind === "pem" ? /-----END [A-Z ]*PRIVATE KEY-----/u.test(text) : /\]\s*[,}\r\n]*$/u.test(text);
   const detectMultilineSecret = (text: string): MultilineSecret | undefined => {
     if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/u.test(text)) {
       return "pem";
     }
-    if (/(?:^|[^\w])"?authTag"?\s*[:=]\s*\[/u.test(text)) {
+    if (authTagAssignmentState(text)) {
       return "authTag";
     }
     return undefined;
@@ -497,6 +509,9 @@ function createQaNativeOutputForwarder() {
         output.pending += segment;
         if (complete) {
           output.multiline ??= detectMultilineSecret(output.pending);
+          if (output.multiline === "authTag" && !authTagAssignmentState(output.pending)) {
+            output.multiline = detectMultilineSecret(output.pending);
+          }
           if (output.multiline && !endsMultilineSecret(output.multiline, output.pending)) {
             continue;
           }

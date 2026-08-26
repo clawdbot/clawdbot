@@ -2032,6 +2032,34 @@ describe("qa suite runtime launcher", () => {
       params.onCommandOutput?.("stderr", Buffer.from('  "synthetic-auth-signature"\r\n]\r\n'));
       params.onCommandOutput?.("stderr", Buffer.from('  "authTag": [\n'));
       params.onCommandOutput?.("stderr", Buffer.from('    "synthetic-json-auth-tag-secret"\n]\n'));
+      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.authTag:\n"));
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from('[\n"synthetic-line-separated-auth-secret"\n]\n'),
+      );
+      params.onCommandOutput?.("stderr", Buffer.from('  "authTag":\r\n'));
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from('[\r\n"synthetic-quoted-line-separated-auth-secret"\r\n]\r\n'),
+      );
+      params.onCommandOutput?.("stderr", Buffer.from('  "authTag"\r\n'));
+      params.onCommandOutput?.("stderr", Buffer.from(":\r\n"));
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from('[\r\n"synthetic-key-colon-separated-auth-secret"\r\n]\r\n'),
+      );
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from("authTag validation: channels.buzz.authTag:\n"),
+      );
+      params.onCommandOutput?.(
+        "stderr",
+        Buffer.from('[\n"synthetic-repeated-mention-auth-secret"\n]\n'),
+      );
+      params.onCommandOutput?.("stderr", Buffer.from("channels.buzz.AUTHTAG:\n"));
+      params.onCommandOutput?.("stderr", Buffer.from('[\n"synthetic-mixed-case-auth-secret"\n]\n'));
+      params.onCommandOutput?.("stderr", Buffer.from("ordinary mention of authTag\n"));
+      params.onCommandOutput?.("stderr", Buffer.from("ordinary progress resumed\n"));
       params.onCommandOutput?.(
         "stderr",
         Buffer.from(`${"x".repeat(16_384)} channels.buzz.authTag: [\n`),
@@ -2100,6 +2128,12 @@ describe("qa suite runtime launcher", () => {
       expect(stderr).not.toContain("synthetic-auth-tag-secret");
       expect(stderr).not.toContain("synthetic-auth-signature");
       expect(stderr).not.toContain("synthetic-json-auth-tag-secret");
+      expect(stderr).not.toContain("synthetic-line-separated-auth-secret");
+      expect(stderr).not.toContain("synthetic-quoted-line-separated-auth-secret");
+      expect(stderr).not.toContain("synthetic-key-colon-separated-auth-secret");
+      expect(stderr).not.toContain("synthetic-repeated-mention-auth-secret");
+      expect(stderr).not.toContain("synthetic-mixed-case-auth-secret");
+      expect(stderr).toContain("ordinary progress resumed");
       expect(stderr).not.toContain("synthetic-oversized-auth-tag-secret");
       expect(stderr).not.toContain("synthetic-split-oversized-auth-secret");
       expect(stderr).not.toContain("discarded-secret");
