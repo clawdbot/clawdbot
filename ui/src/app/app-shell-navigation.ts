@@ -25,7 +25,7 @@ export interface ShellNavigationHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
-  lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null;
+  lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
@@ -260,6 +260,7 @@ export class ShellNavigationOwner {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
         search: routeState.location?.search ?? "",
+        hash: routeState.location?.hash ?? "",
       };
     }
   }
@@ -281,10 +282,8 @@ export class ShellNavigationOwner {
   exitSettings(): void {
     const previous = this.host.lastWorkspaceLocation;
     if (previous) {
-      this.navigate(previous.routeId, {
-        pathname: previous.pathname,
-        ...(previous.search ? { search: previous.search } : {}),
-      });
+      const { routeId, ...location } = previous;
+      this.navigate(routeId, location);
       return;
     }
     this.navigate("chat");
