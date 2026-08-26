@@ -71,9 +71,9 @@ describe("sidebar layout", () => {
     expect(chat?.slot).toBe("chat");
   });
 
-  it("keeps the panel open as a type selector after its final tab closes", () => {
+  it("collapses the panel after its final tab closes", () => {
     const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
-    expect(closed).toEqual({ columns: [], open: true });
+    expect(closed).toEqual({ columns: [], open: false });
   });
 
   it("minimizes and expands without discarding tabs", () => {
