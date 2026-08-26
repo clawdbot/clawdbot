@@ -608,7 +608,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
   },
-  "sessions.describe": ({ params, respond, context }) => {
+  "sessions.describe": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -619,8 +619,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
     if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
+      return respond(false, undefined, requestedAgent.error);
     }
     const { target, storePath, store, entry } = loadSessionEntriesForTarget({
       key,
@@ -628,9 +627,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     if (!entry) {
-      respond(true, { session: null }, undefined);
-      return;
+      return respond(true, { session: null }, undefined);
     }
+    const modelCatalog = await context
+      .loadGatewayModelCatalog({ agentId: target.agentId })
+      .catch(() => undefined);
     const row = buildGatewaySessionRow({
       cfg,
       storePath,
@@ -638,6 +639,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       key: target.canonicalKey,
       entry,
       agentId: target.agentId,
+      ...(modelCatalog !== undefined ? { modelCatalog } : {}),
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
