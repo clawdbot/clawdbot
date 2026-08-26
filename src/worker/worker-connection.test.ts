@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -271,7 +272,7 @@ describe("worker connection reconnect backoff", () => {
     const recoveredWorkers = new Set<string>();
     server.on("connection", (socket) => {
       socket.on("message", (data) => {
-        const frame = JSON.parse(data.toString()) as {
+        const frame = JSON.parse(rawDataToString(data)) as {
           id: string;
           params: { admission: WorkerConnectParams["admission"] };
         };
