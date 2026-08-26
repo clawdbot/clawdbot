@@ -2719,7 +2719,7 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
-  it("blocks on deny decision", async () => {
+  it("uses tool-neutral guidance for a denied plugin tool call", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Dangerous",
@@ -2731,8 +2731,8 @@ describe("before_tool_call requireApproval handling", () => {
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", decision: "deny" });
 
     const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
+      toolName: "web_search",
+      params: { query: "OpenClaw" },
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
@@ -2741,11 +2741,10 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty(
       "reason",
       [
-        "Denied by user. The command was not run.",
-        "This denial is final: the approval request is closed, and /approve cannot re-approve this command. Do not mention /approve or any other approval command to the user.",
-        "Do not run the command again and do not ask the user to approve it again.",
-        "If the user still wants to execute the command, tell them to start over: a new command invocation will trigger a fresh approval request.",
-        "Explain to the user that the command did not run because approval was denied.",
+        "Denied by user. The tool call did not run.",
+        "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
+        "Do not run the tool call again or ask the user to approve it again.",
+        "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
       ].join("\n"),
     );
   });
