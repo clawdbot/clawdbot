@@ -81,7 +81,10 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    "TimeoutStopSec=30",
+    // Must cover the gateway's SIGTERM drain budget (five minutes) plus its
+    // teardown reserve. Otherwise systemd kills the embedded model/tool
+    // process before the gateway can finish the cooperative drain.
+    "TimeoutStopSec=330",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
     // Transient child processes may be selected by the OOM killer before the

@@ -1,5 +1,5 @@
-// Session permission-root tests protect the persisted root/mode invariant across
-// patch, create, and reset owners before hooks or active-work interruption.
+// Session permission-root tests cover optional recorded roots across patch,
+// create, and reset while preserving pinned boundaries and lifecycle behavior.
 import { afterEach, expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -7,7 +7,6 @@ import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admissi
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
-  sessionHookMocks,
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -19,12 +18,17 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-test("sessions.patch rejects a rootless permission mode before persistence or hooks", async () => {
+test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
   const { storePath } = await createSessionStoreDir();
+  const pinnedSessionKey = "agent:main:dashboard:pinned-permission";
   await writeSessionStore({
-    entries: { main: sessionStoreEntry("sess-rootless-permission") },
+    entries: {
+      main: sessionStoreEntry("sess-rootless-permission"),
+      [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
+        sessionRoot: "/workspace/project",
+      }),
+    },
   });
-  sessionHookMocks.triggerInternalHook.mockClear();
 
   const { ws } = await openClient();
   try {
@@ -33,43 +37,53 @@ test("sessions.patch rejects a rootless permission mode before persistence or ho
       permissionMode: "guarded",
     });
 
-    expect(patched).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "permission mode requires a session root; choose Default or a rooted session",
-      },
+    expect(patched).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      permissionMode: "guarded",
     });
+
+    const cleared = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      permissionMode: null,
+    });
+    expect(cleared).toMatchObject({ ok: true });
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
       "permissionMode",
     );
-    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    const pinned = await rpcReq(ws, "sessions.patch", {
+      key: pinnedSessionKey,
+      permissionMode: "workspace",
+    });
+    expect(pinned).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: pinnedSessionKey, storePath })).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
+    });
   } finally {
     ws.close();
   }
 });
 
-test("createGatewaySession rejects a permission mode without a prepared session root", async () => {
+test("createGatewaySession stores a permission mode without a prepared session root", async () => {
   await createSessionStoreDir();
   const { createGatewaySession } = await import("./session-create-service.js");
 
-  await expect(
-    createGatewaySession({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      commandSource: "test",
-      permissionMode: "guarded",
-    }),
-  ).resolves.toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "permission mode requires a session root; choose Default or a rooted session",
-    },
+  const created = await createGatewaySession({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    commandSource: "test",
+    permissionMode: "guarded",
   });
+
+  expect(created).toMatchObject({
+    ok: true,
+    entry: { permissionMode: "guarded" },
+  });
+  expect(created).not.toHaveProperty("entry.sessionRoot");
 });
 
-test("sessions.reset rejects a rootless permission mode without interrupting admitted work", async () => {
+test("sessions.reset applies a rootless permission mode and interrupts admitted work", async () => {
   const { storePath } = await seedActiveMainSession();
   let interrupted = false;
   let releaseAdmission = () => {};
@@ -95,19 +109,19 @@ test("sessions.reset rejects a rootless permission mode without interrupting adm
     });
 
     expect(reset).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "permission mode requires a session root; choose Default or a rooted session",
-      },
+      ok: true,
+      entry: { permissionMode: "guarded" },
     });
-    expect(interrupted).toBe(false);
+    expect(interrupted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      permissionMode: "guarded",
+    });
   } finally {
     admissionLease.release();
   }
 });
 
-test("sessions.reset rejects a persisted rootless permission mode", async () => {
+test("sessions.reset preserves a persisted rootless permission mode", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -124,10 +138,10 @@ test("sessions.reset rejects a persisted rootless permission mode", async () => 
   });
 
   expect(reset).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "permission mode requires a session root; choose Default or a rooted session",
-    },
+    ok: true,
+    entry: { permissionMode: "full" },
   });
+  if (reset.ok && "entry" in reset) {
+    expect(reset.entry.sessionRoot).toBeUndefined();
+  }
 });

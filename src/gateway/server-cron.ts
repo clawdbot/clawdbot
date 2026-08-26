@@ -10,6 +10,7 @@ import {
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
@@ -40,6 +41,7 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
+import { createCronExecutionId } from "../cron/run-id.js";
 import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
@@ -233,6 +235,7 @@ function sanitizeCronHeartbeatOverride(
 async function finalizeCronCompletionAnnouncement(params: {
   job: CronJob;
   text?: string;
+  runStartedAtMs?: number;
   abortSignal?: AbortSignal;
   deps: CliDeps;
   resolveCronAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig };
@@ -258,6 +261,15 @@ async function finalizeCronCompletionAnnouncement(params: {
   }
 
   const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
+  const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
+    jobId: params.job.id,
+    runId:
+      params.runStartedAtMs === undefined
+        ? undefined
+        : createCronExecutionId(params.job.id, params.runStartedAtMs),
+  });
+  // Command summaries are already redacted; adding the link earlier would strip its URL.
+  const text = inspectUrl ? `${params.text}\nInspect: ${inspectUrl}` : params.text;
   const abortSignal = params.abortSignal ?? new AbortController().signal;
   let deliveryMayHaveReachedRecipient = false;
   try {
@@ -279,7 +291,7 @@ async function finalizeCronCompletionAnnouncement(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(params.job),
           },
-          payload: { text: params.text },
+          payload: { text },
           abortSignal,
           onDeliveryAttempt: (reachedRecipient) => {
             deliveryMayHaveReachedRecipient ||= reachedRecipient;
@@ -906,6 +918,7 @@ export function buildGatewayCronService(params: {
           typeof result.summary === "string" && result.summary.trim()
             ? redactCronCommandSummaryForExternalDelivery(result.summary)
             : undefined,
+        runStartedAtMs: job.state.runningAtMs,
         abortSignal,
         deps: params.deps,
         resolveCronAgent,
@@ -976,6 +989,7 @@ export function buildGatewayCronService(params: {
       const completion = await finalizeCronCompletionAnnouncement({
         job,
         text: job.sessionTarget === "main" ? undefined : notify,
+        runStartedAtMs: job.state.runningAtMs,
         abortSignal,
         deps: params.deps,
         resolveCronAgent,

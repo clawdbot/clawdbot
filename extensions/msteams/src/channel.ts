@@ -1,4 +1,5 @@
 // Msteams plugin module implements channel behavior.
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -41,7 +43,11 @@ import {
   msteamsContextTargetsMatch,
   resolveMSTeamsAutoThreadId,
 } from "./action-threading.js";
-import { msTeamsApprovalAuth } from "./approval-auth.js";
+import {
+  isMSTeamsNativeApprovalClientEnabled,
+  msTeamsApprovalCapability,
+  shouldSuppressLocalMSTeamsExecApprovalPrompt,
+} from "./approval-native.js";
 import { collectMSTeamsSecurityWarnings, type ResolvedMSTeamsAccount } from "./channel-config.js";
 import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
@@ -309,6 +315,8 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" && fallbackLimit > 0 ? Math.min(fallbackLimit, 4000) : 4000,
   pollMaxOptions: 12,
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+    shouldSuppressLocalMSTeamsExecApprovalPrompt({ cfg, accountId, payload, hint }),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -364,7 +372,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       groups: {
         resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
       },
-      approvalCapability: msTeamsApprovalAuth,
+      approvalCapability: msTeamsApprovalCapability,
       doctor: {
         dmAllowFromMode: "topOnly",
         groupModel: "hybrid",
@@ -1049,6 +1057,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           });
           statusSink({ port });
           ctx.log?.info(`starting provider account ${accountId} (port ${port})`);
+          if (isMSTeamsNativeApprovalClientEnabled({ cfg: ctx.cfg, accountId })) {
+            registerChannelRuntimeContext({
+              channelRuntime: ctx.channelRuntime,
+              channelId: "msteams",
+              accountId,
+              capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+              context: {},
+              abortSignal: ctx.abortSignal,
+            });
+          }
           return monitorMSTeamsProvider({
             cfg: ctx.cfg,
             accountId,

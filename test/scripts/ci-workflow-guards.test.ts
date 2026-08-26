@@ -7548,6 +7548,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("splits native source verification from generated locale parity", () => {
     const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
     const localeJob = workflow.jobs["native-i18n"];
     const sourceStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Verify native app i18n source",
@@ -7556,11 +7559,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Check native app generated locale parity",
     );
     const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    const fullReleaseCiCase = expectDefined(
+      fullReleaseSource.match(/case "\$CHILD_WORKFLOW_KIND" in\n\s+ci\)([\s\S]*?)\n\s+;;/u)?.[1],
+      "Full Release CI dispatch case",
+    );
 
     expect(packageScripts["native:i18n:baseline"]).toContain("baseline --write");
     expect(packageScripts["native:i18n:verify"]).toContain(" verify");
-    expect(workflow.jobs.preflight.outputs.strict_native_i18n).toContain(
-      "steps.changed_scope.outputs.strict_native_i18n",
+    expect(workflow.jobs.preflight.outputs.strict_native_i18n).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_native_i18n }}",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RUN_NATIVE_I18N).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
     );
     expect(sourceStep.run).toContain("pnpm native:i18n:verify");
     expect(sourceStep.run).toContain("Historical release targets");
@@ -7568,6 +7579,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parityStep.run).toContain("pnpm native:i18n:check");
     expect(parityStep.run).not.toContain("pnpm android:i18n:check");
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
+    expect(fullReleaseCiCase).toContain(
+      'args=(-f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id")',
+    );
+    expect(fullReleaseCiCase).toContain('dispatch_child ci.yml "$dispatch_run_name"');
+    expect(fullReleaseCiCase).not.toContain("release_gate");
   });
 
   it("runs built runtime verifiers inside the artifact-check wave", () => {

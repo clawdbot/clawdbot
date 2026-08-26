@@ -19,7 +19,7 @@ function resolveMSTeamsChannelConfig(cfg: OpenClawConfig, accountId?: string | n
   return resolveMSTeamsAccountConfig(cfg, accountId);
 }
 
-export const msTeamsApprovalAuth = createChannelApprovalAuth({
+const msTeamsApproval = createChannelApprovalAuth({
   channelLabel: "Microsoft Teams",
   resolveInputs: ({ cfg, accountId }) => {
     const channel = resolveMSTeamsChannelConfig(cfg, accountId);
@@ -33,4 +33,7 @@ export const msTeamsApprovalAuth = createChannelApprovalAuth({
     }
     return MSTEAMS_ID_RE.test(trimmed) ? trimmed : undefined;
   },
-}).approvalAuth;
+});
+
+export const getMSTeamsApprovalApprovers = msTeamsApproval.resolveApprovers;
+export const msTeamsApprovalAuth = msTeamsApproval.approvalAuth;

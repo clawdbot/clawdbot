@@ -110,7 +110,15 @@ describe("listSessionFilesForAgent", () => {
       "active.jsonl.reset.2026-02-16T22-26-33.000Z",
       "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
     ];
-    const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
+    const excluded = [
+      "active.jsonl.bak.2026-02-16T22-28-33.000Z",
+      "active.trajectory.jsonl.deleted.2026-02-16T22-30-33.000Z",
+      "active.trajectory.jsonl.reset.2026-02-16T22-31-33.000Z.zst",
+      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-02-16T22-32-33.000Z",
+      "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-02-16T22-33-33.000Z.zst",
+      "sessions.json",
+      "notes.md",
+    ];
     excluded.push("active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl");
 
     for (const fileName of [...included, ...excluded]) {
@@ -299,6 +307,17 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         message: { role: "user", content: "Archived JSONL transcript text" },
       }),
     );
+    const resetArchivePath = path.join(
+      sessionsDir,
+      `${sessionId}.jsonl.reset.2026-06-25T12-02-00.000Z`,
+    );
+    fsSync.writeFileSync(
+      resetArchivePath,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Retained pre-reset conversation fact" },
+      }),
+    );
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
@@ -322,6 +341,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionFile: archivePath,
           sessionId,
         }),
+        expect.objectContaining({
+          artifactKind: "archive-artifact",
+          sessionFile: resetArchivePath,
+        }),
       ]),
     );
 
@@ -342,6 +365,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       updatedAtMs: updatedAt,
     });
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
+    const resetArchiveEntry = requireSessionEntry(await buildSessionEntry(resetArchivePath));
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe("User: Live SQLite transcript text");
@@ -355,6 +379,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
+    expect(resetArchiveEntry.path).toBe(
+      "sessions/main/sqlite-live.jsonl.reset.2026-06-25T12-02-00.000Z",
+    );
+    expect(resetArchiveEntry.content).toBe("User: Retained pre-reset conversation fact");
   });
 
   it("exposes content revisions that change with SQLite appends and file replacement", async () => {

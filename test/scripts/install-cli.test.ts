@@ -207,6 +207,62 @@ describe("install-cli.sh", () => {
     }
   });
 
+  it("round-trips dynamic installer values through independent NDJSON records", () => {
+    const root = tempDirs.make("openclaw-install-cli-json-events-");
+    const dynamicValue = `quote"\\lobster🦞${String.fromCharCode(
+      ...Array.from({ length: 31 }, (_, index) => index + 1),
+    )}end`;
+    const repo = join(root, dynamicValue);
+    const legacyDir = join(repo, "Peekaboo");
+    const fakeNode = join(root, "node");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(fakeNode, '#!/bin/bash\nprintf "%s" "$EVENT_VALUE"\n');
+    chmodSync(fakeNode, 0o755);
+
+    const success = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `cd ${JSON.stringify(process.cwd())}`,
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "JSON=1",
+        'cleanup_legacy_submodules "$REPO"',
+        "try_link_usable_node_runtime_from_path() { return 0; }",
+        `node_bin() { printf '%s\\n' ${JSON.stringify(fakeNode)}; }`,
+        "install_alpine_node",
+        'emit_json done version "$EVENT_VALUE"',
+      ].join("\n"),
+      { EVENT_VALUE: dynamicValue, REPO: repo },
+    );
+
+    expect(success.status, success.stderr || success.stdout).toBe(0);
+    expect(existsSync(legacyDir)).toBe(false);
+    const successLines = success.stdout.trimEnd().split("\n");
+    expect(successLines).toHaveLength(5);
+    const successEvents = successLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(successEvents).toEqual([
+      { event: "step", name: "legacy-submodule", status: "start", path: legacyDir },
+      { event: "step", name: "legacy-submodule", status: "ok", path: legacyDir },
+      { event: "step", name: "node", status: "start", method: "apk" },
+      { event: "step", name: "node", status: "ok", method: "system", version: dynamicValue },
+      { event: "done", ok: true, version: dynamicValue },
+    ]);
+
+    const failure = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `cd ${JSON.stringify(process.cwd())}`,
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "JSON=1",
+        'fail "$EVENT_VALUE"',
+      ].join("\n"),
+      { EVENT_VALUE: dynamicValue },
+    );
+
+    expect(failure.status).toBe(1);
+    expect(failure.stdout.trimEnd().split("\n")).toHaveLength(1);
+    expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
+  });
+
   it("rejects a git checkout without a commit before updating it", () => {
     const result = runInstallCliShell(`
       set -euo pipefail

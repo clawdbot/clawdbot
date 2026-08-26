@@ -139,6 +139,19 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("limits sandbox runtime commands to configured backend owner plugins", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["sandbox", "list"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "sandbox-backends",
+      routeLogsToStderr: undefined,
+    });
+  });
+
   it("does not evaluate config or plugin runtimes for a gateway-backed agent turn", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,

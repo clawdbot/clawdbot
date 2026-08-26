@@ -110,6 +110,7 @@ export type MessageActionInput = {
     receiptDiscriminator: string,
   ) => void;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplyFinal?: boolean;

@@ -20,7 +20,7 @@ import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {

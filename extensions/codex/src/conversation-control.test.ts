@@ -168,7 +168,7 @@ describe("codex conversation controls", () => {
     },
   );
 
-  it("refuses to persist a permission mode without its canonical session root", async () => {
+  it("persists a permission mode on a rootless session", async () => {
     const session = {
       agentId: "main",
       sessionId: "session-without-root",
@@ -184,10 +184,10 @@ describe("codex conversation controls", () => {
 
     await expect(
       setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
-    ).rejects.toThrow("requires a recorded session root");
+    ).resolves.toBe("Codex permissions set to default.");
     expect(
       getSessionEntry({ agentId: session.agentId, sessionKey: session.sessionKey, storePath }),
-    ).not.toHaveProperty("permissionMode");
+    ).toMatchObject({ permissionMode: "guarded" });
   });
 
   it("routes supervised stop and steer requests through the native user-home connection", async () => {

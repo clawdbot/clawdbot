@@ -860,7 +860,8 @@ html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
 
 html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-titlebar-inset: calc(
-    var(--shell-native-titlebar-safe-area-left) + var(--shell-attention-width)
+    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+      var(--shell-chrome-controls-gap) + var(--shell-attention-width)
   );
 }
 

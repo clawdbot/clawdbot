@@ -153,7 +153,6 @@ export function renderChatPaneComposerControls(params: {
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: selectedSession?.permissionMode,
-      sessionRoot: selectedSession?.sessionRoot,
       onSelect: async (permissionMode) => {
         if (!permissionAccess.allowed) {
           return;

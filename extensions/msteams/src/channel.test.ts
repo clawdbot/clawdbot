@@ -12,6 +12,7 @@ import {
   resolveMSTeamsRuntimeAccount,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { msTeamsApprovalCapability } from "./approval-native.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
@@ -332,8 +333,19 @@ describe("msteamsPlugin", () => {
     },
   );
 
-  it("exposes approval auth through approvalCapability", () => {
-    expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
+  it("exposes native approval delivery without replacing existing approval authorization", () => {
+    const authorization = {
+      cfg: createConfiguredMSTeamsCfg(),
+      senderId: "40a1a0ed-4ff2-4164-a219-55518990c197",
+      action: "approve",
+      approvalKind: "exec",
+    } as const;
+
+    expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalCapability);
+    expect(msteamsPlugin.approvalCapability?.authorizeActorAction?.(authorization)).toEqual(
+      msTeamsApprovalAuth.authorizeActorAction?.(authorization),
+    );
+    expect(msteamsPlugin.approvalCapability?.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
   });
 
   it("advertises legacy and group-management message-tool actions together", () => {
