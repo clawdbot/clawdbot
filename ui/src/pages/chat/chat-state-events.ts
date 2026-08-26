@@ -200,6 +200,7 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
+  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -213,9 +214,10 @@ function replayPendingSessionMessageReload(
     return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
-    state.requestUpdate?.(),
-  );
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight,
+  }).finally(() => state.requestUpdate?.());
   return true;
 }
 
@@ -500,19 +502,20 @@ export function handlePageGatewayEvent(
     if (shouldRefreshPullRequests) {
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
-    const replayedPendingSessionReload = replayPendingSessionMessageReload(
-      state,
-      payload,
-      isPresented,
-    );
-    if (
-      !replayedPendingSessionReload &&
+    const shouldRecoverMissingTerminal = Boolean(
       recoveryRunId &&
       recoveryScope &&
       (projectedRunBeforeEvent === undefined || projectedRunBeforeEvent.status === "streaming") &&
       getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
-        ?.status === "completed"
-    ) {
+        ?.status === "completed",
+    );
+    const replayedPendingSessionReload = replayPendingSessionMessageReload(
+      state,
+      payload,
+      isPresented,
+      shouldRecoverMissingTerminal,
+    );
+    if (!replayedPendingSessionReload && shouldRecoverMissingTerminal) {
       // Only the first owned completion can recover history. Replayed, yielded,
       // or background-run terminals must not repeat I/O or disturb the foreground pane.
       // The terminal boundary must observe a request started after persistence;

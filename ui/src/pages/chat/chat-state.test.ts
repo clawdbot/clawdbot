@@ -637,7 +637,10 @@ describe("canonical session message recovery", () => {
     },
   );
 
-  it("starts a fresh history request after a pre-final request resolves stale", async () => {
+  it.each([
+    { name: "without a pending session-message reload", pendingReload: false },
+    { name: "after a pending session-message reload", pendingReload: true },
+  ])("starts a fresh history request $name", async ({ pendingReload }) => {
     const runId = "run-with-pre-final-history";
     const prompt = {
       role: "user",
@@ -663,6 +666,7 @@ describe("canonical session message recovery", () => {
       chatStream: null,
       chatStreamSegments: [],
       chatToolMessages: [],
+      pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
       client: { request } as unknown as GatewayBrowserClient,
     });
     const sessionInfo = {
