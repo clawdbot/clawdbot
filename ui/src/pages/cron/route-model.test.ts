@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { resolveCronRouteData } from "./route-model.ts";
+import { cronRunEntryMatchesLink, resolveCronRouteData } from "./route-model.ts";
 
 describe("resolveCronRouteData", () => {
   it.each([
@@ -33,5 +33,45 @@ describe("resolveCronRouteData", () => {
     },
   ])("normalizes $scenario", ({ search, jobId, runId }) => {
     expect(resolveCronRouteData(search)).toEqual({ jobId, runId });
+  });
+});
+
+describe("cronRunEntryMatchesLink", () => {
+  const entry = {
+    jobId: "job-1",
+    runId: "manual:job-1:1787732891668:1",
+    runAtMs: 1_787_732_891_692,
+  };
+
+  it.each([
+    {
+      scenario: "the exact public run id",
+      linked: "manual:job-1:1787732891668:1",
+      matches: true,
+    },
+    {
+      scenario: "the execution id via the recorded run start",
+      linked: "cron:job-1:1787732891692",
+      matches: true,
+    },
+    {
+      scenario: "an execution id for another job",
+      linked: "cron:job-2:1787732891692",
+      matches: false,
+    },
+    {
+      scenario: "an execution id with a different run start",
+      linked: "cron:job-1:1787732891693",
+      matches: false,
+    },
+    { scenario: "an unrelated id", linked: "run-1", matches: false },
+  ])("matches $scenario", ({ linked, matches }) => {
+    expect(cronRunEntryMatchesLink(linked, entry)).toBe(matches);
+  });
+
+  it("does not match an execution id when the entry has no recorded run start", () => {
+    expect(
+      cronRunEntryMatchesLink("cron:job-1:1787732891692", { jobId: "job-1", runId: "abc" }),
+    ).toBe(false);
   });
 });

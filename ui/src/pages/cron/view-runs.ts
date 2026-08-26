@@ -23,6 +23,7 @@ import {
 } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { cronRunEntryMatchesLink } from "./route-model.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
@@ -414,7 +415,7 @@ function renderRun(
     entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
-  const highlighted = Boolean(highlightedRunId && entry.runId === highlightedRunId);
+  const highlighted = Boolean(highlightedRunId && cronRunEntryMatchesLink(highlightedRunId, entry));
   return html`
     <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">
       <div class="cron-run-entry__header">
