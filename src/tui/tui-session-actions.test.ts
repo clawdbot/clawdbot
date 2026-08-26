@@ -192,6 +192,58 @@ describe("tui session actions", () => {
     );
   });
 
+  it("retires the previous global agent before replacement history resolves", async () => {
+    const state = createBaseState({
+      currentAgentId: "research",
+      currentSessionKey: "global",
+      currentSessionId: "research-session",
+      activeChatRunId: "research-run",
+      pendingSubmit: acceptedSubmit("research-pending", "private draft"),
+      historyLoaded: true,
+      sessionInfo: { displayName: "Research secret", updatedAt: 100, verboseLevel: "full" },
+    });
+    sendPendingUser(state, "research-pending", "private draft");
+    const chatLog = new ChatLog();
+    chatLog.addUser("PRIVATE RESEARCH HISTORY");
+    const history = createDeferred<{
+      messages: unknown[];
+      sessionInfo: { sessionId: string };
+    }>();
+    const loadHistory = vi.fn(() => history.promise);
+    const invalidateRunOwnership = vi.fn();
+    const clearLocalRunIds = vi.fn();
+    const { setSession } = createTestSessionActions({
+      client: makeTuiBackend({ loadHistory }),
+      chatLog,
+      state,
+      invalidateRunOwnership,
+      clearLocalRunIds,
+      resolveSessionSelection: vi.fn((_raw?: string, agentId = state.currentAgentId) => ({
+        key: "global",
+        agentId,
+      })),
+    });
+
+    const switching = setSession("", "ops");
+
+    expect(state.currentAgentId).toBe("ops");
+    expect(state.currentSessionKey).toBe("global");
+    expect(state.currentSessionId).toBeNull();
+    expect(state.sessionInfo.displayName).toBeUndefined();
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
+    expect(state.historyLoaded).toBe(false);
+    expect(state.sessionProjection?.entries).toEqual([]);
+    expect(chatLog.render(120).join("\n")).not.toContain("PRIVATE RESEARCH HISTORY");
+    expect(invalidateRunOwnership).toHaveBeenCalledOnce();
+    expect(clearLocalRunIds).toHaveBeenCalledOnce();
+    expect(loadHistory).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops", limit: 200 });
+
+    history.resolve({ messages: [], sessionInfo: { sessionId: "ops-session" } });
+    await switching;
+    expect(state.currentSessionId).toBe("ops-session");
+  });
+
   it("returns success after applying a normalized fresh agent roster", async () => {
     const state = createBaseState({
       agents: [{ id: "cached", name: "Cached Agent" }],
@@ -314,7 +366,6 @@ describe("tui session actions", () => {
       const invalidateRunOwnership = vi.fn();
       const clearLocalRunIds = vi.fn();
       const clearAll = vi.fn();
-      const clearPendingUsers = vi.fn();
       const btw = createBtwPresenter();
       const { refreshAgents } = createTestSessionActions({
         client: makeTuiBackend({
@@ -326,7 +377,7 @@ describe("tui session actions", () => {
             agents: [{ id: "ops" }],
           }),
         }),
-        chatLog: makeChatLog({ clearAll, clearPendingUsers }),
+        chatLog: makeChatLog({ clearAll }),
         btw,
         state,
         invalidateRunOwnership,
@@ -354,7 +405,6 @@ describe("tui session actions", () => {
       expect(invalidateRunOwnership).toHaveBeenCalledOnce();
       expect(clearLocalRunIds).toHaveBeenCalledOnce();
       expect(clearAll).toHaveBeenCalledOnce();
-      expect(clearPendingUsers).toHaveBeenCalledOnce();
       expect(btw.clear).toHaveBeenCalledOnce();
       expect(loadHistory).not.toHaveBeenCalled();
     },
@@ -1479,26 +1529,72 @@ describe("tui session actions", () => {
     }
   });
 
-  it("preserves run ownership when reloading the same session selection", async () => {
-    const sessionKey = "agent:main:main";
-    const invalidateRunOwnership = vi.fn();
-    const state = createBaseState({ currentSessionKey: sessionKey });
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({
-        listSessions: vi.fn(),
-        loadHistory: vi.fn().mockResolvedValue({
-          sessionId: "session-main",
-          sessionInfo: { key: sessionKey, sessionId: "session-main" },
-          messages: [],
+  it.each(["agent:main:main", "main"])(
+    "preserves run ownership when reselecting the same session as %s",
+    async (selectedKey) => {
+      const sessionKey = "agent:main:main";
+      const activeRunId = "run-active";
+      const pendingRunId = "run-pending";
+      const pendingText = "still waiting for the Gateway";
+      const invalidateRunOwnership = vi.fn();
+      const clearLocalRunIds = vi.fn();
+      const loadHistory = vi.fn();
+      const state = createBaseState({
+        currentSessionKey: sessionKey,
+        activeChatRunId: activeRunId,
+        pendingSubmit: acceptedSubmit(pendingRunId, pendingText),
+        activityStatus: "streaming",
+        historyLoaded: true,
+      });
+      sendPendingUser(state, pendingRunId, pendingText);
+      const chatLog = new ChatLog();
+      chatLog.addPendingUser(pendingRunId, pendingText);
+      const { setSession } = createTestSessionActions({
+        client: makeTuiBackend({
+          listSessions: vi.fn(),
+          loadHistory,
         }),
-      }),
+        chatLog,
+        state,
+        invalidateRunOwnership,
+        clearLocalRunIds,
+        setActivityStatus: (activityStatus) => {
+          state.activityStatus = activityStatus;
+        },
+      });
+
+      await setSession(selectedKey);
+
+      expect(state.activeChatRunId).toBe(activeRunId);
+      expect(state.pendingSubmit).toEqual(acceptedSubmit(pendingRunId, pendingText));
+      expect(state.activityStatus).toBe("streaming");
+      expect(chatLog.render(120).join("\n")).toContain(pendingText);
+      expect(invalidateRunOwnership).not.toHaveBeenCalled();
+      expect(clearLocalRunIds).not.toHaveBeenCalled();
+      expect(loadHistory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reloads the current session when its initial history never loaded", async () => {
+    const sessionKey = "agent:main:main";
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      sessionInfo: { key: sessionKey, sessionId: "session-main" },
+      messages: [],
+    });
+    const state = createBaseState({
+      currentSessionKey: sessionKey,
+      historyLoaded: false,
+    });
+    const { setSession } = createTestSessionActions({
+      client: makeTuiBackend({ listSessions: vi.fn(), loadHistory }),
       state,
-      invalidateRunOwnership,
     });
 
     await setSession(sessionKey);
 
-    expect(invalidateRunOwnership).not.toHaveBeenCalled();
+    expect(loadHistory).toHaveBeenCalledOnce();
+    expect(state.historyLoaded).toBe(true);
   });
 
   it("adopts an in-flight run with no buffered text (Codex) and shows streaming", async () => {
@@ -2363,6 +2459,27 @@ describe("tui session actions", () => {
       aborted: false,
       rejected: true,
     },
+    {
+      name: "successful abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: true,
+      rejected: false,
+    },
+    {
+      name: "no-active-run abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: false,
+    },
+    {
+      name: "rejected abort after the same session is replaced",
+      initialKey: "agent:main:main",
+      nextKey: "agent:main:main",
+      aborted: false,
+      rejected: true,
+    },
   ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
     const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
     const abortChat = vi.fn(() => deferred.promise);
@@ -2380,6 +2497,8 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentSessionKey: initialKey,
       currentAgentId: "main",
+      currentSessionId: "first-session",
+      sessionGeneration: 4,
       activeChatRunId: "first-active-run",
       pendingSubmit: acceptedSubmit("first-pending-run"),
     });
@@ -2388,9 +2507,9 @@ describe("tui session actions", () => {
       chatLog: Object.assign(chatLog, { dropPendingUser }),
       state,
       setActivityStatus,
-      resolveSessionSelection: vi.fn((raw?: string) => ({
+      resolveSessionSelection: vi.fn((raw?: string, agentId?: string) => ({
         key: raw ?? state.currentSessionKey,
-        agentId: state.currentAgentId,
+        agentId: agentId ?? state.currentAgentId,
       })),
     });
 
@@ -2399,10 +2518,12 @@ describe("tui session actions", () => {
       sessionKey: initialKey,
       ...(initialKey === "global" ? { agentId: "main" } : {}),
     });
-    if (initialKey === "global") {
-      state.currentAgentId = "work";
+    if (initialKey === nextKey && initialKey !== "global") {
+      state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
+      state.currentSessionId = "second-session";
+    } else {
+      await setSession(nextKey, initialKey === "global" ? "work" : undefined);
     }
-    await setSession(nextKey);
     state.activeChatRunId = "second-active-run";
     state.pendingSubmit = acceptedSubmit("second-pending-run", "second draft");
     addSystem.mockClear();
@@ -2736,6 +2857,51 @@ describe("tui session actions", () => {
 
     await expect(loadHistory()).resolves.toEqual({ loaded: true, runOutcome });
   });
+
+  it.each([
+    { verboseLevel: "off", showsTool: false, showsOutput: false },
+    { verboseLevel: "on", showsTool: true, showsOutput: false },
+    { verboseLevel: "full", showsTool: true, showsOutput: true },
+  ] as const)(
+    "preserves $verboseLevel tool-output visibility when rebuilding history",
+    async ({ verboseLevel, showsTool, showsOutput }) => {
+      const privateOutput = "TUI_PRIVATE_TOOL_OUTPUT";
+      const chatLog = new ChatLog();
+      const startTool = vi.spyOn(chatLog, "startTool");
+      const state = createBaseState({
+        sessionInfo: { verboseLevel },
+      });
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({
+          listSessions: vi.fn(),
+          loadHistory: vi.fn().mockResolvedValue({
+            sessionId: "session-main",
+            sessionInfo: {
+              key: "agent:main:main",
+              sessionId: "session-main",
+              verboseLevel,
+            },
+            messages: [
+              {
+                role: "toolResult",
+                toolCallId: "tool-private",
+                toolName: "read_file",
+                content: [{ type: "text", text: privateOutput }],
+                details: { accessToken: "TUI_PRIVATE_TOOL_DETAILS" },
+              },
+            ],
+          }),
+        }),
+        chatLog,
+        state,
+      });
+
+      await loadHistory();
+
+      expect(startTool).toHaveBeenCalledTimes(showsTool ? 1 : 0);
+      expect(chatLog.render(120).join("\n").includes(privateOutput)).toBe(showsOutput);
+    },
+  );
 
   it("restores attachment-only assistant rows from history without exposing references", async () => {
     const loadHistory = vi.fn().mockResolvedValue({

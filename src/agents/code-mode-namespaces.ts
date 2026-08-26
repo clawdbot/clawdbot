@@ -3,6 +3,7 @@
  * namespaced tool scopes here; code mode receives descriptors, virtual API
  * files, and a guarded invocation runtime.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type { PluginToolMcpMeta } from "../plugins/tools.js";
@@ -346,7 +347,7 @@ function assignMcpNamespaceServerNames(
 }
 
 function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
-  return (node.displayName?.trim() || node.id).replace(/\s+/gu, " ").slice(0, 128);
+  return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
 function createMcpNamespaceModel(

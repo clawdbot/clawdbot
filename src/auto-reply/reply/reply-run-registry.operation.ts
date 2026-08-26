@@ -543,18 +543,17 @@ export function createReplyOperation(params: {
       abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
       return true;
     },
-    supersede() {
-      if (result || stateCleared) {
+    supersede(beforeSupersede) {
+      const abortFrozen = abortFrozenOperations.has(operation);
+      if (result || stateCleared || (!abortFrozen && !isReplyOperationAbortable(operation))) {
         return false;
       }
-      if (abortFrozenOperations.has(operation)) {
+      beforeSupersede?.();
+      if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
         phase = "aborted";
         scheduleTerminalSettle();
         return true;
-      }
-      if (!isReplyOperationAbortable(operation)) {
-        return false;
       }
       abortOperation("superseded", createSupersededError(), "aborted_for_supersession");
       return true;

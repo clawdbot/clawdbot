@@ -101,17 +101,17 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/command-palette-catalog-search.ts",
+      "text": "/verbose"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/command-palette.ts",
       "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "/verbose"
     },
     {
       "count": 1,

@@ -7,7 +7,7 @@
 - Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
 - The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.
 
 ## Scenario Metadata
 
@@ -20,7 +20,6 @@
   "model": "gpt-5.5",
   "modelProvider": "openai",
   "runtime": "codex_app_server",
-  "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
@@ -71,6 +70,7 @@
     "features.goals": false,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
+    "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
@@ -116,6 +116,7 @@
     "features.goals": false,
     "features.standalone_web_search": false,
     "project_doc_max_bytes": 131072,
+    "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
     "web_search": "cached"
   },
@@ -142,7 +143,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nHeartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.\nAssigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.\nNo rote loops; orientation != accomplishment. Prefer action/silent progress.\nNever repetitive \"same/no change/still\" updates.\nInterrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>",
+      "developer_instructions": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.\n\n## request_user_input availability\n\nUse the `request_user_input` tool only when it is listed in the available tools for this turn.\n\nIn Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -210,8 +211,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 1507,
-    "roughTokens": 377
+    "chars": 1433,
+    "roughTokens": 359
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -226,24 +227,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56248,
-    "roughTokens": 14062
+    "chars": 56450,
+    "roughTokens": 14113
   },
   "openClawDeveloperInstructions": {
     "chars": 3390,
     "roughTokens": 848
   },
   "totalTextOnly": {
-    "chars": 27818,
-    "roughTokens": 6955
+    "chars": 27678,
+    "roughTokens": 6920
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84068,
-    "roughTokens": 21017
+    "chars": 84130,
+    "roughTokens": 21033
   },
   "userInputText": {
-    "chars": 1271,
-    "roughTokens": 318
+    "chars": 1205,
+    "roughTokens": 302
   }
 }
 ```
@@ -465,17 +466,17 @@ You are in a Telegram direct conversation. Normal final replies are private and 
 ### Developer: Codex Collaboration Mode Instructions
 
 ```text
-This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.
+# Collaboration Mode: Default
 
-When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.
+You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
-### Heartbeats
+Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
 
-Heartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.
-Assigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.
-No rote loops; orientation != accomplishment. Prefer action/silent progress.
-Never repetitive "same/no change/still" updates.
-Interrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.
+## request_user_input availability
+
+Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 
 ## OpenClaw Agent Soul
 
@@ -502,7 +503,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.
 
 # Project Context
 

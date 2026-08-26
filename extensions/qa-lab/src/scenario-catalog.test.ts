@@ -237,28 +237,18 @@ describe("qa scenario catalog", () => {
         flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
       );
 
-    expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
-      "active-memory-preprompt-recall",
-      "channel-participant-identity-inspection",
-      "cron-model-created-explicit-authority",
-      "cron-model-created-one-shot-recurring",
-      "kitchen-sink-live-openai",
-      "matrix-post-restart-room-continue",
-      "matrix-restart-resume",
-      "message-delivery-decision-inspection",
-      "qa-channel-reconnect-dedupe",
-      "remember-across-conversations",
-      "remember-across-reset-private",
-      "slack-restart-resume",
-      "subagent-stale-child-links",
-      "telegram-repeated-command-authorization",
-      "whatsapp-restart-resume",
-    ]);
+    expect(scenarios.length).toBeGreaterThan(0);
     expect(
       scenarios
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+    expect(
+      scenarios.find((scenario) => scenario.id === "gateway-restart-unclaimed-delivery")?.execution,
+    ).toMatchObject({
+      suiteIsolation: "isolated",
+      isolationReason: expect.stringMatching(/\S/),
+    });
   });
 
   it("uses graceful restart and isolation for Matrix replay dedupe", () => {

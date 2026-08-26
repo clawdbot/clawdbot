@@ -1497,21 +1497,23 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure(
-      "route",
-      () =>
-        options.builtInMachineOutput
-          ? tryRouteCli(normalizedArgv, { machineOutput: true })
-          : tryRouteCli(normalizedArgv),
-      { timeline: false },
-    );
-    if (routed) {
-      return;
+    if (!isHelpOrVersionInvocation) {
+      const route = await startupTrace.measure("route-import", () => import("./route.js"));
+      const routed = await startupTrace.measure(
+        "route",
+        () =>
+          options.builtInMachineOutput
+            ? route.tryRouteCli(normalizedArgv, { machineOutput: true })
+            : route.tryRouteCli(normalizedArgv),
+        { timeline: false },
+      );
+      if (routed) {
+        return;
+      }
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
+    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",

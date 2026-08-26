@@ -1,21 +1,30 @@
-/* Floating footer controls must clear the collapsed chrome and scope indicator. */
+/* Floating footer controls clear collapsed chrome and feed their resting width
+   back into the first-row safe edge. */
+.shell--nav-collapsed:has(openclaw-sidebar-attention.sidebar-attention--floating) {
+  --shell-attention-width: 40px;
+}
+
+.shell--nav-collapsed:has(
+  openclaw-sidebar-attention.sidebar-attention--floating .sidebar-footer-update-slot
+) {
+  --shell-attention-width: 72px;
+}
+
 openclaw-sidebar-attention.sidebar-attention--floating {
   --sidebar-bg: var(--bg-content, var(--bg));
 
   position: fixed;
   top: 10px;
-  left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
-  );
+  left: calc(var(--shell-chrome-controls-inset) + var(--shell-controls-width) + 8px);
   z-index: 45;
   display: flex;
   align-items: center;
   gap: var(--shell-chrome-controls-gap);
 }
 
-/* Native navigation hides web controls but leaves its scope indicator in-page. */
+/* Native navigation hides the web controls. */
 html.openclaw-native-nav openclaw-sidebar-attention.sidebar-attention--floating {
-  left: calc(var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-access-width) + 6px);
+  left: calc(var(--shell-chrome-controls-inset) + 6px);
 }
 
 html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--floating {
@@ -24,6 +33,10 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
 
 html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floating {
   top: 52px;
+}
+
+:is(.shell--onboarding, .shell--settings) openclaw-sidebar-attention.sidebar-attention--floating {
+  inset: auto auto max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
 }
 
 /* A stale-client refresh card shares the collapsed overlay strip's row; drop it

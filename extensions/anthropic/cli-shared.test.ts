@@ -881,7 +881,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
-    expect(backend.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(backend.config.clearEnv).not.toContain("CLAUDE_CONFIG_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_BEDROCK");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");

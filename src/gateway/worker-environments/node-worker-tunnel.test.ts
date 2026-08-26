@@ -349,7 +349,7 @@ describe("node worker tunnel manager", () => {
       const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
       const outputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
       const nodeTransport = transport();
-      nodeTransport.invoke = vi.fn(async () => ({
+      const invoke = vi.fn(async () => ({
         ok: true,
         payloadJSON: JSON.stringify({
           workspaceDir: "/node/workspace",
@@ -361,6 +361,7 @@ describe("node worker tunnel manager", () => {
           termination: "exit",
         }),
       }));
+      nodeTransport.invoke = invoke;
       const prepareSync = vi.fn(async () => {
         await validation.promise;
         if (outcome === "failure") {
@@ -401,6 +402,15 @@ describe("node worker tunnel manager", () => {
       const expectedStatus = outcome === "success" ? "fulfilled" : "rejected";
       expect(results.map((result) => result.status)).toEqual([expectedStatus, expectedStatus]);
       expect(manager.status("environment-1")).toBe(outcome === "success" ? "connected" : "stopped");
+      if (outcome === "success") {
+        expect(invoke).toHaveBeenCalledWith(
+          expect.objectContaining({
+            params: expect.objectContaining({
+              argv: expect.arrayContaining(["all", manifestRef.slice("sha256:".length)]),
+            }),
+          }),
+        );
+      }
     },
   );
 
@@ -853,13 +863,14 @@ describe("node worker tunnel manager", () => {
       });
     const transferDirections: string[] = [];
     const nodeTransport = transport();
-    nodeTransport.invoke = vi.fn(async ({ params }) => {
+    const invoke = vi.fn(async ({ params }) => {
       const input = params as { transfer?: { direction?: string } };
       if (input.transfer?.direction) {
         transferDirections.push(input.transfer.direction);
       }
       return { ok: true, payloadJSON: spawnResult(`${baseManifestRef}\n`) };
     });
+    nodeTransport.invoke = invoke;
     const publishSnapshot = vi.fn(() => "accepted-download-token");
     const transfer = {
       prepareSync: vi.fn(async () => ({
@@ -902,5 +913,12 @@ describe("node worker tunnel manager", () => {
     expect(reconciliation.manifestRef).toBe(baseManifestRef);
     expect(transferDirections).toEqual(["download", "upload"]);
     expect(publishSnapshot).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          argv: expect.arrayContaining(["all", baseManifestRef.slice("sha256:".length)]),
+        }),
+      }),
+    );
   });
 });

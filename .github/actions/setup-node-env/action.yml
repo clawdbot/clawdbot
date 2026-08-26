@@ -321,7 +321,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        npm install -g bun@1.3.14
+        npm install -g bun@1.4.0
 
     - name: Runtime versions
       shell: bash

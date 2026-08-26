@@ -544,6 +544,11 @@ describe("runNodeDaemonStatus", () => {
         OPENCLAW_GATEWAY_TOKEN: "gateway-token",
         OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
       },
+      managedDefinition: {
+        programArguments: ["node", "node-host"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-token" },
+      },
+      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
     });
 
     await runNodeDaemonStatus({ json: true });
@@ -558,5 +563,8 @@ describe("runNodeDaemonStatus", () => {
     const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
     expect(payload).not.toContain("gateway-token");
     expect(payload).not.toContain("gateway-password");
+    expect(payload).not.toContain("managed-base-token");
+    expect(payload).not.toContain("managedDefinition");
+    expect(payload).not.toContain("managedOverrides");
   });
 });

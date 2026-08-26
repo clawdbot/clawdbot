@@ -1520,7 +1520,13 @@ export function createAgentEventHandler({
       chatLink &&
       isControlUiVisible &&
       !isAborted &&
-      ((isToolEvent && !suppressHeartbeatToolEvents) || isItemEvent)
+      ((isToolEvent && !suppressHeartbeatToolEvents) ||
+        isItemEvent ||
+        evt.stream === "notice" ||
+        typeof evt.data?.reviewId === "string" ||
+        evt.data?.phase === "started" ||
+        evt.data?.phase === "completed" ||
+        evt.data?.phase === "warning")
     ) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same

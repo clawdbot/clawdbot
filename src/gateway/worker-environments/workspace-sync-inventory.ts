@@ -181,6 +181,38 @@ async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<s
   }
 }
 
+export async function readWorkspaceTransferPaths(filePath: string): Promise<Set<string>> {
+  const paths = new Set<string>();
+  for await (const entry of readBoundedGitPathCandidates(filePath)) {
+    paths.add(entry);
+  }
+  return paths;
+}
+
+export async function filterExistingGitTransferList(params: {
+  gitRoot: string;
+  preparedListPath: string;
+  outputPath: string;
+}): Promise<string> {
+  const output = await fs.open(params.outputPath, "wx", 0o600);
+  try {
+    for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
+      const stats = await fs.lstat(path.join(params.gitRoot, file)).catch((error: unknown) => {
+        if (hasNodeErrorCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (stats?.isFile() || stats?.isSymbolicLink()) {
+        await output.writeFile(`${file}\0`);
+      }
+    }
+  } finally {
+    await output.close();
+  }
+  return params.outputPath;
+}
+
 export async function runWorkspaceInventoryCommandToFile(params: {
   argv: string[];
   inputPath?: string;

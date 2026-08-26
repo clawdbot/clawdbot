@@ -109,6 +109,11 @@ const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
   { cacheRejections: true },
 );
 
+const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
+  () => import("../plugins/manifest-contract-eligibility.js"),
+  { cacheRejections: true },
+);
+
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,
 ): Promise<AuthProfileStore | undefined> {
@@ -174,6 +179,82 @@ function collectAuthProfileServiceEnvVars(params: {
   }
 
   return entries;
+}
+
+async function collectAmbientProviderApiKeyServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  authProfileEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+}): Promise<Record<string, string>> {
+  if (params.platform !== "linux") {
+    return {};
+  }
+  const existingManagedKeys = readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment);
+  const ownedKeys = new Set(
+    [
+      ...Object.keys(params.durableEnvironment),
+      ...Object.keys(params.authProfileEnvironment),
+      ...Object.entries(params.existingEnvironment ?? {}).flatMap(([key, value]) =>
+        existingManagedKeys.has(key.toUpperCase()) && params.env[key]?.trim() !== value?.trim()
+          ? []
+          : [key],
+      ),
+    ].map((key) => key.toUpperCase()),
+  );
+  const candidates = new Map(
+    Object.entries(params.env).flatMap(([rawKey, rawValue]) => {
+      const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+      const value = rawValue?.trim();
+      return key &&
+        key.endsWith("_API_KEY") &&
+        !key.endsWith("_ADMIN_API_KEY") &&
+        !ownedKeys.has(key) &&
+        value &&
+        !isDangerousHostEnvVarName(key) &&
+        !isDangerousHostEnvOverrideVarName(key)
+        ? [[key, value] as const]
+        : [];
+    }),
+  );
+  if (candidates.size === 0) {
+    return {};
+  }
+  const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
+    await loadDaemonInstallProviderManifestRuntime();
+  const config = params.config ?? {};
+  const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
+  return Object.fromEntries(
+    snapshot.plugins.flatMap((plugin) => {
+      if (
+        (plugin.origin !== "bundled" && plugin.trustedOfficialInstall !== true) ||
+        !isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })
+      ) {
+        return [];
+      }
+      const providers = new Set(
+        (plugin.providerAuthChoices ?? [])
+          .filter(
+            ({ method, appGuidedSecret, onboardingScopes }) =>
+              method === "api-key" &&
+              appGuidedSecret === true &&
+              (!onboardingScopes || onboardingScopes.includes("text-inference")),
+          )
+          .map(({ provider }) => provider),
+      );
+      return (plugin.setup?.providers ?? [])
+        .filter(({ id }) => providers.has(id))
+        .flatMap(({ envVars = [] }) =>
+          envVars.flatMap((name) => {
+            const key = normalizeEnvVarKey(name, { portable: true })?.toUpperCase();
+            const value = key ? candidates.get(key) : undefined;
+            return key && value ? [[key, value] as const] : [];
+          }),
+        );
+    }),
+  );
 }
 
 type ExecSecretRefPassEnvSource = {
@@ -631,6 +712,14 @@ async function buildGatewayInstallEnvironment(params: {
     authStore,
     warn: params.warn,
   });
+  const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    authProfileEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    platform: params.platform,
+  });
   const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(
     stateDirDotEnvEnvironment,
     [
@@ -649,6 +738,7 @@ async function buildGatewayInstallEnvironment(params: {
     valueSource: ({ normalizedKey }) =>
       readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
+  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});

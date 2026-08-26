@@ -61,6 +61,12 @@ export const projectProofArtifactDir = path.join(
   "control-ui-e2e",
   "project-registry",
 );
+export const newSessionComposerProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "new-session-slash-menu",
+);
 const environmentMetadataProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -76,7 +82,12 @@ const deviceRuntimeProofArtifactDir = path.join(
 
 export async function prepareProjectUiProof() {
   if (captureUiProofEnabled) {
-    await mkdir(projectProofArtifactDir, { recursive: true });
+    await prepareUiProof(projectProofArtifactDir);
+  }
+}
+export async function prepareNewSessionComposerUiProof() {
+  if (captureUiProofEnabled) {
+    await prepareUiProof(newSessionComposerProofArtifactDir);
   }
 }
 export const ONE_PIXEL_PNG_B64 =
@@ -157,24 +168,21 @@ export async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
-  });
+  await captureProof(page, uiProofArtifactDir, fileName);
 }
 
 export async function captureProjectUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(projectProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(projectProofArtifactDir, fileName),
-  });
+  await captureProof(page, projectProofArtifactDir, fileName);
+}
+
+export async function captureNewSessionComposerUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await captureProof(page, newSessionComposerProofArtifactDir, fileName);
 }
 
 export async function captureEnvironmentMetadataUiProof(page: Page) {
@@ -182,23 +190,26 @@ export async function captureEnvironmentMetadataUiProof(page: Page) {
   if (proofName !== "before" && proofName !== "after") {
     return;
   }
-  await mkdir(environmentMetadataProofArtifactDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(environmentMetadataProofArtifactDir, `${proofName}.png`),
-  });
+  await captureProof(page, environmentMetadataProofArtifactDir, `${proofName}.png`);
 }
 
 export async function captureDeviceRuntimeUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(deviceRuntimeProofArtifactDir, { recursive: true });
+  await captureProof(page, deviceRuntimeProofArtifactDir, fileName);
+}
+
+async function prepareUiProof(artifactDir: string) {
+  await mkdir(artifactDir, { recursive: true });
+}
+
+async function captureProof(page: Page, artifactDir: string, fileName: string) {
+  await prepareUiProof(artifactDir);
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(deviceRuntimeProofArtifactDir, fileName),
+    path: path.join(artifactDir, fileName),
   });
 }
 
@@ -295,6 +306,14 @@ export async function replaceGatewayClient(page: Page) {
     }
     app.runtime.context.gateway.connect();
   });
+}
+
+export async function openNewSessionPlusMenu(page: Page) {
+  const composer = page.locator(".new-session-page__composer");
+  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+  await composer.getByRole("button", { name: "Add attachment" }).click();
+  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
+  return menu;
 }
 
 export async function navigateInApp(page: Page, routeId: string, search = "") {

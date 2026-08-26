@@ -764,7 +764,7 @@ describe("discordOutbound", () => {
     expect(mediaOptions.reply).toEqual(testCase.expectedReplies[1]);
   });
 
-  it("preserves the media delivery identity for captioned videos in regular channels", async () => {
+  it("preserves both delivery receipts and the media identity for captioned videos", async () => {
     const mediaReceipt = {
       primaryPlatformMessageId: "video-1",
       platformMessageIds: ["video-1"],
@@ -796,11 +796,18 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       channel: "discord",
       messageId: "video-1",
       target: { kind: "channel", id: "channel-1" },
-      receipt: mediaReceipt,
+      receipt: {
+        primaryPlatformMessageId: "caption-1",
+        platformMessageIds: ["caption-1", "video-1"],
+        parts: [
+          { platformMessageId: "caption-1", kind: "text", index: 0 },
+          { platformMessageId: "video-1", kind: "media", index: 1 },
+        ],
+      },
     });
   });
 

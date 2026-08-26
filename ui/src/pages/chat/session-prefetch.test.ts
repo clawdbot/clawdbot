@@ -188,7 +188,7 @@ describe("recent session prefetch", () => {
     controller.hostUpdated?.();
   }
 
-  it("idles, excludes open and fresh sessions, and fills five cache entries sequentially", async () => {
+  it("quickly warms five eligible sessions together without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
@@ -232,19 +232,18 @@ describe("recent session prefetch", () => {
 
     updatePrefetch(state);
     expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(300);
     await settlePromises();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(5);
 
     for (let index = 0; index < 5; index += 1) {
-      expect(request).toHaveBeenCalledTimes(index + 1);
       const pendingRequest = pending[index];
       if (!pendingRequest) {
         throw new Error(`missing pending history request ${index}`);
       }
       pendingRequest.resolve(historyResult(pendingRequest.sessionKey));
-      await settlePromises();
     }
+    await settlePromises();
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
       "agent:main:eligible-1",

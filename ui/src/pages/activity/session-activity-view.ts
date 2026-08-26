@@ -262,6 +262,7 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     : row.agentId
       ? t("activityFeed.agentLabel", { value: row.agentId })
       : null;
+  const source = row.createdVia === "cron" ? t("activityFeed.automation") : null;
   return html`<div class="activity-feed__session-row">
     <a
       class="activity-feed__session"
@@ -291,7 +292,11 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
                 data-health=${row.observerDigest?.health ?? nothing}
                 >${headline}</span
               >`
-            : html`<span>${ownerName}</span>`}${scope
+            : html`<span>${ownerName}</span>`}${source
+            ? html`<span class="activity-feed__session-source" data-activity-created-via="cron"
+                >· ${source}${scope ? " ·" : ""}</span
+              >`
+            : nothing}${scope
             ? html`<span class="activity-feed__session-scope">${scope}</span>`
             : nothing}
         </span>

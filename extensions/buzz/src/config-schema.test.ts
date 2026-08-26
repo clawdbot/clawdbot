@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { BuzzConfigSchema } from "./config-schema.js";
@@ -44,6 +45,7 @@ describe("BuzzConfigSchema", () => {
       ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c", true],
       ["7C4A6D2A-2ED9-4B4E-A5E2-4D705EE9B34C", true],
       ["general", false],
+      ["*", false],
       ["buzz:7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c", false],
     ] as const) {
       const config = { groupPolicy: "allowlist", groups: { [groupId]: {} } };
@@ -55,6 +57,39 @@ describe("BuzzConfigSchema", () => {
 
       expect(parseBuzzConfig(config).success).toBe(valid);
       expect(jsonSchemaResult.ok).toBe(valid);
+    }
+  });
+
+  it("accepts room-scoped sender policy overrides in both config schemas", () => {
+    const config = {
+      groupPolicy: "open",
+      groups: {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      },
+    };
+
+    expect(parseBuzzConfig(config).success).toBe(true);
+    const pluginManifest = JSON.parse(
+      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      channelConfigs: {
+        buzz: { schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"] };
+      };
+    };
+    for (const [name, schema] of [
+      ["runtime", BuzzConfigSchema.schema],
+      ["manifest", pluginManifest.channelConfigs.buzz.schema],
+    ] as const) {
+      expect(
+        validateJsonSchemaValue({
+          cacheKey: `buzz.config-schema.room-sender-policy.${name}`,
+          schema,
+          value: config,
+        }).ok,
+      ).toBe(true);
     }
   });
 });

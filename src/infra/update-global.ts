@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { pathExists } from "../utils.js";
+import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import {
   applyNpmFreshnessBypassEnv,
   applyPosixNpmScriptShellEnv,
@@ -552,8 +553,10 @@ async function tryRealpath(targetPath: string): Promise<string> {
 }
 
 function resolveBunGlobalRoot(): string {
-  const bunInstall = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
-  return path.join(bunInstall, "install", "global", "node_modules");
+  return (
+    resolveBunGlobalInstallOwner()?.globalRoot ??
+    path.join(os.homedir(), ".bun", "install", "global", "node_modules")
+  );
 }
 
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -739,13 +742,7 @@ function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
 }
 
 function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
-  const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
-  if (!directGlobalRoot) {
-    return null;
-  }
-  return path.resolve(directGlobalRoot) === path.resolve(resolveBunGlobalRoot())
-    ? directGlobalRoot
-    : null;
+  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot)?.globalRoot ?? null) : null;
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -1043,7 +1040,7 @@ async function resolveGlobalRoot(
 ): Promise<string | null> {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "bun") {
-    return resolveBunGlobalRoot();
+    return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
   }
   const argv = [resolved.command, "root", "-g"];
   const res = await runCommand(argv, { timeoutMs }).catch(() => null);
@@ -1190,6 +1187,10 @@ export async function detectGlobalInstallManagerForRoot(
   timeoutMs: number,
 ): Promise<GlobalInstallManager | null> {
   const pkgReal = await tryRealpath(pkgRoot);
+  const bunOwner = resolveBunGlobalInstallOwner(pkgRoot) ?? resolveBunGlobalInstallOwner(pkgReal);
+  if (bunOwner) {
+    return (await isPnpmGlobalPackageRoot(pkgRoot)) ? "pnpm" : "bun";
+  }
 
   const candidates: Array<{
     manager: "npm" | "pnpm";
@@ -1227,16 +1228,6 @@ export async function detectGlobalInstallManagerForRoot(
 
   if (await isPnpmGlobalPackageRoot(pkgRoot)) {
     return "pnpm";
-  }
-
-  const bunGlobalRoot = resolveBunGlobalRoot();
-  const bunGlobalReal = await tryRealpath(bunGlobalRoot);
-  for (const name of ALL_PACKAGE_NAMES) {
-    const bunExpected = path.join(bunGlobalReal, name);
-    const bunExpectedReal = await tryRealpath(bunExpected);
-    if (path.resolve(bunExpectedReal) === path.resolve(pkgReal)) {
-      return "bun";
-    }
   }
 
   if (resolveNpmCommandBesidePackageRoot(pkgRoot)) {

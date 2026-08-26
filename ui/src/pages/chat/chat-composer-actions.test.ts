@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import {
@@ -8,6 +9,8 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { renderChatPrimaryActions } from "./components/chat-composer-controls.ts";
+import type { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -32,6 +35,46 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each([
+    { committed: false, sends: 0 },
+    { committed: true, sends: 1 },
+  ])(
+    "sends after dictation only when the current transcript committed: $committed",
+    async ({ committed, sends }) => {
+      const container = document.createElement("div");
+      const finishActive = vi.fn().mockResolvedValue(committed);
+      const onSend = vi.fn();
+      const dictation = {
+        active: true,
+        connecting: false,
+        finalizing: false,
+        locksComposer: true,
+        elapsed: "0:01",
+        finishActive,
+      } as unknown as ComposerDictationController;
+      render(
+        renderChatPrimaryActions({
+          canAbort: false,
+          canSend: true,
+          connected: true,
+          draft: "preexisting draft",
+          isBusy: false,
+          steerNowEnabled: false,
+          sending: false,
+          dictation,
+          onSend,
+        }),
+        container,
+      );
+
+      container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-send")?.click();
+      await Promise.resolve();
+
+      expect(finishActive).toHaveBeenCalledOnce();
+      expect(onSend).toHaveBeenCalledTimes(sends);
+    },
+  );
+
   it.each([
     {
       name: "empty idle",

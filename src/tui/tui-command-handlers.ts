@@ -76,7 +76,7 @@ type CommandHandlerContext = {
   closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
-  setSession: (key: string) => Promise<void>;
+  setSession: (key: string, agentId?: string) => Promise<void>;
   refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
@@ -219,8 +219,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const setAgent = async (id: string) => {
-    state.currentAgentId = normalizeAgentId(id);
-    await setSession("");
+    await setSession("", normalizeAgentId(id));
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
@@ -265,19 +264,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     state.currentAgentId === selection.agentId &&
     agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
 
+  const captureSessionIncarnation = () => {
+    const selection = captureSessionSelection();
+    const sessionId = state.currentSessionId;
+    const generation = state.sessionGeneration ?? 0;
+    return {
+      selection,
+      sessionId,
+      isCurrent: () =>
+        isCurrentSessionSelection(selection) &&
+        (state.sessionGeneration ?? 0) === generation &&
+        (sessionId === null || state.currentSessionId === sessionId),
+    };
+  };
+
   const patchCurrentSession = async (
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
   ): Promise<SessionsPatchResult | null> => {
-    const selection = captureSessionSelection();
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
       const result = await client.patchSession({
         key: selection.sessionKey,
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         ...patch,
       });
-      return isCurrentSessionSelection(selection) ? result : null;
+      return isCurrent() ? result : null;
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (!isCurrent()) {
         return null;
       }
       throw err;
@@ -308,17 +321,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSelector = (
-    selector: {
-      onSelect?: (item: SelectItem) => void;
-      onCancel?: () => void;
-    },
+    selector: { onSelect?: (item: SelectItem) => void; onCancel?: () => void },
     onSelect: (value: string) => Promise<void>,
     request: { overlay?: OverlayHandle },
   ) => {
+    const selection = captureSessionSelection();
     selector.onSelect = (item) => {
       void (async () => {
         try {
-          await onSelect(item.value);
+          if (isCurrentSessionSelection(selection)) {
+            await onSelect(item.value);
+          }
         } catch (err) {
           // A rejected selection must not strand the overlay open with an
           // unhandled rejection; close it and surface the cause in chat.
@@ -468,6 +481,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           provider: state.sessionInfo.modelProvider,
           model: state.sessionInfo.model,
           agentRuntime: state.sessionInfo.agentRuntime?.id,
+          thinkingLevels: state.sessionInfo.thinkingLevels,
         }),
       );
     },
@@ -788,8 +802,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (rejectUnsafeSessionRollover("reset")) {
         return;
       }
-      const resetSelection = captureSessionSelection();
-      let resetResultSelection = resetSelection;
+      let resetIncarnation = captureSessionIncarnation();
+      const resetSelection = resetIncarnation.selection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
         const result = await client.resetSession(
@@ -799,7 +813,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             ? { agentId: resetSelection.agentId }
             : undefined,
         );
-        if (!isCurrentSessionSelection(resetSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         state.sessionInfo.inputTokens = null;
@@ -807,17 +821,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.sessionInfo.totalTokens = null;
         tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
-          resetResultSelection = captureSessionSelection();
+          resetIncarnation = captureSessionIncarnation();
           await refreshSessionInfo();
         } else {
           await loadHistory();
         }
-        if (!isCurrentSessionSelection(resetResultSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         chatLog.addSystem(`session ${state.currentSessionKey} reset`);
       } catch (err) {
-        if (!isCurrentSessionSelection(resetResultSelection)) {
+        if (!resetIncarnation.isCurrent()) {
           return;
         }
         chatLog.addSystem(`reset failed: ${formatTuiErrorMessage(err)}`);
@@ -876,13 +890,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     // The Gateway owns queue policy. TUI only serializes pending RPC admission;
     // an already-active run must not suppress steer/followup/collect/interrupt.
     const runId = randomUUID();
-    const sendSelection = captureSessionSelection();
-    const sendSessionId = state.currentSessionId;
-    const sendSessionGeneration = state.sessionGeneration ?? 0;
-    const isCurrentSendViewport = () =>
-      isCurrentSessionSelection(sendSelection) &&
-      (state.sessionGeneration ?? 0) === sendSessionGeneration &&
-      (sendSessionId === null || state.currentSessionId === sendSessionId);
+    const {
+      selection: sendSelection,
+      sessionId: sendSessionId,
+      isCurrent: isCurrentSendViewport,
+    } = captureSessionIncarnation();
     const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {

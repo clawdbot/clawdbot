@@ -427,7 +427,7 @@ export function validateConfigObject(
   return {
     ok: true,
     config: attachAgentListProjection(
-      materializeRuntimeConfig(result.config, "snapshot", {
+      materializeRuntimeConfig(result.config, {
         manifestRegistry: opts?.manifestRegistry,
       }),
     ),

@@ -36,7 +36,7 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
   };
 }
 
-function createHarness(request: GatewayBrowserClient["request"]) {
+function createHarness(request: GatewayBrowserClient["request"], ownerId?: string) {
   const client = { request } as GatewayBrowserClient;
   let eventListener: ((event: GatewayEventFrame) => void) | undefined;
   const sessions = createSessionCapability({
@@ -46,6 +46,7 @@ function createHarness(request: GatewayBrowserClient["request"]) {
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents(listener) {

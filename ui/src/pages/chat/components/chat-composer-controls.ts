@@ -49,10 +49,34 @@ type MicrophonePickerProps = {
   selectedDeviceId: string;
   voiceActive: boolean;
   issue: RealtimeTalkDeviceIssue | null;
+  holdToDictate?: boolean;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
+  onHoldToDictateChange?: (enabled: boolean) => void;
 };
+
+/**
+ * Drops focus from the device picker's trigger once a device has been chosen.
+ * The dropdown restores focus there on close, which is right for a normal
+ * trigger and wrong for this one: it is revealed by hover, so a focused trigger
+ * keeps the microphone expanded after the pointer has moved on. Deferred to the
+ * next task because the dropdown restores focus as part of closing.
+ */
+function releaseMicrophonePickerFocus(dropdown: EventTarget | null, item: HTMLElement): void {
+  if (item.matches(":focus-visible")) {
+    return;
+  }
+  if (!(dropdown instanceof HTMLElement)) {
+    return;
+  }
+  queueMicrotask(() => {
+    const trigger = dropdown.querySelector<HTMLElement>(".chat-talk-input-picker__trigger");
+    if (trigger && document.activeElement === trigger) {
+      trigger.blur();
+    }
+  });
+}
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
   // Discovery reporting an issue with nothing enumerated is the browser stating
@@ -81,8 +105,10 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       .open=${props.open}
       @wa-show=${props.onOpen}
       @wa-hide=${props.onClose}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
-        props.onSelect(event.detail.item.value ?? "")}
+      @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+        props.onSelect(event.detail.item.value ?? "");
+        releaseMicrophonePickerFocus(event.currentTarget, event.detail.item);
+      }}
     >
       <button
         slot="trigger"
@@ -119,6 +145,9 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                   aria-checked=${String(selected)}
                   ${ref((element) => syncDropdownItemRadio(element, selected))}
                 >
+                  <span slot="icon" class="chat-talk-input-picker__option-icon" aria-hidden="true"
+                    >${icons.mic}</span
+                  >
                   <span class="chat-talk-input-picker__label">${option.label}</span>
                   <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
                     >${selected ? icons.check : nothing}</span
@@ -142,19 +171,62 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                 </div>`
               : nothing}
           `}
+      ${props.onHoldToDictateChange
+        ? html`
+            <div class="chat-talk-input-picker__preference">
+              <span>${t("chat.composer.holdToDictate")}</span>
+              <button
+                class="chat-controls__speed-toggle ${props.holdToDictate !== false
+                  ? "chat-controls__speed-toggle--active"
+                  : ""}"
+                type="button"
+                role="switch"
+                aria-checked=${props.holdToDictate !== false ? "true" : "false"}
+                aria-label=${t("chat.composer.holdToDictate")}
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  props.onHoldToDictateChange?.(props.holdToDictate === false);
+                }}
+              >
+                <span class="chat-controls__speed-toggle-thumb"></span>
+              </button>
+            </div>
+          `
+        : nothing}
     </wa-dropdown>
   `;
 }
 
-function renderComposerVoiceButton(props: ChatRunControlsProps) {
+/**
+ * What the microphone control itself reads. Narrower than the chat run controls
+ * on purpose: the new-session composer offers the same control without a run to
+ * abort, a send action, or a Talk session to toggle.
+ */
+type ComposerVoiceButtonProps = {
+  connected: boolean;
+  sending: boolean;
+  isBusy: boolean;
+  dictation?: ComposerDictationController;
+  microphonePicker?: TemplateResult | typeof nothing;
+  /**
+   * What the control offers at rest. The chat composer's microphone also starts
+   * Talk, so it promises voice input; a surface that only dictates says so
+   * rather than offering something it cannot start.
+   */
+  idleLabel?: string;
+  onDictationPointerDown?: (event: PointerEvent) => void;
+  onToggleVoice?: () => void;
+};
+
+export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const active = props.dictation?.active === true;
   const finalizing = props.dictation?.finalizing === true;
   const holding = props.dictation?.locksComposer === true;
   const label = finalizing
     ? t("chat.composer.dictationFinalizing")
     : active
-      ? t("chat.composer.dictationReleaseToInsert")
-      : t("chat.composer.startVoiceInput");
+      ? t("chat.composer.dictationStop")
+      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
     props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label;
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
@@ -168,8 +240,18 @@ function renderComposerVoiceButton(props: ChatRunControlsProps) {
             : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
           type="button"
           @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
-          @click=${(event: MouseEvent) =>
-            props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.()}
+          @click=${(event: MouseEvent) => {
+            if (active) {
+              // Stop keeps the words. Escape remains the explicit discard path.
+              void props.dictation?.finishActive();
+              return;
+            }
+            if (props.dictation) {
+              props.dictation.handleClick(event);
+            } else {
+              props.onToggleVoice?.();
+            }
+          }}
           @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
           ?disabled=${finalizing ||
           (!active && (!props.connected || props.sending || props.isBusy))}
@@ -178,13 +260,7 @@ function renderComposerVoiceButton(props: ChatRunControlsProps) {
           ${finalizing
             ? icons.loader
             : active
-              ? html`
-                  ${renderMicrophoneActivity({
-                    status: props.dictation?.connecting ? "connecting" : "listening",
-                    inputLevel: props.dictation?.inputLevel,
-                  })}
-                  <span class="chat-send-btn__dictation-time">${props.dictation?.elapsed}</span>
-                `
+              ? icons.stop
               : html`
                   ${icons.mic}
                   <span class="agent-chat__control-label">${label}</span>
@@ -246,50 +322,73 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
   const voiceButton = renderComposerVoiceButton(props);
+  // Dictation and Talk are one affordance to the operator — a microphone — so
+  // the control shows whenever either route exists, and it always sits ahead of
+  // the primary action rather than standing in for it.
+  const voiceControl = props.dictation || props.onToggleVoice ? voiceButton : nothing;
+  // Send holds the trailing edge whatever the draft is. During an active run the
+  // same slot shows stop while empty, then becomes the follow-up action as soon
+  // as the operator composes content; two competing primary buttons never render.
   const sendAction = html`
-    <openclaw-tooltip .content=${activeRunActionTooltip}>
+    <openclaw-tooltip
+      .content=${props.sending
+        ? t("chat.composer.sendingMessage")
+        : hasComposedContent
+          ? activeRunActionTooltip
+          : t("chat.composer.emptyHint")}
+    >
       <button
-        class="chat-send-btn"
+        class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
-        ?disabled=${!props.canSend || props.sending}
-        aria-label=${activeRunActionDescription}
+        ?disabled=${!props.canSend || props.sending || !hasComposedContent}
+        aria-label=${props.sending
+          ? t("chat.composer.sendingMessage")
+          : hasComposedContent
+            ? activeRunActionDescription
+            : t("chat.composer.emptyHint")}
+        aria-busy=${props.sending ? "true" : "false"}
       >
-        ${icons.arrowUp}
+        ${props.sending
+          ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+          : icons.arrowUp}
         <span class="agent-chat__control-label">${activeRunActionLabel}</span>
       </button>
     </openclaw-tooltip>
   `;
-  const emptySendDescription = props.canSend
-    ? t("chat.composer.emptyHint")
-    : t("chat.runControls.sendMessage");
-  const idleAction = html`
-    <openclaw-tooltip .content=${props.canSend ? emptySendDescription : t("chat.runControls.send")}>
-      <button
-        class="chat-send-btn"
-        @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${send}
-        disabled
-        aria-label=${emptySendDescription}
-      >
-        ${icons.arrowUp}
-        <span class="agent-chat__control-label">${t("chat.runControls.send")}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
-  const stopAction = html`
-    <openclaw-tooltip .content=${t("chat.runControls.stopWithShortcut")}>
-      <button
-        class="chat-send-btn chat-send-btn--stop"
-        @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${props.onAbort}
-        aria-label=${t("chat.runControls.stopGenerating")}
-      >
-        ${icons.stop}
-        <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
+  const dictationSendAction = props.dictation?.active
+    ? html`
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+          >${props.dictation.finalizing
+            ? t("chat.composer.dictationFinalizing")
+            : props.dictation.connecting
+              ? t("chat.composer.dictationConnecting")
+              : t("chat.composer.dictationRecording", {
+                  elapsed: props.dictation.elapsed,
+                })}</span
+        >
+        <openclaw-tooltip .content=${t("chat.runControls.sendMessage")}>
+          <button
+            class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-send"
+            type="button"
+            @pointerdown=${props.onPrimaryActionPointerDown}
+            @click=${() => {
+              // Only the dictation session that actually committed text owns
+              // this send; an empty or stale finalization leaves the draft alone.
+              void props.dictation?.finishActive().then((committed) => {
+                if (committed) {
+                  props.onSend();
+                }
+              });
+            }}
+            ?disabled=${props.dictation.finalizing}
+            aria-label=${t("chat.runControls.sendMessage")}
+          >
+            ${icons.arrowUp}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -355,14 +454,14 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           ${abortAction}
         `
       : html`
-          ${props.dictation || props.onToggleVoice ? voiceButton : nothing}
+          ${voiceControl}
           ${props.dictation?.active
-            ? nothing
-            : hasComposedContent
-              ? sendAction
-              : props.canAbort
-                ? stopAction
-                : idleAction}
+            ? dictationSendAction
+            : props.canAbort
+              ? hasComposedContent
+                ? sendAction
+                : abortAction
+              : sendAction}
         `}
   `;
 }

@@ -75,7 +75,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   // These caches were not Lit state on the element and stay non-reactive here.
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
-  sessionCreatedOrder = new Map<string, number>();
 
   private readonly subscriptions: SubscriptionsController;
   readonly sessionCatalogLive = new SessionCatalogLiveState();
@@ -96,6 +95,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private activeSessionLineageRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
+  private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
@@ -423,19 +423,18 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       return;
     }
     const gateway = this.context?.gateway;
-    const sameClientDisconnected =
+    const sameGatewayDisconnected =
       gateway !== undefined &&
       gateway === this.gatewaySource &&
       gateway.snapshot.client !== null &&
-      gateway.snapshot.client === this.gatewayClient &&
       gateway.snapshot.phase !== "connected";
-    if (sameClientDisconnected && this.reconnectListRevision === null) {
+    if (sameGatewayDisconnected && this.reconnectListRevision === null) {
       this.reconnectListRevision = sessions.canonicalListRevision + 1;
     }
     const waitingForReconnectList =
       this.reconnectListRevision !== null &&
       sessions.canonicalListRevision < this.reconnectListRevision;
-    if (!sameClientDisconnected && !waitingForReconnectList) {
+    if (!sameGatewayDisconnected && !waitingForReconnectList) {
       // Keep the result and agent scope paired until the first canonical list
       // after reconnect; chat startup may publish a partial reconciliation first.
       this.reconnectListRevision = null;
@@ -466,9 +465,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]): void {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.phase === "connected";
+    const sessionSourceChanged =
+      gateway !== this.gatewaySource ||
+      gateway.connectionRevision !== this.gatewayConnectionRevision;
     const clientChanged = client !== this.gatewayClient;
     const connectedStarted = connected && !this.gatewayConnected;
-    const sourceOrClientChanged = gateway !== this.gatewaySource || client !== this.gatewayClient;
+    const sourceOrClientChanged = sessionSourceChanged || clientChanged;
     const connectionChanged = connected !== this.gatewayConnected;
     // Presence and auth snapshots must not retire this client's in-flight
     // native or catalog pages unless its connection phase actually changes.
@@ -477,6 +479,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.invalidateSessionMutations();
     this.gatewaySource = gateway;
+    this.gatewayConnectionRevision = gateway.connectionRevision;
     this.gatewayClient = client;
     this.gatewayConnected = connected;
     this.presenceInstanceId = client?.instanceId;
@@ -494,7 +497,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       return;
     }
-    this.clearSessionCache();
+    // Session rows belong to the logical Gateway, not one replaceable socket client.
+    if (sessionSourceChanged) {
+      this.clearSessionCache();
+    }
     this.resetSessionCatalogConnection();
     if (connected && this.sessionsSource && this.host.sidebarSessionStatusFilter() !== "active") {
       void this.refreshSidebarSessions();
@@ -508,7 +514,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionsAgentId = null;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
-    this.sessionCreatedOrder.clear();
     this.visibleSessionLimits.clear();
     this.notify();
   }

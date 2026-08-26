@@ -131,7 +131,10 @@ export async function handleCodexAppServerApprovalRequest(params: {
     return buildApprovalResponse(params.method, context.requestParams, resolvedOutcome);
   };
   try {
-    if (params.method === "item/commandExecution/requestApproval") {
+    if (
+      params.method === "item/commandExecution/requestApproval" &&
+      !readNetworkApprovalContext(requestParams)
+    ) {
       const command = readPolicyCommand(requestParams);
       const cwd = readString(requestParams, "cwd") ?? params.paramsForRun.workspaceDir;
       // Snapshot the executable file operands before policy or operator waits;
@@ -173,7 +176,9 @@ export async function handleCodexAppServerApprovalRequest(params: {
     ) {
       return await resolvePolicyApproval(policyOutcome.outcome);
     }
-    const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
+    const canAutoApproveConcreteToolCall =
+      CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method) &&
+      !readNetworkApprovalContext(requestParams);
     if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       return await resolvePolicyApproval(
         "approved-session",
@@ -392,6 +397,10 @@ function buildApprovalContext(params: {
   );
   const command = commandPreview.text;
   const reason = reasonPreview.text;
+  const networkApproval =
+    params.method === "item/commandExecution/requestApproval"
+      ? readNetworkApprovalContext(params.requestParams)
+      : undefined;
   const approvalKind: CodexApprovalKind = params.method.includes("commandExecution")
     ? "command"
     : params.method.includes("fileChange")
@@ -405,8 +414,9 @@ function buildApprovalContext(params: {
     params.method === "item/permissions/requestApproval"
       ? describeRequestedPermissions(params.requestParams)
       : [];
-  const title =
-    kind === "exec"
+  const title = networkApproval
+    ? "Codex app-server network approval"
+    : kind === "exec"
       ? "Codex app-server command approval"
       : params.method === "item/permissions/requestApproval"
         ? "Codex app-server permission approval"
@@ -414,6 +424,9 @@ function buildApprovalContext(params: {
           ? "Codex app-server file approval"
           : "Codex app-server approval";
   const subject =
+    (networkApproval
+      ? `Network: ${sanitizePermissionScalar(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
+      : undefined) ??
     permissionLines[0] ??
     (command
       ? `Command: ${formatApprovalPreviewSubject(command, commandPreview.omitted)}`
@@ -434,8 +447,9 @@ function buildApprovalContext(params: {
     title,
     description,
     severity: kind === "exec" ? ("warning" as const) : ("info" as const),
-    toolName:
-      kind === "exec"
+    toolName: networkApproval
+      ? "codex_network_approval"
+      : kind === "exec"
         ? "codex_command_approval"
         : params.method === "item/permissions/requestApproval"
           ? "codex_permission_approval"
@@ -748,6 +762,12 @@ function buildOpenClawToolPolicyRequest(
   requestParams: JsonObject | undefined,
 ): { toolName: string; params: JsonObject } | undefined {
   if (method === "item/commandExecution/requestApproval") {
+    if (readNetworkApprovalContext(requestParams)) {
+      return {
+        toolName: "codex_network_approval",
+        params: { approval: requestParams ?? {} },
+      };
+    }
     const command = readPolicyCommand(requestParams);
     return {
       toolName: "exec",
@@ -1275,6 +1295,17 @@ function readPolicyCommand(record: JsonObject | undefined): string | undefined {
     return actionCommands.join(" && ");
   }
   return undefined;
+}
+
+function readNetworkApprovalContext(
+  record: JsonObject | undefined,
+): { host: string; protocol: string } | undefined {
+  const context = isJsonObject(record?.networkApprovalContext)
+    ? record.networkApprovalContext
+    : undefined;
+  const host = readString(context, "host");
+  const protocol = readString(context, "protocol");
+  return host && protocol ? { host, protocol } : undefined;
 }
 
 function readCommandActions(record: JsonObject | undefined): string[] {

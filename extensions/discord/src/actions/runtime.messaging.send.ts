@@ -188,7 +188,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
-        ctx.withOpts({ content }),
+        ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
       return jsonResult({ ok: true });
     }
@@ -258,7 +258,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
-            target: to,
+            target: result.receipt?.threadId ?? to,
             threadName,
           }),
         );
@@ -309,7 +309,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
           payload: { ok: true, result },
-          target: to,
+          target: result.receipt?.threadId ?? to,
           threadName,
         }),
       );
@@ -417,6 +417,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
           reply: resolveActionReplyReference(ctx, replyTo),
+          ...(ctx.params.silent === true ? { silent: true } : {}),
         },
       );
       return jsonResult({ ok: true, result });

@@ -269,6 +269,7 @@ async function forEachUpgradeSurvivorSystemctlShim(
     run: (command: "is-active" | "stop", procStat?: string) => number | null;
     scriptPath: string;
   }) => void | Promise<void>,
+  targetPid?: number,
 ): Promise<void> {
   for (const scriptPath of [
     UPGRADE_SURVIVOR_RUN_SCRIPT,
@@ -278,14 +279,19 @@ async function forEachUpgradeSurvivorSystemctlShim(
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
     const childPidPath = join(workDir, "child.pid");
-    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
-      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-      stdio: "ignore",
-    });
-    for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
-      await delay(10);
+    const child =
+      targetPid === undefined
+        ? spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+            env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+            stdio: "ignore",
+          })
+        : undefined;
+    if (child) {
+      for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
+        await delay(10);
+      }
     }
-    const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+    const pid = targetPid ?? Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
     writeFileSync(pidPath, `${pid}\n`);
     const shimPath = join(workDir, "systemctl");
     writeFileSync(shimPath, extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")), {
@@ -324,10 +330,12 @@ esac
     try {
       await callback({ pid, run, scriptPath });
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+      if (child) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await waitForProcessExit(child).catch(() => undefined);
       }
-      await waitForProcessExit(child).catch(() => undefined);
     }
   }
 }
@@ -2725,16 +2733,20 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain("/tmp/openclaw-channel-add.log");
   });
 
-  it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
+  it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
       "send $'y\\r'",
+      'wait_for_log "Help make OpenClaw better?"',
+      "send $'\\r'",
       'wait_for_log "What should we call your first agent?"',
       "send $'\\r'",
       'wait_for_log "to search"',
       "send $'ollama\\r'",
     ]);
     expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
+      'wait_for_log "Help make OpenClaw better?"',
+      "send $'\\r'",
       'wait_for_log "What should we call your first agent?"',
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
@@ -3181,7 +3193,7 @@ fi
         for (const procStat of [undefined, `${pid} (gateway) Z`]) {
           expect(run("is-active", procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(0);
         }
-      });
+      }, process.pid);
     },
   );
 
@@ -3866,6 +3878,24 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
+  it("serves the version-matched Codex candidate during package onboarding", () => {
+    const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
+      "node scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
+      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+    ]);
+    expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(
+      runner.indexOf("\nconfigure_plugin_registry\n"),
+    );
+    expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
+      runner.indexOf("\nopenclaw onboard --non-interactive"),
+    );
+  });
+
   it("cleans package-backed onboarding and plugin Docker artifacts on every exit path", () => {
     for (const path of [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
@@ -4508,7 +4538,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "npm install -g --prefix /tmp/openclaw-proof",
       "corepack prepare pnpm@11.22.0 --activate",
       "pnpm add --global --allow-build=openclaw",
-      "bun@1.3.14",
+      "bun@1.4.0",
       'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",

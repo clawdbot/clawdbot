@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -254,7 +255,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention."
-      : "After completing all due tasks, reply HEARTBEAT_OK.";
+      : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
     const taskPrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

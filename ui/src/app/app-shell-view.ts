@@ -41,25 +41,25 @@ import {
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
-import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
+import {
+  floatingSidebarAttentionVisible,
+  navigationSurfaceIsHidden,
+  renderFloatingUpdateCard,
+} from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
-  loadSettings,
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const SCOPE_UPGRADE_SURFACE_ELEMENT = {
-  tagName: "openclaw-device-scope-upgrade-banner",
-  label: t("connection.scopeUpgrade.status"),
-  loadModule: () =>
-    import("./device-scope-upgrade.runtime.ts").catch(
-      () => import("./device-scope-upgrade-retry.runtime.ts"),
-    ),
+const SIDEBAR_ATTENTION_ELEMENT = {
+  tagName: "openclaw-sidebar-attention",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/sidebar-attention.ts"),
 } satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
@@ -212,7 +212,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
   const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
-  const storedDraftScopeKeys = outboxStoreRuntime?.listStoredDraftScopes(outboxScopeHost) ?? null;
   const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -224,7 +223,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
         return (
-          storedDraftScopeKeys?.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) === true
+          storedOutboxes?.draftScopes.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ===
+          true
         );
       }
     : EMPTY_SESSION_HAS_DRAFT;
@@ -275,25 +275,6 @@ export function renderApplicationShell(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
-  const showScopeUpgradeStatus =
-    gatewayConnected &&
-    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
-    !operatorAccess.canAdmin;
-  if (showScopeUpgradeStatus) {
-    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
-  }
-  const scopeUpgradeSurface = showScopeUpgradeStatus
-    ? html`<openclaw-device-scope-upgrade-banner
-        .props=${{
-          snapshot: gatewaySnapshot,
-          mobile: mobileNavLayout,
-          // Device-less clients may not reach a session pane, so the shell
-          // retains the manual-repair entry until the header can own it.
-          showTrigger:
-            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
-        }}
-      ></openclaw-device-scope-upgrade-banner>`
-    : null;
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
@@ -308,6 +289,17 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
+  if (
+    floatingSidebarAttentionVisible({
+      navigationSurfaceHidden,
+      mobileNavLayout,
+      onboarding,
+      settingsTakeover,
+      compact: mergedChatChrome,
+    })
+  ) {
+    host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+  }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
@@ -334,8 +326,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       host.openNewSession(agentId, target);
     }
   };
-  // One storage read per render; theme.refresh() re-renders on pref changes.
-  const uiSettings = loadSettings();
+  const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
@@ -493,9 +484,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .resourceBasePath=${context.resourceBasePath}
         .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
-        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
-          ? scopeUpgradeSurface
-          : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -563,7 +551,6 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>
           `
         : nothing}
-      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
       <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
         ${mobileNavLayout
           ? html`<openclaw-modal-dialog
@@ -604,6 +591,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
+          settingsTakeover,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,

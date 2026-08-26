@@ -242,22 +242,35 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private async deleteProfile(profile: ConfiguredCloudWorkerProfile) {
-    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    const gatewayUrl = gateway.connection.gatewayUrl;
     const runtimeConfig = this.context.runtimeConfig;
     if (
-      !scope ||
       !this.canManage() ||
       !(await showConfirmDialog({
         title: t("cloudWorkersPage.deleteTitle"),
         message: t("cloudWorkersPage.deleteConfirm", { profile: profile.id }),
         confirmLabel: t("common.delete"),
         danger: true,
-      })) ||
-      !this.gateway.isCurrent(scope)
+      }))
     ) {
       return;
     }
+    const scope = this.gateway.capture();
+    if (
+      !scope ||
+      scope.client !== client ||
+      this.context.gateway !== gateway ||
+      gateway.connection.gatewayUrl !== gatewayUrl ||
+      this.context.runtimeConfig !== runtimeConfig ||
+      !this.canManage()
+    ) {
+      this.formError = t("cloudWorkersPage.errors.deleteFailed");
+      return;
+    }
     this.busyProfileId = profile.id;
+    this.formError = null;
     this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
@@ -548,6 +561,9 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           ? html`<div class="callout warning" role="status">
               ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
             </div>`
+          : nothing}
+        ${this.formError && !this.editor
+          ? html`<div class="callout warning" role="alert">${this.formError}</div>`
           : nothing}
         ${this.notice
           ? html`<div class="callout warning" role="status">${this.notice}</div>`

@@ -8,7 +8,6 @@ import {
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
 import {
-  formatThinkingLevels,
   listThinkingLevelLabels,
   type ReasoningLevel,
   type VerboseLevel,
@@ -46,6 +45,12 @@ type SlashCommandOptions = {
   local?: boolean;
   dynamicCommands?: CommandEntry[];
 };
+
+function resolveThinkingLevelLabels(options: SlashCommandOptions): string[] {
+  return options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+}
 
 function createLevelCompletion(
   levels: string[],
@@ -203,7 +208,7 @@ function normalizeSlashCommandName(value: string): string {
 
 function appendSlashCommand(
   commands: SlashCommand[],
-  seen: Set<string>,
+  seen: Map<string, SlashCommand["getArgumentCompletions"]>,
   name: string,
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
@@ -212,7 +217,7 @@ function appendSlashCommand(
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
-  seen.add(normalizedName);
+  seen.set(normalizedName, getArgumentCompletions);
   commands.push({ name: normalizedName, description, getArgumentCompletions });
 }
 
@@ -243,11 +248,9 @@ export function isSharedTextCommand(input: string): boolean {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = options.thinkingLevels?.length
-    ? options.thinkingLevels.map((level) => level.label)
-    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+  const thinkLevels = resolveThinkingLevelLabels(options);
   const commands: SlashCommand[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, SlashCommand["getArgumentCompletions"]>();
   for (const command of TUI_COMMAND_DESCRIPTORS) {
     if (
       command.shared ||
@@ -287,7 +290,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
-      appendSlashCommand(commands, seen, alias, command.description);
+      appendSlashCommand(commands, seen, alias, command.description, seen.get(command.key));
     }
   }
 
@@ -324,13 +327,7 @@ export function shouldSubmitExactArgumentCompletion(
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(
-    options.provider,
-    options.model,
-    "|",
-    undefined,
-    options.agentRuntime,
-  );
+  const thinkLevels = resolveThinkingLevelLabels(options).join("|");
   const commandHelp = TUI_COMMAND_DESCRIPTORS.flatMap((command) => {
     if (!command.help || !commandIsVisible(command, options.local === true)) {
       return [];

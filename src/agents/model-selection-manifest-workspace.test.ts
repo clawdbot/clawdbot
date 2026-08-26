@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryWorkspaceDirFromStateMock = vi.hoisted(() => vi.fn());
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
@@ -19,7 +20,7 @@ vi.mock("../plugins/runtime-state.js", () => ({
 }));
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: () => undefined,
+  normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
 }));
 
 describe("configured model manifest workspace scope", () => {
@@ -28,6 +29,7 @@ describe("configured model manifest workspace scope", () => {
     loadManifestMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReset();
+    normalizeProviderModelIdWithRuntimeMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadManifestMetadataSnapshotMock.mockReturnValue({
       plugins: [
@@ -206,6 +208,186 @@ describe("configured model manifest workspace scope", () => {
     expect(aliases.byKey.size).toBe(0);
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("indexes selected-agent default-provider aliases without cold manifest discovery", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          ops: {
+            models: {
+              "openai/ops": { alias: "Operations" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "openai", agentId: "ops" });
+
+    expect(aliases.byAlias.get("operations")).toEqual({
+      alias: "Operations",
+      ref: { provider: "openai", model: "ops" },
+    });
+    expect(aliases.byKey.get("openai/ops")).toEqual(["Operations"]);
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(0);
+  });
+
+  it("resolves selected-agent default-provider aliases without cold manifest discovery", async () => {
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          ops: {
+            model: { primary: "Operations" },
+            models: { "openai/ops": { alias: "Operations" } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg,
+        agentId: "ops",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.6-sol",
+      }),
+    ).toEqual({ provider: "openai", model: "ops" });
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+    expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(0);
+  });
+
+  it.each(["current", "supplied"] as const)(
+    "preserves %s prepared manifest policy for default-provider aliases",
+    async (source) => {
+      const manifestPlugins = [
+        {
+          modelIdNormalization: {
+            providers: {
+              openai: { aliases: { legacy: "normalized" } },
+            },
+          },
+        },
+      ];
+      if (source === "current") {
+        getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: manifestPlugins });
+      }
+      const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+      const cfg = {
+        agents: { defaults: { models: { "openai/legacy": { alias: "Legacy" } } } },
+      } as unknown as OpenClawConfig;
+
+      const aliases = buildModelAliasIndex({
+        cfg,
+        defaultProvider: "openai",
+        ...(source === "supplied" ? { manifestPlugins } : {}),
+      });
+
+      expect(aliases.byAlias.get("legacy")?.ref).toEqual({
+        provider: "openai",
+        model: "normalized",
+      });
+      expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(0);
+      expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(1);
+    },
+  );
+
+  it("preserves workspace manifest policy for default-provider aliases", async () => {
+    getActivePluginRegistryWorkspaceDirFromStateMock.mockReturnValue("/workspace/a");
+    loadManifestMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        { modelIdNormalization: { providers: { openai: { aliases: { ops: "workspace-ops" } } } } },
+      ],
+    });
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      buildModelAliasIndex({ cfg, defaultProvider: "openai" }).byAlias.get("operations")?.ref,
+    ).toEqual({ provider: "openai", model: "workspace-ops" });
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
+    expect(loadManifestMetadataSnapshotMock.mock.calls[0]?.[0]?.workspaceDir).toBe("/workspace/a");
+  });
+
+  it("preserves provider-owned manifest discovery for non-default aliases", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: { defaults: { models: { "custom/ops": { alias: "Operations" } } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      buildModelAliasIndex({ cfg, defaultProvider: "openai" }).byAlias.get("operations")?.ref,
+    ).toEqual({ provider: "custom", model: "workspace-custom/ops" });
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
+    expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(1);
+  });
+
+  it.each([
+    {
+      name: "default-provider first",
+      models: [
+        ["openai/legacy", { alias: "Legacy" }],
+        ["custom/ops", { alias: "Operations" }],
+      ],
+    },
+    {
+      name: "provider-owned first",
+      models: [
+        ["custom/ops", { alias: "Operations" }],
+        ["openai/legacy", { alias: "Legacy" }],
+      ],
+    },
+  ])("normalizes mixed aliases consistently with $name", async ({ models }) => {
+    loadManifestMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              custom: { prefixWhenBare: "workspace-custom" },
+              openai: { aliases: { legacy: "normalized" } },
+            },
+          },
+        },
+      ],
+    });
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: { defaults: { models: Object.fromEntries(models) } },
+    } as unknown as OpenClawConfig;
+
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+
+    expect(aliases.byAlias.get("legacy")?.ref).toEqual({
+      provider: "openai",
+      model: "normalized",
+    });
+    expect(aliases.byAlias.get("operations")?.ref).toEqual({
+      provider: "custom",
+      model: "workspace-custom/ops",
+    });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves manifest discovery for default-provider configured API-owner mappings", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
+      models: { providers: { openai: { api: "custom-owner", models: [] } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      buildModelAliasIndex({ cfg, defaultProvider: "openai" }).byAlias.get("operations")?.ref,
+    ).toEqual({ provider: "openai", model: "ops" });
+    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
   });
 
   it("does not load manifest metadata for statically resolved primary models", async () => {

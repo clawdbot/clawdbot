@@ -392,30 +392,6 @@ async function directorySizeBytes(root: string): Promise<number> {
   return total;
 }
 
-async function containsGitMarker(root: string, checkoutRoot = false): Promise<boolean> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    if (entry.name === ".git") {
-      if (!checkoutRoot) {
-        return true;
-      }
-      continue;
-    }
-    if (entry.isDirectory() && (await containsGitMarker(path.join(root, entry.name), false))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function splitNullBuffer(input: Buffer): Buffer[] {
   const fields: Buffer[] = [];
   let start = 0;
@@ -457,6 +433,48 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
   }
 }
 
+async function containsSnapshotGitMarker(
+  checkoutRoot: string,
+  snapshotPaths?: Iterable<Buffer>,
+): Promise<boolean> {
+  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  if (!snapshotPaths) {
+    const indexEntries = splitNullBuffer(
+      await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
+    );
+    if (indexEntries.some((entry) => entry.subarray(0, 7).toString() === "160000 ")) {
+      return true;
+    }
+    const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
+    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+  }
+  const checked = new Set<string>();
+  const ignoredPaths = splitNullBuffer(
+    await requireGitBuffer(checkoutRoot, [
+      "ls-files",
+      "-z",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+    ]),
+  );
+  for (const gitPath of [...visiblePaths, ...ignoredPaths]) {
+    for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
+      const directory = gitPath.subarray(0, end);
+      const key = gitPathKey(directory);
+      if (checked.has(key)) {
+        continue;
+      }
+      checked.add(key);
+      const marker = Buffer.concat([directory, Buffer.from("/.git")]);
+      if (await rawPathExists(checkoutPathFromGitBytes(checkoutRoot, marker))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function snapshotWorktree(
   record: ManagedWorktreeRecord,
   reason: string,
@@ -480,9 +498,6 @@ async function snapshotWorktree(
         }),
   };
   try {
-    if (await containsGitMarker(record.path, true)) {
-      throw new Error("nested git repositories cannot be snapshotted losslessly");
-    }
     const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
     const snapshotPaths = new Map<string, Buffer>();
     const addSnapshotPath = (entry: Buffer) => {
@@ -536,6 +551,9 @@ async function snapshotWorktree(
       for (const entry of splitNullBuffer(await requireGitBuffer(record.path, args))) {
         addSnapshotPath(entry);
       }
+    }
+    if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
+      throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     await requireGit(record.path, ["read-tree", "HEAD"], { env });
     // This index came from a tree, so it has no checkout-local skip-worktree
@@ -1174,7 +1192,9 @@ export class ManagedWorktreeService {
           ? "retained-unpushed"
           : ignoredDrift
             ? "retained-provisioned-drift"
-            : undefined;
+            : (await containsSnapshotGitMarker(record.path))
+              ? "retained-dirty"
+              : undefined;
       if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
         recordOutcome(retainedOutcome);
@@ -1267,8 +1287,8 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Shared auto-removal guard for idle and limit cleanup: owner protection, live
-   * run leases, and live/foreign git locks veto removal; a dead lock is cleared.
+   * Shared auto-removal guard: owners, leases, nested repositories, and live or
+   * foreign Git locks veto removal; a dead lock is cleared.
    */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
@@ -1298,7 +1318,7 @@ export class ManagedWorktreeService {
     if (state.kind === "dead") {
       await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
     }
-    return false;
+    return await containsSnapshotGitMarker(record.path);
   }
 
   /**

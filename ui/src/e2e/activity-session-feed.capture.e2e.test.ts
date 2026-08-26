@@ -120,6 +120,7 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-bob", label: "Bob Rivera" },
                   },
+                  createdVia: "cron",
                   participants: [{ type: "human", id: "profile-alice", label: "Alice Chen" }],
                   hasAutomation: true,
                   updatedAt: now - 42 * 60_000,
@@ -133,6 +134,7 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
                   },
+                  createdVia: "cron",
                   hasAutomation: true,
                   updatedAt: now - 2 * 60 * 60_000,
                 },
@@ -145,6 +147,7 @@ suite.define(() => {
                   owner: {
                     actor: { type: "human", id: "profile-carol", label: "Carol Singh" },
                   },
+                  createdVia: "cron",
                   hasAutomation: true,
                   updatedAt: now - 3 * 60 * 60_000,
                 },
@@ -321,6 +324,26 @@ suite.define(() => {
 
         await activityPage.locator(".activity-feed__people-clear").click();
         await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await activityPage.locator(".activity-feed__people-trigger").click();
+        await activityPage.locator('[data-activity-person="profile-carol"]').click();
+        await expect
+          .poll(() => new URL(page.url()).searchParams.get("person"))
+          .toBe("profile-carol");
+        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
+        await expect
+          .poll(() =>
+            activitySession(nightlyMaintenanceKey)
+              .locator('[data-activity-created-via="cron"]')
+              .count(),
+          )
+          .toBe(1);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(outputDir, "06-automation-creator-desktop.png"),
+        });
+
+        await activityPage.locator(".activity-feed__people-clear").click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
         await page.setViewportSize({ height: 844, width: 390 });
 
         const peopleControl = activityPage.locator(".activity-feed__people-control");
@@ -354,10 +377,19 @@ suite.define(() => {
             };
           }),
         ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
+        await activityPage.locator(".activity-feed__people-trigger").click();
+        await activityPage.locator('[data-activity-person="profile-carol"]').click();
+        await expect
+          .poll(() => new URL(page.url()).searchParams.get("person"))
+          .toBe("profile-carol");
+        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
+        await expect
+          .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())
+          .toBe(2);
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(outputDir, "07-global-activity-mobile.png"),
+          path: path.join(outputDir, "07-automation-creator-mobile.png"),
         });
       },
     );

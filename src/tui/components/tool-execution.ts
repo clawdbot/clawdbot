@@ -105,7 +105,7 @@ function extractText(result?: ToolResult): string {
       lines.push(`[${mime}${size}${omitted}]`);
     }
   }
-  return lines.join("\n").trim();
+  return lines.join("\n");
 }
 
 /** Displays a running or completed tool call with optional expandable output. */
@@ -187,7 +187,7 @@ export class ToolExecutionComponent extends Container {
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
 
     const raw = extractText(this.result);
-    const text = raw || (this.isPartial ? "…" : "");
+    const text = raw.trim() ? raw : this.isPartial ? "…" : "";
     this.output.setExpanded(this.expanded);
     this.output.setText(text);
   }

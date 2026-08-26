@@ -304,6 +304,16 @@ CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
   ON execution_decision_facts (run_id, occurred_at, receipt_id);
 
+-- Exact admission identity stays separate from owner-native lifecycle rows so
+-- older readers retain byte-compatible cron/task/flow table definitions.
+CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  context_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  PRIMARY KEY (owner_kind, owner_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   dedupe_key TEXT UNIQUE,
@@ -554,6 +564,25 @@ CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
     length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
   )
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
+  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
+  minted_by_approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
+  cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
+  job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
+  operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
+  revoked_at_ms INTEGER,
+  revoked_by TEXT,
+  last_used_at_ms INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
+  ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,

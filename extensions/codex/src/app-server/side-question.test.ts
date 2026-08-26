@@ -283,7 +283,8 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -406,7 +407,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         forwardedAuthProfileId: authProfileId,
         forwardedAuthProfileSource: authProfileId ? authProfileIdSource : undefined,
         forwardedAuthProfileCandidateIds: authProfileId ? [authProfileId] : undefined,
-        selectedAuthMode: authProfileId ? "token" : undefined,
+        selectedAuthMode: authProfileId ? "oauth" : undefined,
         modelRoute: {
           provider: "openai",
           modelId: "gpt-5.5",
@@ -421,10 +422,12 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         profiles: authProfileId
           ? {
               [authProfileId]: {
-                type: "token",
+                type: "oauth",
                 provider: "openai",
-                token: "test-token",
-                expires: Date.now() + 60_000,
+                access: "test-access-token",
+                refresh: "test-refresh-token",
+                expires: Date.now() + 24 * 60 * 60_000,
+                accountId: "account-1",
               },
             }
           : {},
@@ -672,6 +675,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -898,41 +902,47 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  it("rejects paired-device side questions before acquiring a client, channel, or approval", async () => {
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    const openDuplex = vi.fn(async () => {
-      throw new Error("paired-device side-question channel was opened");
-    });
-    const requestApproval = vi.fn(async () => undefined);
-    const sandbox = {
-      ...createSandboxContext({}),
-      placementExecutionMode: "remote-exec" as const,
-      placementNodeId: "paired-device-1",
-      placementEnvironmentId: "environment-1",
-      placementSessionId: "session-1",
-      placementOwnerEpoch: 1,
-      sessionKey: "agent:main:session-1",
-    };
+  it.each([
+    { host: "paired device", nodeId: "paired-device-1" },
+    { host: "cloud worker", nodeId: "cloud-worker-node-1" },
+  ])(
+    "rejects $host side questions before acquiring a client, channel, or approval",
+    async ({ nodeId }) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      const openDuplex = vi.fn(async () => {
+        throw new Error("node side-question channel was opened");
+      });
+      const requestApproval = vi.fn(async () => undefined);
+      const sandbox = {
+        ...createSandboxContext({}),
+        placementExecutionMode: "remote-exec" as const,
+        placementNodeId: nodeId,
+        placementEnvironmentId: "environment-1",
+        placementSessionId: "session-1",
+        placementOwnerEpoch: 1,
+        sessionKey: "agent:main:session-1",
+      };
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sandbox,
-          hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
-        }),
-        { runtime: { nodes: { openDuplex } } as never },
-      ),
-    ).rejects.toThrow(
-      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
-    );
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sandbox,
+            hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
+          }),
+          { runtime: { nodes: { openDuplex } } as never },
+        ),
+      ).rejects.toThrow(
+        "Normal Codex turns are supported on nodes, but /btw is not yet bound to the active placement.",
+      );
 
-    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
-    expect(openDuplex).not.toHaveBeenCalled();
-    expect(requestApproval).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
-  });
+      expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+      expect(openDuplex).not.toHaveBeenCalled();
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+      expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
     const initialClient = createFakeClient();

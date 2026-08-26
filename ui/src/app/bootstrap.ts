@@ -48,6 +48,7 @@ import type {
 } from "./context.ts";
 import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -142,6 +143,9 @@ function createApplicationTheme(
   syncSystemThemeListener();
 
   return {
+    get settings() {
+      return settings;
+    },
     get mode() {
       return settings.themeMode;
     },
@@ -370,6 +374,7 @@ export function bootstrapApplication(
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
+  const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
     auth: {
@@ -532,6 +537,7 @@ export function bootstrapApplication(
     agentSelection,
     channels,
     config,
+    scopeUpgrade,
     runtimeConfig,
     sessions,
     placementStartup,
@@ -651,6 +657,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      scopeUpgrade.dispose();
       placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();

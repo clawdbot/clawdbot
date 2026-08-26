@@ -495,9 +495,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const service = {
     list: environmentAccess.list,
+    supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
       return profile ? providerSupportsExecutionMode(profile.provider, mode) : false;
+    },
+    requiresNodeEnrollment: (profileId: string, providerId?: string) => {
+      const id = providerId ?? options.getConfig().cloudWorkers?.profiles?.[profileId]?.provider;
+      return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
     hasPendingNodeEnrollmentSetup: (setupId: string, deviceId: string) =>
@@ -514,11 +519,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
       }
       return environmentAccess.project(
-        await providerLifecycle.createWithProfile(
-          profileId,
-          idempotencyKey,
-          machineClass === undefined ? {} : { machineClass },
-        ),
+        await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
+          ...(machineClass === undefined ? {} : { machineClass }),
+          ...(executionMode === undefined ? {} : { executionMode }),
+        }),
       );
     },
     createFromProfileSnapshot: async (
@@ -535,6 +539,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             profileSnapshot: profile.profileSnapshot,
           },
           ...(machineClass === undefined ? {} : { machineClass }),
+          ...(executionMode === undefined ? {} : { executionMode }),
         }),
       );
     },

@@ -186,6 +186,7 @@ async function useGoogleAuthorizedUserCredentials(
 async function useGoogleAuthLibraryCredentials(label: string, token?: string): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
   vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+  vi.stubEnv("CLOUDSDK_CONFIG", "");
   vi.stubEnv("HOME", path.join(tempDir, "home"));
   vi.stubEnv("APPDATA", "");
   if (token !== undefined) {
@@ -906,7 +907,7 @@ describe("google transport stream", () => {
       if (provider === "google-vertex") {
         vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
         vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+        await useGoogleAuthLibraryCredentials("blocked", "ya29.vertex-token");
       }
 
       const result =
@@ -933,7 +934,7 @@ describe("google transport stream", () => {
       if (provider === "google-vertex") {
         vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
         vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+        await useGoogleAuthLibraryCredentials("unfinished", "ya29.vertex-token");
       }
 
       const result =
@@ -2020,12 +2021,9 @@ describe("google transport stream", () => {
   );
 
   it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));
-    vi.stubEnv("HOME", path.join(tempDir, "home"));
-    vi.stubEnv("APPDATA", "");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+    await useGoogleAuthLibraryCredentials("prefix", "ya29.transport-token");
     const tokenFetchMock = vi.fn();
     mockGoogleTextResponse();
 

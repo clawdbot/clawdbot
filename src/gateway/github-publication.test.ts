@@ -74,7 +74,8 @@ describe("Gateway GitHub publication", () => {
         candidate.includes("update-ref") ||
         candidate.includes("read-tree") ||
         candidate.includes("add") ||
-        candidate.includes("reset"),
+        candidate.includes("reset") ||
+        candidate.includes("push"),
     )) {
       expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
     }
@@ -118,7 +119,7 @@ describe("Gateway GitHub publication", () => {
     ]);
     expect(JSON.parse(post?.input ?? "null")).toEqual({
       title: "Publish the reconciled fix",
-      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Participants\n\n- @alice\n\n<!-- openclaw-publication:${first.requestId} -->`,
+      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${first.requestId} -->`,
       head: `openclaw:${BRANCH}`,
       base: "main",
       draft: true,
@@ -267,7 +268,7 @@ describe("Gateway GitHub publication", () => {
     ]);
     expect(JSON.parse(post?.[1]?.input ?? "null")).toEqual({
       title: "Publish from the fork",
-      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Participants\n\n- @alice\n\n<!-- openclaw-publication:${result.requestId} -->`,
+      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${result.requestId} -->`,
       head: `roboclaw-bot:${BRANCH}`,
       base: "trunk",
       draft: true,

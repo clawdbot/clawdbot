@@ -6,7 +6,6 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
-  CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
   hasDirectSessionRun,
@@ -17,6 +16,8 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
 type TestRow = {

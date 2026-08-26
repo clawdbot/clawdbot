@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
-  listTrackedTestFilesForRoots,
+  listExtensionTestFilesForRoots,
   splitExtensionTestJobTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
@@ -137,7 +137,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     const matrix = runPluginPrereleaseManifest();
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
     const telegramRows = matrix.include.filter((row) => row.task === "extension-file-shard");
-    const trackedTelegramTestFiles = listTrackedTestFilesForRoots(["extensions/telegram"]);
+    const allTelegramTestFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
     const runnableTelegramTestFiles = listTelegramRunnableTestFiles();
 
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
@@ -173,7 +173,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     expect(telegramPartitions.every((partition) => partition.length <= 10)).toBe(true);
     expect(Math.max(...telegramPartitions.map((partition) => partition.length))).toBe(10);
     expect(
-      trackedTelegramTestFiles.filter((file) => !runnableTelegramTestFiles.includes(file)).length,
+      allTelegramTestFiles.filter((file) => !runnableTelegramTestFiles.includes(file)).length,
     ).toBeGreaterThan(0);
 
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-specs-"));

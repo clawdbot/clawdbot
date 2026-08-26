@@ -1,5 +1,6 @@
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { restoreChatApiAttachments } from "../chat/attachment-api.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
 export type PendingPlacementPlace = {
@@ -32,8 +33,11 @@ export function resolveDraftSessionPlacement(
 }
 
 export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementRecovery) {
-  const visibility: "normal" | "incognito" =
-    recovery.createParams?.incognito === true ? "incognito" : "normal";
+  const visibility: NewSessionVisibility = recovery.createParams?.incognito
+    ? "incognito"
+    : recovery.createParams?.visibility === "draft"
+      ? "draft"
+      : "normal";
   const placement: PendingPlacementPlace = {
     agentId: recovery.agentId,
     profileId: recovery.target.kind === "profile" ? recovery.target.profileId : "",
@@ -50,6 +54,8 @@ export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementR
       message: recovery.message,
       attachments: restoreChatApiAttachments(recovery.attachments),
       visibility,
+      toolOverrides: recovery.createParams?.toolOverrides ?? null,
+      permissionMode: recovery.createParams?.permissionMode,
     },
   };
 }

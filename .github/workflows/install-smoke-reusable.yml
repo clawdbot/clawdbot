@@ -1449,7 +1449,7 @@ jobs:
             --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
 
       - name: Install Bun for global smoke
-        run: npm install -g bun@1.3.14
+        run: npm install -g bun@1.4.0
 
       - name: Run Bun global install candidate-payload smoke
         working-directory: .release-harness

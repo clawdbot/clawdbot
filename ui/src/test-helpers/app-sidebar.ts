@@ -30,7 +30,10 @@ import {
   type SessionListOptions,
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
-import { createApplicationContextProvider } from "./application-context.ts";
+import {
+  createApplicationContextProvider,
+  hiddenScopeUpgradeCapability,
+} from "./application-context.ts";
 import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
 import { createStorageMock } from "./storage.ts";
 
@@ -148,6 +151,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       bootstrapToken: "",
       password: "",
     },
+    connectionRevision: 0,
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
@@ -239,6 +243,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const archiveVisibilityByKey = new Map<string, "pending" | "archived">();
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -351,6 +356,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
+    archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
+    setArchiveVisibility(key: string, visibility: "pending" | "archived" | undefined) {
+      if (visibility) {
+        archiveVisibilityByKey.set(key, visibility);
+      } else {
+        archiveVisibilityByKey.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     assignOwner,
     patchMany,
     delete: deleteSession,
@@ -468,6 +484,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
+      for (const row of statePatch.result?.sessions ?? []) {
+        if (row.archived !== true && archiveVisibilityByKey.get(row.key) === "archived") {
+          archiveVisibilityByKey.delete(row.key);
+        }
+      }
       canonicalListRevision += 1;
       publish(statePatch);
     },
@@ -517,6 +538,7 @@ export function createContext(
       setScope: () => undefined,
       subscribe: () => () => undefined,
     },
+    scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
       subscribe: () => () => undefined,
@@ -569,7 +591,7 @@ export const manyAgents = (count: number) =>
   }) as AgentsListResult;
 
 export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string }>,
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
   nextCursor?: string,
   catalogId = "codex",
 ): SessionsCatalogListResult => ({

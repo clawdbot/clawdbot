@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS session_participants (
   actor_type TEXT NOT NULL,
   actor_id TEXT NOT NULL,
   actor_source TEXT,
+  contribution_count INTEGER,
   first_prompted_at INTEGER NOT NULL,
   last_prompted_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, actor_type, actor_id),
@@ -142,6 +143,9 @@ CREATE TABLE IF NOT EXISTS session_windows (
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_updated_at
   ON session_windows(updated_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key
+  ON session_windows(session_key, updated_at DESC, session_id);
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at
   ON session_windows(created_at DESC, session_id);
@@ -454,6 +458,9 @@ CREATE TABLE IF NOT EXISTS transcript_event_identities (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
   ON transcript_event_identities(session_id, message_idempotency_key)
   WHERE message_idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence
+  ON transcript_event_identities(session_id, seq);
 
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
   ON transcript_event_identities(session_id, parent_id)

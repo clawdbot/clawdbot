@@ -14,9 +14,10 @@ function shellQuote(value: string): string {
 
 export function createCrabboxNodeEnrollmentSetup(params: {
   enrollment: CrabboxWorkerNodeEnrollment;
+  executionMode?: NonNullable<WorkerProvider["supportedExecutionModes"]>[number];
   leaseId: string;
 }): { command: string; forwardedEnv?: Record<string, string> } {
-  const { enrollment, leaseId } = params;
+  const { enrollment, executionMode, leaseId } = params;
   const stateDir = `.openclaw/cloud-workers/${leaseId}`;
   const packageCandidates = enrollment.packageSpecs.map(shellQuote).join(" ");
   if (!packageCandidates) {
@@ -30,12 +31,50 @@ export function createCrabboxNodeEnrollmentSetup(params: {
           'setup_code_file="$state_dir/setup-code"',
           "umask 077",
           `printf "%s\\n" "$${CLOUD_SETUP_CODE_ENV}" >"$setup_code_file"`,
+          `unset ${CLOUD_SETUP_CODE_ENV}`,
         ]
       : [];
   const launch =
     enrollment.mode === "connect"
       ? `connect --target-file "$setup_code_file" --ephemeral --display-name ${shellQuote(enrollment.displayName)}`
       : `node run --ephemeral --display-name ${shellQuote(enrollment.displayName)}`;
+  const prepareCodex = (binary: string): string[] => {
+    if (executionMode !== "remote-exec") {
+      return [];
+    }
+    const inspectPlugin = [
+      'const fs=require("node:fs"),path=require("node:path"),module=require("node:module");',
+      'const inspection=JSON.parse(fs.readFileSync(0,"utf8")),plugin=inspection.plugin;',
+      `const version=${JSON.stringify(enrollment.openclawVersion)};`,
+      'if(plugin?.id!=="codex"||plugin.packageName!=="@openclaw/codex"||plugin.packageVersion!==version||(plugin.origin!=="bundled"&&(plugin.trustedOfficialInstall!==true||inspection.install?.source!=="npm"))){',
+      "throw new Error(`Codex remote-exec requires the exact official @openclaw/codex@${version} plugin to be installed by cloudWorkers profile setup`)}",
+      "const root=fs.realpathSync(plugin.rootDir);",
+      'const manifest=JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));',
+      'const requirePlugin=module.createRequire(path.join(root,"package.json"));',
+      'const runtime=requirePlugin("@openai/codex/package.json");',
+      'if(manifest.name!==plugin.packageName||manifest.version!==version||runtime.version!==manifest.dependencies?.["@openai/codex"]){',
+      'throw new Error("Codex remote-exec requires the plugin and its exact pinned native runtime")}',
+      'const launcher=requirePlugin.resolve("@openai/codex/bin/codex.js");',
+      'const probe=require("node:child_process").spawnSync(process.execPath,[launcher,"--version"],{encoding:"utf8",timeout:10000,stdio:["ignore","pipe","pipe"]});',
+      "if(probe.status!==0||probe.stdout?.trim()!==`codex-cli ${runtime.version}`){",
+      'throw new Error("Codex remote-exec requires the exact executable platform-native Codex binary")}',
+      'if(plugin.origin!=="bundled"){',
+      'const project=path.join(process.argv[1],"npm","projects","codex");',
+      'const packageRoot=path.join(project,"node_modules","@openclaw");',
+      "fs.mkdirSync(packageRoot,{recursive:true,mode:0o700});",
+      'const dependency={"@openclaw/codex":version};',
+      'fs.writeFileSync(path.join(project,"package.json"),JSON.stringify({name:"openclaw-cloud-codex",private:true,dependencies:dependency})+"\\n",{mode:0o600});',
+      'const projected=path.join(packageRoot,"codex");',
+      "try{const existing=fs.lstatSync(projected);",
+      'if(!existing.isSymbolicLink()||fs.realpathSync(projected)!==root){throw new Error("Codex node plugin path is occupied")}',
+      '}catch(error){if(error.code!=="ENOENT"){throw error}fs.symlinkSync(root,projected)}',
+      "}",
+    ].join("");
+    return [
+      `  ${binary} plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
+      `  OPENCLAW_STATE_DIR="$state_dir" ${binary} plugins enable codex`,
+    ];
+  };
   const command = [
     "set -eu",
     `state_dir="$HOME/${stateDir}"`,
@@ -67,8 +106,10 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     "fi",
     'package_spec="$(cat "$package_spec_file")"',
     'if [ "$package_spec" = "@global" ]; then',
+    ...prepareCodex("openclaw"),
     `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
     "else",
+    ...prepareCodex('npx --yes --package "$package_spec" -- openclaw'),
     `  setsid -f sh -c 'printf "%s\\n" "$$" >"$1"; shift; exec "$@"' sh "$pid_file" env OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw ${launch} >"$state_dir/node.log" 2>&1 </dev/null`,
     "fi",
     'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$pid_file" ] && break; sleep 0.1; done',

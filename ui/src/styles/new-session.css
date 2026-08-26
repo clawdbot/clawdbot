@@ -26,6 +26,25 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
+.new-session-page__incognito-toggle.shell-chrome-controls__button {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  corner-shape: superellipse(1.5);
+}
+
+.new-session-page__incognito-toggle.shell-chrome-controls__button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+}
+
+.new-session-page__incognito-toggle.shell-chrome-controls__button svg {
+  width: 19px;
+  height: 19px;
+}
+
 .new-session-page__incognito-toggle--active,
 .new-session-page__incognito-toggle--active:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -60,18 +79,29 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   margin: 0 auto auto;
 }
 
+.new-session-page .agent-chat__welcome-identity {
+  gap: 12px;
+}
+
+.new-session-page .agent-chat__welcome-identity-copy {
+  gap: 6px;
+}
+
 /* Draft block inside the centered welcome column; the welcome centers text,
-   so reset alignment for the controls and composer. */
+   so reset alignment for the controls and composer.
+   The top margin is a paragraph break, not a nudge: the tagline is the last line
+   of the hero and the scope chips are the first line of the form, so they must
+   not read as one stack. */
 .new-session-page__draft {
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 34px;
   text-align: left;
 }
 
-.new-session-page__visibility {
+.new-session-page__selection-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -79,24 +109,155 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
   font: inherit;
   font-size: 11px;
   cursor: var(--cursor-action);
+}
+
+.new-session-page__selection-status:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.new-session-page__selection-status:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.new-session-page__selection-status svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
+.new-session-page__incognito-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-height: 0;
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin: -8px auto 0;
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
   opacity: 0;
-  transition: opacity 120ms ease;
+  filter: blur(4px);
+  pointer-events: none;
+  transform: translateY(-2px);
+  visibility: hidden;
+  white-space: nowrap;
+  transition:
+    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
+    margin 160ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 120ms ease-out,
+    filter 120ms ease-out,
+    transform 120ms ease-out,
+    visibility 0s linear 160ms;
+}
+
+.new-session-page__incognito-notice--visible {
+  max-height: 20px;
+  margin-top: 0;
+  opacity: 1;
+  filter: blur(0);
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.new-session-page__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.new-session-page__incognito-notice-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+}
+
+.new-session-page--incognito .agent-chat__input {
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  border-style: dashed;
+}
+
+/* Image and emoji fallbacks carry the same welcome-avatar silhouette. */
+.new-session-page .agent-chat__avatar--text {
+  border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__incognito-notice {
+    transition-duration: 0ms;
+  }
+}
+
+/* Sits after the model and reasoning pickers: the footer row reads as the
+   settings for the next turn, and how the session is recorded is the last of
+   them, not the first thing between "+" and the model. The model control claims
+   order 3 in chat/layout.css, so this follows it.
+   Box, type and rhythm come from the composer's chip family tokens rather than
+   numbers of its own: this control is a peer of the pickers beside it, and it
+   used to announce itself as a different component — smaller text, shorter box,
+   pill corners and a muted foreground against their 13px squared-off chips. The
+   fallbacks keep it sane if it is ever rendered outside a composer. */
+.new-session-page__visibility {
+  display: inline-flex;
+  align-items: center;
+  order: 4;
+  gap: var(--chat-composer-chip-gap, 6px);
+  min-height: var(--chat-composer-chip-height, 30px);
+  padding-block: 0;
+  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--chat-composer-secondary, var(--muted));
+  font: inherit;
+  font-size: var(--chat-composer-chip-text, 13px);
+  line-height: 1.35;
+  cursor: var(--cursor-action);
+}
+
+/* Draft belongs with the attachment and permission controls. On pointer-first
+   layouts it stays quiet until the footer is explored; touch layouts keep the
+   action reachable because they have no persistent hover state. */
+@media (hover: hover) and (pointer: fine) {
+  .new-session-page__composer
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+      opacity 120ms var(--ease-out),
+      visibility 0s linear 160ms;
+  }
+
+  .new-session-page__composer
+    .agent-chat__composer-footer:is(:hover, :focus-within)
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition-delay: 0s;
+  }
 }
 
 .new-session-page__visibility:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.new-session-page__composer:hover .new-session-page__visibility,
-.new-session-page__composer:focus-within .new-session-page__visibility,
-.new-session-page__visibility--active {
-  opacity: 1;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
 }
 
 /* Active mode must read as toggled-on even while hovered: hover on an
@@ -110,11 +271,17 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 
 .new-session-page__visibility:disabled {
   cursor: default;
+  opacity: 0.5;
 }
 
+/* The mark has to be a block: left inline it sits on the label's baseline, which
+   parks it about 2px above the row's axis while every sibling control is centred
+   on its own box. Blocking it lets the wrapper collapse to the icon so the
+   button's `align-items: center` puts it on the same line as the label. */
 .new-session-page__visibility svg {
-  width: 12px;
-  height: 12px;
+  display: block;
+  width: var(--chat-composer-chip-icon, 14px);
+  height: var(--chat-composer-chip-icon, 14px);
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7px;
@@ -667,9 +834,17 @@ wa-dropdown.new-session-page__start-menu {
 
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
+/* No inset of its own: the editor's breathing room is the composer surface's
+   decision, and a left-only override here put the draft further from one edge
+   than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
-  padding-left: var(--chat-box-inset);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -709,8 +884,7 @@ wa-dropdown.new-session-page__start-menu {
   }
 
   .new-session-page__composer::after,
-  .new-session-page__composer > *,
-  .new-session-page__visibility {
+  .new-session-page__composer > * {
     transition-duration: 0ms;
   }
 }
@@ -926,12 +1100,13 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* A new session has visibility pills instead of the chat settings cluster.
-     Keep those pills intrinsic and let the model picker use the remaining width. */
+  /* A new session has visibility chips instead of the chat settings cluster.
+     Keep those chips intrinsic and let the model picker use the remaining width;
+     spacing stays on the shared family token so the row keeps one rhythm as it
+     wraps. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
     flex-wrap: wrap;
-    gap: 2px;
   }
 
   .new-session-page__composer .agent-chat__input .chat-composer-model-control {

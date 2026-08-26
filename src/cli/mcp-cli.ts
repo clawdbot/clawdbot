@@ -331,7 +331,7 @@ async function collectMcpDoctorIssues(params: {
           }
         }
         const headers = asRecord(server.headers);
-        if (headers && "Authorization" in headers) {
+        if (headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
           issues.push(
             issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
           );

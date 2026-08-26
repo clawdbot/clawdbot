@@ -223,12 +223,12 @@ private object SystemCalendarDataSource : CalendarDataSource {
   }
 
   private fun findDefaultCalendarId(resolver: ContentResolver): Long? {
-    val projection = arrayOf(CalendarContract.Calendars._ID)
     resolver
       .query(
         CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        "${CalendarContract.Calendars.VISIBLE}=1",
+        arrayOf(CalendarContract.Calendars._ID),
+        "${CalendarContract.Calendars.VISIBLE}=1 AND " +
+          "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
         null,
         // Prefer Android's primary visible calendar, then lowest id for deterministic fallback.
         "${CalendarContract.Calendars.IS_PRIMARY} DESC, ${CalendarContract.Calendars._ID} ASC",

@@ -9,7 +9,6 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
-  bindAgentRunTaskRunId,
   claimAgentRunContext,
   consumeCronNextCheckProposal,
   getAgentRunContext,
@@ -28,7 +27,6 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
-import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -93,6 +91,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
 }): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
@@ -210,12 +209,6 @@ export async function runCronIsolatedAgentTurn(params: {
         ownsContext: ownsRunContext,
       },
     );
-    if (runContextOwnerToken) {
-      const taskRunId = getActiveCronTaskRunId();
-      if (taskRunId) {
-        bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
-      }
-    }
     const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
@@ -264,6 +257,7 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
       pluginRegistry: prepared.context.pluginRegistry,
+      executionIdentity: params.executionIdentity,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>

@@ -299,15 +299,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   if (json) {
     const safeEnvironment = filterDaemonEnv(command?.environment);
+    const publicCommand = command && {
+      ...command,
+      environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+    };
+    if (publicCommand) {
+      delete publicCommand.managedDefinition;
+      delete publicCommand.managedOverrides;
+    }
     defaultRuntime.writeJson({
       service: {
         ...payload.service,
-        command: command
-          ? {
-              ...command,
-              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
-            }
-          : command,
+        command: publicCommand,
       },
     });
     return;

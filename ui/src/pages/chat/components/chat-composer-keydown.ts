@@ -1,20 +1,15 @@
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
-import { restoreHistoryCaret, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
+import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import {
-  getActiveSlashMenuOptionId,
-  resetSlashMenuState,
-  selectSlashArg,
-  selectSlashCommand,
-  tabCompleteSlashCommand,
-} from "./chat-composer-slash-menu.ts";
+import { handleSlashMenuKeydown, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
+  slashMenuHost: SlashMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
@@ -24,53 +19,11 @@ type ComposerKeyDownDeps = {
   steerNowEnabled: boolean;
 };
 
-function handleComposerMenuKeyDown<T>(
-  event: KeyboardEvent,
-  state: ChatComposerState,
-  items: readonly T[],
-  paneId: string,
-  requestUpdate: () => void,
-  onSelect: (item: T, submit: boolean) => void,
-  scrollActive: (state: ChatComposerState, paneId: string) => void,
-): boolean {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    state.slashMenuOpen = false;
-    resetSlashMenuState(state);
-    requestUpdate();
-    return true;
-  }
-  if (items.length === 0) {
-    return false;
-  }
-  switch (event.key) {
-    case "ArrowDown":
-    case "ArrowUp": {
-      event.preventDefault();
-      const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-      state.slashMenuIndex = (state.slashMenuIndex + offset) % items.length;
-      requestUpdate();
-      scrollActive(state, paneId);
-      return true;
-    }
-    case "Tab":
-    case "Enter": {
-      event.preventDefault();
-      const item = items[state.slashMenuIndex];
-      if (item !== undefined) {
-        onSelect(item, event.key === "Enter");
-      }
-      return true;
-    }
-    default:
-      return false;
-  }
-}
-
 export function createComposerKeyDownHandler({
   state,
   props,
   skillMenuHost,
+  slashMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
@@ -94,46 +47,8 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (
-      props.connected &&
-      state.slashMenuOpen &&
-      state.slashMenuMode === "args" &&
-      state.slashMenuArgItems.length > 0
-    ) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuArgItems,
-          props.paneId,
-          requestUpdate,
-          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
-    }
-
-    if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuItems,
-          props.paneId,
-          requestUpdate,
-          (command, submit) =>
-            submit
-              ? selectSlashCommand(command, props, requestUpdate)
-              : tabCompleteSlashCommand(command, props, requestUpdate),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
+    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
+      return;
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {

@@ -38,6 +38,7 @@ const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
+const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
@@ -100,6 +101,8 @@ vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections,
   inspectPortUsage,
 }));
+
+vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment }));
 
 vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
@@ -173,6 +176,7 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readCommand.mockResolvedValue(null);
     service.restart.mockResolvedValue({ outcome: "completed" });
     isDefaultInstallIdentity.mockReturnValue(true);
+    isContainerEnvironment.mockReturnValue(false);
     readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
     resolveGatewayBindHost.mockResolvedValue("127.0.0.1");
@@ -335,6 +339,44 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.isLoaded).toHaveBeenCalledTimes(1);
     expect(service.readRuntime).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { environment: "detected container", detected: true, kubernetes: false },
+    { environment: "Kubernetes pod without container markers", detected: false, kubernetes: true },
+  ])(
+    "keeps port diagnostics but never probes host services in a $environment",
+    async (scenario) => {
+      setPlatform("linux");
+      isContainerEnvironment.mockReturnValue(scenario.detected);
+      inspectPortUsage.mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 1234, command: "other-process" }],
+        hints: [],
+      });
+
+      await withEnvAsync(
+        {
+          KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
+          KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
+        },
+        runNonInteractiveRepair,
+      );
+
+      expect(inspectPortUsage).toHaveBeenCalledOnce();
+      expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
+      expect(note).toHaveBeenCalledWith(
+        "Container lifecycle is externally managed; skipping host service installation.",
+        "Gateway",
+      );
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.readRuntime).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(findSystemGatewayServices).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports recent restart handoffs during deep doctor", async () => {
     vi.useFakeTimers();

@@ -1,5 +1,47 @@
 // Mattermost helper module supports normalize behavior.
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+  resolveMessagePresentationControlValue,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export function resolveMattermostPresentation(params: {
+  text?: string;
+  presentation?: unknown;
+  presentationTextMode?: "fallback";
+}) {
+  const presentation = normalizeMessagePresentation(params.presentation);
+  const text =
+    !presentation || (params.presentationTextMode === "fallback" && params.text !== undefined)
+      ? (params.text ?? "")
+      : renderMessagePresentationFallbackText({ text: params.text, presentation });
+  const buttons = presentation
+    ? presentation.blocks
+        .filter((block) => block.type === "buttons")
+        .map((block) =>
+          block.buttons.flatMap((button) => {
+            if (button.action) {
+              return [];
+            }
+            const value = resolveMessagePresentationControlValue(button);
+            return value
+              ? [
+                  {
+                    id: value,
+                    text: button.label,
+                    callback_data: value,
+                    context: { callback_data: value },
+                    style: button.style,
+                  },
+                ]
+              : [];
+          }),
+        )
+        .filter((row) => row.length > 0)
+    : [];
+  return { text, buttons };
+}
 
 export function normalizeMattermostMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -35,6 +77,16 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   }
   // Bare name without prefix — return undefined to allow directory lookup
   return undefined;
+}
+
+/**
+ * True when media must be uploaded as a file: any non-empty, non-http(s) value
+ * (e.g. a local workspace path) has no address the server can fetch, so the
+ * send must require a successful upload rather than degrade to caption text.
+ */
+export function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
+  const trimmed = mediaUrl?.trim();
+  return Boolean(trimmed && !/^https?:\/\//i.test(trimmed));
 }
 
 export function looksLikeMattermostTargetId(raw: string, _normalized?: string): boolean {

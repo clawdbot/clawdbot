@@ -12,6 +12,7 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
@@ -1337,6 +1338,35 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it.each([
+    { providedName: "friendly-cover.png", expectedName: "friendly-cover.png" },
+    { providedName: "../album\\cover\r\n.png", expectedName: "cover.png" },
+  ])(
+    "preserves safe generated image filenames in the record and HTTP response",
+    async ({ providedName, expectedName }) => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+        attachments: [{ type: "image", name: providedName }],
+        stateDir,
+        messageId: "msg-1",
+      });
+      const block = requireBlock(blocks);
+      const attachmentId = requireAttachmentIdFromUrl(block.url);
+
+      expect(readManagedImageRecord(attachmentId, stateDir)?.original.filename).toBe(expectedName);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: String(block.url),
+        authResponse: { authMethod: "token" },
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
+    },
+  );
+
+  it.each([
     { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
     { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
   ])(
@@ -1376,6 +1406,127 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
     },
   );
+
+  it.each([
+    {
+      kind: "audio" as const,
+      sourceName: "theme.mp3",
+      providedName: "../album\\cover\r\n.mp3",
+      expectedName: "cover.mp3",
+    },
+    {
+      kind: "video" as const,
+      sourceName: "clip.mp4",
+      providedName: "../album\\NUL\r\n.webp",
+      expectedName: "NUL_.mp4",
+    },
+  ])(
+    "sanitizes generated $kind filenames in media blocks, records, and downloads",
+    async ({ kind, sourceName, providedName, expectedName }) => {
+      const sourcePath = path.join(stateDir, "workspace", sourceName);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(
+        sourcePath,
+        kind === "audio"
+          ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
+      );
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: kind, path: sourcePath, name: providedName }],
+        stateDir,
+        localRoots: [path.dirname(sourcePath)],
+        allowLocalNonImage: true,
+        messageId: "msg-1",
+      });
+      const block = requireBlock(blocks);
+      const pathName = String(block.url);
+
+      expect(block).toMatchObject({ type: kind, fileName: expectedName });
+      expect(
+        readManagedImageRecord(requireAttachmentIdFromUrl(pathName), stateDir)?.original.filename,
+      ).toBe(expectedName);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName,
+        authResponse: { authMethod: "token" },
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [{ type: kind, url: pathName, openUrl: pathName }],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
+    },
+  );
+
+  it.each([
+    { kind: "audio" as const, contentType: "audio/mpeg" },
+    { kind: "video" as const, contentType: "video/mp4" },
+  ])(
+    "preserves generated $kind labels without attachment metadata",
+    async ({ kind, contentType }) => {
+      const buffer =
+        kind === "audio"
+          ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:${contentType};base64,${buffer.toString("base64")}`],
+        stateDir,
+      });
+
+      expect(requireBlock(blocks)).toMatchObject({
+        type: kind,
+        fileName: `Generated ${kind} 1`,
+      });
+    },
+  );
+
+  it("prepares generated audio when provider attachment metadata contains malformed values", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "theme.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const extracted = extractToolResultMediaArtifact({
+      details: {
+        media: {
+          mediaUrls: [sourcePath],
+          attachments: [
+            {
+              type: "audio",
+              path: sourcePath,
+              name: 1,
+              mimeType: false,
+              durationMs: -1,
+              width: Infinity,
+            },
+          ],
+        },
+      },
+    });
+    const onPrepareError = vi.fn();
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: extracted?.mediaUrls,
+      attachments: extracted?.attachments,
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(onPrepareError).not.toHaveBeenCalled();
+    expect(blocks).toHaveLength(1);
+    expect(requireBlock(blocks)).toMatchObject({ type: "audio", fileName: "theme.mp3" });
+  });
 
   it("marks exotic managed media metadata for playback transcoding", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.caf");
@@ -1723,6 +1874,23 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     expect(blocks).toHaveLength(2);
     expect(blocks[0]?.type).toBe("image");
+    expect(requireBlock(blocks, 1).type).toBe("text");
+  });
+
+  it("updates generated image filenames to the actual format after resizing", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [await createPngDataUrl(200, 120)],
+      attachments: [{ type: "image", name: "generated-poster.webp" }],
+      stateDir,
+      limits: { maxWidth: 64, maxHeight: 64, maxPixels: 4096 },
+    });
+    const block = requireBlock(blocks);
+    const record = readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir);
+
+    expect(record?.original.contentType).toBe("image/jpeg");
+    expect(record?.original.filename).toBe("generated-poster.jpg");
+    expect(record?.original.mediaId).toMatch(/\.jpg$/);
     expect(requireBlock(blocks, 1).type).toBe("text");
   });
 

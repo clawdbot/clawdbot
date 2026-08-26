@@ -46,6 +46,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     # Filter by runtime or status
     openclaw tasks list --runtime acp
     openclaw tasks list --status running
+    openclaw tasks list --status blocked
     ```
 
   </Tab>
@@ -154,6 +155,10 @@ Execution and result delivery are separate. A subagent task can remain
 terminal outcome is `succeeded` after delivery and `blocked` when the work
 finished but the result could not be handed back. This preserves the completed
 result instead of misreporting the child execution as failed.
+
+Use `openclaw tasks list --status blocked` to find these tasks. They also remain
+in `--status succeeded` results because the underlying execution succeeded, and
+JSON output preserves the stored status plus the `blocked` terminal outcome.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
@@ -405,8 +410,16 @@ A sweeper runs every **60 seconds** (first pass about 5 seconds after gateway st
     A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
-    A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
-  </Accordion>
+A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.
+
+When execution identity collection is enabled, OpenClaw also binds the exact
+admitted `contextId` and `executionId` to Gateway CLI, ACP, and automation task
+rows and their mirrored flow rows. This is inspection provenance only: `runId`
+remains correlation, task/flow status remains authoritative, and a missing or
+mismatched binding never changes execution or settlement. `openclaw audit
+--execution <id> --explain` adapts the existing rows without copying task or
+flow content into the generic decision-fact table.
+</Accordion>
 </AccordionGroup>
 
 ## Related

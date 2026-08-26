@@ -106,6 +106,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-methods-isolated.config.ts",
       "test/vitest/vitest.gateway-server.config.ts",
       "test/vitest/vitest.gateway-server-isolated.config.ts",
       "test/vitest/vitest.cli-process.config.ts",

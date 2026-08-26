@@ -26,6 +26,19 @@ function configResponse(config: Record<string, unknown>, hash: string) {
   };
 }
 
+function configuredCloudWorkerProfile(backend = "aws") {
+  return {
+    provider: "crabbox",
+    install: "bundle",
+    settings: {
+      provider: backend,
+      class: "standard",
+      ttl: "8h",
+      idleTimeout: "45m",
+    },
+  };
+}
+
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   if (!isRecord(request.params) || typeof request.params.raw !== "string") {
     throw new Error("Expected config.patch params");
@@ -386,20 +399,22 @@ suite.define(() => {
     }
   });
 
-  it("deletes a profile only after confirmation", async () => {
+  it("deletes a profile and its project defaults only after confirmation", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
-    const pending = {
-      provider: "crabbox",
-      install: "bundle",
-      settings: {
-        provider: "aws",
-        class: "standard",
-        ttl: "8h",
-        idleTimeout: "45m",
+    const pending = configuredCloudWorkerProfile();
+    const retained = configuredCloudWorkerProfile("hetzner");
+    const retainedProjectProfiles = { "github.com/acme/retained": "retained" };
+    const initialConfig = {
+      cloudWorkers: {
+        profiles: { pending, retained },
+        projectProfiles: {
+          "github.com/acme/app": "pending",
+          "github.com/acme/docs": "pending",
+          ...retainedProjectProfiles,
+        },
       },
     };
-    const initialConfig = { cloudWorkers: { profiles: { pending } } };
     const gateway = await installMockGateway(page, {
       featureMethods: ["config.patch", "environments.list"],
       methodResponses: {
@@ -407,7 +422,9 @@ suite.define(() => {
         "config.patch": {
           ok: true,
           hash: "cloud-workers-delete-2",
-          config: { cloudWorkers: { profiles: {} } },
+          config: {
+            cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
+          },
         },
         "environments.list": { environments: [], profiles: [] },
       },
@@ -429,9 +446,209 @@ suite.define(() => {
         throw new Error("Expected delete config.patch request");
       }
       expect(requestRaw(deleteRequest)).toEqual({
-        cloudWorkers: { profiles: { pending: null } },
+        cloudWorkers: {
+          profiles: { pending: null, retained },
+          projectProfiles: { "github.com/acme/app": null, "github.com/acme/docs": null },
+        },
       });
       await expect.poll(() => pendingRow.count()).toBe(0);
+      await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("deletes a confirmed profile after the Gateway reconnects during confirmation", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const pending = configuredCloudWorkerProfile();
+    const initialConfig = { cloudWorkers: { profiles: { pending } } };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["config.patch", "environments.list"],
+      methodResponses: {
+        "config.get": configResponse(initialConfig, "cloud-workers-delete-reconnect-1"),
+        "config.patch": {
+          ok: true,
+          hash: "cloud-workers-delete-reconnect-3",
+          config: { cloudWorkers: { profiles: {} } },
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      const pendingRow = page.locator(".settings-row").filter({
+        has: page.locator("code", { hasText: /^pending$/ }),
+      });
+      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      const confirmation = await waitForConfirmModal(page);
+      const socketCount = await gateway.getSocketCount();
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(initialConfig, "cloud-workers-delete-reconnect-2"),
+      );
+      await gateway.closeLatest(1012, "cloud worker delete confirmation reconnect proof");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(configGetCount);
+      await expect
+        .poll(() => pendingRow.getByRole("button", { name: "Delete" }).isEnabled())
+        .toBe(true);
+
+      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+      await expect.poll(() => pendingRow.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("rejects a confirmed deletion after same-URL Gateway credentials replace its client", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const initialConfig = {
+      cloudWorkers: { profiles: { pending: configuredCloudWorkerProfile() } },
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["config.patch", "environments.list"],
+      methodResponses: {
+        "config.get": configResponse(initialConfig, "cloud-workers-delete-client-replacement-1"),
+        "config.patch": {
+          ok: true,
+          hash: "cloud-workers-delete-client-replacement-2",
+          config: { cloudWorkers: { profiles: {} } },
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      const pendingRow = page.locator(".settings-row").filter({
+        has: page.locator("code", { hasText: /^pending$/ }),
+      });
+      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      const confirmation = await waitForConfirmModal(page);
+      const socketCount = await gateway.getSocketCount();
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      const originalGateway = await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              gateway: {
+                connection: { gatewayUrl: string };
+                connect: (options: { token: string }) => void;
+                snapshot: { client: { instanceId: string } | null };
+              };
+            };
+          };
+        };
+        const activeGateway = app.runtime?.context.gateway;
+        const client = activeGateway?.snapshot.client;
+        if (!activeGateway || !client) {
+          throw new Error("Expected a connected Gateway client before confirmation");
+        }
+        const identity = {
+          clientInstanceId: client.instanceId,
+          gatewayUrl: activeGateway.connection.gatewayUrl,
+        };
+        activeGateway.connect({ token: "replacement-credential-proof" });
+        return identity;
+      });
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(configGetCount);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: {
+                context: {
+                  gateway: {
+                    connection: { gatewayUrl: string };
+                    snapshot: { client: { instanceId: string } | null; phase: string };
+                  };
+                };
+              };
+            };
+            const activeGateway = app.runtime?.context.gateway;
+            return {
+              clientInstanceId: activeGateway?.snapshot.client?.instanceId,
+              gatewayUrl: activeGateway?.connection.gatewayUrl,
+              phase: activeGateway?.snapshot.phase,
+            };
+          }),
+        )
+        .toMatchObject({ gatewayUrl: originalGateway.gatewayUrl, phase: "connected" });
+      const replacementClientInstanceId = await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: { gateway: { snapshot: { client: { instanceId: string } } } } };
+        };
+        return app.runtime?.context.gateway.snapshot.client.instanceId;
+      });
+      expect(replacementClientInstanceId).not.toBe(originalGateway.clientInstanceId);
+      await expect
+        .poll(() => pendingRow.getByRole("button", { name: "Delete" }).isEnabled())
+        .toBe(true);
+
+      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect
+        .poll(async () => ({
+          alerts: await page.getByRole("alert").count(),
+          patches: (await gateway.getRequests("config.patch")).length,
+        }))
+        .not.toEqual({ alerts: 0, patches: 0 });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await expect
+        .poll(async () => page.getByRole("alert").textContent())
+        .toBe("The profile was not deleted. Reload the config and try again.");
+      await pendingRow.waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reports a confirmed deletion that cannot run while Gateway config is reconnecting", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const initialConfig = {
+      cloudWorkers: { profiles: { pending: configuredCloudWorkerProfile() } },
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["config.patch", "environments.list"],
+      methodResponses: {
+        "config.get": configResponse(initialConfig, "cloud-workers-delete-offline-1"),
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      const pendingRow = page.locator(".settings-row").filter({
+        has: page.locator("code", { hasText: /^pending$/ }),
+      });
+      await pendingRow.getByRole("button", { name: "Delete" }).click();
+      const confirmation = await waitForConfirmModal(page);
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("config.get");
+      await gateway.closeLatest(1012, "cloud worker delete unavailable reconnect proof");
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(configGetCount);
+
+      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect
+        .poll(async () => page.getByRole("alert").textContent())
+        .toBe("The profile was not deleted. Reload the config and try again.");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await pendingRow.waitFor();
     } finally {
       await context.close();
     }
