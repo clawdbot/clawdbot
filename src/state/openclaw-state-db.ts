@@ -223,7 +223,7 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
           if (migrateJsonCanonicalWideRowsV13(db, previousVersion)) {
-            applied.push("Made cron jobs and subagent runs JSON-canonical (v13)");
+            applied.push("Consolidated shared state tables (v13)");
           }
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,

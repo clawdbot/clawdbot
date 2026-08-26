@@ -193,6 +193,105 @@ CREATE INDEX idx_subagent_runs_archive_at
 CREATE INDEX idx_subagent_runs_ended_cleanup
   ON subagent_runs(ended_at, cleanup_handled, run_id);
 
+CREATE TABLE workspace_attestations (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  attested_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms)
+SELECT workspace_key, attested_at_ms, attestation_updated_at_ms
+FROM workspace_setup_state
+WHERE attested_at_ms IS NOT NULL;
+
+CREATE INDEX idx_workspace_attestations_attested
+  ON workspace_attestations(attested_at_ms DESC, workspace_key);
+
+-- Data note: v12 requires version/updated_at NOT NULL, so merged
+-- attestation-only rows (NULL version) cannot survive the downgrade; drop
+-- them and their generated hashes.
+DELETE FROM workspace_generated_bootstrap_hashes
+WHERE workspace_key IN (SELECT workspace_key FROM workspace_setup_state WHERE version IS NULL);
+DELETE FROM workspace_setup_state WHERE version IS NULL;
+
+CREATE TABLE workspace_setup_state_migration_v12 (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  workspace_path TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  bootstrap_seeded_at TEXT,
+  setup_completed_at TEXT,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO workspace_setup_state_migration_v12 (
+  workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+)
+SELECT workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+FROM workspace_setup_state;
+
+DROP TABLE workspace_setup_state;
+ALTER TABLE workspace_setup_state_migration_v12 RENAME TO workspace_setup_state;
+
+CREATE INDEX idx_workspace_setup_state_path
+  ON workspace_setup_state(workspace_path);
+
+CREATE TABLE workspace_generated_bootstrap_hashes_migration_v12 (
+  workspace_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (workspace_key, filename),
+  FOREIGN KEY (workspace_key) REFERENCES workspace_attestations(workspace_key) ON DELETE CASCADE
+) STRICT;
+
+INSERT INTO workspace_generated_bootstrap_hashes_migration_v12 (workspace_key, filename, sha256)
+SELECT workspace_key, filename, sha256 FROM workspace_generated_bootstrap_hashes;
+
+DROP TABLE workspace_generated_bootstrap_hashes;
+ALTER TABLE workspace_generated_bootstrap_hashes_migration_v12
+  RENAME TO workspace_generated_bootstrap_hashes;
+
+-- v12 carried installed_plugin_index; repopulate it from the folded KV row.
+CREATE TABLE IF NOT EXISTS installed_plugin_index (
+  index_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  host_contract_version TEXT NOT NULL,
+  compat_registry_version TEXT NOT NULL,
+  migration_version INTEGER NOT NULL,
+  policy_hash TEXT NOT NULL,
+  generated_at_ms INTEGER NOT NULL,
+  workspace_dir TEXT,
+  refresh_reason TEXT,
+  install_records_json TEXT NOT NULL,
+  plugins_json TEXT NOT NULL,
+  diagnostics_json TEXT NOT NULL,
+  warning TEXT,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
+  ON installed_plugin_index(generated_at_ms DESC, index_key);
+INSERT INTO installed_plugin_index (
+  index_key, version, host_contract_version, compat_registry_version,
+  migration_version, policy_hash, generated_at_ms, workspace_dir, refresh_reason,
+  install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+)
+SELECT 'installed-plugin-index',
+       json_extract(value_json, '$.index.version'),
+       json_extract(value_json, '$.index.hostContractVersion'),
+       json_extract(value_json, '$.index.compatRegistryVersion'),
+       json_extract(value_json, '$.index.migrationVersion'),
+       json_extract(value_json, '$.index.policyHash'),
+       json_extract(value_json, '$.index.generatedAtMs'),
+       json_extract(value_json, '$.index.workspaceDir'),
+       json_extract(value_json, '$.index.refreshReason'),
+       json_extract(value_json, '$.index.installRecords'),
+       json_extract(value_json, '$.index.plugins'),
+       json_extract(value_json, '$.index.diagnostics'),
+       json_extract(value_json, '$.index.warning'),
+       json_extract(value_json, '$.revision')
+  FROM config_machine_state
+ WHERE state_key = 'plugins.installedIndex';
+DELETE FROM config_machine_state WHERE state_key = 'plugins.installedIndex';
+
 PRAGMA user_version = 12;
 UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
 COMMIT;

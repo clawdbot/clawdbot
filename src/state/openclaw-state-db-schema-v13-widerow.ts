@@ -114,14 +114,17 @@ export function migrateJsonCanonicalWideRowsV13(
     rebuildJsonCanonicalTable(db, "cron_jobs");
     migrated = true;
   }
-  if (tableExists(db, "workspace_attestations")) {
-    // Order matters: grow the old table first, rebuild to the canonical shape
-    // (relaxing version/updated_at to nullable), then merge attestation data.
-    if (!tableHasColumn(db, "workspace_setup_state", "attested_at_ms")) {
-      db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attested_at_ms INTEGER;");
-      db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attestation_updated_at_ms INTEGER;");
-    }
+  const hasSetupState = tableExists(db, "workspace_setup_state");
+  const hasAttestations = tableExists(db, "workspace_attestations");
+  if (hasSetupState && !tableHasColumn(db, "workspace_setup_state", "attested_at_ms")) {
+    // Grow the old table, then rebuild to the canonical merged shape (version
+    // and updated_at relax to nullable so attestation-only rows can exist).
+    db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attested_at_ms INTEGER;");
+    db.exec("ALTER TABLE workspace_setup_state ADD COLUMN attestation_updated_at_ms INTEGER;");
     rebuildJsonCanonicalTable(db, "workspace_setup_state");
+    migrated = true;
+  }
+  if (hasAttestations) {
     db.exec(`
       UPDATE workspace_setup_state
          SET attested_at_ms = (
@@ -154,20 +157,30 @@ export function migrateJsonCanonicalWideRowsV13(
                 WHERE alias.workspace_key = a.workspace_key
              );
     `);
+    db.exec("DROP TABLE workspace_attestations;");
+    migrated = true;
+  }
+  if (
+    (hasSetupState || hasAttestations) &&
+    tableExists(db, "workspace_generated_bootstrap_hashes")
+  ) {
+    // Repoint the FK to the merged table and drop hashes whose owner row is gone.
     rebuildJsonCanonicalTable(db, "workspace_generated_bootstrap_hashes");
     db.exec(`
       DELETE FROM workspace_generated_bootstrap_hashes
        WHERE workspace_key NOT IN (SELECT workspace_key FROM workspace_setup_state);
     `);
-    db.exec("DROP TABLE workspace_attestations;");
-    migrated = true;
   }
   if (tableExists(db, "installed_plugin_index")) {
     // Fold the singleton index row (revision lived in updated_at_ms) into the KV.
+    // workspace_dir was a same-version additive column; pre-addition rows lack it.
+    const workspaceDirColumn = tableHasColumn(db, "installed_plugin_index", "workspace_dir")
+      ? "workspace_dir"
+      : "NULL AS workspace_dir";
     const row = db
       .prepare(
         `SELECT version, warning, host_contract_version, compat_registry_version,
-                migration_version, policy_hash, generated_at_ms, workspace_dir,
+                migration_version, policy_hash, generated_at_ms, ${workspaceDirColumn},
                 refresh_reason, install_records_json, plugins_json, diagnostics_json,
                 updated_at_ms
            FROM installed_plugin_index

@@ -2175,6 +2175,39 @@ describe("openclaw state database", () => {
           "legacy-requester",
           "keep",
         );
+      legacy
+        .prepare(
+          `INSERT INTO workspace_setup_state (
+             workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at,
+             updated_at
+           ) VALUES (?, ?, 1, ?, ?, ?)`,
+        )
+        .run(
+          "wk-setup",
+          "/tmp/wk-setup",
+          "2026-07-15T10:00:00.000Z",
+          "2026-07-15T10:01:00.000Z",
+          500,
+        );
+      const insertLegacyAttestation = legacy.prepare(
+        "INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms) VALUES (?, ?, ?)",
+      );
+      insertLegacyAttestation.run("wk-setup", 1_000, 1_100);
+      insertLegacyAttestation.run("wk-alias", 2_000, 2_100);
+      insertLegacyAttestation.run("wk-orphan", 3_000, 3_100);
+      legacy
+        .prepare(
+          `INSERT INTO workspace_path_aliases (
+             alias_key, alias_path, workspace_key, workspace_path, updated_at_ms
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("wk-alias-link", "/tmp/wk-alias-link", "wk-alias", "/tmp/wk-alias", 2_200);
+      const insertLegacyHash = legacy.prepare(
+        "INSERT INTO workspace_generated_bootstrap_hashes (workspace_key, filename, sha256) VALUES (?, ?, ?)",
+      );
+      insertLegacyHash.run("wk-setup", "AGENTS.md", "a".repeat(64));
+      insertLegacyHash.run("wk-alias", "TOOLS.md", "b".repeat(64));
+      insertLegacyHash.run("wk-orphan", "USER.md", "c".repeat(64));
       legacy.close();
 
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
@@ -2183,7 +2216,7 @@ describe("openclaw state database", () => {
       });
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Made cron jobs and subagent runs JSON-canonical (v13)"],
+          changes: ["Consolidated shared state tables (v13)"],
           warnings: [],
         });
       }
@@ -2296,6 +2329,54 @@ describe("openclaw state database", () => {
         created_at: 200,
         payload_json: JSON.stringify(runPayload),
       });
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT workspace_key, workspace_path, version, bootstrap_seeded_at,
+                    setup_completed_at, updated_at, attested_at_ms, attestation_updated_at_ms
+               FROM workspace_setup_state ORDER BY workspace_key`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          workspace_key: "wk-alias",
+          workspace_path: "/tmp/wk-alias",
+          version: null,
+          bootstrap_seeded_at: null,
+          setup_completed_at: null,
+          updated_at: null,
+          attested_at_ms: 2_000,
+          attestation_updated_at_ms: 2_100,
+        },
+        {
+          workspace_key: "wk-setup",
+          workspace_path: "/tmp/wk-setup",
+          version: 1,
+          bootstrap_seeded_at: "2026-07-15T10:00:00.000Z",
+          setup_completed_at: "2026-07-15T10:01:00.000Z",
+          updated_at: 500,
+          attested_at_ms: 1_000,
+          attestation_updated_at_ms: 1_100,
+        },
+      ]);
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT workspace_key, filename, sha256 FROM workspace_generated_bootstrap_hashes
+              ORDER BY workspace_key`,
+          )
+          .all(),
+      ).toEqual([
+        { workspace_key: "wk-alias", filename: "TOOLS.md", sha256: "b".repeat(64) },
+        { workspace_key: "wk-setup", filename: "AGENTS.md", sha256: "a".repeat(64) },
+      ]);
+      expect(
+        migrated.db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_attestations'",
+          )
+          .all(),
+      ).toEqual([]);
       expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     },
@@ -2536,8 +2617,8 @@ describe("openclaw state database", () => {
         "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
-        "Made cron jobs and subagent runs JSON-canonical (v13)",
-        "Migrated shared state tables to SQLite STRICT typing (52)",
+        "Consolidated shared state tables (v13)",
+        "Migrated shared state tables to SQLite STRICT typing (50)",
       ],
       warnings: [],
     });
@@ -3829,36 +3910,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ).toEqual([{ task_id: "task-index-repair" }]);
     },
   );
-
-  it("appends the same-version plugin workspace column before schema validation", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const shippedSchema = new DatabaseSync(databasePath);
-    try {
-      shippedSchema.exec(`
-        ALTER TABLE installed_plugin_index DROP COLUMN workspace_dir;
-      `);
-      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-    } finally {
-      shippedSchema.close();
-    }
-
-    const reopened = openOpenClawStateDatabase({ env });
-    const columns = reopened.db
-      .prepare("PRAGMA table_info(installed_plugin_index)")
-      .all() as Array<{
-      name: string;
-    }>;
-    expect(columns.map((column) => column.name)).toContain("workspace_dir");
-    expect(() =>
-      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
-    ).not.toThrow();
-  });
 
   it("installs same-version worker session tool tables before runtime schema validation", () => {
     const stateDir = createTempStateDir();
