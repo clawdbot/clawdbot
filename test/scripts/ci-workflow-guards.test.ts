@@ -1124,39 +1124,6 @@ function runQaSelectedRefValidation(
   return { ...result, outputs: readWorkflowOutputs(githubOutput) };
 }
 
-function runMaturitySelectedRefValidation(params: {
-  topology: ReturnType<typeof createQaProtocolTopology>;
-  expectedSha: string;
-  revision: string;
-  successorAttempt: string;
-}) {
-  runGit(params.topology.checkout, ["checkout", "-q", "--detach", params.revision]);
-  const githubOutput = path.join(params.topology.checkout, "github-output");
-  rmSync(githubOutput, { force: true });
-  const validateStep = expectDefined(
-    readMaturityScorecardWorkflow().jobs.validate_selected_ref.steps.find(
-      (step: WorkflowStep) => step.name === "Validate selected ref",
-    ),
-    "maturity selected-ref validation step",
-  );
-  const result = runWorkflowShellScript(expectDefined(validateStep.run, "validation script"), {
-    cwd: params.topology.checkout,
-    env: {
-      ...process.env,
-      DEFAULT_BRANCH: "main",
-      EVIDENCE_RUN_ID: "42",
-      EXPECTED_SHA: params.expectedSha,
-      GITHUB_OUTPUT: githubOutput,
-      GITHUB_STEP_SUMMARY: path.join(params.topology.checkout, "github-summary"),
-      INPUT_REF: "main",
-      PATH: `${params.topology.fakeBin}:${process.env.PATH ?? ""}`,
-      PUBLISH_PULL_REQUEST: "false",
-      SUCCESSOR_ATTEMPT: params.successorAttempt,
-    },
-  });
-  return { ...result, outputs: readWorkflowOutputs(githubOutput) };
-}
-
 function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
@@ -1361,6 +1328,7 @@ function runGeneratedPublisherScenario(
     existingPr?: boolean;
     expectFailure?: boolean;
     failGeneratedPush?: boolean;
+    invalidationPaths?: string;
     mergeGeneratedPush?: boolean;
     noGeneratedChange?: boolean;
     overlapPolicy?: string;
@@ -1528,7 +1496,7 @@ ${actionRun}`;
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
         FAKE_STALE_PR_VIEW_HEAD_ONCE: stalePrViewHeadOnce,
         GENERATED_PATHS: "generated",
-        INVALIDATION_PATHS: "source",
+        INVALIDATION_PATHS: options.invalidationPaths ?? "source",
         OVERLAP_POLICY: options.overlapPolicy ?? "defer",
         CONTENTS_TOKEN: "contents-token",
         GH_TOKEN: "test-token",
@@ -2427,6 +2395,11 @@ NODE
     expect(actionPublishStep.env.CONTENTS_TOKEN).toBe("${{ steps.tokens.outputs.contents-token }}");
     expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.tokens.outputs.pull-request-token }}");
     expect(actionPublishStep.env.INVALIDATION_PATHS).toBe("${{ inputs.invalidation-paths }}");
+    expect(publishAction.inputs["invalidation-paths"]).toEqual({
+      description: "Newline-delimited generator input paths that make an older run stale.",
+      required: false,
+      default: "",
+    });
     expect(publishAction.inputs["working-directory"]).toEqual({
       description: "Repository root containing the generated files.",
       required: false,
@@ -2614,37 +2587,6 @@ NODE
     }
   });
 
-  it("refreezes a queued maturity successor only across a forward main advance", () => {
-    const topology = createQaProtocolTopology();
-    const currentMain = runGit(topology.origin, ["rev-parse", "main"]);
-    const successor = runMaturitySelectedRefValidation({
-      topology,
-      expectedSha: topology.mainBase,
-      revision: currentMain,
-      successorAttempt: "1",
-    });
-    expect(successor.status, successor.stderr).toBe(0);
-    expect(successor.outputs.selected_revision).toBe(currentMain);
-
-    const initial = runMaturitySelectedRefValidation({
-      topology,
-      expectedSha: topology.mainBase,
-      revision: currentMain,
-      successorAttempt: "0",
-    });
-    expect(initial.status).not.toBe(0);
-    expect(initial.stderr).toContain(`expected ${topology.mainBase}`);
-
-    const divergent = runMaturitySelectedRefValidation({
-      topology,
-      expectedSha: topology.featureHead,
-      revision: currentMain,
-      successorAttempt: "1",
-    });
-    expect(divergent.status).not.toBe(0);
-    expect(divergent.stderr).toContain(`expected ${topology.featureHead}`);
-  });
-
   it.skipIf(process.platform === "win32")(
     "enables auto-merge for the exact generated pull request head",
     () => {
@@ -2802,6 +2744,21 @@ NODE
         "Deferred stale generated output because generator inputs changed on main.",
       );
       expect(result.summary).toContain("Neutralized stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "publishes after unrelated source changes when input invalidation is disabled",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        invalidationPaths: "",
+        overlapPolicy: "fail",
+        updateSource: true,
+      });
+
+      expect(result.branchExists).toBe(true);
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.publishOutput).not.toContain("Refusing stale generated output");
     },
   );
 
@@ -9092,21 +9049,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
     expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
-    expect(publishPrJob.permissions).toEqual({ actions: "write", contents: "read" });
-    expect(maturityWorkflow.on.workflow_dispatch.inputs.successor_attempt).toEqual({
-      description: "Internal bounded retry count for stale generated output",
-      required: false,
-      default: "0",
-      type: "string",
-    });
-    expect(maturityWorkflow.on.workflow_call.inputs.successor_attempt).toEqual(
-      maturityWorkflow.on.workflow_dispatch.inputs.successor_attempt,
-    );
-    const validateSelectedRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
-      (step: WorkflowStep) => step.name === "Validate selected ref",
-    );
-    expect(validateSelectedRefStep.env.SUCCESSOR_ATTEMPT).toBe("${{ inputs.successor_attempt }}");
-    expect(validateSelectedRefStep.run).toContain('[[ ! "$SUCCESSOR_ATTEMPT" =~ ^[0-2]$ ]]');
+    expect(publishPrJob.permissions).toEqual({ actions: "read", contents: "read" });
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",
       "needs.publish.result == 'success'",
@@ -9163,17 +9106,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "working-directory": "selected",
       "commit-message": "docs: update maturity scorecard",
       "pr-title": "docs: update maturity scorecard",
-      "overlap-policy": "defer",
+      "invalidation-paths": "",
+      "overlap-policy": "fail",
     });
     expect(openDocsPrStep.with["generated-paths"].trim().split("\n")).toEqual(
       MATURITY_GENERATED_PR_PATHS,
     );
-    expect(openDocsPrStep.with["invalidation-paths"].trim().split("\n")).toEqual([
-      ".",
-      ":(exclude)qa/maturity-scores.yaml",
-      ":(exclude)docs/maturity/scorecard.md",
-      ":(exclude)docs/maturity/taxonomy.md",
-    ]);
     for (const heading of [
       "## What Problem This Solves",
       "## Why This Change Was Made",
@@ -9182,24 +9120,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]) {
       expect(openDocsPrStep.with["pr-body"]).toContain(heading);
     }
-    const successorStep = publishPrJob.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch latest-base successor",
-    );
-    expect(successorStep).toMatchObject({
-      env: {
-        ALLOW_FAILURES: "${{ inputs.allow_failures }}",
-        BASE_BRANCH: "${{ needs.validate_selected_ref.outputs.publication_base }}",
-        GH_TOKEN: "${{ github.token }}",
-        SOURCE_SHA: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-        SUCCESSOR_ATTEMPT: "${{ inputs.successor_attempt }}",
-      },
-      "working-directory": "selected",
-    });
-    expect(successorStep.run).toContain("max_successor_attempts=2");
-    expect(successorStep.run).toContain("gh workflow run maturity-scorecard.yml");
-    expect(successorStep.run).toContain('-f expected_sha="$latest_sha"');
-    expect(successorStep.run).toContain('-f successor_attempt="$next_attempt"');
-    expect(successorStep.run).toContain("remained stale after");
     expect(publishPrJob.steps).not.toContainEqual(
       expect.objectContaining({ name: "Create generated docs PR app token" }),
     );
