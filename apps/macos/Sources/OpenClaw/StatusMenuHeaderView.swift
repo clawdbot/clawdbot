@@ -74,7 +74,16 @@ struct StatusMenuHeaderView: View {
         }
     }
 
+    @ViewBuilder
     private var statusSummary: some View {
+        // Unconfigured installs already carry the sessions-section explainer;
+        // a red "Gateway error" line here would shout at a fresh install.
+        if self.state.connectionMode != .unconfigured {
+            self.configuredStatusSummary
+        }
+    }
+
+    private var configuredStatusSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
             let health = self.healthStatus
             let endpoint = self.endpointHost
