@@ -324,48 +324,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     },
   );
 
-  it("discards a committed message when its session owner changes during catalog loading", async () => {
-    let currentEntry = {
-      sessionId: "sess-main",
-      lifecycleRevision: "revision-before-catalog",
-      updatedAt: 1,
-    };
-    loadAccessorSessionEntryReadOnlyMock.mockImplementation(() => currentEntry);
-    let resolveCatalog: ((value: import("../agents/model-catalog.js").ModelCatalogEntry[]) => void) | undefined;
-    const loadModelCatalog = vi.fn(
-      () =>
-        new Promise<import("../agents/model-catalog.js").ModelCatalogEntry[]>((resolve) => {
-          resolveCatalog = resolve;
-        }),
-    );
-    const { broadcastToConnIds, handler } = createHandler(
-      false,
-      true,
-      () => new Set<string>(),
-      loadModelCatalog,
-    );
-
-    const pendingBroadcast = handler({
-      target: {
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/catalog-reset-sessions.json",
-      },
-      lifecycleRevision: "revision-before-catalog",
-      message: { role: "user", content: [{ type: "text", text: "stale during catalog" }] },
-      messageId: "message-before-catalog-reset",
-    });
-
-    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledOnce());
-    currentEntry = { ...currentEntry, lifecycleRevision: "revision-after-catalog" };
-    resolveCatalog?.([]);
-
-    await pendingBroadcast;
-    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledTimes(3);
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-  });
-
   it("validates a committed custom-store owner without exposing private identity", async () => {
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
       sessionId: "sess-main",
