@@ -658,6 +658,7 @@ describe("raw trusted delegate task echoes", () => {
       sessionKey: "session-raw-over-limit",
       eventFragment: "maxDelegatesPerTurn exceeded",
       run: async (sessionKey: string) => {
+        enqueuePendingDelegate(sessionKey, { task: "accepted first" });
         enqueuePendingDelegate(sessionKey, { task: ROLE_MARKED_DELEGATE_TASK });
 
         const result = await dispatchToolDelegates({
@@ -670,11 +671,10 @@ describe("raw trusted delegate task echoes", () => {
           ctx: { sessionKey },
           maxChainLength: 10,
           config: continuationConfig({ maxDelegatesPerTurn: 1 }),
-          reservedDelegateSlots: 1,
         });
 
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ dispatched: 1, rejected: 1 });
+        expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
       },
     },
     {

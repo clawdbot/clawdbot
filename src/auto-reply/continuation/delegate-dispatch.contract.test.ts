@@ -476,8 +476,8 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("honors resolved run config and delegate slots already consumed this turn", async () => {
-    const sessionKey = "session-delegate-cap-reserved";
+  it("honors the resolved run delegate cap", async () => {
+    const sessionKey = "session-delegate-cap";
     for (let index = 0; index < 3; index++) {
       enqueuePendingDelegate(sessionKey, { task: `delegate-${index}` });
     }
@@ -499,15 +499,14 @@ describe("tool delegate dispatch contract", () => {
         crossSessionTargeting: "disabled",
         earlyWarningBand: 0.3125,
       },
-      reservedDelegateSlots: 1,
     });
 
-    expect(result.dispatched).toBe(1);
-    expect(result.rejected).toBe(2);
-    expect(result.chainState.currentChainCount).toBe(1);
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(result.dispatched).toBe(2);
+    expect(result.rejected).toBe(1);
+    expect(result.chainState.currentChainCount).toBe(2);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("maxDelegatesPerTurn exceeded (2). Task: delegate-1"),
+      expect.stringContaining("maxDelegatesPerTurn exceeded (2). Task: delegate-2"),
       { sessionKey, trusted: true },
     );
   });

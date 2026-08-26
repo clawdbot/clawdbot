@@ -19,7 +19,6 @@ const registryRuntimeMock = vi.hoisted(() => ({
   countActiveDescendantRuns: vi.fn(() => 0),
   countPendingDescendantRuns: vi.fn(() => 0),
   countPendingDescendantRunsExcludingRun: vi.fn(() => 0),
-  listAncestorSessionKeys: vi.fn((_sessionKey: string): string[] => []),
   listSubagentRunsForRequester: vi.fn(() => []),
   replaceSubagentRunAfterSteer: vi.fn(() => true),
   resolveRequesterForChildSession: vi.fn(() => null),
@@ -136,7 +135,6 @@ describe("subagent announce targeted continuation return integration", () => {
       .mockReturnValue(false);
     registryRuntimeMock.isSubagentSessionRunActive.mockReset().mockReturnValue(true);
     registryRuntimeMock.countPendingDescendantRuns.mockReset().mockReturnValue(0);
-    registryRuntimeMock.listAncestorSessionKeys.mockReset().mockReturnValue([]);
     registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
     registryRuntimeMock.resolveRequesterForChildSession.mockReset().mockReturnValue(null);
   });
@@ -257,10 +255,6 @@ describe("subagent announce targeted continuation return integration", () => {
       const nonce = "TREE-TARGETED-RETURN-NONCE-641";
       const requesterSessionKey = "agent:main:subagent:dispatcher-tree";
       const rootSessionKey = "agent:main:root-tree";
-      registryRuntimeMock.listAncestorSessionKeys.mockReturnValueOnce([
-        requesterSessionKey,
-        rootSessionKey,
-      ]);
       registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
       registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
         (sessionKey: string) => sessionKey === requesterSessionKey,
@@ -281,6 +275,7 @@ describe("subagent announce targeted continuation return integration", () => {
         roundOneReply: `delegate completed with ${nonce}`,
         silentAnnounce: true,
         wakeOnReturn: true,
+        continuationTargetSessionKeys: [requesterSessionKey, rootSessionKey],
         continuationFanoutMode: "tree",
       });
 
@@ -292,7 +287,6 @@ describe("subagent announce targeted continuation return integration", () => {
       expect(registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession).toHaveBeenCalledWith(
         rootSessionKey,
       );
-      expect(registryRuntimeMock.listAncestorSessionKeys).toHaveBeenCalledWith(requesterSessionKey);
 
       const persisted = await readQueuedSystemEventDeliveries(stateDir);
       expect(persisted).toHaveLength(1);
@@ -445,7 +439,6 @@ describe("subagent announce targeted continuation return integration", () => {
     await withTestDir({ prefix: "openclaw-targeted-return-empty-tree-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const requesterSessionKey = "agent:main:subagent:cleaned-tree";
-      registryRuntimeMock.listAncestorSessionKeys.mockReturnValueOnce([requesterSessionKey]);
       registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValueOnce(true);
 
       const didAnnounce = await runSubagentAnnounceFlow({
@@ -463,6 +456,7 @@ describe("subagent announce targeted continuation return integration", () => {
         roundOneReply: "delegate completed",
         silentAnnounce: true,
         wakeOnReturn: true,
+        continuationTargetSessionKeys: [requesterSessionKey],
         continuationFanoutMode: "tree",
       });
 
@@ -482,10 +476,6 @@ describe("subagent announce targeted continuation return integration", () => {
       const nonce = "POST-COMPACTION-TREE-RETURN-NONCE-642";
       const requesterSessionKey = "agent:main:post-compacted";
       const rootSessionKey = "agent:main:post-root";
-      registryRuntimeMock.listAncestorSessionKeys.mockReturnValueOnce([
-        requesterSessionKey,
-        rootSessionKey,
-      ]);
 
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: "agent:main:subagent:post-compaction-tree",
@@ -504,6 +494,7 @@ describe("subagent announce targeted continuation return integration", () => {
         roundOneReply: `post-compaction delegate completed with ${nonce}`,
         silentAnnounce: true,
         wakeOnReturn: true,
+        continuationTargetSessionKeys: [requesterSessionKey, rootSessionKey],
         continuationFanoutMode: "tree",
       });
 

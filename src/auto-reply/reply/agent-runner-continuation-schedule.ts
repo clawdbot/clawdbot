@@ -76,11 +76,6 @@ export async function scheduleReplyContinuation(context: {
       },
       maxChainLength: liveContinuationRuntimeConfig.maxChainLength,
       config: liveContinuationRuntimeConfig,
-      reservedDelegateSlots:
-        effectiveContinuationSignal?.kind === "delegate" &&
-        (effectiveContinuationSignal.delayMs ?? 0) <= 0
-          ? 1
-          : 0,
       // Pass a fresh-loader so the hedge timer re-loads the chain state
       // from the persisted session entry at fire time.
       loadFreshChainState: () => loadContinuationChainState(activeSessionEntry, 0),

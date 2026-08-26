@@ -20,11 +20,6 @@ export type DelegateDispatchParams = {
    */
   config?: ContinuationRuntimeConfig;
   /**
-   * Delegate slots already consumed by another continuation signal in the same
-   * turn, e.g. a bracket-style CONTINUE_DELEGATE.
-   */
-  reservedDelegateSlots?: number;
-  /**
    * Optional callback the hedge timer invokes to re-load the chain state
    * from the persisted session entry at fire time.
    */
