@@ -89,7 +89,7 @@ describe("Mattermost send action loopback", () => {
     );
   });
 
-  it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
+  it("sends text with blank attachment placeholders and rejects unsupported payloads", async () => {
     const requests: Array<{ path: string; body: unknown }> = [];
 
     await withServer(
@@ -169,6 +169,30 @@ describe("Mattermost send action loopback", () => {
           }),
         ).rejects.toThrow("buffer/base64 payloads are not supported");
         expect(requests).toHaveLength(1);
+
+        requests.length = 0;
+        for (const attachment of [
+          { buffer: Buffer.from("binary attachment"), filename: "proof.bin" },
+          {
+            buffer: { type: "Buffer", data: [...Buffer.from("serialized attachment")] },
+            filename: "serialized.bin",
+          },
+        ]) {
+          await expect(
+            handleAction({
+              channel: "mattermost",
+              action: "send",
+              params: {
+                to: `channel:${CHANNEL_ID}`,
+                message: "must not degrade",
+                attachments: [attachment],
+              },
+              cfg,
+              accountId: "default",
+            }),
+          ).rejects.toThrow("buffer/base64 payloads are not supported");
+          expect(requests).toHaveLength(0);
+        }
       },
     );
   });
