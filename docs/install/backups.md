@@ -202,8 +202,10 @@ storage, with periodic snapshots so restores stay fast. Only changed pages
 leave the machine, which makes it the right tool when backups must not
 re-upload whole databases.
 
-OpenClaw's databases run in WAL mode, which is Litestream's one hard
-requirement. A minimal `litestream.yml` replicating the control-plane
+Litestream's one hard requirement is WAL mode, which OpenClaw uses on local
+filesystems; on network-backed storage such as NFS or SMB, OpenClaw falls
+back to rollback journaling, so verify with `PRAGMA journal_mode;` first.
+A minimal `litestream.yml` replicating the control-plane
 database and one agent database to an S3-compatible bucket:
 
 ```yaml
@@ -237,7 +239,16 @@ between an origin and a replica database and ships only changed pages,
 typically over SSH with the same binary installed on both ends. Unlike a raw
 file copy, it takes a read transaction on the origin, so pulling from a live
 database while the Gateway runs produces a consistent replica. WAL mode is
-required on the origin, which OpenClaw's databases already use.
+required on the origin. OpenClaw uses WAL on local filesystems but
+deliberately falls back to rollback journaling on network-backed storage
+such as NFS or SMB, so check the origin before relying on this path:
+
+```bash
+sqlite3 ~/.openclaw/state/openclaw.sqlite "PRAGMA journal_mode;"
+```
+
+If this prints anything other than `wal`, use one of the file-based paths
+above instead.
 
 The tool ships in the `sqlite-tools` binary bundles on the
 [SQLite download page](https://sqlite.org/download.html) and in the full
