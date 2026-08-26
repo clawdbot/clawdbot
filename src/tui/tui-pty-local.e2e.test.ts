@@ -13,12 +13,14 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
+import { withEnv } from "../test-utils/env.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
@@ -1587,7 +1589,13 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
-        const store = loadPersistedAuthProfileStore(agentDir);
+        const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
+          reloadSharedAuthStoreOwnership();
+          return loadAuthProfileStoreForRuntime(agentDir, {
+            readOnly: true,
+            syncExternalCli: false,
+          });
+        });
         const profile = store?.profiles[profileId];
         expect(profile?.type === "api_key").toBe(true);
         expect(profile?.provider === providerId).toBe(true);
