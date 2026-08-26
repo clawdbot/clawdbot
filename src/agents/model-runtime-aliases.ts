@@ -191,15 +191,11 @@ function resolveRuntimeAuthProvider(provider: string, params: RuntimeAuthAliasPa
 function resolveProfileRuntimeAlias(
   params: RuntimeAuthAliasParams & {
     provider: string;
-    profileId: string;
+    profileProvider: string | undefined;
   },
 ): string | undefined {
-  const profile = params.cfg?.auth?.profiles?.[params.profileId];
-  if (!profile?.provider) {
-    return undefined;
-  }
   const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(profile.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
   if (!provider || !profileProvider) {
     return undefined;
   }
@@ -225,36 +221,32 @@ function resolveCliRuntimeFromAuthProfile(
     agentId?: string;
   },
 ): string | undefined {
-  if (!params.cfg?.auth?.profiles) {
-    return undefined;
-  }
+  const configuredProfiles = params.cfg?.auth?.profiles ?? {};
+  // Login and auth-order commands own the credential store, not config metadata.
+  // Reuse its published snapshot without reopening SQLite on a request path.
+  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined,
+    resolveLegacyInheritedAuthDir(params.cfg ?? {}),
+  );
   if (params.authProfileId?.trim()) {
+    const profileId = params.authProfileId.trim();
     return resolveProfileRuntimeAlias({
       ...params,
       provider: params.provider,
-      profileId: params.authProfileId.trim(),
+      profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
     });
   }
 
   const provider = normalizeProviderId(params.provider);
   const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  // The persisted auth store owns the effective profile order once an operator sets
-  // one (`models auth order set`). Read it from the lifecycle-published snapshot and
-  // resolve precedence through the same helper resolveAuthProfileOrderWithMetadata
-  // uses, so alias routing and profile selection cannot disagree.
-  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
-    params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    resolveLegacyInheritedAuthDir(params.cfg),
-  );
   const selection = resolveExplicitAuthOrderSelection({
     storeOrder: store?.order,
-    configuredOrder: params.cfg.auth.order,
+    configuredOrder: params.cfg?.auth?.order,
     providerKey: provider,
     providerAuthKey,
   });
-  const orderedProfileIds = selection.directExplicitOrder ?? selection.aliasExplicitOrder ?? [];
-  for (const profileId of orderedProfileIds) {
-    const profile = params.cfg.auth.profiles[profileId];
+  for (const profileId of selection.order ?? []) {
+    const profile = configuredProfiles[profileId] ?? store?.profiles[profileId];
     if (!profile?.provider) {
       continue;
     }
@@ -265,16 +257,21 @@ function resolveCliRuntimeFromAuthProfile(
     return resolveProfileRuntimeAlias({
       ...params,
       provider,
-      profileId,
+      profileProvider: profile.provider,
     });
   }
 
-  if (selection.explicitOrderFromStore) {
-    // An authored stored order owns selection, including an explicitly empty one.
+  if (
+    selection.order !== undefined &&
+    (selection.order.length === 0 ||
+      selection.order.some((profileId) => store?.profiles[profileId] !== undefined))
+  ) {
+    // Keep empty orders and existing stored profiles authoritative. Only an order
+    // of missing profiles may use the canonical stale-profile repair below.
     return undefined;
   }
 
-  const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
+  const compatibleProfileIds = Object.entries(configuredProfiles)
     .filter(([, profile]) => {
       if (!profile?.provider) {
         return false;
@@ -290,7 +287,7 @@ function resolveCliRuntimeFromAuthProfile(
     ? resolveProfileRuntimeAlias({
         ...params,
         provider,
-        profileId,
+        profileProvider: configuredProfiles[profileId]?.provider,
       })
     : undefined;
 }

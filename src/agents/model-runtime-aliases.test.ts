@@ -5,7 +5,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./auth-profiles/runtime-snapshots.js";
-import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
@@ -95,11 +95,16 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     clearRuntimeAuthProfileStoreSnapshots();
   });
 
-  function seedStoredAuthOrder(order: string[], providerKey = "anthropic"): void {
+  function seedStoredAuthOrder(
+    order: string[],
+    providerKey = "anthropic",
+    profiles: AuthProfileStore["profiles"] = {},
+  ): void {
     setRuntimeAuthProfileStoreSnapshot({
-      profiles: {},
+      version: 1,
+      profiles,
       order: { [providerKey]: order },
-    } as unknown as RuntimeAuthProfileStore);
+    });
   }
 
   it("honors a stored auth order when config declares none", () => {
@@ -117,6 +122,28 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it.each(["order", "pin"])(
+    "routes a stored CLI profile selected by %s without config metadata",
+    (selection) => {
+      seedStoredAuthOrder(selection === "order" ? ["anthropic:claude-cli"] : [], "anthropic", {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "test-access",
+          refresh: "test-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
+      expect(
+        resolveCliRuntimeExecutionProvider({
+          provider: "anthropic",
+          modelId: "opus-4.7",
+          authProfileId: selection === "pin" ? "anthropic:claude-cli" : undefined,
+        }),
+      ).toBe("claude-cli");
+    },
+  );
+
   it("matches a stored order key that is not already canonically normalized", () => {
     // Persisted state only lowercases provider keys, and the canonical resolver
     // looks the order up through normalized provider matching rather than an exact
@@ -131,10 +158,45 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
-  it("treats an explicitly empty stored order as authoritative", () => {
-    // An authored empty order owns selection in resolveAuthProfileOrderWithMetadata,
-    // so alias routing must not fall through to the unique-compatible-profile pick.
-    seedStoredAuthOrder([]);
+  it("does not route a provider disabled by an explicitly empty configured order", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({ order: [], onlyCliProfile: true }),
+        provider: "anthropic",
+        modelId: "opus-4.7",
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each(["configured", "stored"])(
+    "repairs a %s order containing only deleted profiles",
+    (source) => {
+      if (source === "stored") {
+        seedStoredAuthOrder(["anthropic:deleted"]);
+      }
+      expect(
+        resolveCliRuntimeExecutionProvider({
+          cfg: createAnthropicAuthConfig({
+            order: source === "configured" ? ["anthropic:deleted"] : undefined,
+            onlyCliProfile: true,
+          }),
+          provider: "anthropic",
+          modelId: "opus-4.7",
+        }),
+      ).toBe("claude-cli");
+    },
+  );
+
+  it.each([
+    { name: "alone", order: ["anthropic:stored-api"] },
+    {
+      name: "before a configured CLI profile",
+      order: ["anthropic:stored-api", "anthropic:claude-cli"],
+    },
+  ])("keeps a stored profile missing from config authoritative $name", ({ order }) => {
+    seedStoredAuthOrder(order, "anthropic", {
+      "anthropic:stored-api": { type: "api_key", provider: "anthropic", key: "test-key" },
+    });
     expect(
       resolveCliRuntimeExecutionProvider({
         cfg: createAnthropicAuthConfig({ onlyCliProfile: true }),
