@@ -1811,6 +1811,75 @@ describe("prepareCliRunContext", () => {
     });
   });
 
+  it("drifts a resumed first-only session when truncation starts mid-session", async () => {
+    const { dir } = fixture.session;
+    const agentsPath = path.join(dir, "AGENTS.md");
+    const bootstrapContextFor = (injected: string) => ({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md" as const,
+          path: agentsPath,
+          content: "policy ".repeat(100),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: agentsPath, content: injected }],
+    });
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        systemPromptArg: "--system-prompt",
+        systemPromptWhen: "first",
+        sessionMode: "existing",
+        output: "text",
+        input: "arg",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(100))),
+    });
+    const firstTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn one",
+      runId: "run-truncation-drift-1",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+    });
+    expect(firstTurn.systemPrompt).not.toContain("[Bootstrap truncation warning]");
+    const untruncatedBinding = {
+      sessionId: "cli-session",
+      extraSystemPromptHash: firstTurn.extraSystemPromptHash,
+      cwdHash: hashCliSessionText(dir),
+    };
+
+    // AGENTS.md grows past the bootstrap cap between turns of the same session.
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: vi.fn(async () => bootstrapContextFor("policy ".repeat(10))),
+    });
+    const secondTurn = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig(),
+      prompt: "turn two",
+      runId: "run-truncation-drift-2",
+      trigger: "user",
+      extraSystemPrompt: "stable prompt",
+      cliSessionBinding: untruncatedBinding,
+    });
+
+    expect(secondTurn.systemPrompt).toContain("[Bootstrap truncation warning]");
+    expect(secondTurn.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
+  });
+
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir } = fixture.session;
     fixture.appendTranscript({
