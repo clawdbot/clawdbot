@@ -1093,7 +1093,7 @@ private func waitUntil(
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "operator") == nil)
     }
 
-    @Test @MainActor func `successful setup handoff enables target scoped auth`() throws {
+    @Test @MainActor func `successful setup handoff enables target scoped auth`() async throws {
         let previousStableID = "manual|previous.gateway.example.com|443"
         let stableID = "manual|new.gateway.example.com|443"
         let instanceID = "bootstrap-handoff-\(UUID().uuidString)"
@@ -1132,18 +1132,20 @@ private func waitUntil(
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let emptyIssuanceOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: [],
+        let emptyIssuanceOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: ([], []),
             nodeOptions: nodeOptions)
-        let operatorOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["operator"],
+        let operatorOnlyOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["operator"], ["operator"]),
             nodeOptions: nodeOptions)
-        let nodeOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["node"],
+        let nodeOnlyOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["node"], ["node"]),
             nodeOptions: nodeOptions)
         #expect(emptyIssuanceOptions == nil)
         #expect(operatorOnlyOptions == nil)
         #expect(nodeOnlyOptions == nil)
+        #expect(appModel.lastGatewayProblem?.owner == .gateway)
+        #expect(appModel.lastGatewayProblem?.title == "Gateway setup incomplete")
         #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "one-time-bootstrap")
         #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
             instanceId: instanceID,
@@ -1161,8 +1163,8 @@ private func waitUntil(
             gatewayID: stableID)
         let bootstrapOptions = nodeOptions
         appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
-        let completedOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["node", "operator"],
+        let completedOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["node", "operator"], ["node", "operator"]),
             nodeOptions: nodeOptions)
         nodeOptions = try #require(completedOptions)
 
@@ -1188,6 +1190,40 @@ private func waitUntil(
         #expect(appModel.currentGatewayReconnectOptions(
             stableID: stableID,
             fallback: bootstrapOptions).allowStoredDeviceAuth)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `incomplete setup distinguishes missing roles from failed storage`(receivedOperator: Bool) async throws {
+        let stableID = "manual|handoff.gateway.example.com|443"
+        let temporaryState = try TemporaryOpenClawState(instanceID: UUID().uuidString)
+        defer { temporaryState.restore() }
+        let options = Self.makeNodeOptions(allowStoredDeviceAuth: false, deviceAuthGatewayID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        try appModel.applyGatewayConnectConfig(GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: stableID,
+            tls: nil,
+            token: nil,
+            bootstrapToken: "one-time-bootstrap",
+            password: nil,
+            nodeOptions: options))
+
+        let received: Set<String> = receivedOperator ? ["node", "operator"] : ["node"]
+        let result = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (received, ["node"]),
+            nodeOptions: options)
+        let problem = try #require(appModel.lastGatewayProblem)
+        #expect(result == nil)
+        #expect(problem.owner == (receivedOperator ? .iphone : .gateway))
+        #expect(problem.title == (receivedOperator ? "Credential save failed" : "Gateway setup incomplete"))
+        #expect(problem.pauseReconnect)
+        #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "one-time-bootstrap")
+        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
+        if !receivedOperator {
+            #expect(problem.technicalDetails == "Gateway credential handoff missing roles: operator.")
+            #expect(problem.message.contains("new iPhone setup code"))
+        }
     }
 
     @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
