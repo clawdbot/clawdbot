@@ -29,6 +29,7 @@ import {
 } from "./config-cli-model-normalization.js";
 import {
   assertNonDestructiveReplacement,
+  formatConfigSetPath,
   getAtPath,
   mergeAtPath,
   setAtPath,
@@ -316,6 +317,10 @@ export async function runConfigOperations(params: {
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        ...(operation.pathTokens ? { pathTokens: operation.pathTokens } : {}),
+        ...(operation.quotedNumericSegments
+          ? { quotedNumericSegments: operation.quotedNumericSegments }
+          : {}),
         schema: mutationSchema,
       });
     } else {
@@ -327,6 +332,10 @@ export async function runConfigOperations(params: {
       });
       setAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        ...(operation.pathTokens ? { pathTokens: operation.pathTokens } : {}),
+        ...(operation.quotedNumericSegments
+          ? { quotedNumericSegments: operation.quotedNumericSegments }
+          : {}),
         schema: mutationSchema,
       });
     }
@@ -501,7 +510,12 @@ export async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
+    const requestedPath = formatConfigSetPath(
+      operation?.requestedPath ?? [],
+      operation?.pathTokens,
+      nextConfig,
+    );
+    runtime.log(info(`${action} ${requestedPath}. ${hint}`));
   } else if (params.successMode === "set") {
     runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
   } else {

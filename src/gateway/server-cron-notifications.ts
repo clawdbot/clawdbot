@@ -6,10 +6,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
+import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob } from "../cron/types.js";
@@ -19,7 +21,7 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
@@ -150,6 +152,20 @@ function appendCronRunStarted(
     timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
   });
   return timestamp ? `${message}\nRun started: ${timestamp}` : message;
+}
+
+function appendCronFailureAlertDetails(
+  message: string,
+  jobId: string,
+  runAtMs: number | undefined,
+  config: OpenClawConfig,
+): string {
+  const withRunStarted = appendCronRunStarted(message, runAtMs, config);
+  const inspectUrl = resolveControlUiAutomationRunUrl(config, {
+    jobId,
+    runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
+  });
+  return inspectUrl ? `${withRunStarted}\nInspect: ${inspectUrl}` : withRunStarted;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -313,7 +329,7 @@ function dispatchDetachedCronNotification(params: {
   logger: CronLogger;
   deliver: () => Promise<void>;
 }): void {
-  void runWithGatewayIndependentRootWorkAdmission(params.deliver).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(params.deliver).catch((err: unknown) => {
     params.logger.warn(
       { jobId: params.jobId, err: formatErrorMessage(err) },
       "cron: detached notification delivery failed",
@@ -323,7 +339,7 @@ function dispatchDetachedCronNotification(params: {
 
 /** Transports a scheduler-authorized cron failure alert. */
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
-  await runWithGatewayIndependentRootWorkAdmission(async () => {
+  await runWithGatewayIndependentRootWorkContinuation(async () => {
     await sendGatewayCronFailureAlertUnderAdmission(params);
   });
 }
@@ -375,7 +391,12 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       },
       payload: {
         ...params.payload,
-        text: appendCronRunStarted(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+        text: appendCronFailureAlertDetails(
+          params.payload.text ?? "",
+          params.job.id,
+          params.runAtMs,
+          runtimeConfig,
+        ),
       },
       abortSignal: abortController.signal,
       onDeliveryAttempt: params.onDeliveryAttempt,

@@ -426,17 +426,22 @@ export function createGatewayHooksRequestHandler(params: {
       startupAbortController.signal.throwIfAborted();
       settleAdmission({ ok: true, runId });
     };
-    admissionTimer = setTimeout(() => {
-      admissionTimedOut = true;
-      startupAbortController.abort(admissionTimeoutError);
-      settleAdmission(
-        createHookAdmissionFailure({
-          runId,
-          statusCode: 503,
-        }),
-      );
-    }, agentStartAdmissionTimeoutMs);
-    admissionTimer.unref?.();
+    // Background admission (fan-out items) skips the start deadline: the
+    // producer's redelivery plus the replay cache own retry semantics, and a
+    // canceled slow admission would keep every redelivery equally cold.
+    if (value.admissionMode !== "background") {
+      admissionTimer = setTimeout(() => {
+        admissionTimedOut = true;
+        startupAbortController.abort(admissionTimeoutError);
+        settleAdmission(
+          createHookAdmissionFailure({
+            runId,
+            statusCode: 503,
+          }),
+        );
+      }, agentStartAdmissionTimeoutMs);
+      admissionTimer.unref?.();
+    }
 
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.

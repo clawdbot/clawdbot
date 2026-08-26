@@ -872,7 +872,6 @@ extensions/msteams/src/reply-dispatcher.ts	4
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10
-extensions/msteams/src/send.ts	1
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/sso-token-store.ts	2

@@ -1,3 +1,7 @@
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
 export type PendingSystemRunEvent = {
@@ -27,6 +31,7 @@ export type PendingInvoke = {
   progressChunks: Map<number, string>;
   nextInputSeq: number;
   removeAbortListener?: () => void;
+  admissionContinuation?: GatewayRootWorkAdmissionContinuationScope;
 };
 
 export type NodeInvokeProgressParams = {
@@ -144,6 +149,10 @@ export class NodeInvokeStreamController {
     idleTimeoutMs: number;
     signal?: AbortSignal;
   }): void {
+    const continuation = captureGatewayRootWorkAdmissionContinuationScope();
+    if (continuation) {
+      params.pending.admissionContinuation = continuation;
+    }
     if (params.timeoutMs > 0) {
       params.pending.deadlineAtMs = Date.now() + params.timeoutMs;
     }
@@ -256,6 +265,8 @@ export class NodeInvokeStreamController {
     }
     pending.removeAbortListener?.();
     pending.removeAbortListener = undefined;
+    pending.admissionContinuation?.release();
+    pending.admissionContinuation = undefined;
   }
 
   private createIdleTimer(requestId: string, pending: PendingInvoke) {

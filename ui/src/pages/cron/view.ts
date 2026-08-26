@@ -101,6 +101,7 @@ type CronProps = {
   channelLabels?: Record<string, string>;
   channelMeta?: ChannelUiMetaEntry[];
   runs: CronRunLogEntry[];
+  highlightedRunId?: string | null;
   runsTotal: number;
   runsHasMore: boolean;
   runsLoadingMore: boolean;

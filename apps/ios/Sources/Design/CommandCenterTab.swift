@@ -614,10 +614,10 @@ struct CommandCenterTab: View {
         self.appModel.chatViewModelIdentityID
     }
 
-    private func open(_ route: WorkRoute, unread: Bool = false) {
+    private func open(_ route: WorkRoute) {
         switch route {
         case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey, unread: unread)
+            self.appModel.openChat(sessionKey: sessionKey)
             self.openChat()
         case .settings:
             self.openSettings()
@@ -625,11 +625,11 @@ struct CommandCenterTab: View {
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.open(.chat(session.key), unread: session.unread == true)
+        self.open(.chat(session.key))
     }
 
     private func openDefaultChatSession() {
-        self.open(.chat(nil), unread: self.effectiveDefaultChatSessionEntry?.unread == true)
+        self.open(.chat(nil))
     }
 
     private func patchSession(
@@ -1302,11 +1302,11 @@ struct CommandSessionsScreen: View {
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.openSessionKey(session.key, unread: session.unread == true)
+        self.openSessionKey(session.key)
     }
 
-    private func openSessionKey(_ key: String, unread: Bool = false) {
-        self.appModel.openChat(sessionKey: key, unread: unread)
+    private func openSessionKey(_ key: String) {
+        self.appModel.openChat(sessionKey: key)
         self.dismiss()
         self.openChat()
     }

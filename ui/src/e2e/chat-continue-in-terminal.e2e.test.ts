@@ -181,7 +181,8 @@ suite.define(() => {
         const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
-        await menuTrigger.press("Enter");
+        await menuTrigger.click();
+        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("true");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
         for (const label of compactManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });

@@ -253,6 +253,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         hasRepliedRef: options?.hasRepliedRef,
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
+        sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         sourceReplyOnly: options?.sourceReplyOnly,
