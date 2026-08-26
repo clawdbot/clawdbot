@@ -76,6 +76,12 @@ final class StatusMenuHighlightDelegate: NSObject, NSMenuDelegate {
             (candidate.view as? HostedMenuRowView)?.isHighlighted = candidate === item && candidate.isEnabled
         }
     }
+
+    // AppKit does not send willHighlight(nil) when a submenu closes, so a
+    // hosted row selected there would reopen still lit without this reset.
+    func menuDidClose(_ menu: NSMenu) {
+        self.menu(menu, willHighlight: nil)
+    }
 }
 
 @MainActor

@@ -46,6 +46,14 @@ struct StatusMenuReconcileTests {
         #expect(hostedDevice.isHighlighted)
         submenu.delegate?.menu?(submenu, willHighlight: nil)
         #expect(!hostedDevice.isHighlighted)
+
+        menu.delegate?.menu?(menu, willHighlight: second)
+        #expect(secondHosted.isHighlighted)
+        // A closing submenu never receives willHighlight(nil); the delegate's
+        // close callback must clear the lingering hosted selection itself.
+        StatusMenuHighlightDelegate.shared.menuDidClose(menu)
+        #expect(!secondHosted.isHighlighted)
+        #expect(!firstHosted.isHighlighted)
     }
 
     @Test func `matching rows update titles without replacing tracked items`() throws {
