@@ -671,7 +671,7 @@ describe("canonical session message recovery", () => {
       updatedAt: 2,
       hasActiveRun: false,
       activeRunIds: [],
-      status: "done",
+      status: "done" as const,
     };
 
     const preFinalLoad = loadChatHistory(state);
