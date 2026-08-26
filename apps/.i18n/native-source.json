@@ -4294,6 +4294,8 @@
     {"id":"native.apple.f4c5b493be9f6510","source":"unknown error","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/GatewayProcessManager.swift"}]},
     {"id":"native.apple.4aa0a356f580cb09","source":"unknown gateway error","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/ControlChannel.swift"}]},
     {"id":"native.apple.f9b680b5b2d7c191","source":"unknown relay error","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/ios/Sources/Push/PushRelayClient.swift"}]},
+    {"id":"native.apple.b1e3eae65a23e786","source":"worker exited with status \\(String(describing: $0))","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/NodeMode/MacNodeHostWorker.swift"}]},
+    {"id":"native.apple.d0a4a562ecb7d1a3","source":"worker exited with unknown status","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/NodeMode/MacNodeHostWorker.swift"}]},
     {"id":"native.apple.067080f781ccd053","source":"wss://gateway.example.com","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/GatewaySettings.swift"}]},
     {"id":"native.apple.3ac7fbb6e39a56c1","source":"wss://gateway.example.ts.net","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/GeneralSettings.swift"},{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift"}]},
     {"id":"native.apple.db37ef73df39748c","source":"your browser","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/BrowserProfileImportBannerView.swift"}]},

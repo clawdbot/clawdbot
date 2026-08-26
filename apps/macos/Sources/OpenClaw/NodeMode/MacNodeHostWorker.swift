@@ -468,7 +468,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                       self.processCleanupTask == nil
                 else { return }
                 self.stopLocked(
-                    reason: "worker exited with status \(String(describing: status))",
+                    reason: status.map { String(localized: "worker exited with status \(String(describing: $0))") }
+                        ?? String(localized: "worker exited with unknown status"),
                     notifyUnexpectedExit: true)
             }
         }
