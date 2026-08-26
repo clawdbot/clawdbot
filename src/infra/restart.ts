@@ -703,6 +703,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   let cancelled = false;
   let attemptingEmission = false;
   let cancelEmissionFence: (() => void) | null = null;
+  let timedOutNotified = false;
   let poll: ReturnType<typeof setInterval> | null = null;
   const stopPoll = () => {
     if (!poll) {
@@ -736,6 +737,9 @@ export function deferGatewayRestartUntilIdle(opts: {
       return undefined;
     }
   };
+  // Tags each attempt so a stale settlement — from a preparation superseded at the
+  // timeout below — becomes a no-op instead of clobbering the attempt that replaced it.
+  let emissionAttemptSeq = 0;
   const attemptEmission = (params: {
     intent?: GatewayRestartIntent;
     notifyReady: boolean;
@@ -745,6 +749,8 @@ export function deferGatewayRestartUntilIdle(opts: {
       return;
     }
     attemptingEmission = true;
+    const attemptSeq = ++emissionAttemptSeq;
+    const isStillCurrentAttempt = () => attemptSeq === emissionAttemptSeq;
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
@@ -759,10 +765,15 @@ export function deferGatewayRestartUntilIdle(opts: {
             return current !== undefined && current <= 0;
           },
       (rollback) => {
-        cancelEmissionFence = rollback;
+        if (isStillCurrentAttempt()) {
+          cancelEmissionFence = rollback;
+        }
       },
     )
       .then((attempted) => {
+        if (!isStillCurrentAttempt()) {
+          return;
+        }
         attemptingEmission = false;
         // Successful delivery clears the cancel hook after the fence is owned by
         // the run loop. Failed attempts already reopened via emitPrepared finally.
@@ -776,6 +787,9 @@ export function deferGatewayRestartUntilIdle(opts: {
         }
       })
       .catch((err: unknown) => {
+        if (!isStillCurrentAttempt()) {
+          return;
+        }
         attemptingEmission = false;
         // Invoke before clearing: a thrown emission must reopen the fence even
         // when emitPreparedGatewayRestart's finally did not run (for example a
@@ -813,8 +827,29 @@ export function deferGatewayRestartUntilIdle(opts: {
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
     if (timedOut) {
-      stopPoll();
-      opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
+      if (!timedOutNotified) {
+        timedOutNotified = true;
+        opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
+        if (attemptingEmission) {
+          // The idle-triggered attempt above never settled (its beforeEmit hook is hung), so
+          // leaving its guard set would defeat this bound indefinitely. Roll back its fence
+          // (safe no-op if a signal already fired) and drop the guard so the forced attempt
+          // below claims a fresh attempt id and runs a real beforeEmit of its own — never
+          // skipped, so a caller's safety preflight can't look like it already ran. If the
+          // stuck slot is instead a coalesced session's parked hook (see the while(nextParked)
+          // drain above), it's unreachable here and its continuation is lost when it never
+          // settles — but on unfixed main the same stuck slot already defeats BOTH that
+          // session's restart and this bound forever, so nothing reachable from here is lost
+          // that wasn't lost already.
+          cancelEmissionFence?.();
+          cancelEmissionFence = null;
+          attemptingEmission = false;
+        }
+      }
+      // Not gated on !timedOutNotified: the poll deliberately stays alive past the deadline
+      // (stopPoll only ever runs on cancel or a genuinely delivered restart) so a forced
+      // attempt whose emission rejects — same as the pre-timeout idle-emission-keeps-failing
+      // case — gets retried on the next tick instead of stranding the deferral silently.
       attemptEmission({
         intent: opts.timeoutIntent,
         notifyReady: false,
