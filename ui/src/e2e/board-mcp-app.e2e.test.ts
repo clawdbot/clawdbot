@@ -90,6 +90,22 @@ async function waitForMountedApp(page: Page): Promise<void> {
   );
 }
 
+async function cycleBoardProviderConnection(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const surface = document.querySelector(".board-session-surface");
+    const pane = surface?.closest("openclaw-chat-pane");
+    const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
+    const scopedProvider = lease?.provider;
+    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
+    const client = transport ? Reflect.get(transport, "client") : undefined;
+    if (!transport || !client || typeof transport.attachClient !== "function") {
+      throw new Error("Dashboard Gateway provider is unavailable");
+    }
+    transport.attachClient(client, false);
+    transport.attachClient(client, true);
+  });
+}
+
 async function captureBoardIdentity(page: Page): Promise<void> {
   await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".board-session-surface");
@@ -289,17 +305,30 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
 
     await openDashboard(page);
     await gateway.waitForRequest("board.widget.appView");
+    await gateway.deferNext("board.widget.appView");
     const boardGetCount = (await gateway.getRequests("board.get")).length;
-    await gateway.closeLatest();
+    await cycleBoardProviderConnection(page);
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length)
       .toBeGreaterThan(boardGetCount);
-    await expect
-      .poll(async () => (await gateway.getRequests("board.widget.appView")).length)
-      .toBe(2);
 
     await gateway.resolveDeferred("board.widget.appView", {
       viewId: "retired-view",
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    await page.evaluate(
+      async () =>
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    expect(await gateway.getRequests("mcp.app.view")).toEqual([]);
+
+    await expect
+      .poll(async () => (await gateway.getRequests("board.widget.appView")).length)
+      .toBe(2);
+    await gateway.resolveDeferred("board.widget.appView", {
+      viewId: "current-view",
       expiresAtMs: Date.now() + 3_600_000,
     });
     await waitForMountedApp(page);
