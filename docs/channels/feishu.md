@@ -754,7 +754,26 @@ Enable the sticker action to let the agent resend stickers:
 ```
 
 For one account only, set `channels.feishu.accounts.<id>.actions.sticker: true`
-instead. Send a sticker to that bot first, then ask it to resend the sticker.
+instead. An account-level `actions` object **replaces**, rather than merges
+with, the channel-level object. Repeat any action gates you want to preserve.
+For example, keep reactions disabled while enabling stickers for `work`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { reactions: false },
+      accounts: {
+        work: {
+          actions: { reactions: false, sticker: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Send a sticker to that bot first, then ask it to resend the sticker.
 The shared `message` tool uses `action: "sticker"` with the received `file_key`
 in `fileId` or the first entry of `stickerId`. In multi-account setups, use the
 same `accountId` that received the sticker.
