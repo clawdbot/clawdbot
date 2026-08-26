@@ -1,0 +1,201 @@
+// Historical readers compare complete column definitions, so ALTER ADD defaults
+// cannot restore v12's NOT NULL columns; rebuild both exact original contracts.
+export const STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL = `
+PRAGMA foreign_keys = OFF;
+BEGIN;
+
+CREATE TABLE cron_jobs_migration_v12 (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
+  name TEXT NOT NULL,
+  description TEXT,
+  enabled INTEGER NOT NULL,
+  delete_after_run INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  agent_id TEXT,
+  session_key TEXT,
+  schedule_kind TEXT NOT NULL,
+  schedule_expr TEXT,
+  schedule_tz TEXT,
+  every_ms INTEGER,
+  anchor_ms INTEGER,
+  at TEXT,
+  stagger_ms INTEGER,
+  session_target TEXT NOT NULL,
+  wake_mode TEXT NOT NULL,
+  trigger_script TEXT,
+  trigger_once INTEGER,
+  payload_kind TEXT NOT NULL,
+  payload_message TEXT,
+  payload_model TEXT,
+  payload_fallbacks_json TEXT,
+  payload_thinking TEXT,
+  payload_timeout_seconds INTEGER,
+  payload_allow_unsafe_external_content INTEGER,
+  payload_external_content_source_json TEXT,
+  payload_light_context INTEGER,
+  payload_tools_allow_json TEXT,
+  payload_tools_allow_is_default INTEGER,
+  delivery_mode TEXT,
+  delivery_channel TEXT,
+  delivery_to TEXT,
+  delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
+  delivery_account_id TEXT,
+  delivery_best_effort INTEGER,
+  delivery_completion_mode TEXT,
+  delivery_completion_to TEXT,
+  failure_delivery_mode TEXT,
+  failure_delivery_channel TEXT,
+  failure_delivery_to TEXT,
+  failure_delivery_account_id TEXT,
+  failure_alert_disabled INTEGER,
+  failure_alert_after INTEGER,
+  failure_alert_channel TEXT,
+  failure_alert_to TEXT,
+  failure_alert_cooldown_ms INTEGER,
+  failure_alert_include_skipped INTEGER,
+  failure_alert_mode TEXT,
+  failure_alert_account_id TEXT,
+  next_run_at_ms INTEGER,
+  running_at_ms INTEGER,
+  last_run_at_ms INTEGER,
+  last_run_status TEXT,
+  last_error TEXT,
+  last_duration_ms INTEGER,
+  consecutive_errors INTEGER,
+  consecutive_skipped INTEGER,
+  schedule_error_count INTEGER,
+  last_delivery_status TEXT,
+  last_delivery_error TEXT,
+  last_delivered INTEGER,
+  last_failure_alert_at_ms INTEGER,
+  job_json TEXT NOT NULL,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  runtime_updated_at_ms INTEGER,
+  schedule_identity TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id)
+) STRICT;
+
+INSERT INTO cron_jobs_migration_v12 (
+  store_key, job_id, declaration_key, owner_agent_id, name, description,
+  enabled, created_at_ms, agent_id, schedule_kind, session_target, wake_mode,
+  payload_kind, job_json, state_json, runtime_updated_at_ms, schedule_identity,
+  sort_order, updated_at
+)
+SELECT
+  store_key, job_id, declaration_key, owner_agent_id, name, description,
+  enabled, 0, agent_id, '', '', '', payload_kind, job_json, state_json,
+  runtime_updated_at_ms, schedule_identity, sort_order, updated_at
+FROM cron_jobs;
+
+DROP TABLE cron_jobs;
+ALTER TABLE cron_jobs_migration_v12 RENAME TO cron_jobs;
+
+CREATE INDEX idx_cron_jobs_store_updated
+  ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
+CREATE INDEX idx_cron_jobs_store_order
+  ON cron_jobs(store_key, sort_order ASC, updated_at ASC, job_id);
+CREATE INDEX idx_cron_jobs_enabled_next_run
+  ON cron_jobs(store_key, enabled, next_run_at_ms, job_id)
+  WHERE next_run_at_ms IS NOT NULL;
+CREATE INDEX idx_cron_jobs_agent_session
+  ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
+  WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
+
+CREATE TABLE subagent_runs_migration_v12 (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  child_session_key TEXT NOT NULL,
+  controller_session_key TEXT,
+  requester_session_key TEXT NOT NULL,
+  requester_display_key TEXT NOT NULL,
+  requester_origin_json TEXT,
+  task TEXT NOT NULL,
+  task_name TEXT,
+  cleanup TEXT NOT NULL,
+  label TEXT,
+  model TEXT,
+  agent_dir TEXT,
+  workspace_dir TEXT,
+  run_timeout_seconds INTEGER,
+  spawn_mode TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  session_started_at INTEGER,
+  accumulated_runtime_ms INTEGER,
+  ended_at INTEGER,
+  outcome_json TEXT,
+  archive_at_ms INTEGER,
+  cleanup_completed_at INTEGER,
+  cleanup_handled INTEGER,
+  suppress_announce_reason TEXT,
+  expects_completion_message INTEGER,
+  announce_retry_count INTEGER,
+  last_announce_retry_at INTEGER,
+  last_announce_delivery_error TEXT,
+  ended_reason TEXT,
+  pause_reason TEXT,
+  wake_on_descendant_settle INTEGER,
+  requester_settle_wake_status TEXT,
+  requester_settle_wake_attempt_count INTEGER,
+  requester_settle_wake_replay_count INTEGER,
+  requester_settle_wake_next_attempt_at INTEGER,
+  requester_settle_wake_batch_run_ids_json TEXT,
+  requester_settle_wake_last_error TEXT,
+  requester_settle_wake_retire_after INTEGER,
+  frozen_result_text TEXT,
+  frozen_result_captured_at INTEGER,
+  fallback_frozen_result_text TEXT,
+  fallback_frozen_result_captured_at INTEGER,
+  ended_hook_emitted_at INTEGER,
+  pending_final_delivery INTEGER,
+  pending_final_delivery_created_at INTEGER,
+  pending_final_delivery_last_attempt_at INTEGER,
+  pending_final_delivery_attempt_count INTEGER,
+  pending_final_delivery_last_error TEXT,
+  pending_final_delivery_payload_json TEXT,
+  completion_announced_at INTEGER,
+  swarm_group_id TEXT,
+  swarm_collector INTEGER,
+  swarm_output_schema_json TEXT,
+  swarm_completion_status TEXT,
+  swarm_structured_json TEXT,
+  swarm_schema_error TEXT,
+  swarm_usage_json TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+) STRICT;
+
+INSERT INTO subagent_runs_migration_v12 (
+  run_id, child_session_key, controller_session_key, requester_session_key,
+  requester_display_key, task, cleanup, created_at, payload_json
+)
+SELECT run_id, child_session_key, controller_session_key, requester_session_key,
+  '', '', '', created_at, payload_json
+FROM subagent_runs;
+
+DROP TABLE subagent_runs;
+ALTER TABLE subagent_runs_migration_v12 RENAME TO subagent_runs;
+
+CREATE INDEX idx_subagent_runs_child_session_key
+  ON subagent_runs(child_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_requester_session_key
+  ON subagent_runs(requester_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_controller_session_key
+  ON subagent_runs(controller_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_archive_at
+  ON subagent_runs(archive_at_ms, cleanup_handled, run_id);
+CREATE INDEX idx_subagent_runs_ended_cleanup
+  ON subagent_runs(ended_at, cleanup_handled, run_id);
+
+PRAGMA user_version = 12;
+UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
+COMMIT;
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_key_check;
+`;

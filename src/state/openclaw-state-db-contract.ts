@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 
+// v13 keeps cron jobs and subagent runs canonical in JSON, removing unused projections.
 // v12 folds singleton state into config_machine_state and retires write-only cron epochs.
 // v11 retires the legacy skill curator lifecycle and write-only proposal origin runs.
 // v10 retires six dead tables that shipped without runtime owners.
@@ -9,7 +10,7 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 12;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 13;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
@@ -94,6 +95,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "state-table-retirement-v10"
     | "state-table-retirement-v11"
     | "singleton-state-foldin-v12"
+    | "wide-row-canonical-json-v13"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

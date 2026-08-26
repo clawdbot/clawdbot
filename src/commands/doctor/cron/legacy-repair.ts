@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "../../../../packages/normalization-core
 import { tryResolveLegacyCompatibilityAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -43,11 +42,7 @@ import {
   hasLegacyCronMigrationReceiptReadOnly,
   markLegacyCronMigrationSourceRemoved,
 } from "./migration-ledger.js";
-import {
-  mergeLegacyCronJobs,
-  mergeRuntimeEntryIntoConfigJob,
-  needsSqliteProjectionBackfill,
-} from "./repair-plan.js";
+import { mergeLegacyCronJobs, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
   assertCronStateSchemaSupported,
@@ -73,7 +68,6 @@ export type LegacyCronRepairState = {
   legacyMigrationSource?: LegacyCronMigrationSource;
   legacyMigrationAlreadyImported: boolean;
   legacyImportCount: number;
-  sqliteProjectionBackfillCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
@@ -144,42 +138,16 @@ export async function loadLegacyCronRepairState(params: {
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
   );
-  const currentEntries = loaded.configJobs.map((job, index) => ({
-    sourceIndex: loaded.configJobIndexes[index] ?? index,
-    job: mergeRuntimeEntryIntoConfigJob({
-      job,
-      runtimeEntry: loaded.configJobRuntimeEntries[index],
-    }),
-    projectedJob: loaded.store.jobs[index],
-  }));
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [];
-  for (const row of loaded.invalidConfigRows) {
-    if (row.job && !getInvalidPersistedCronJobReason(row.job)) {
-      // Early SQLite builds omitted projection columns but retained a complete
-      // job_json definition; doctor must backfill that job instead of deleting it.
-      currentEntries.push({
-        sourceIndex: row.sourceIndex,
-        job: mergeRuntimeEntryIntoConfigJob({
-          job: row.job,
-          runtimeEntry: { state: row.state, updatedAtMs: row.updatedAtMs },
-        }),
-        projectedJob: undefined,
-      });
-      continue;
-    }
-    invalidConfigRows.push(row);
-  }
-  currentEntries.sort((left, right) => left.sourceIndex - right.sourceIndex);
+  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   const currentJobs =
-    currentEntries.length > 0
-      ? currentEntries.map((entry) => entry.job)
+    loaded.configJobs.length > 0
+      ? loaded.configJobs.map((job, index) =>
+          mergeRuntimeEntryIntoConfigJob({
+            job,
+            runtimeEntry: loaded.configJobRuntimeEntries[index],
+          }),
+        )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
-  const sqliteProjectionBackfillCount = currentEntries.filter((entry) =>
-    needsSqliteProjectionBackfill({
-      configJob: entry.job,
-      projectedJob: entry.projectedJob,
-    }),
-  ).length;
   let rawJobs = currentJobs;
   let legacyImportCount = 0;
   let legacyMigrationSource: LegacyCronMigrationSource | undefined;
@@ -211,7 +179,6 @@ export async function loadLegacyCronRepairState(params: {
     legacyMigrationSource,
     legacyMigrationAlreadyImported,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     invalidConfigRows,
     projectedOwnersByJobId,
     rawJobs,
@@ -266,7 +233,6 @@ export async function applyLegacyCronStoreRepair(params: {
 
   const storeChanged =
     (state.legacyStoreDetected && !state.legacyMigrationAlreadyImported) ||
-    state.sqliteProjectionBackfillCount > 0 ||
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||

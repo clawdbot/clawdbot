@@ -1,9 +1,5 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeCronJobInput } from "../../../cron/normalize.js";
-import type { CronJob } from "../../../cron/types.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
@@ -223,42 +219,4 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
       : {}),
     ...(params.runtimeEntry?.state ? { state: structuredClone(params.runtimeEntry.state) } : {}),
   };
-}
-
-/** Return true when a SQLite cron projection row no longer matches config JSON. */
-export function needsSqliteProjectionBackfill(params: {
-  configJob: Record<string, unknown>;
-  projectedJob?: CronJob;
-}): boolean {
-  if (!params.projectedJob) {
-    return true;
-  }
-  const normalizedConfig = normalizeCronJobInput(params.configJob, { applyDefaults: true });
-  if (!normalizedConfig) {
-    return true;
-  }
-  if (!isRecord(params.projectedJob)) {
-    return true;
-  }
-  const projected = params.projectedJob;
-  for (const field of [
-    "agentId",
-    "deleteAfterRun",
-    "delivery",
-    "description",
-    "enabled",
-    "failureAlert",
-    "name",
-    "payload",
-    "schedule",
-    "scheduledToolPolicy",
-    "sessionKey",
-    "sessionTarget",
-    "wakeMode",
-  ] as const) {
-    if (!isDeepStrictEqual(normalizedConfig[field], projected[field])) {
-      return true;
-    }
-  }
-  return false;
 }

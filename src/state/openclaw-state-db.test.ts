@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   countFailedDeliveryQueueEntries,
@@ -60,6 +61,7 @@ import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibi
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-retirement.test-support.js";
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "./openclaw-state-schema-v11-retirement.test-support.js";
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "./openclaw-state-schema-v12-foldin.test-support.js";
+import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13-widerow.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -1848,12 +1850,14 @@ describe("openclaw state database", () => {
         });
       }
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(12);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 12 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const name of [
         "skill_lifecycle",
         "idx_skill_lifecycle_key",
@@ -1962,12 +1966,14 @@ describe("openclaw state database", () => {
       }
 
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(12);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 12 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const tableName of FOLDED_STATE_TABLES_V12) {
         expect(
           migrated.db
@@ -2054,6 +2060,244 @@ describe("openclaw state database", () => {
         kind: "singleton-state-foldin-v12",
         path: databasePath,
       });
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "migrates v12 wide rows to canonical JSON through %s without changing hydrated jobs",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+
+      const job = {
+        id: "legacy-wide-job",
+        name: "Legacy wide job",
+        description: "preserved cron configuration",
+        enabled: true,
+        declarationKey: "legacy-declaration",
+        owner: { agentId: "legacy-owner" },
+        createdAtMs: 100,
+        updatedAtMs: 250,
+        agentId: "legacy-agent",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          failureDestination: { channel: "discord", to: "https://example.invalid/failure" },
+        },
+      };
+      const storeKey = path.join(stateDir, "cron", "jobs.json");
+      legacy
+        .prepare(
+          `INSERT INTO cron_jobs (
+             store_key, job_id, declaration_key, owner_agent_id, name, description,
+             enabled, created_at_ms, agent_id, payload_kind, job_json, state_json,
+             runtime_updated_at_ms, schedule_identity, sort_order, updated_at,
+             schedule_kind, every_ms, session_target, wake_mode, payload_message,
+             delivery_mode, delivery_channel, failure_delivery_mode,
+             failure_delivery_channel, failure_delivery_to, failure_delivery_account_id,
+             last_run_status
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          storeKey,
+          job.id,
+          "legacy-declaration",
+          "legacy-owner",
+          job.name,
+          job.description,
+          1,
+          job.createdAtMs,
+          job.agentId,
+          job.payload.kind,
+          JSON.stringify(job),
+          JSON.stringify({ lastStatus: "ok" }),
+          job.updatedAtMs,
+          "every:60000",
+          4,
+          job.updatedAtMs,
+          job.schedule.kind,
+          job.schedule.everyMs,
+          job.sessionTarget,
+          job.wakeMode,
+          job.payload.message,
+          job.delivery.mode,
+          job.delivery.channel,
+          "",
+          "discord",
+          "https://example.invalid/failure",
+          "",
+          "ok",
+        );
+      const authoritySchemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+        "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
+      );
+      const authoritySchemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+        "\n) STRICT;",
+        authoritySchemaStart,
+      );
+      legacy.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(authoritySchemaStart, authoritySchemaEnd + 10));
+      legacy
+        .prepare(
+          `INSERT INTO cron_job_runtime_authorities (
+             store_key, job_id, authority_json, authority_input_fingerprint, recovery_required
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(storeKey, job.id, '{"owner":"preserved"}', "preserved-fingerprint", 0);
+      const runPayload = {
+        runId: "legacy-run",
+        childSessionKey: "agent:child:legacy",
+        requesterSessionKey: "agent:main:legacy",
+        task: "preserved subagent task",
+      };
+      legacy
+        .prepare(
+          `INSERT INTO subagent_runs (
+             run_id, child_session_key, controller_session_key, requester_session_key,
+             created_at, payload_json, task, requester_display_key, cleanup
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          runPayload.runId,
+          runPayload.childSessionKey,
+          "agent:controller:legacy",
+          runPayload.requesterSessionKey,
+          200,
+          JSON.stringify(runPayload),
+          runPayload.task,
+          "legacy-requester",
+          "keep",
+        );
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "wide-row-canonical-json-v13",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Made cron jobs and subagent runs JSON-canonical (v13)"],
+          warnings: [],
+        });
+      }
+
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(13);
+      const cronColumns = migrated.db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
+        name: string;
+      }>;
+      expect(cronColumns.map((column) => column.name)).toEqual([
+        "store_key",
+        "job_id",
+        "declaration_key",
+        "owner_agent_id",
+        "name",
+        "description",
+        "enabled",
+        "agent_id",
+        "payload_kind",
+        "job_json",
+        "state_json",
+        "runtime_updated_at_ms",
+        "schedule_identity",
+        "sort_order",
+        "updated_at",
+      ]);
+      const runColumns = migrated.db.prepare("PRAGMA table_info(subagent_runs)").all() as Array<{
+        name: string;
+      }>;
+      expect(runColumns.map((column) => column.name)).toEqual([
+        "run_id",
+        "child_session_key",
+        "controller_session_key",
+        "requester_session_key",
+        "created_at",
+        "payload_json",
+      ]);
+      const row = migrated.db
+        .prepare(
+          `SELECT declaration_key, owner_agent_id, agent_id, payload_kind,
+                  runtime_updated_at_ms, schedule_identity, sort_order, job_json, state_json
+             FROM cron_jobs WHERE job_id = ?`,
+        )
+        .get(job.id) as {
+        declaration_key: string;
+        owner_agent_id: string;
+        agent_id: string;
+        payload_kind: string;
+        runtime_updated_at_ms: number;
+        schedule_identity: string;
+        sort_order: number;
+        job_json: string;
+        state_json: string;
+      };
+      expect(row).toMatchObject({
+        declaration_key: "legacy-declaration",
+        owner_agent_id: "legacy-owner",
+        agent_id: "legacy-agent",
+        payload_kind: "agentTurn",
+        runtime_updated_at_ms: 250,
+        schedule_identity: "every:60000",
+        sort_order: 4,
+      });
+      expect(JSON.parse(row.job_json).delivery.failureDestination).toEqual({
+        mode: null,
+        channel: "discord",
+        to: "https://example.invalid/failure",
+        accountId: null,
+      });
+      expect(JSON.parse(row.state_json)).toEqual({ lastStatus: "ok", lastRunStatus: "ok" });
+      expect(loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs).toEqual([
+        {
+          ...job,
+          declarationKey: "legacy-declaration",
+          owner: { agentId: "legacy-owner" },
+          delivery: {
+            ...job.delivery,
+            failureDestination: {
+              mode: undefined,
+              channel: "discord",
+              to: "https://example.invalid/failure",
+              accountId: undefined,
+            },
+          },
+          state: { lastStatus: "ok", lastRunStatus: "ok" },
+        },
+      ]);
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT store_key, job_id, authority_json, authority_input_fingerprint,
+                    recovery_required
+               FROM cron_job_runtime_authorities WHERE job_id = ?`,
+          )
+          .get(job.id),
+      ).toEqual({
+        store_key: storeKey,
+        job_id: job.id,
+        authority_json: '{"owner":"preserved"}',
+        authority_input_fingerprint: "preserved-fingerprint",
+        recovery_required: 0,
+      });
+      expect(
+        migrated.db.prepare("SELECT * FROM subagent_runs WHERE run_id = ?").get(runPayload.runId),
+      ).toEqual({
+        run_id: runPayload.runId,
+        child_session_key: runPayload.childSessionKey,
+        controller_session_key: "agent:controller:legacy",
+        requester_session_key: runPayload.requesterSessionKey,
+        created_at: 200,
+        payload_json: JSON.stringify(runPayload),
+      });
+      expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     },
   );
 
@@ -2276,6 +2520,7 @@ describe("openclaw state database", () => {
       { kind: "state-table-retirement-v10", path: fixture.databasePath },
       { kind: "state-table-retirement-v11", path: fixture.databasePath },
       { kind: "singleton-state-foldin-v12", path: fixture.databasePath },
+      { kind: "wide-row-canonical-json-v13", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -2291,7 +2536,8 @@ describe("openclaw state database", () => {
         "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
-        "Migrated shared state tables to SQLite STRICT typing (54)",
+        "Made cron jobs and subagent runs JSON-canonical (v13)",
+        "Migrated shared state tables to SQLite STRICT typing (52)",
       ],
       warnings: [],
     });
@@ -5832,58 +6078,30 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(() =>
-      database.db.prepare("SELECT enabled, session_key FROM cron_jobs LIMIT 1").all(),
-    ).not.toThrow();
     expect(
       database.db
         .prepare(
-          `SELECT name, enabled, delete_after_run, schedule_kind, every_ms, payload_kind, payload_message,
-                  payload_model, agent_id, session_key, session_target, wake_mode, delivery_mode, delivery_channel,
-                  delivery_to, delivery_account_id, delivery_best_effort, failure_delivery_mode,
-                  failure_delivery_channel, failure_delivery_to, failure_delivery_account_id,
-                  failure_alert_mode, failure_alert_channel, failure_alert_to,
-                  failure_alert_after
+          `SELECT name, enabled, payload_kind, agent_id, job_json
              FROM cron_jobs
             WHERE job_id = ?`,
         )
         .get("legacy-job"),
     ).toEqual({
       enabled: 1,
-      delete_after_run: 1,
-      every_ms: 3_600_000,
       agent_id: "agent-a",
       name: "Legacy job",
       payload_kind: "agentTurn",
-      payload_message: "hello",
-      payload_model: "anthropic/claude-sonnet-4-6",
-      schedule_kind: "every",
-      session_key: "agent:agent-a:main",
-      session_target: "isolated",
-      wake_mode: "now",
-      delivery_account_id: "acct-1",
-      delivery_best_effort: 1,
-      delivery_channel: "telegram",
-      delivery_mode: "announce",
-      delivery_to: "chat-1",
-      failure_alert_after: 2,
-      failure_alert_channel: "discord",
-      failure_alert_mode: "announce",
-      failure_alert_to: "ops",
-      failure_delivery_account_id: null,
-      failure_delivery_channel: null,
-      failure_delivery_mode: null,
-      failure_delivery_to: "https://example.invalid/hook",
+      job_json: jobJson,
     });
     expect(
       database.db
         .prepare(
-          `SELECT delivery_thread_id, delivery_thread_id_type
+          `SELECT json_extract(job_json, '$.delivery.threadId') AS delivery_thread_id
              FROM cron_jobs
             WHERE job_id = ?`,
         )
         .get("already-projected-job"),
-    ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
+    ).toEqual({ delivery_thread_id: 1008013 });
   });
 
   it("imports early cron run-log tables before dropping them", () => {

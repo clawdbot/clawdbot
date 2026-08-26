@@ -2810,12 +2810,9 @@ src/cron/service/timer.ts	1
 src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store.ts	1
-src/cron/store/delivery-codec.ts	3
-src/cron/store/failure-alert-codec.ts	2
-src/cron/store/payload-codec.ts	3
+src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
-src/cron/store/row-codec.ts	7
-src/cron/store/state-codec.ts	3
+src/cron/store/row-codec.ts	6
 src/cron/store/transaction-hooks.ts	1
 src/cron/task-run-detail.ts	2
 src/cron/task-run-history.ts	1
@@ -3799,7 +3796,7 @@ src/state/openclaw-quarantine-store.ts	2
 src/state/openclaw-schema-versions.ts	7
 src/state/openclaw-state-db-audit-migration.ts	5
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
-src/state/openclaw-state-db-legacy-backfills.ts	7
+src/state/openclaw-state-db-legacy-backfills.ts	5
 src/state/openclaw-state-db-maintenance.ts	3
 src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-readonly.ts	1
