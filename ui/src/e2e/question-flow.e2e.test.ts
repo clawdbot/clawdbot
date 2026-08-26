@@ -327,6 +327,17 @@ suite.define(() => {
       shellBorder: "1px",
       shellContainsChildren: true,
     });
+
+    await composer.locator(".agent-chat__composer-combobox > textarea").focus();
+    await expect
+      .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
+      .toBe("none");
+    await page.evaluate(() => {
+      document.documentElement.dataset.themeMode = "light";
+    });
+    await expect
+      .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
+      .toBe("none");
   });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
