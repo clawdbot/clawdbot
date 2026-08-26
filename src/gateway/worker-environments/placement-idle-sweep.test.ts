@@ -31,6 +31,7 @@ describe("worker placement idle suspension", () => {
     options: {
       suspendAfter?: string | null;
       destroyFails?: boolean;
+      reclaim?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["dispatch"]["reclaim"];
       isPlacementOperationInFlight?: (sessionId: string) => boolean;
       getSessionWorkAdmissionCheck?: (identity: {
         sessionId: string;
@@ -53,7 +54,7 @@ describe("worker placement idle suspension", () => {
     const idleSweep = createWorkerPlacementIdleSweep({
       placements,
       environments: harness.environments,
-      dispatch: harness.service,
+      dispatch: { reclaim: options.reclaim ?? harness.service.reclaim },
       getConfig: () => ({
         cloudWorkers: {
           profiles: {
@@ -304,6 +305,91 @@ describe("worker placement idle suspension", () => {
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(info).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a recently used worker when automatic reclaim waited behind another dispatch", async () => {
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const reclaimQueued = createDeferredCore();
+    const { harness, idleSweep, info, warn } = createIdleFixture({
+      reclaim: (request, authorize, beforeDrain) => {
+        const pending = coordinated.reclaim(request, authorize, beforeDrain);
+        reclaimQueued.resolve();
+        return pending;
+      },
+      isPlacementOperationInFlight: (sessionId) =>
+        coordinated.isPlacementOperationInFlight(sessionId),
+      getSessionWorkAdmissionCheck: async () => () => false,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    const coordinated = coordinateWorkerPlacementDispatch({
+      ...harness.service,
+      dispatch: async () => {
+        dispatchStarted.resolve();
+        await releaseDispatch.promise;
+        return active;
+      },
+    });
+    const unrelatedDispatch = coordinated.dispatch({
+      ...REQUEST,
+      sessionId: "another-session",
+      sessionKey: "agent:main:another-session",
+    });
+    let sweeping: Promise<void> | undefined;
+    try {
+      await dispatchStarted.promise;
+      nowMs += 60_000;
+      sweeping = idleSweep.sweep();
+      await reclaimQueued.promise;
+
+      const claim = claimWorkerTurn("turn-during-idle-reclaim-wait");
+      nowMs += 1_000;
+      placements.releaseTurn(claim);
+      releaseDispatch.resolve();
+      await Promise.all([unrelatedDispatch, sweeping]);
+
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        turnClaim: null,
+        updatedAtMs: nowMs,
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+
+      nowMs += 60_000;
+      await idleSweep.sweep();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+      expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    } finally {
+      releaseDispatch.resolve();
+      await Promise.allSettled([unrelatedDispatch, sweeping]);
+    }
+  });
+
+  it("finishes its owned drain without rechecking idle eligibility during teardown", async () => {
+    let hasSessionWork = false;
+    const { harness, idleSweep, info, warn } = createIdleFixture({
+      getSessionWorkAdmissionCheck: async () => () => hasSessionWork,
+    });
+    await harness.service.dispatch(REQUEST);
+    const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation();
+    if (!startTunnel) {
+      throw new Error("expected the fixture tunnel implementation");
+    }
+    vi.mocked(harness.environments.startTunnel).mockImplementationOnce(async (...args) => {
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("draining");
+      hasSessionWork = true;
+      return await startTunnel(...args);
+    });
+    nowMs += 60_000;
+
+    await idleSweep.sweep();
+
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
   });
 

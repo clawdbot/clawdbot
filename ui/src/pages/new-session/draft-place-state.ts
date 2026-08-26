@@ -178,7 +178,11 @@ export class DraftPlaceState {
   }
 
   devices() {
-    return projectDevicePlacements(this.gateway.environments, this.devicePlacementRequirement());
+    return projectDevicePlacements(
+      this.gateway.environments,
+      this.devicePlacementRequirement(),
+      this.gateway.deviceCatalogDisabledReason,
+    );
   }
 
   private findDevice(deviceId: string) {
