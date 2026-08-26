@@ -44,6 +44,9 @@ type ParentState = {
   // Overlapping runs share this parent; the last owner releases it only after
   // detached children finish recovery and delivery.
   ownerCount: number;
+  // turn/started can precede bindTurn; retain receipt ownership until the
+  // foreground run has finalized its reply and releases this registration.
+  turnIds: Set<string>;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   agentId?: string;
@@ -62,6 +65,7 @@ type ChildState = {
   terminal: boolean;
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: CodexNativeSubagentCompletion;
+  nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletion: boolean;
@@ -153,7 +157,7 @@ function registerMonitor(params: {
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
   retainClient?: () => (() => void) | undefined;
-}): { unregister: () => void } {
+}): { bindTurn: (turnId: string) => void; unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
     monitor = new Monitor(params.client, params.runtime ?? defaultRuntime, {
@@ -230,6 +234,8 @@ class Monitor {
     this.releaseRetainedClient();
     for (const state of this.parentStates.values()) {
       state.ownerCount = 0;
+      state.turnIds.clear();
+      this.deliverDetachedCompletions(state);
     }
     for (const [parentThreadId] of this.parentStates) {
       if (
@@ -247,7 +253,7 @@ class Monitor {
     requesterSessionKey?: string;
     taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
     agentId?: string;
-  }): { unregister: () => void } {
+  }): { bindTurn: (turnId: string) => void; unregister: () => void } {
     const parentThreadId = params.parentThreadId.trim();
     if (!parentThreadId) {
       throw new Error("Codex native subagent monitor requires a parent thread id");
@@ -264,7 +270,7 @@ class Monitor {
       throw new Error(`Codex thread ${parentThreadId} is already bound to another session`);
     }
     if (!state) {
-      state = { parentThreadId, ownerCount: 0 };
+      state = { parentThreadId, ownerCount: 0, turnIds: new Set() };
       this.parentStates.set(parentThreadId, state);
     }
     state.ownerCount += 1;
@@ -278,6 +284,7 @@ class Monitor {
       }
     }
     let registered = true;
+    let boundTurnId: string | undefined;
     const registeredState = state;
     // Recovery may perform several bounded history reads. It must never delay
     // the foreground parent turn that established this registration.
@@ -288,14 +295,32 @@ class Monitor {
       });
     });
     return {
+      bindTurn: (turnIdInput) => {
+        const turnId = turnIdInput.trim();
+        if (!registered || !turnId || this.parentStates.get(parentThreadId) !== registeredState) {
+          return;
+        }
+        if (boundTurnId) {
+          registeredState.turnIds.delete(boundTurnId);
+        }
+        boundTurnId = turnId;
+        registeredState.turnIds.add(turnId);
+      },
       unregister: () => {
         if (!registered) {
           return;
         }
         registered = false;
         const current = this.parentStates.get(parentThreadId);
-        if (current) {
+        if (current === registeredState) {
           current.ownerCount -= 1;
+          if (boundTurnId) {
+            current.turnIds.delete(boundTurnId);
+          }
+          if (current.ownerCount === 0) {
+            current.turnIds.clear();
+          }
+          this.deliverDetachedCompletions(current);
           this.pruneParentIfUnused(current);
         }
       },
@@ -335,6 +360,13 @@ class Monitor {
     const threadStatus = isJsonObject(params?.status)
       ? normalizeIdentifier(readString(params.status, "type"))
       : undefined;
+    const parent = threadId ? this.parentStates.get(threadId) : undefined;
+    if (parent && parent.ownerCount > 0 && notification.method === "turn/started") {
+      const turnId = isJsonObject(params?.turn) ? readString(params.turn, "id") : undefined;
+      if (turnId) {
+        parent.turnIds.add(turnId);
+      }
+    }
     const tracksRecoveryRevision = Boolean(threadId && this.threadStatusRevisions.has(threadId));
     if (
       RECOVERY_REVISION_NOTIFICATION_METHODS.has(notification.method) &&
@@ -364,7 +396,11 @@ class Monitor {
     }
     const childState = threadId ? this.childStates.get(threadId) : undefined;
     if (notification.method === "turn/started" && childState) {
+      childState.nativeCompletionDelivered = false;
       this.resumeChild(childState);
+    }
+    if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
+      this.recordNativeCompletionDelivery(parent, notification);
     }
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
@@ -873,6 +909,10 @@ class Monitor {
       this.unregisterChild(childState);
       return;
     }
+    if (childState.nativeCompletionDelivered) {
+      this.finishCompletionDelivery(state, childState);
+      return;
+    }
     childState.pendingCompletion = completion;
     state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
@@ -888,6 +928,11 @@ class Monitor {
   ): Promise<void> {
     const completion = childState.pendingCompletion;
     if (!completion || !state.requesterSessionKey || !state.taskRuntimeScope) {
+      return;
+    }
+    // Codex owns completion input from registration through reply finalization,
+    // including turn startup before its id is bound. Only wake detached parents.
+    if (state.ownerCount > 0) {
       return;
     }
     if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
@@ -909,13 +954,7 @@ class Monitor {
           "Use the Codex native subagent result to continue or wrap up the parent task. If this is a Discord/channel session, send the visible response with the message tool instead of only writing a transcript final answer. Reply in your normal assistant voice and do not expose internal notification markup.",
       });
       if (isDurableAgentHarnessCompletionDelivery(delivery)) {
-        childState.pendingCompletion = undefined;
-        childState.completionDeliveryAttempt = 0;
-        state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
-          runId: codexNativeSubagentRunId(completion.childThreadId),
-          deliveryStatus: "delivered",
-        });
-        this.unregisterChild(childState);
+        this.finishCompletionDelivery(state, childState);
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
@@ -940,6 +979,43 @@ class Monitor {
       });
     } finally {
       childState.deliveringCompletion = false;
+    }
+  }
+
+  private recordNativeCompletionDelivery(
+    state: ParentState,
+    notification: CodexServerNotification,
+  ): void {
+    for (const agentPath of nativeSubagentNotifications.deliveredAgentPaths(notification)) {
+      const childThreadId = this.childThreadIdsByAgentPath.get(
+        buildParentAgentPathKey(state.parentThreadId, agentPath),
+      );
+      const child = childThreadId ? this.childStates.get(childThreadId) : undefined;
+      if (!child || child.parentThreadId !== state.parentThreadId) {
+        continue;
+      }
+      child.nativeCompletionDelivered = true;
+      if (child.pendingCompletion && !child.deliveringCompletion) {
+        this.finishCompletionDelivery(state, child);
+      }
+    }
+  }
+
+  private finishCompletionDelivery(state: ParentState, child: ChildState): void {
+    child.pendingCompletion = undefined;
+    child.completionDeliveryAttempt = 0;
+    state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
+      runId: codexNativeSubagentRunId(child.childThreadId),
+      deliveryStatus: "delivered",
+    });
+    this.unregisterChild(child);
+  }
+
+  private deliverDetachedCompletions(state: ParentState): void {
+    for (const child of this.childStates.values()) {
+      if (child.parentThreadId === state.parentThreadId && child.pendingCompletion) {
+        void this.deliverPendingCompletion(state, child);
+      }
     }
   }
 
@@ -1006,6 +1082,7 @@ class Monitor {
         assistantMessagesByTurn: new Map<string, ChildAssistantMessages>(),
         recoveryAttempt: 0,
         terminal: false,
+        nativeCompletionDelivered: false,
         settledWithoutCompletion: false,
         completionDeliveryAttempt: 0,
         deliveringCompletion: false,
@@ -1362,6 +1439,7 @@ class Monitor {
         state = {
           parentThreadId,
           ownerCount: 0,
+          turnIds: new Set(),
           requesterSessionKey: candidate.requesterSessionKey,
           taskRuntimeScope: candidate.taskRuntimeScope,
           agentId: candidate.agentId,
