@@ -202,68 +202,62 @@ esac
   });
 
   it("only ignores the process-owned exact-merge check", () => {
-    const ignored = filterProcessIgnoredRollupChecks(
-      {
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 1,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "clownfish/exact-merge",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-            ],
-          },
+    const ignored = filterProcessIgnoredRollupChecks({
+      statusCheckRollup: {
+        state: "FAILURE",
+        contexts: {
+          totalCount: 1,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "clownfish/exact-merge",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+          ],
         },
       },
-    );
+    });
     expect(classifyRollup(ignored.statusCheckRollup).verdict).toBe("GREEN");
 
-    const otherFailure = filterProcessIgnoredRollupChecks(
-      {
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 2,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "clownfish/exact-merge",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "FAILURE" },
-            ],
-          },
+    const otherFailure = filterProcessIgnoredRollupChecks({
+      statusCheckRollup: {
+        state: "FAILURE",
+        contexts: {
+          totalCount: 2,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "clownfish/exact-merge",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "FAILURE" },
+          ],
         },
       },
-    );
+    });
     expect(classifyRollup(otherFailure.statusCheckRollup)).toMatchObject({
       verdict: "FAILING",
       failingNames: ["unit"],
     });
 
-    const incomplete = filterProcessIgnoredRollupChecks(
-      {
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 2,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "clownfish/exact-merge",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-            ],
-          },
+    const incomplete = filterProcessIgnoredRollupChecks({
+      statusCheckRollup: {
+        state: "FAILURE",
+        contexts: {
+          totalCount: 2,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "clownfish/exact-merge",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+          ],
         },
       },
-    );
+    });
     expect(classifyRollup(incomplete.statusCheckRollup).verdict).toBe("FAILING");
   });
 
