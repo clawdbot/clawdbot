@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { GatewayClientTransport } from "./transport.js";
@@ -18,7 +19,7 @@ describe("GatewayClientTransport live WebSocket lifecycle", () => {
         }),
       );
       socket.on("message", (raw) => {
-        const request = JSON.parse(raw.toString()) as { id: string; method: string };
+        const request = JSON.parse(rawDataToString(raw)) as { id: string; method: string };
         if (request.method !== "connect") {
           return;
         }
