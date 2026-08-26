@@ -88,6 +88,19 @@ export function buildMSTeamsPresentationCard(params: {
           });
           continue;
         }
+        if (action?.type === "approval") {
+          actions.push({
+            type: "Action.Submit",
+            title: button.label,
+            data: {
+              msteams: {
+                type: "imBack",
+                value: `/approve ${action.approvalId} ${action.decision}`,
+              },
+            },
+          });
+          continue;
+        }
         if (action?.type === "callback") {
           actions.push({
             type: "Action.Submit",
