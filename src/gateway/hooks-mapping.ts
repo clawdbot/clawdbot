@@ -263,6 +263,9 @@ async function applyMappingToContext(
     }
   }
 
+  if (!base.action) {
+    return { ok: true, action: null };
+  }
   return mergeAction(base.action, override, mapping.action);
 }
 
