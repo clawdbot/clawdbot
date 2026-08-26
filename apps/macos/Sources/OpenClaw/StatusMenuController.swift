@@ -19,6 +19,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let dashboard = DashboardManager.shared
 
     private var statusItem: NSStatusItem?
+    private var clickMonitor: Any?
     private var hostingView: NSHostingView<StatusMenuIconView>?
     private var renderer: StatusMenuRenderer?
     private var refreshTask: Task<Void, Never>?
@@ -71,6 +72,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         self.approvals.stop()
+        if let clickMonitor = self.clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
         guard let statusItem else { return }
         self.statusItem = nil
         NSStatusBar.system.removeStatusItem(statusItem)
@@ -79,6 +84,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         StatusMenuAppearance.pin(menu)
         guard menu === self.menu, menu.supermenu == nil else { return }
+        // Reconciling tracked rows can re-enter this callback without a close;
+        // a second pass here would cancel refreshes and re-reconcile forever.
+        guard !self.isMenuOpen else { return }
 
         // Cache projection must precede network work: AppKit begins tracking immediately.
         self.renderCachedMenu()
@@ -107,15 +115,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.statusItem?.button?.highlight(self.isChatWindowVisible)
     }
 
+    /// Accessibility/keyboard activation path; pointer clicks are consumed by the
+    /// local event monitor below, so an action firing here has no mouse event.
     @objc
     private func handleStatusClick(_: Any?) {
-        guard let item = self.statusItem, let button = item.button else { return }
-        if NSApp.currentEvent?.type == .rightMouseUp {
-            item.menu = self.menu
-            button.performClick(nil)
-        } else {
-            AppNavigationActions.openDashboard()
-        }
+        AppNavigationActions.openDashboard()
     }
 
     private func installButton(in item: NSStatusItem) {
@@ -132,7 +136,37 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.hostingView = host
         button.target = self
         button.action = #selector(self.handleStatusClick(_:))
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        self.installClickMonitor()
+    }
+
+    /// NSControl's send-action mask ignores right mouse buttons, so a local
+    /// monitor owns pointer routing: left opens the dashboard, right the menu.
+    private func installClickMonitor() {
+        guard self.clickMonitor == nil else { return }
+        self.clickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, let button = self.statusItem?.button,
+                      let window = button.window, event.windowNumber == window.windowNumber
+                else { return event }
+                let point = button.convert(event.locationInWindow, from: nil)
+                guard button.bounds.contains(point) else { return event }
+                switch event.type {
+                case .leftMouseDown:
+                    AppNavigationActions.openDashboard()
+                    return nil
+                case .rightMouseDown:
+                    self.presentMenu()
+                    return nil
+                default:
+                    return event
+                }
+            }
+    }
+
+    private func presentMenu() {
+        guard let item = self.statusItem, let button = item.button else { return }
+        item.menu = self.menu
+        button.performClick(nil)
     }
 
     private func installWindowCallbacks() {
@@ -308,11 +342,33 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func scheduleDebugMenuOpen() {
         #if DEBUG
-        guard ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, let button = self.statusItem?.button else { return }
-            self.statusItem?.menu = self.menu
-            button.performClick(nil)
+        let environment = ProcessInfo.processInfo.environment
+        if environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self, let button = self.statusItem?.button else { return }
+                self.statusItem?.menu = self.menu
+                button.performClick(nil)
+            }
+        }
+        if environment["OPENCLAW_DEBUG_PROBE_RIGHTCLICK"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self, let button = self.statusItem?.button,
+                      let window = button.window else { return }
+                let center = NSPoint(x: button.bounds.midX, y: button.bounds.midY)
+                let inWindow = button.convert(center, to: nil)
+                guard let event = NSEvent.mouseEvent(
+                    with: .rightMouseDown,
+                    location: inWindow,
+                    modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil,
+                    eventNumber: 0,
+                    clickCount: 1,
+                    pressure: 1) else { return }
+                // Route through the local monitor path a real click takes.
+                NSApp.postEvent(event, atStart: false)
+            }
         }
         #endif
     }
