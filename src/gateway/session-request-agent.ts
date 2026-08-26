@@ -50,27 +50,28 @@ export function resolveSessionEventAgentScope(
     explicit?.value ??
     (publishQualifiedAgent && keyAgentId && listAgentIds(cfg).includes(keyAgentId)
       ? keyAgentId
-      : undefined) ??
-    compatibilityOwnerAgentId;
+      : undefined);
   const routingAgentId =
     explicit?.value ??
     keyAgentId ??
-    eventAgentId ??
+    compatibilityOwnerAgentId ??
     (persistedOwner.kind === "retired" ? persistedOwner.agentId : undefined);
   return [eventAgentId, routingAgentId, compatibilityOwnerAgentId];
 }
 
-/** Binds private broadcast authorization to the final canonical session key. */
-export function resolveSessionEventBroadcastScope(
+/** Binds a retired unqualified owner to its private sharing scope. */
+export function resolvePrivateSessionEventBroadcastScope(
   key: string | undefined,
-  [, routingAgentId, compatibilityOwnerAgentId]: SessionEventAgentScope,
+  [eventAgentId, routingAgentId, compatibilityOwnerAgentId]: SessionEventAgentScope,
 ) {
-  return routingAgentId
+  return key &&
+    !parseAgentSessionKey(key) &&
+    !eventAgentId &&
+    routingAgentId &&
+    !compatibilityOwnerAgentId
     ? {
         agentId: routingAgentId,
-        sessionKeys: key
-          ? resolveSessionSubscriptionKeys(key, routingAgentId, compatibilityOwnerAgentId)
-          : undefined,
+        sessionKeys: resolveSessionSubscriptionKeys(key, routingAgentId),
       }
     : undefined;
 }

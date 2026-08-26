@@ -204,16 +204,18 @@ describe("sessions.changed coalescing", () => {
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
-        agentId: "ops",
         activeRunIds: ["ops-global-run"],
         hasActiveRun: true,
       }),
       expect.anything(),
       expect.objectContaining({
         agentId: "ops",
-        sessionKeys: ["agent:ops:global", "global"],
+        sessionKeys: ["global"],
       }),
     );
+    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("goal");
   });
 
   it("keeps a retired fixed-store owner private after the mutation commits", () => {

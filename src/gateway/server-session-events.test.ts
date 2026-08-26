@@ -172,7 +172,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
   });
 
@@ -221,7 +220,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         phase: "message",
       }),
       new Set(["conn-broad", "conn-shared", "conn-targeted"]),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("message");
@@ -259,7 +257,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "sessions.changed",
       expect.objectContaining({ sessionKey: "agent:main:current" }),
       new Set(["conn-1", "conn-current"]),
-      { agentId: "main", sessionKeys: ["agent:main:current"] },
     );
   });
 
@@ -419,7 +416,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("lifecycleRevision");
@@ -456,7 +452,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
   });
 
@@ -484,7 +479,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 3,
       }),
       expect.any(Set),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
   });
 
@@ -519,7 +513,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
       }),
       expect.any(Set),
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:main"] }),
     );
   });
 
@@ -587,7 +580,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it.each([
-    { name: "publishes the configured persisted owner's identity and goal" },
+    { name: "routes the configured persisted owner without publishing its goal" },
     { name: "publishes the explicit owner's identity and goal", agentId: "ops" },
   ])("$name", async ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
@@ -637,13 +630,15 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "session.message",
       expect.objectContaining({ sessionKey: "global" }),
       new Set(["conn-scoped", "conn-global"]),
-      {
-        agentId: "ops",
-        sessionKeys: ["agent:ops:global", "global"],
-      },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
-    expect(payload).toMatchObject({ agentId: "ops", goal, session: { goal } });
+    if (agentId) {
+      expect(payload).toMatchObject({ agentId: "ops", goal, session: { goal } });
+    } else {
+      expect(payload).not.toHaveProperty("agentId");
+      expect(payload).not.toHaveProperty("goal");
+      expect(payload).not.toHaveProperty("session.goal");
+    }
   });
 
   it("keeps a retired fixed-store owner private instead of routing through another agent", async () => {
@@ -968,11 +963,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      {
-        agentId: "main",
-        dropIfSlow: true,
-        sessionKeys: ["agent:main:main"],
-      },
+      { dropIfSlow: true },
     );
   });
 
@@ -1005,7 +996,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
   });
 
   it.each([
-    { name: "publishes active state and goal for the configured persisted owner" },
+    { name: "projects configured persisted state without publishing its goal" },
     { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
   ])("$name", ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
@@ -1045,14 +1036,16 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      {
-        agentId: "ops",
-        dropIfSlow: true,
-        sessionKeys: ["agent:ops:global", "global"],
-      },
+      { dropIfSlow: true },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
-    expect(payload).toMatchObject({ agentId: "ops", goal });
+    if (agentId) {
+      expect(payload).toMatchObject({ agentId: "ops", goal });
+    } else {
+      expect(payload).not.toHaveProperty("agentId");
+      expect(payload).not.toHaveProperty("goal");
+      expect(payload).not.toHaveProperty("session.goal");
+    }
   });
 
   it("publishes only a private invalidation for a retired fixed-store lifecycle owner", () => {

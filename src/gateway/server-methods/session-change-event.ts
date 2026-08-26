@@ -3,7 +3,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
-  resolveSessionEventBroadcastScope,
+  resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
@@ -64,8 +64,10 @@ function broadcastSessionsChanged(
     return;
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
-  const privateBroadcastScope = resolveSessionEventBroadcastScope(payload.sessionKey, scope);
+  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope);
+  const broadcastAgentId = routingAgentId;
   const broadcastOptions = {
+    ...(broadcastAgentId ? { agentId: broadcastAgentId } : {}),
     ...privateBroadcastScope,
     dropIfSlow: true,
   };
@@ -77,7 +79,7 @@ function broadcastSessionsChanged(
   if (
     !payload.sessionKey ||
     !routingAgentId ||
-    (!eventAgentId && !parseAgentSessionKey(payload.sessionKey))
+    (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(payload.sessionKey))
   ) {
     context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
     return;
@@ -110,7 +112,10 @@ function broadcastSessionsChanged(
         : {}),
     },
     connIds,
-    broadcastOptions,
+    {
+      ...broadcastOptions,
+      ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
+    },
   );
 }
 

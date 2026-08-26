@@ -343,6 +343,35 @@ test("ownerless raw-global events invalidate without contaminating the selected 
   expect(invalidated.result).toBe(result);
   expect(invalidated.row).toBeUndefined();
 
+  const mainResult = buildResult([{ key: "main", kind: "direct", updatedAt: 1, status: "done" }]);
+  const invalidatedMain = reconcileSessionChanged(
+    mainResult,
+    { sessionKey: "main", reason: "delete", ts: 2 },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(invalidatedMain.applied).toBe(false);
+  expect(invalidatedMain.result).toBe(mainResult);
+
+  const ownerlessMain = reconcileSessionChanged(
+    mainResult,
+    {
+      sessionKey: "main",
+      activeRunIds: ["main-run"],
+      hasActiveRun: true,
+      status: "running",
+      updatedAt: 2,
+    },
+    { resultAgentId: "main", selectedGlobalAgentId: "main" },
+  );
+  expect(ownerlessMain.applied).toBe(true);
+  expect(ownerlessMain.row).toMatchObject({
+    key: "main",
+    activeRunIds: ["main-run"],
+    hasActiveRun: true,
+    status: "running",
+  });
+  expect(ownerlessMain.row).not.toHaveProperty("agentId");
+
   const explicit = reconcileSessionChanged(
     result,
     { ...payload, agentId: "research" },

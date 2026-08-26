@@ -24,11 +24,14 @@ import { resolveVisibleActiveSessionRunState } from "./server-methods/session-ac
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
-  resolveSessionEventBroadcastScope,
+  resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
   type SessionEventAgentScope,
 } from "./session-request-agent.js";
-import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "./session-subscription-keys.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionRow, loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -204,12 +207,14 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-  const privateBroadcastScope = resolveSessionEventBroadcastScope(sessionKey, agentScope);
+  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope);
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  const broadcastKeys = privateBroadcastScope?.sessionKeys ?? [sessionKey];
+  const broadcastKeys = routingAgentId
+    ? resolveSessionSubscriptionKeys(sessionKey, routingAgentId, compatibilityOwnerAgentId)
+    : [sessionKey];
   for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
@@ -224,7 +229,7 @@ async function handleTranscriptUpdateBroadcast(
     }
   }
   const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
-  if (!eventAgentId && !parseAgentSessionKey(sessionKey)) {
+  if (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(sessionKey)) {
     if (lifecycleRevision) {
       const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
       if (
@@ -329,7 +334,6 @@ async function handleTranscriptUpdateBroadcast(
         ...sessionSnapshot,
       },
       connIds,
-      privateBroadcastScope,
     );
     return;
   }
@@ -343,7 +347,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionSnapshot,
   });
   if (projected.payload) {
-    params.broadcastToConnIds("session.message", projected.payload, connIds, privateBroadcastScope);
+    params.broadcastToConnIds("session.message", projected.payload, connIds);
     return;
   }
 
@@ -365,7 +369,7 @@ async function handleTranscriptUpdateBroadcast(
       ...sessionSnapshot,
     },
     sessionEventConnIds,
-    { ...privateBroadcastScope, dropIfSlow: true },
+    { dropIfSlow: true },
   );
 }
 
@@ -395,9 +399,12 @@ export function createLifecycleEventBroadcastHandler(params: {
       return;
     }
     const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-    const privateBroadcastScope = resolveSessionEventBroadcastScope(event.sessionKey, agentScope);
+    const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(
+      event.sessionKey,
+      agentScope,
+    );
     const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
-    if (!eventAgentId || !routingAgentId) {
+    if (!routingAgentId || (!eventAgentId && !compatibilityOwnerAgentId)) {
       params.broadcastToConnIds(
         "sessions.changed",
         { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
@@ -422,7 +429,7 @@ export function createLifecycleEventBroadcastHandler(params: {
       "sessions.changed",
       {
         sessionKey: event.sessionKey,
-        agentId: eventAgentId,
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
         reason: event.reason,
         parentSessionKey: event.parentSessionKey,
         label: event.label,
@@ -445,7 +452,7 @@ export function createLifecycleEventBroadcastHandler(params: {
           : {}),
       },
       connIds,
-      broadcastOptions,
+      { dropIfSlow: true },
     );
   };
 }

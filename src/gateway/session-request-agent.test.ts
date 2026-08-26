@@ -114,7 +114,7 @@ describe("requested session agent ownership", () => {
 describe("session event agent scope", () => {
   it("separates configured, retired, legacy, and explicit event ownership", () => {
     expect(resolveSessionEventAgentScope(fixedStoreConfig("ops"), "global")).toEqual([
-      "ops",
+      undefined,
       "ops",
       "ops",
     ]);
@@ -125,7 +125,7 @@ describe("session event agent scope", () => {
     ]);
     expect(
       resolveSessionEventAgentScope({ agents: { entries: { main: { default: true } } } }, "global"),
-    ).toEqual(["main", "main", "main"]);
+    ).toEqual([undefined, "main", "main"]);
     expect(resolveSessionEventAgentScope(fixedStoreConfig("ops"), "global", "research")).toEqual([
       "research",
       "research",
