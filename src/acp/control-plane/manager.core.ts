@@ -46,6 +46,7 @@ import {
   DEFAULT_DEPS,
   type SessionAcpMeta,
   type SessionEntry,
+  type TurnSetupState,
   type TurnLatencyStats,
 } from "./manager.types.js";
 import {
@@ -69,6 +70,7 @@ export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly runtimeHandles = new ManagerRuntimeHandleCache();
   private readonly activeTurnBySession = new Map<string, ActiveTurnState>();
+  private readonly turnSetupBySession = new Map<string, Set<TurnSetupState>>();
   private readonly turnLatencyStats: TurnLatencyStats = {
     completed: 0,
     failed: 0,
@@ -314,26 +316,60 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles();
-    await this.withSessionActor(
-      sessionKey,
-      async () =>
-        await runManagerTurn({
-          input,
-          sessionKey,
-          deps: this.deps,
-          runtimeHandles: this.runtimeHandles,
-          activeTurnBySession: this.activeTurnBySession,
-          resolveSession: this.resolveSession.bind(this),
-          ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
-          applyRuntimeControls: this.applyRuntimeControls.bind(this),
-          setSessionState: this.setSessionState.bind(this),
-          recordTurnCompletion: this.recordTurnCompletion.bind(this),
-          reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
-          writeSessionMeta: this.writeSessionMeta.bind(this),
-        }),
-      input.signal,
-    );
+    const actorKey = normalizeActorKey(sessionKey);
+    const setupAbortController = new AbortController();
+    let resolveSetupCompletion: () => void = () => {};
+    const setupCompletion = new Promise<void>((resolve) => {
+      resolveSetupCompletion = resolve;
+    });
+    const setupState: TurnSetupState = {
+      abortController: setupAbortController,
+      completion: setupCompletion,
+    };
+    const setupStates = this.turnSetupBySession.get(actorKey) ?? new Set<TurnSetupState>();
+    setupStates.add(setupState);
+    this.turnSetupBySession.set(actorKey, setupStates);
+    let setupRegistered = true;
+    const unregisterSetup = () => {
+      if (!setupRegistered) {
+        return;
+      }
+      setupRegistered = false;
+      setupStates.delete(setupState);
+      if (setupStates.size === 0 && this.turnSetupBySession.get(actorKey) === setupStates) {
+        this.turnSetupBySession.delete(actorKey);
+      }
+      resolveSetupCompletion();
+    };
+    const signal = input.signal
+      ? AbortSignal.any([input.signal, setupAbortController.signal])
+      : setupAbortController.signal;
+    try {
+      await this.evictIdleRuntimeHandles();
+      await this.withSessionActor(
+        sessionKey,
+        async () => {
+          await runManagerTurn({
+            input: { ...input, signal },
+            sessionKey,
+            deps: this.deps,
+            runtimeHandles: this.runtimeHandles,
+            activeTurnBySession: this.activeTurnBySession,
+            resolveSession: this.resolveSession.bind(this),
+            ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+            applyRuntimeControls: this.applyRuntimeControls.bind(this),
+            setSessionState: this.setSessionState.bind(this),
+            onTurnActive: unregisterSetup,
+            recordTurnCompletion: this.recordTurnCompletion.bind(this),
+            reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
+            writeSessionMeta: this.writeSessionMeta.bind(this),
+          });
+        },
+        signal,
+      );
+    } finally {
+      unregisterSetup();
+    }
   }
 
   async cancelSession(params: {
@@ -348,7 +384,10 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    if (!this.activeTurnBySession.has(actorKey) && !this.turnSetupBySession.has(actorKey)) {
+      await this.evictIdleRuntimeHandles();
+    }
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
@@ -357,6 +396,7 @@ export class AcpSessionManager {
       expectedInstanceId: params.expectedInstanceId,
       expectedOwnerKey: params.expectedOwnerKey,
       activeTurnBySession: this.activeTurnBySession,
+      turnSetupBySession: this.turnSetupBySession,
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
