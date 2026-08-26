@@ -7,6 +7,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandBuffer as requireGitBuffer,
 } from "../infra/git-exec.js";
+import { captureRequiredCleanupOutcome, finishRequiredCleanup } from "../infra/required-cleanup.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -327,7 +328,7 @@ async function materializeGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
   ref?: string;
-}): Promise<{ commit: string; path: string; cleanup: () => Promise<void> }> {
+}): Promise<{ commit: string; path: string; cleanupPath: string; cleanup: () => Promise<void> }> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
   const commit = await resolveGitCommit(repositoryPath, params.ref);
@@ -369,11 +370,15 @@ async function materializeGitBackupRef(params: {
     return {
       commit,
       path: outputPath,
+      cleanupPath: root,
       cleanup: async () => await fs.rm(root, { recursive: true, force: true }),
     };
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    return await finishRequiredCleanup({
+      outcome: { ok: false, error },
+      cleanup: async () => await fs.rm(root, { recursive: true, force: true }),
+      combinedFailureMessage: `Git backup materialization and private staging cleanup both failed: ${root}.`,
+    });
   }
 }
 
@@ -385,18 +390,21 @@ export async function restoreGitBackupRef(params: {
   targetPath: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
   const materialized = await materializeGitBackupRef(params);
-  try {
-    return {
-      ...(await restoreGitBackupDirectory({
-        sourcePath: materialized.path,
-        targetPath: params.targetPath,
-        expectedIdentity: params.identity,
-      })),
-      commit: materialized.commit,
-    };
-  } finally {
-    await materialized.cleanup();
-  }
+  const outcome = await captureRequiredCleanupOutcome(async () => ({
+    ...(await restoreGitBackupDirectory({
+      sourcePath: materialized.path,
+      targetPath: params.targetPath,
+      expectedIdentity: params.identity,
+    })),
+    commit: materialized.commit,
+  }));
+  const recovery = `Remove the private staging directory manually: ${materialized.cleanupPath}`;
+  return await finishRequiredCleanup({
+    outcome,
+    cleanup: materialized.cleanup,
+    cleanupFailureMessage: `Git backup restore completed, but materialized source cleanup failed. The verified target remains at ${path.resolve(params.targetPath)}. ${recovery}`,
+    combinedFailureMessage: `Git backup restore and materialized source cleanup both failed. ${recovery}`,
+  });
 }
 
 /** Verify a Git snapshot by restoring it privately and comparing every table digest. */
@@ -407,14 +415,20 @@ export async function verifyGitBackupRef(params: {
 }): Promise<GitBackupRestoreResult & { commit: string }> {
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-verify-"));
   await fs.chmod(scratch, 0o700);
-  try {
-    return await restoreGitBackupRef({
-      ...params,
-      targetPath: path.join(scratch, "database.sqlite"),
-    });
-  } finally {
-    await fs.rm(scratch, { recursive: true, force: true }).catch(() => undefined);
-  }
+  const outcome = await captureRequiredCleanupOutcome(
+    async () =>
+      await restoreGitBackupRef({
+        ...params,
+        targetPath: path.join(scratch, "database.sqlite"),
+      }),
+  );
+  const recovery = `Remove the private verification directory manually: ${scratch}`;
+  return await finishRequiredCleanup({
+    outcome,
+    cleanup: async () => await fs.rm(scratch, { recursive: true, force: true }),
+    cleanupFailureMessage: `Git backup verification completed, but private scratch cleanup failed. ${recovery}`,
+    combinedFailureMessage: `Git backup verification and private scratch cleanup both failed. ${recovery}`,
+  });
 }
 
 /** Return bounded Git backup log entries for CLI rendering. */

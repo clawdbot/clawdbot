@@ -17,7 +17,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
-import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
+import {
+  createGitBackup,
+  initializeGitBackupRepository,
+  restoreGitBackupRef,
+  verifyGitBackupRef,
+} from "./git-backup.js";
 
 const mocks = vi.hoisted(() => ({ pushDiagnostic: undefined as string | undefined }));
 
@@ -42,6 +47,50 @@ async function tempRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-test-"));
   roots.push(root);
   return root;
+}
+
+async function captureCleanupFailure<T>(
+  operation: () => Promise<T>,
+  options: { prefix: string; message: string },
+) {
+  const originalRm = fs.rm.bind(fs);
+  let stagingPath: string | undefined;
+  const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, rmOptions) => {
+    const targetPath = String(target);
+    if (path.basename(targetPath).startsWith(options.prefix)) {
+      stagingPath = targetPath;
+      throw Object.assign(new Error(options.message), { code: "EACCES" });
+    }
+    return await originalRm(target, rmOptions);
+  });
+  try {
+    const outcome = await operation().then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    if (!stagingPath) {
+      throw new Error("Git restore did not attempt private staging cleanup.");
+    }
+    return { outcome, stagingPath };
+  } finally {
+    rmSpy.mockRestore();
+    if (stagingPath) {
+      await originalRm(stagingPath, { recursive: true, force: true });
+    }
+  }
+}
+
+async function createGitRestoreFixture(root: string): Promise<{
+  repositoryPath: string;
+  stateDir: string;
+}> {
+  const { stateDir, database } = createStateDatabaseFixture(root);
+  const repositoryPath = path.join(root, "repository");
+  await initializeGitBackupRepository({ repositoryPath, stateDir });
+  await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+  await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+  await createGitBackup({ repositoryPath, stateDir, databases: [database] });
+  return { repositoryPath, stateDir };
 }
 
 afterEach(async () => {
@@ -637,6 +686,189 @@ describe("Git-backed SQLite snapshots", () => {
     } finally {
       database.close();
     }
+  });
+
+  it("rejects cleanup failure after preserving the verified target", async () => {
+    const root = await tempRoot();
+    const source = path.join(root, "source.sqlite");
+    const dump = path.join(root, "dump");
+    const restoredPath = path.join(root, "restored.sqlite");
+    await createFormatFixture(source);
+    await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: dump,
+      identity: { role: "global" },
+    });
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () =>
+        restoreGitBackupDirectory({
+          sourcePath: dump,
+          targetPath: restoredPath,
+          expectedIdentity: { role: "global" },
+        }),
+      { prefix: ".git-backup-restore-", message: "restore cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Restore reported success despite staging cleanup failure.");
+    }
+    expect(outcome.error).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining(`The verified target remains at ${restoredPath}`),
+      }),
+    );
+    expect((outcome.error as Error).message).toContain(stagingPath);
+    const restored = new DatabaseSync(restoredPath, { readOnly: true });
+    try {
+      expect(restored.prepare("SELECT COUNT(*) AS count FROM content").get()).toEqual({ count: 2 });
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("reports restore and cleanup failures together", async () => {
+    const root = await tempRoot();
+    const source = path.join(root, "source.sqlite");
+    const dump = path.join(root, "dump");
+    const restoredPath = path.join(root, "restored.sqlite");
+    await createFormatFixture(source);
+    const database = new DatabaseSync(source);
+    try {
+      database.exec("DROP TABLE schema_meta;");
+    } finally {
+      database.close();
+    }
+    await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: dump,
+      identity: { role: "global" },
+    });
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () =>
+        restoreGitBackupDirectory({
+          sourcePath: dump,
+          targetPath: restoredPath,
+          expectedIdentity: { role: "global" },
+        }),
+      { prefix: ".git-backup-restore-", message: "restore cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Invalid restore reported success.");
+    }
+    expect(outcome.error).toBeInstanceOf(AggregateError);
+    expect((outcome.error as AggregateError).message).toContain(stagingPath);
+    expect((outcome.error as AggregateError).errors.map(String)).toEqual([
+      expect.stringMatching(/schema role missing; expected global/u),
+      expect.stringMatching(/restore cleanup denied/u),
+    ]);
+    await expect(fs.lstat(restoredPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves a verified target when Git materialization cleanup fails", async () => {
+    const root = await tempRoot();
+    const { repositoryPath } = await createGitRestoreFixture(root);
+    const restoredPath = path.join(root, "restored.sqlite");
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () =>
+        restoreGitBackupRef({
+          repositoryPath,
+          identity: { role: "global" },
+          targetPath: restoredPath,
+        }),
+      { prefix: "openclaw-git-restore-", message: "materialized cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Restore reported success despite materialized source cleanup failure.");
+    }
+    expect((outcome.error as Error).message).toContain(
+      `The verified target remains at ${restoredPath}`,
+    );
+    expect((outcome.error as Error).message).toContain(stagingPath);
+    const restored = new DatabaseSync(restoredPath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ role: "global" });
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("aggregates restore and Git materialization cleanup failures", async () => {
+    const root = await tempRoot();
+    const { repositoryPath } = await createGitRestoreFixture(root);
+    const restoredPath = path.join(root, "restored.sqlite");
+    await fs.writeFile(restoredPath, "occupied");
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () =>
+        restoreGitBackupRef({
+          repositoryPath,
+          identity: { role: "global" },
+          targetPath: restoredPath,
+        }),
+      { prefix: "openclaw-git-restore-", message: "materialized cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Invalid restore reported success.");
+    }
+    expect(outcome.error).toBeInstanceOf(AggregateError);
+    expect((outcome.error as AggregateError).message).toContain(stagingPath);
+    expect((outcome.error as AggregateError).errors.map(String)).toEqual([
+      expect.stringMatching(/Fresh SQLite restore path already exists/u),
+      expect.stringMatching(/materialized cleanup denied/u),
+    ]);
+  });
+
+  it("aggregates Git materialization and staging cleanup failures", async () => {
+    const root = await tempRoot();
+    const { repositoryPath } = await createGitRestoreFixture(root);
+    const unexpectedPath = path.join(repositoryPath, "global", "unexpected.txt");
+    await fs.writeFile(unexpectedPath, "unexpected\n");
+    await requireGit(repositoryPath, ["add", "global/unexpected.txt"]);
+    await requireGit(repositoryPath, ["commit", "-m", "inject unexpected backup content"]);
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () =>
+        restoreGitBackupRef({
+          repositoryPath,
+          identity: { role: "global" },
+          targetPath: path.join(root, "restored.sqlite"),
+        }),
+      { prefix: "openclaw-git-restore-", message: "materialized cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Invalid materialization reported success.");
+    }
+    expect(outcome.error).toBeInstanceOf(AggregateError);
+    expect((outcome.error as AggregateError).message).toContain(stagingPath);
+    expect((outcome.error as AggregateError).errors.map(String)).toEqual([
+      expect.stringMatching(/Git backup ref contains an unexpected file/u),
+      expect.stringMatching(/materialized cleanup denied/u),
+    ]);
+  });
+
+  it("rejects verification when private scratch cleanup fails", async () => {
+    const root = await tempRoot();
+    const { repositoryPath } = await createGitRestoreFixture(root);
+
+    const { outcome, stagingPath } = await captureCleanupFailure(
+      () => verifyGitBackupRef({ repositoryPath, identity: { role: "global" } }),
+      { prefix: "openclaw-git-verify-", message: "verification cleanup denied" },
+    );
+
+    if (outcome.ok) {
+      throw new Error("Verification reported success despite private scratch cleanup failure.");
+    }
+    expect((outcome.error as Error).message).toContain("private scratch cleanup failed");
+    expect((outcome.error as Error).message).toContain(stagingPath);
   });
 
   it("omits secret tables and reports the restore gap", async () => {

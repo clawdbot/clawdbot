@@ -25,6 +25,7 @@ import {
 } from "../infra/fs-safe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { finishRequiredCleanup, type RequiredCleanupOutcome } from "../infra/required-cleanup.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
@@ -1161,7 +1162,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
   const directoryPath = await createPrivateSqliteTempDirectory(trustedRootPath, options.prefix);
   const directoryIdentity = await fs.lstat(directoryPath);
 
-  let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+  let outcome: RequiredCleanupOutcome<T>;
   try {
     applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
     await assertPrivateStagingDirectory(directoryIdentity, directoryPath);
@@ -1174,44 +1175,31 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
     outcome = { ok: false, error };
   }
 
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown };
-  try {
-    const removed = await removePrivateDirectoryIfOwned(
-      directoryPath,
-      directoryIdentity,
-      options.allowedEntries,
-    );
-    if (!removed) {
-      throw new Error(`Private SQLite staging directory disappeared: ${directoryPath}`);
-    }
-    cleanupOutcome = { ok: true };
-  } catch (error) {
-    cleanupOutcome = { ok: false, error };
-  }
-
-  if (!cleanupOutcome.ok) {
-    if (!outcome.ok) {
-      throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
-        `SQLite staging operation and cleanup both failed: ${directoryPath}`,
+  return await finishRequiredCleanup({
+    outcome,
+    cleanup: async () => {
+      const removed = await removePrivateDirectoryIfOwned(
+        directoryPath,
+        directoryIdentity,
+        options.allowedEntries,
       );
-    }
-    throw new Error(`Failed to clean private SQLite staging directory: ${directoryPath}`, {
-      cause: cleanupOutcome.error,
-    });
-  }
-  requireDirectorySync(
-    await syncDirectory({
-      path: trustedRootPath,
-      realPath: trustedRootPath,
-      identity: options.expectedRootIdentity,
-    }),
-    "Private SQLite staging root",
-  );
-  if (!outcome.ok) {
-    throw outcome.error;
-  }
-  return outcome.value;
+      if (!removed) {
+        throw new Error(`Private SQLite staging directory disappeared: ${directoryPath}`);
+      }
+    },
+    afterCleanup: async () => {
+      requireDirectorySync(
+        await syncDirectory({
+          path: trustedRootPath,
+          realPath: trustedRootPath,
+          identity: options.expectedRootIdentity,
+        }),
+        "Private SQLite staging root",
+      );
+    },
+    cleanupFailureMessage: `Failed to clean private SQLite staging directory: ${directoryPath}`,
+    combinedFailureMessage: `SQLite staging operation and cleanup both failed: ${directoryPath}`,
+  });
 }
 
 async function assertTrustedStagingRoot(

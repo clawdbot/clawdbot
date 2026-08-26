@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { finishRequiredCleanup, type RequiredCleanupOutcome } from "../infra/required-cleanup.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
@@ -535,6 +536,7 @@ export async function restoreGitBackupDirectory(params: {
   const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
   await stagedHandle.close();
   const database = openNodeSqliteDatabase(stagedPath);
+  let outcome: RequiredCleanupOutcome<GitBackupRestoreResult>;
   try {
     database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
     for (const statement of [...plainTables, ...indexes]) {
@@ -622,13 +624,24 @@ export async function restoreGitBackupDirectory(params: {
         guard.assertTargetMatchesExpectedContent(() => assertNoSqliteSidecarsSync(targetPath));
       },
     });
-    return { manifest, targetPath, tables, excludedTables: manifest.excludedTables };
+    outcome = {
+      ok: true,
+      value: { manifest, targetPath, tables, excludedTables: manifest.excludedTables },
+    };
   } catch (error) {
     if (database.isOpen) {
       database.close();
     }
-    throw error;
-  } finally {
-    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
+    outcome = { ok: false, error };
   }
+
+  // Publication can succeed before cleanup. Preserve that verified target, but never
+  // report success while its sensitive private staging copy remains.
+  const recovery = `Remove the private staging directory manually: ${stagingDirectory}`;
+  return await finishRequiredCleanup({
+    outcome,
+    cleanup: async () => await fs.rm(stagingDirectory, { recursive: true, force: true }),
+    cleanupFailureMessage: `Git backup restore completed, but private staging cleanup failed. The verified target remains at ${targetPath}. ${recovery}`,
+    combinedFailureMessage: `Git backup restore and private staging cleanup both failed. ${recovery}`,
+  });
 }
