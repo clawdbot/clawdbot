@@ -2914,6 +2914,15 @@ function materializeGatewayLiveDiscoveryAuth(params: {
   });
 }
 
+function resolveGatewayLivePreparedProfileId(
+  store: AuthProfileStore,
+  provider: string,
+): string | undefined {
+  return normalizeProviderId(provider) === "openai" && store.profiles["openai:live"]
+    ? "openai:live"
+    : undefined;
+}
+
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3105,6 +3114,17 @@ describe("buildLiveGatewayAuthProfileStore", () => {
         store,
       }),
     ).toBe(store);
+  });
+
+  it("carries the materialized OpenAI profile into profile-first lookup", () => {
+    const store = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolveGatewayLivePreparedProfileId(store, "openai")).toBe("openai:live");
+    expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
   });
 
   it("keeps an env-first provider on its prepared direct credential", () => {
@@ -5997,6 +6017,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 store: authProfileStore,
                 agentDir,
                 workspaceDir,
+                profileId: resolveGatewayLivePreparedProfileId(authProfileStore, model.provider),
                 credentialPrecedence: resolveLiveCredentialPrecedence(
                   model.provider,
                   REQUIRE_PROFILE_KEYS,
