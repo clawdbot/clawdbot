@@ -59,7 +59,13 @@ describe("handleDirList — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, "private.txt"), "secret");
 
     const preflight = await handleDirList({ path: tmpRoot, preflightOnly: true });
-    expect(preflight).toEqual({ ok: true, path: tmpRoot, preflight: true });
+    expect(preflight).toEqual({
+      ok: true,
+      path: tmpRoot,
+      entries: [],
+      truncated: false,
+      preflight: true,
+    });
 
     const changed = await handleDirList({
       path: tmpRoot,

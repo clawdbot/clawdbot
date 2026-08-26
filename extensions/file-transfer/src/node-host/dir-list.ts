@@ -37,12 +37,7 @@ type DirListOk = {
   entries: DirListEntry[];
   nextPageToken?: string;
   truncated: boolean;
-};
-
-type DirListPreflightOk = {
-  ok: true;
-  path: string;
-  preflight: true;
+  preflight?: true;
 };
 
 type DirListErrCode =
@@ -61,7 +56,7 @@ type DirListErr = {
   canonicalPath?: string;
 };
 
-type DirListResult = DirListOk | DirListPreflightOk | DirListErr;
+type DirListResult = DirListOk | DirListErr;
 
 function clampMaxEntries(input: unknown): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
@@ -125,7 +120,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     };
   }
   if (params.preflightOnly === true) {
-    return { ok: true, path: canonical, preflight: true };
+    return { ok: true, path: canonical, entries: [], truncated: false, preflight: true };
   }
 
   const directory = await statRequiredDirectory(canonical, classifyFsError);
