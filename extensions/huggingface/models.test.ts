@@ -64,6 +64,44 @@ describe("huggingface models", () => {
     expect(models).toEqual([{ ...bundledModel, contextWindow: 64000 }]);
   });
 
+  it("limits discovered models to every available route regardless of provider order", async () => {
+    const bundledModel = HUGGINGFACE_MODEL_CATALOG[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            {
+              id: "Qwen/Qwen3.8-2.4T-A95B",
+              providers: [{ context_length: 1010000 }, { context_length: 262144 }],
+            },
+            {
+              id: "test/reversed-provider-order",
+              providers: [{ context_length: 262144 }, { context_length: 1010000 }],
+            },
+            {
+              id: bundledModel.id,
+              providers: [
+                { status: "error", context_length: 16000 },
+                { context_length: 96000 },
+                { context_length: 0 },
+                { context_length: 64000 },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map(({ id, contextWindow }) => ({ id, contextWindow }))).toEqual([
+      { id: "Qwen/Qwen3.8-2.4T-A95B", contextWindow: 262144 },
+      { id: "test/reversed-provider-order", contextWindow: 262144 },
+      { id: bundledModel.id, contextWindow: 64000 },
+    ]);
+  });
+
   it("disables tools only when every available route explicitly rejects them", async () => {
     vi.stubGlobal(
       "fetch",
@@ -108,7 +146,7 @@ describe("huggingface models", () => {
       {
         id: "test/no-tools-vision",
         input: ["text", "image"],
-        contextWindow: 96000,
+        contextWindow: 64000,
         compat: { supportsTools: false },
       },
       {

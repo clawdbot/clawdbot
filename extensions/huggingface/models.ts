@@ -129,9 +129,9 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
     const providers = Array.isArray(entry?.providers)
       ? entry.providers.filter((provider) => provider?.status !== "error")
       : [];
-    const providerWithContext = providers.find(
-      (provider) => typeof provider?.context_length === "number" && provider.context_length > 0,
-    );
+    const providerContexts = providers
+      .map((provider) => provider?.context_length)
+      .filter((context): context is number => typeof context === "number" && context > 0);
     const model: ModelDefinitionConfig = catalogById.get(id) ?? {
       id,
       name: displayNameFromApiEntry(entry),
@@ -144,7 +144,8 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
     };
     models.push({
       ...model,
-      contextWindow: providerWithContext?.context_length ?? model.contextWindow,
+      contextWindow:
+        providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
       ...(providers.length > 0 && providers.every((provider) => provider?.supports_tools === false)
         ? { compat: { ...model.compat, supportsTools: false } }
         : {}),
