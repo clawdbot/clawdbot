@@ -413,9 +413,19 @@ extension StatusMenuSummaries {
         }
 
         return NodeInfo(
-            nodeId: "gateway", displayName: String(localized: "Gateway"), platform: platform,
-            version: nil, coreVersion: nil, uiVersion: nil, deviceFamily: nil, modelIdentifier: nil,
-            remoteIp: host, caps: nil, commands: nil, permissions: nil, paired: nil,
+            nodeId: "gateway",
+            displayName: String(localized: "Gateway"),
+            platform: platform,
+            version: nil,
+            coreVersion: nil,
+            uiVersion: nil,
+            deviceFamily: nil,
+            modelIdentifier: nil,
+            remoteIp: host,
+            caps: nil,
+            commands: nil,
+            permissions: nil,
+            paired: nil,
             connected: self.isConnected)
     }
 
@@ -442,7 +452,9 @@ extension StatusMenuSummaries {
             entries.append(self.copyEntry(node: node, id: "ip", label: String(localized: "IP"), value: ip))
         }
         entries.append(self.copyEntry(
-            node: node, id: "status", label: String(localized: "Status"),
+            node: node,
+            id: "status",
+            label: String(localized: "Status"),
             value: NodeMenuEntryFormatter.roleText(node)))
         if let platform = NodeMenuEntryFormatter.platformText(node) {
             entries.append(self.copyEntry(
@@ -463,14 +475,18 @@ extension StatusMenuSummaries {
            !capabilities.isEmpty
         {
             entries.append(self.copyEntry(
-                node: node, id: "capabilities", label: String(localized: "Caps"),
+                node: node,
+                id: "capabilities",
+                label: String(localized: "Caps"),
                 value: capabilities.joined(separator: ", ")))
         }
         if let commands = node.commands?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
            !commands.isEmpty
         {
             entries.append(self.copyEntry(
-                node: node, id: "commands", label: String(localized: "Commands"),
+                node: node,
+                id: "commands",
+                label: String(localized: "Commands"),
                 value: commands.joined(separator: ", ")))
         }
         self.reconcileSubmenu(for: item, entries: entries)

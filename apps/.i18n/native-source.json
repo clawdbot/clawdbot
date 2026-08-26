@@ -4155,8 +4155,6 @@
     {"id":"native.apple.3a013ca23d500630","source":"\\(self.agentSkillFilter?.count ?? 0)","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/ios/Sources/Design/AgentProTab+Skills.swift"}]},
     {"id":"native.apple.d3213dcf4563b1df","source":"\\(self.appModel.gatewayAgents.count)","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/ios/Sources/Design/IPadActivityScreen.swift"}]},
     {"id":"native.apple.97e0057bfed62f44","source":"\\(self.friendlyName(for: current)) (System)","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"}]},
-    {"id":"native.apple.fa3a93cd790f6cf1","source":"\\(self.label):","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/NodesMenu.swift"}]},
-    {"id":"native.apple.d95da1563f0a6385","source":"\\(self.row.tokens.contextSummaryShort) · \\(self.row.ageText)","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/SessionMenuLabelView.swift"}]},
     {"id":"native.apple.e56638fb2bd2fd60","source":"\\(self.sessionRows.count)","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/ios/Sources/Design/IPadActivityScreen.swift"}]},
     {"id":"native.apple.0552734ad83e18be","source":"\\(status.label) presence","surface":"apple","sites":[{"kind":"ui-modifier","path":"apps/macos/Sources/OpenClaw/InstancesSettings.swift"}]},
     {"id":"native.apple.8dc3f06acc9c0e2d","source":"\\(style.percent) percent used","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/ContextRingView.swift"}]},

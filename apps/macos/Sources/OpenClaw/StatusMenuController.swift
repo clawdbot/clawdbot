@@ -144,23 +144,24 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private func installClickMonitor() {
         guard self.clickMonitor == nil else { return }
         self.clickMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-                guard let self, let button = self.statusItem?.button,
-                      let window = button.window, event.windowNumber == window.windowNumber
-                else { return event }
-                let point = button.convert(event.locationInWindow, from: nil)
-                guard button.bounds.contains(point) else { return event }
-                switch event.type {
-                case .leftMouseDown:
-                    AppNavigationActions.openDashboard()
-                    return nil
-                case .rightMouseDown:
-                    self.presentMenu()
-                    return nil
-                default:
-                    return event
-                }
+            matching: [.leftMouseDown, .rightMouseDown])
+        { [weak self] event in
+            guard let self, let button = self.statusItem?.button,
+                  let window = button.window, event.windowNumber == window.windowNumber
+            else { return event }
+            let point = button.convert(event.locationInWindow, from: nil)
+            guard button.bounds.contains(point) else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                AppNavigationActions.openDashboard()
+                return nil
+            case .rightMouseDown:
+                self.presentMenu()
+                return nil
+            default:
+                return event
             }
+        }
     }
 
     private func presentMenu() {
