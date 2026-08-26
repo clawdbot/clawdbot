@@ -64,6 +64,7 @@ import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
 import {
   detectPluginVersionDrift,
+  resolvePluginVersionDriftTargets,
   type PluginVersionDriftReport,
 } from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -783,18 +784,22 @@ export async function gatherDaemonStatus(
   // records with the merged daemon environment inspects the managed service's
   // profile/state dir, so remote/explicit URL probes need remote-owned
   // diagnostics instead.
-  // Best-effort: unreadable install records omit this advisory report.
+  // Best-effort: unreadable install records omit this advisory report. Registry
+  // lookup failures stay in the report so renderers cannot fabricate a repair
+  // command from the gateway version alone.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
   if (shouldInspectLocalGateway) {
     try {
       const installRecords = await loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
       });
-      pluginVersionDrift = detectPluginVersionDrift({
-        gatewayVersion: gatewayVersion ?? VERSION,
-        installRecords,
-        config: daemonCfg,
-      });
+      pluginVersionDrift = await resolvePluginVersionDriftTargets(
+        detectPluginVersionDrift({
+          gatewayVersion: gatewayVersion ?? VERSION,
+          installRecords,
+          config: daemonCfg,
+        }),
+      );
     } catch {
       pluginVersionDrift = undefined;
     }

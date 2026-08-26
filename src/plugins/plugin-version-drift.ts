@@ -6,19 +6,35 @@ import {
   parseRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
 } from "../infra/npm-registry-spec.js";
+import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
-type PluginVersionDriftEntry = {
+type PluginVersionDriftTargetResolution =
+  | {
+      status: "resolved";
+      packageName: string;
+      requestedTarget: string;
+      version: string;
+    }
+  | {
+      status: "unresolved";
+      packageName: string;
+      requestedTarget: string;
+      error: string;
+    };
+
+export type PluginVersionDriftEntry = {
   pluginId: string;
   installedVersion: string;
   gatewayVersion: string;
   source: PluginInstallRecord["source"];
   packageName?: string;
   spec?: string;
+  targetResolution?: PluginVersionDriftTargetResolution;
 };
 
 export type PluginVersionDriftReport = {
@@ -37,16 +53,141 @@ function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string |
   return parsed.name;
 }
 
-/** Exact npm pins need a package@version target; id-only updates preserve the old pin. */
-export function resolvePluginVersionDriftUpdateCommand(entry: PluginVersionDriftEntry): string {
+/** Exact npm pins need a registry-confirmed package@version target; id-only updates preserve pins. */
+export function resolvePluginVersionDriftUpdateCommand(
+  entry: PluginVersionDriftEntry,
+): string | undefined {
   const exactNpmPackageName = resolveExactNpmPinPackageName(entry);
   if (exactNpmPackageName) {
-    const exactNpmTarget = `${exactNpmPackageName}@${resolveOpenClawReleaseCohortVersion(entry.gatewayVersion)}`;
+    if (
+      entry.targetResolution?.status !== "resolved" ||
+      entry.targetResolution.packageName !== exactNpmPackageName ||
+      entry.targetResolution.requestedTarget !==
+        resolveOpenClawReleaseCohortVersion(entry.gatewayVersion)
+    ) {
+      return undefined;
+    }
+    const exactNpmTarget = `${exactNpmPackageName}@${entry.targetResolution.version}`;
     if (parseRegistryNpmSpec(exactNpmTarget)?.selectorKind === "exact-version") {
       return `openclaw plugins update ${exactNpmTarget}`;
     }
+    return undefined;
   }
   return `openclaw plugins update ${entry.pluginId}`;
+}
+
+export type PluginVersionDriftTargetFetcher = (params: {
+  packageName: string;
+  target: string;
+}) => Promise<{ version: string | null; error?: string }>;
+
+function unresolvedTarget(params: {
+  packageName: string;
+  requestedTarget: string;
+  error: string;
+}): PluginVersionDriftTargetResolution {
+  return {
+    status: "unresolved",
+    packageName: params.packageName,
+    requestedTarget: params.requestedTarget,
+    error: params.error,
+  };
+}
+
+async function resolveEntryTarget(params: {
+  entry: PluginVersionDriftEntry;
+  fetchTarget: PluginVersionDriftTargetFetcher;
+}): Promise<PluginVersionDriftEntry> {
+  const packageName = resolveExactNpmPinPackageName(params.entry);
+  if (!packageName) {
+    return params.entry;
+  }
+
+  const requestedTarget = resolveOpenClawReleaseCohortVersion(params.entry.gatewayVersion);
+  const requestedSpec = `${packageName}@${requestedTarget}`;
+  if (parseRegistryNpmSpec(requestedSpec)?.selectorKind !== "exact-version") {
+    return {
+      ...params.entry,
+      targetResolution: unresolvedTarget({
+        packageName,
+        requestedTarget,
+        error: `gateway release cohort ${JSON.stringify(requestedTarget)} is not an exact npm version`,
+      }),
+    };
+  }
+
+  let status: Awaited<ReturnType<PluginVersionDriftTargetFetcher>>;
+  try {
+    status = await params.fetchTarget({
+      packageName,
+      target: requestedTarget,
+    });
+  } catch (err) {
+    return {
+      ...params.entry,
+      targetResolution: unresolvedTarget({
+        packageName,
+        requestedTarget,
+        error: `npm registry lookup failed: ${String(err)}`,
+      }),
+    };
+  }
+
+  const version = status.version?.trim();
+  if (!version) {
+    return {
+      ...params.entry,
+      targetResolution: unresolvedTarget({
+        packageName,
+        requestedTarget,
+        error: `npm registry did not resolve ${requestedSpec}${status.error ? `: ${status.error}` : ""}`,
+      }),
+    };
+  }
+  const resolvedSpec = `${packageName}@${version}`;
+  if (
+    parseRegistryNpmSpec(resolvedSpec)?.selectorKind !== "exact-version" ||
+    resolveOpenClawReleaseCohortVersion(version) !== requestedTarget
+  ) {
+    return {
+      ...params.entry,
+      targetResolution: unresolvedTarget({
+        packageName,
+        requestedTarget,
+        error: `npm registry resolved ${requestedSpec} to incompatible version ${JSON.stringify(version)}`,
+      }),
+    };
+  }
+
+  return {
+    ...params.entry,
+    targetResolution: {
+      status: "resolved",
+      packageName,
+      requestedTarget,
+      version,
+    },
+  };
+}
+
+/** Resolve exact npm repair targets against the package registry before rendering commands. */
+export async function resolvePluginVersionDriftTargets(
+  report: PluginVersionDriftReport,
+  options: { fetchTarget?: PluginVersionDriftTargetFetcher } = {},
+): Promise<PluginVersionDriftReport> {
+  const fetchTarget: PluginVersionDriftTargetFetcher =
+    options.fetchTarget ??
+    ((params) =>
+      fetchNpmPackageTargetStatus({
+        packageName: params.packageName,
+        target: params.target,
+      }));
+  return {
+    ...report,
+    drifts: await Promise.all(
+      report.drifts.map((entry) => resolveEntryTarget({ entry, fetchTarget })),
+    ),
+  };
 }
 
 function isPluginEnabled(config: OpenClawConfig | undefined, pluginId: string): boolean {

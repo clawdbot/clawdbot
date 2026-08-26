@@ -42,7 +42,7 @@ const config: OpenClawConfig = {
 };
 
 function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
-  return detectPluginVersionDrift({
+  const report = detectPluginVersionDrift({
     gatewayVersion,
     installRecords: {
       codex: {
@@ -54,6 +54,18 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
     },
     config,
   });
+  return {
+    ...report,
+    drifts: report.drifts.map((entry) => ({
+      ...entry,
+      targetResolution: {
+        status: "resolved" as const,
+        packageName: "@openclaw/codex",
+        requestedTarget: gatewayVersion,
+        version: gatewayVersion,
+      },
+    })),
+  };
 }
 
 describe("official Codex plugin version drift doctor evidence", () => {
@@ -72,6 +84,12 @@ describe("official Codex plugin version drift doctor evidence", () => {
             source: "npm",
             packageName: "@openclaw/codex",
             spec: `@openclaw/codex@${installedVersion}`,
+            targetResolution: {
+              status: "resolved",
+              packageName: "@openclaw/codex",
+              requestedTarget: gatewayVersion,
+              version: gatewayVersion,
+            },
           },
         ],
       });
