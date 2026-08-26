@@ -37,7 +37,7 @@ import {
   type SsrFPolicy,
 } from "./ssrf.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
-import { resolveUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -602,7 +602,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveUndiciStreamTimeoutMs(params.timeoutMs);
+      const timeoutMs = params.timeoutMs ?? globalUndiciStreamTimeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.

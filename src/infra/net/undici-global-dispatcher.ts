@@ -23,10 +23,6 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
 /** Process-wide timeout snapshot for dispatchers that cannot expose their options. */
 export let globalUndiciStreamTimeoutMs: number | undefined;
 
-export function resolveUndiciStreamTimeoutMs(timeoutMs: number | undefined): number | undefined {
-  return timeoutMs ?? globalUndiciStreamTimeoutMs;
-}
-
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;
 
