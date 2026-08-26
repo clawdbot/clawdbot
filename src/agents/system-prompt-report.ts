@@ -22,6 +22,10 @@ const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
 // descriptions vary with runtime context and would otherwise accumulate.
 const toolSummaryHashCache = new Map<string, string>();
 const MAX_TOOL_SUMMARY_HASHES = 512;
+// Keys are the summary text itself, so entry count alone does not bound memory:
+// 512 arbitrarily long runtime-generated descriptions would be retained for the
+// process lifetime. Oversized summaries still hash, they just never enter the cache.
+const MAX_CACHED_TOOL_SUMMARY_CHARS = 4_096;
 const toolSchemaStatsCache = new WeakMap<
   object,
   Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
@@ -91,6 +95,9 @@ function buildToolSchemaStats(
 }
 
 function resolveSummaryHash(summary: string): string {
+  if (summary.length > MAX_CACHED_TOOL_SUMMARY_CHARS) {
+    return sha256(summary);
+  }
   const cached = toolSummaryHashCache.get(summary);
   if (cached !== undefined) {
     return cached;

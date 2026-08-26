@@ -71,4 +71,34 @@ describe("tool summary digest cache", () => {
       first.tools.entries.map((entry) => entry.schemaHash),
     );
   });
+
+  it("does not retain oversized tool summaries in the content-keyed cache", () => {
+    // The cache keys are the summary text, so entry count alone would let a few
+    // very large runtime-generated descriptions pin megabytes for the process
+    // lifetime. Over the length cap the digest is computed but never cached.
+    const oversizedParameters = { type: "object", properties: {} };
+    const oversized = `oversized probe ${"x".repeat(5_000)}`;
+    const buildOversized = (promptSuffix: string) =>
+      buildSystemPromptReport({
+        source: "run",
+        generatedAt: 0,
+        bootstrapMaxChars: 20_000,
+        systemPrompt: `oversized system prompt ${promptSuffix}`,
+        bootstrapFiles: [],
+        injectedFiles: [],
+        skillsPrompt: `<skill><name>oversized-${promptSuffix}</name></skill>`,
+        tools: [
+          { name: "oversized_probe", description: oversized, parameters: oversizedParameters },
+        ] as never,
+      });
+
+    const first = buildOversized("a");
+    createHashCalls.count = 0;
+    const second = buildOversized("b");
+
+    // A cached summary would leave only the 2 prompt digests, as the test above
+    // asserts. The third call is the oversized summary being hashed again.
+    expect(createHashCalls.count).toBe(3);
+    expect(second.tools.entries[0]?.summaryHash).toBe(first.tools.entries[0]?.summaryHash);
+  });
 });
