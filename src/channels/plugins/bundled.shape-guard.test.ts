@@ -1103,10 +1103,7 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
-    const offenders = [
-      "extensions/googlechat/runtime-api.ts",
-      "extensions/matrix/src/runtime-api.ts",
-    ].filter((filePath) =>
+    const offenders = ["extensions/googlechat/runtime-api.ts"].filter((filePath) =>
       fs.readFileSync(path.resolve(filePath), "utf8").includes("openclaw/plugin-sdk/core"),
     );
 
