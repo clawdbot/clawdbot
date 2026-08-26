@@ -56,10 +56,10 @@ const inProcessDispatchMock = vi.hoisted(() =>
   vi.fn(
     async (
       _method: string,
-      _params: Record<string, unknown>,
+      params: Record<string, unknown>,
       _options?: Record<string, unknown>,
     ) => ({
-      runId: "return-run",
+      runId: typeof params.idempotencyKey === "string" ? params.idempotencyKey : "return-run",
       status: "accepted",
     }),
   ),
@@ -77,10 +77,10 @@ vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
 }));
 
 import {
-  enqueuePendingDelegate,
   pendingDelegateCount,
   resetDelegateStoreForTests,
 } from "../auto-reply/continuation/delegate-store.js";
+import { resetContinueDelegateTurnAdmissionForTests } from "../auto-reply/continuation/delegate-turn-admission.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -115,13 +115,14 @@ import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
 } from "./subagents/registry/subagent-registry-read.js";
+import { getSubagentRunByRunId } from "./subagents/registry/subagent-registry.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
-import "./subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
+import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
 
 const rootSessionKey = "agent:main:root";
 const originTraceId = "11111111111111111111111111111111";
@@ -242,6 +243,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     resetSubagentRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
     resetDelegateStoreForTests();
+    resetContinueDelegateTurnAdmissionForTests();
     resetSystemEventsForTest();
     resetContinuationTracer();
     resetDiagnosticTraceContextForTest();
@@ -260,6 +262,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     clearRuntimeConfigSnapshot();
     resetSystemEventsForTest();
     resetDelegateStoreForTests();
+    resetContinueDelegateTurnAdmissionForTests();
     resetTaskFlowRegistryForTests({ persist: false });
     resetSubagentRegistryForTests();
     resetAgentEventsForTest();
@@ -276,10 +279,14 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     stateDir = "";
   });
 
-  it("delivers one depth-2 tree return after the settled intermediate registry row retires", async () => {
+  it("recovers a depth-1 orchestrator after its depth-2 delegate settles exactly once", async () => {
+    const nonce = "CHAINED-DEPTH-2-RECOVERY";
+    const childWaiting = `CHILD-WAITING ${nonce}`;
+    const grandchildDone = `GRANDCHILD-DONE ${nonce}`;
+    const childDone = `CHILD-DONE ${nonce}`;
     const hop1Spawn = await spawnSubagentDirect(
       {
-        task: "[continuation:chain-hop:1] live proof hop-1",
+        task: `[continuation:chain-hop:1] emit ${childWaiting}, then recover and emit ${childDone}`,
         silentAnnounce: true,
         wakeOnReturn: true,
         continuationFanoutMode: "tree",
@@ -310,19 +317,28 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     const hop1RunId = hop1Spawn.runId as string;
     gatewayState.waitResults.set(hop1RunId, { status: "ok", startedAt: 10, endedAt: 20 });
 
-    enqueuePendingDelegate(hop1ChildSessionKey, {
-      task: "live proof hop-2",
+    const delegateTool = createContinueDelegateTool({
+      agentSessionKey: hop1ChildSessionKey,
+    });
+    const scheduledDelegate = await delegateTool.execute("depth-2-delegate", {
+      task: `reply exactly ${grandchildDone}`,
       mode: "silent-wake",
-      delayMs: 0,
       fanoutMode: "tree",
-      firstArmedAt: Date.now(),
+    });
+    expect(scheduledDelegate?.details).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+      fanoutMode: "tree",
     });
     expect(pendingDelegateCount(hop1ChildSessionKey)).toBe(1);
+    expect(listTaskFlowsForOwnerKey(hop1ChildSessionKey)).toHaveLength(1);
+    reloadTaskFlowRegistryFromStore();
+    expect(listTaskFlowsForOwnerKey(hop1ChildSessionKey)).toHaveLength(1);
 
     gatewayState.chatHistoryBySessionKey.set(hop1ChildSessionKey, [
       {
         role: "assistant",
-        content: "CHAIN-1-DONE",
+        content: childWaiting,
       },
     ]);
     emitAgentEvent({
@@ -363,15 +379,6 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
         }),
       );
     }
-    await waitFor(
-      () =>
-        typeof getSubagentRunByChildSessionKey(hop1ChildSessionKey)?.cleanupCompletedAt ===
-        "number",
-      4_000,
-    );
-    releaseSubagentRun(hop1RunId);
-    expect(getSubagentRunByChildSessionKey(hop1ChildSessionKey)).toBeNull();
-
     const requesterRuns = listSubagentRunsForRequester(hop1ChildSessionKey);
     const hop2Run = requesterRuns.find((entry) =>
       entry.task.includes("[continuation:chain-hop:2]"),
@@ -397,11 +404,22 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect(hop2Run?.continuationTargetSessionKeys).toEqual([hop1ChildSessionKey, rootSessionKey]);
     expect(hop2Run?.continuationFanoutMode).toBe("tree");
 
+    await waitFor(() => {
+      const intermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
+      return (
+        intermediate?.wakeOnDescendantSettle === true ||
+        typeof intermediate?.cleanupCompletedAt === "number"
+      );
+    }, 4_000);
+    const waitingIntermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
+    expect(waitingIntermediate?.runId).toBe(hop1RunId);
+    expect(waitingIntermediate?.wakeOnDescendantSettle).toBe(true);
+    expect(waitingIntermediate?.cleanupCompletedAt).toBeUndefined();
+
     const hop2SessionKey = hop2Run?.childSessionKey as string;
     const hop2RunId = hop2Run?.runId as string;
-    gatewayState.waitResults.set(hop2RunId, { status: "pending" });
+    gatewayState.waitResults.set(hop2RunId, { status: "ok", startedAt: 30, endedAt: 40 });
 
-    // Capture concrete registry + session-store state right before lifecycle announce.
     expect(getSubagentDepthFromSessionStore(hop2Run.requesterSessionKey)).toBe(1);
     expect(getSubagentRunByChildSessionKey(hop2SessionKey)?.runId).toBe(hop2RunId);
     expect(loadSessionEntryByKey(rootSessionKey)?.sessionId).toBe("sess-root");
@@ -411,53 +429,100 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     gatewayState.chatHistoryBySessionKey.set(hop2SessionKey, [
       {
         role: "assistant",
-        content: "GRANDCHILD-DONE",
+        content: grandchildDone,
       },
     ]);
-    const countGrandchildReturns = (sessionKey: string) =>
-      peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes("GRANDCHILD-DONE"))
-        .length;
-    const rootReturnsBeforeHop2Lifecycle = countGrandchildReturns(rootSessionKey);
-    const hop1ReturnsBeforeHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
-    const countHop2RootReturnLogs = () =>
-      logSpy.mock.calls.filter(
-        ([message]: [unknown]) =>
-          typeof message === "string" &&
-          message.includes("[continuation:targeted-return]") &&
-          message.includes(rootSessionKey) &&
-          message.includes(hop2SessionKey),
-      ).length;
-    const targetedReturnLogsBeforeHop2Lifecycle = countHop2RootReturnLogs();
+    const countReturns = (sessionKey: string, marker: string) =>
+      peekSystemEventEntries(sessionKey).filter((entry) => entry.text.includes(marker)).length;
+    const rootGrandchildReturnsBefore = countReturns(rootSessionKey, grandchildDone);
+    const hop1GrandchildReturnsBefore = countReturns(hop1ChildSessionKey, grandchildDone);
 
     const emitHop2Completion = () =>
       emitAgentEvent({
         runId: hop2RunId,
         stream: "lifecycle",
         sessionKey: hop2SessionKey,
-        data: { phase: "end", startedAt: 30, endedAt: 40 },
+        data: {
+          phase: "end",
+          startedAt: 30,
+          endedAt: 40,
+          terminalReply: { disposition: "visible", text: grandchildDone },
+        },
       });
     emitHop2Completion();
 
     await waitFor(
       () =>
-        countGrandchildReturns(rootSessionKey) === rootReturnsBeforeHop2Lifecycle + 1 &&
-        countHop2RootReturnLogs() === targetedReturnLogsBeforeHop2Lifecycle + 1,
+        countReturns(rootSessionKey, grandchildDone) === rootGrandchildReturnsBefore + 1 &&
+        countReturns(hop1ChildSessionKey, grandchildDone) === hop1GrandchildReturnsBefore + 1 &&
+        inProcessDispatchMock.mock.calls.some(
+          ([method, params]) =>
+            method === "agent" &&
+            params.sessionKey === hop1ChildSessionKey &&
+            typeof params.message === "string" &&
+            params.message.includes(grandchildDone),
+        ),
       4_000,
     );
 
+    const recoveredIntermediate = getSubagentRunByChildSessionKey(hop1ChildSessionKey);
+    if (!recoveredIntermediate || recoveredIntermediate.runId === hop1RunId) {
+      throw new Error("expected descendant completion to replace the intermediate run");
+    }
+    const recoveryRunId = recoveredIntermediate.runId;
+    expect(getSubagentRunByRunId(hop1RunId)).toBeUndefined();
+    expect(recoveredIntermediate.task).toContain(grandchildDone);
+    expect(recoveredIntermediate.continuationTargetSessionKeys).toEqual([rootSessionKey]);
+    expect(recoveredIntermediate.continuationFanoutMode).toBe("tree");
+
+    gatewayState.waitResults.set(recoveryRunId, { status: "ok", startedAt: 50, endedAt: 60 });
+    gatewayState.chatHistoryBySessionKey.set(hop1ChildSessionKey, [
+      { role: "assistant", content: childWaiting },
+      { role: "assistant", content: childDone },
+    ]);
+    const rootChildDoneBefore = countReturns(rootSessionKey, childDone);
+    const emitRecoveryCompletion = () =>
+      emitAgentEvent({
+        runId: recoveryRunId,
+        stream: "lifecycle",
+        sessionKey: hop1ChildSessionKey,
+        data: {
+          phase: "end",
+          startedAt: 50,
+          endedAt: 60,
+          terminalReply: { disposition: "visible", text: childDone },
+        },
+      });
+    emitRecoveryCompletion();
+    await waitFor(() => countReturns(rootSessionKey, childDone) === rootChildDoneBefore + 1, 4_000);
+
     emitHop2Completion();
+    emitRecoveryCompletion();
+    reloadTaskFlowRegistryFromStore();
     await new Promise<void>((resolveTurn) => {
       setTimeout(resolveTurn, 50);
     });
 
-    const rootReturnsAfterHop2Lifecycle = countGrandchildReturns(rootSessionKey);
-    const hop1ReturnsAfterHop2Lifecycle = countGrandchildReturns(hop1ChildSessionKey);
-    const targetedReturnLogsAfterHop2Lifecycle = countHop2RootReturnLogs();
-    expect(rootReturnsAfterHop2Lifecycle).toBe(rootReturnsBeforeHop2Lifecycle + 1);
-    expect(hop1ReturnsAfterHop2Lifecycle).toBe(hop1ReturnsBeforeHop2Lifecycle + 1);
-    expect(targetedReturnLogsAfterHop2Lifecycle).toBe(targetedReturnLogsBeforeHop2Lifecycle + 1);
-    // The frozen tree reaches every ancestor once and lifecycle replay does not
-    // duplicate either the stale intermediate or root delivery.
+    expect(countReturns(rootSessionKey, grandchildDone)).toBe(rootGrandchildReturnsBefore + 1);
+    expect(countReturns(hop1ChildSessionKey, grandchildDone)).toBe(hop1GrandchildReturnsBefore + 1);
+    expect(countReturns(rootSessionKey, childDone)).toBe(rootChildDoneBefore + 1);
+    expect(
+      inProcessDispatchMock.mock.calls.filter(
+        ([method, params]) =>
+          method === "agent" &&
+          params.sessionKey === hop1ChildSessionKey &&
+          typeof params.message === "string" &&
+          params.message.includes(grandchildDone),
+      ),
+    ).toHaveLength(1);
+    expect(
+      listSubagentRunsForRequester(hop1ChildSessionKey).filter((entry) =>
+        entry.task.includes("[continuation:chain-hop:2]"),
+      ),
+    ).toHaveLength(1);
+    expect(listTaskFlowsForOwnerKey(hop1ChildSessionKey)).toEqual([
+      expect.objectContaining({ status: "succeeded" }),
+    ]);
   });
 
   it("keeps a raw-final token delegate owned by its registered disposable origin", async () => {
