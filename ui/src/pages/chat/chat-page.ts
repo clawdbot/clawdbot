@@ -403,13 +403,8 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
-    if (
-      data &&
-      areUiSessionKeysEquivalent(data.sessionKey, sessionKey) &&
-      (data.face ?? "chat") === face &&
-      !data.draft &&
-      !data.focusComposer
-    ) {
+    const sameSession = data && areUiSessionKeysEquivalent(data.sessionKey, sessionKey);
+    if (sameSession && (data.face ?? "chat") === face && !data.draft && !data.focusComposer) {
       return;
     }
     const options = sessionNavigationTarget({
@@ -420,14 +415,11 @@ export class ChatPage extends OpenClawLightDomElement {
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
     }).options;
     if (replace) {
-      this.context.replace(
-        face,
-        data &&
-          areUiSessionKeysEquivalent(data.sessionKey, sessionKey) &&
-          (data.draft || data.focusComposer)
+      const location =
+        sameSession && (data.draft || data.focusComposer)
           ? locationWithoutDraft(currentRouteLocation(), options)
-          : options,
-      );
+          : options;
+      this.context.replace(face, location);
     } else {
       this.context.navigate(face, options);
     }

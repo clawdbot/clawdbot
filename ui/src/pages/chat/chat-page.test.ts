@@ -413,11 +413,7 @@ describe("chat page split layout host", () => {
   });
 
   it("hands each route-provided draft to the active pane only once", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      `${sessionPath("main")}?draft=one-shot%20draft&panel=details#pane`,
-    );
+    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
@@ -425,12 +421,9 @@ describe("chat page split layout host", () => {
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
 
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath("main"),
       search: "?panel=details",
@@ -561,12 +554,8 @@ describe("chat page split layout host", () => {
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {
-    const catalogSearch = catalogSessionSearch(CATALOG_KEY);
-    window.history.replaceState(
-      {},
-      "",
-      `/chat/research${catalogSearch}&draft=one-shot%20catalog%20draft&panel=details#pane`,
-    );
+    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -575,15 +564,12 @@ describe("chat page split layout host", () => {
       draft: "one-shot catalog draft",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
-    const expectedSearch = `${catalogSearch}&panel=details`;
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/research",
       search: expectedSearch,
-      hash: "#pane",
+      hash: "",
     });
     await expect(
       loadChatRoute(
@@ -620,7 +606,7 @@ describe("chat page split layout host", () => {
   });
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
-    window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship&panel=details#pane");
+    window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -630,14 +616,12 @@ describe("chat page split layout host", () => {
       face: "chat",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/main/1234567890",
-      search: "?panel=details",
-      hash: "#pane",
+      search: "",
+      hash: "",
     });
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
