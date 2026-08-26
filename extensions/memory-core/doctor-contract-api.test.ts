@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -2629,6 +2630,9 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
     await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
       "Retained reset transcript recall fact",
+    );
+    expect((await buildSessionEntry(retainedResetTranscript))?.content).toBe(
+      "User: Retained reset transcript recall fact",
     );
     await expect(fs.access(invalidAgentQmdHome)).resolves.toBeUndefined();
     await expect(fs.access(path.join(externalModels, "model.bin"))).resolves.toBeUndefined();

@@ -94,7 +94,7 @@ describe("retired QMD memory config migration", () => {
     expect(result.raw).not.toHaveProperty("memory.backend");
     expect(result.raw).not.toHaveProperty("memory.qmd");
     expect(result.raw).not.toHaveProperty("memory.search.qmd");
-    expect(result.raw).not.toHaveProperty("agents.defaults.memory.search.qmd");
+    expect(result.raw).not.toHaveProperty("agents.defaults.memory");
     expect(result.raw).not.toHaveProperty("agents.entries.research.memory.search.qmd");
     expect(result.raw).not.toHaveProperty("agents.list.0.memory.search.qmd");
     expect(result.raw).toHaveProperty("memory.citations", "on");
@@ -108,9 +108,6 @@ describe("retired QMD memory config migration", () => {
       { path: "/tmp/patterned", pattern: "notes/*.md" },
       { path: "/tmp/shared", pattern: "**/*.md" },
       "/tmp/search",
-    ]);
-    expect(result.raw).toHaveProperty("agents.defaults.memory.search.extraPaths", [
-      "notes",
       "/tmp/defaults",
     ]);
     expect(result.raw).toHaveProperty("agents.entries.research.memory.search.enabled", false);
@@ -142,7 +139,7 @@ describe("retired QMD memory config migration", () => {
       raw: {
         agents: { defaults: { memory: { search: { qmd: { sessions: { enabled: true } } } } } },
       },
-      target: "agents.defaults.memory.search",
+      target: "memory.search",
     },
     {
       name: "named agent",
