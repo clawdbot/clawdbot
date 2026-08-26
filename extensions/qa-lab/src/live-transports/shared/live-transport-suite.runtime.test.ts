@@ -93,6 +93,114 @@ describe("live transport suite runtime", () => {
     );
   });
 
+  it.each([undefined, "live"] as const)(
+    "keeps the Discord live driver identical when selected as %s",
+    async (channelDriver) => {
+      const selectScenarioIds = vi.fn(() => ["discord-canary"]);
+
+      await runLiveTransportQaSuiteCommand({
+        channelId: "discord",
+        defaultProviderMode: "live-frontier",
+        options: { channelDriver },
+        selectScenarioIds,
+      });
+
+      expect(selectScenarioIds).toHaveBeenCalledWith(
+        expect.objectContaining({ channelDriver: "live" }),
+      );
+      expect(runQaSuiteCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          channelDriver: "live",
+          scenarioIds: ["discord-canary"],
+        }),
+      );
+    },
+  );
+
+  it("selects Discord Crabline without forwarding credential lease options", async () => {
+    const selectScenarioIds = vi.fn(() => ["discord-crabline-roundtrip"]);
+
+    await runLiveTransportQaSuiteCommand({
+      channelId: "discord",
+      defaultProviderMode: "live-frontier",
+      options: {
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/custom",
+      },
+      selectScenarioIds,
+    });
+
+    expect(selectScenarioIds).toHaveBeenCalledWith({
+      channelDriver: "crabline",
+      profile: undefined,
+      primaryModel: "mock-openai/custom",
+      providerMode: "mock-openai",
+      scenarioIds: undefined,
+    });
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/custom",
+        scenarioIds: ["discord-crabline-roundtrip"],
+      }),
+    );
+    expect(runQaSuiteCommand.mock.calls[0]?.[0]).not.toHaveProperty("credentialSource");
+    expect(runQaSuiteCommand.mock.calls[0]?.[0]).not.toHaveProperty("credentialRole");
+  });
+
+  it("uses the same Discord selection for listing and execution", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const selectScenarioIds = vi.fn((_selection: unknown) => [
+      "channel-canary",
+      "thread-follow-up",
+    ]);
+    const base = {
+      channelId: "discord",
+      defaultProviderMode: "mock-openai" as const,
+      selectScenarioIds,
+    };
+
+    try {
+      await runLiveTransportQaSuiteCommand({
+        ...base,
+        options: { channelDriver: "crabline", listScenarios: true },
+      });
+      await runLiveTransportQaSuiteCommand({
+        ...base,
+        options: { channelDriver: "crabline" },
+      });
+    } finally {
+      stdoutWrite.mockRestore();
+    }
+
+    expect(selectScenarioIds).toHaveBeenCalledTimes(2);
+    expect(selectScenarioIds.mock.calls[0]?.[0]).toEqual(selectScenarioIds.mock.calls[1]?.[0]);
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ scenarioIds: ["channel-canary", "thread-follow-up"] }),
+    );
+  });
+
+  it.each(["credentialSource", "credentialRole"] as const)(
+    "rejects Discord Crabline with %s",
+    async (option) => {
+      await expect(
+        runLiveTransportQaSuiteCommand({
+          channelId: "discord",
+          defaultProviderMode: "mock-openai",
+          options: { channelDriver: "crabline", [option]: "ci" },
+          selectScenarioIds: () => ["channel-canary"],
+        }),
+      ).rejects.toThrow(
+        `do not use --${option === "credentialSource" ? "credential-source" : "credential-role"}`,
+      );
+      expect(runQaSuiteCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects shared credentials for disposable transports", async () => {
     await expect(
       runLiveTransportQaSuiteCommand({

@@ -275,18 +275,19 @@ describe("crabline transport", () => {
       });
 
       try {
+        await transport.state.addInboundMessage({
+          conversation: { id: "-1001234567890", kind: "group" },
+          senderId: "100001",
+          text: "Provision forum topic.",
+          threadId: "42",
+        });
+        await transport.state.reset();
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegram = config.channels?.telegram as
           | { apiRoot?: string; botToken?: string }
           | undefined;
         const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
         const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        await transport.sendInbound({
-          conversation: { id: "-1001234567890", kind: "group" },
-          senderId: "100001",
-          text: "forum topic seed",
-          threadId: "42",
-        });
         const postTelegram = async (method: string, body: Record<string, unknown>) => {
           const response = await fetch(`${apiRoot}/bot${botToken}/${method}`, {
             body: JSON.stringify(body),
@@ -696,7 +697,6 @@ describe("crabline transport", () => {
           senderName: "Alice",
           text: "Mattermost baseline marker check.",
         });
-        await transport.state.reset();
         const delivery = transport.buildAgentDelivery({ target: "group:qa-channel" });
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         const mattermostUrl = requireString(env.MATTERMOST_URL, "Mattermost URL");
@@ -965,7 +965,7 @@ describe("crabline transport", () => {
       });
 
       try {
-        const inbound = await transport.state.addInboundMessage({
+        await transport.state.addInboundMessage({
           conversation: {
             id: "telegram-command-room",
             kind: "channel",
@@ -981,13 +981,14 @@ describe("crabline transport", () => {
           | undefined;
         expect(telegram?.apiRoot).toBeTruthy();
         expect(telegram?.botToken).toBeTruthy();
+        const groupDelivery = transport.buildAgentDelivery({
+          target: "channel:telegram-command-room",
+        });
         const { response, release } = await fetchWithSsrFGuard({
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: transport.buildAgentDelivery({
-                target: `channel:${inbound.conversation.id}`,
-              }).to,
+              chat_id: groupDelivery.to,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },

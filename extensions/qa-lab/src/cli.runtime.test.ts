@@ -1180,6 +1180,33 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("dispatches generic suite Discord selection through Crabline", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "crabline",
+      channel: "discord",
+      providerMode: "mock-openai",
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: expect.objectContaining({ channel: "discord" }),
+        scenarioIds: ["discord-crabline-roundtrip"],
+      }),
+    );
+  });
+
+  it("rejects channels outside Crabline's canonical server contract", async () => {
+    await expect(
+      runQaSuiteCommand({
+        channelDriver: "crabline",
+        channel: "imessage",
+        providerMode: "mock-openai",
+      }),
+    ).rejects.toThrow("--channel must be one of");
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
   it("keeps implicit channel membership identical for live and Crabline drivers", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
@@ -1204,7 +1231,7 @@ describe("qa cli runtime", () => {
       expect.objectContaining({
         channelDriver: "crabline",
         channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
-        scenarioIds: [],
+        scenarioIds: expect.arrayContaining(["telegram-help-command"]),
       }),
     );
   });

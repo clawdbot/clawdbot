@@ -48,7 +48,7 @@ script aliases; both forms work.
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
 | `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                           |
 | `qa buzz`                                           | Live transport lane against a real Buzz relay room with dedicated driver and SUT identities.                                                                                                                                                                        |
-| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                   |
+| `qa discord`                                        | Discord transport lane through the real bundled plugin: live Discord by default, or Crabline's deterministic local provider server with `--channel-driver crabline`.                                                                                                |
 | `qa matrix`                                         | QA Lab Matrix catalog scenarios against a disposable Tuwunel homeserver. See [Matrix live lane](#matrix-live-lane).                                                                                                                                                 |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                           |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                                                                                          |
@@ -458,8 +458,9 @@ guest can write back through the mounted workspace.
 ## Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
 
 The Matrix adapter uses the disposable Docker-backed lane documented above.
-Buzz, Discord, Slack, Telegram, and WhatsApp run against pre-existing real
-transports, so their reference lives here.
+Buzz, Slack, Telegram, and WhatsApp run against pre-existing real transports.
+Discord can run against either live Discord or Crabline's deterministic local
+provider server. Their reference lives here.
 
 ### Shared CLI flags
 
@@ -481,10 +482,15 @@ accept the same flags:
 | `--credential-file <path>`            | -                                                  | Buzz-only JSON credential file for local runs.                                                                                                  |
 | `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
+Discord also accepts `--channel-driver <live|crabline>` (default `live`) and
+`--list-scenarios`. Crabline mode is local and rejects `--credential-source`
+and `--credential-role`; provider mode and model selection remain independent
+of the channel driver.
+
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
-artifacts without setting a failing exit code. Telegram also accepts
-`--list-scenarios` to print available scenario ids and exit; the other lanes
-do not expose that flag.
+artifacts without setting a failing exit code. Telegram and Discord also accept
+`--list-scenarios` to print the scenario ids selected by the same profile,
+provider, model, execution-kind, and channel-driver rules used for execution.
 
 ### Buzz QA
 
@@ -581,13 +587,46 @@ creating a separate RTT command or Telegram-specific summary format.
 
 ```bash
 pnpm openclaw qa discord
+pnpm openclaw qa discord --channel-driver live
 ```
 
-Targets one real private Discord guild channel with two bots: a driver bot
+Both commands select the live driver. They target one real private Discord
+guild channel with two bots: a driver bot
 controlled by the harness and a SUT bot started by the child OpenClaw gateway
 through the bundled Discord plugin. Verifies channel mention handling, that
 the SUT bot has registered the native `/help` command with Discord, and
-opt-in Mantis evidence scenarios.
+opt-in Mantis evidence scenarios. Live Discord remains the release/provider
+coverage lane; catalog and profile membership determine its current scenario
+inventory.
+
+For deterministic local transport proof without Discord credentials or a
+credential lease, run:
+
+```bash
+pnpm openclaw qa discord \
+  --channel-driver crabline \
+  --provider-mode mock-openai
+
+pnpm openclaw qa suite \
+  --channel-driver crabline \
+  --channel discord \
+  --provider-mode mock-openai
+```
+
+Crabline starts a separate Discord-shaped local provider server, then the child
+Gateway runs the real bundled OpenClaw Discord plugin against that server's REST
+and Gateway/WebSocket boundaries. The harness injects provider-native inbound
+events through Crabline's authenticated admin ingress and records the plugin's
+outbound REST traffic. This is not Crabline's fixture-level Discord local mock
+provider, which fixture commands call directly without running the OpenClaw
+plugin.
+
+The local server covers Gateway handshake and message events, REST message
+delivery and reply metadata, mention handling, and native command registration.
+Use live Discord for behavior the local server cannot faithfully exercise,
+including voice, attachment/CDN and multipart behavior, interactions and
+activities, webhooks, Gateway compression or multi-shard behavior, replay, and
+Discord's distributed permissions and rate limits.
 
 Required env when `--credential-source env`:
 

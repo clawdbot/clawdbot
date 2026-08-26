@@ -389,7 +389,6 @@ export async function startQaGatewayChild(params: {
     let packagedMockAuthStaged = false;
     let migrationConvergenceRestartUsed = false;
     let reuseStartupLaunchState = false;
-
     const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
     const cliArgsPrefix = gatewayExecutablePath
       ? gatewayArgsPrefix

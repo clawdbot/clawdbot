@@ -66,4 +66,31 @@ describe("live transport QA contributions", () => {
       expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
     );
   });
+
+  it("maps the dedicated Discord driver and listing options", async () => {
+    const registration = listLiveTransportQaCliRegistrations().find(
+      (candidate) => candidate.commandName === "discord",
+    );
+    const qa = new Command();
+    registration?.register(qa);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "discord",
+      "--channel-driver",
+      "crabline",
+      "--list-scenarios",
+    ]);
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "discord",
+        options: expect.objectContaining({
+          channelDriver: "crabline",
+          listScenarios: true,
+        }),
+      }),
+    );
+  });
 });

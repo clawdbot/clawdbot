@@ -8,6 +8,8 @@ scenario:
   execution:
     kind: flow
     channel: discord
+    config:
+      requiredChannelDriver: live
     timeoutMs: 45000
     retryCount: 1
     suiteIsolation: isolated

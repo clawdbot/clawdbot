@@ -1,0 +1,78 @@
+title: Discord Crabline real-plugin roundtrip
+
+scenario:
+  id: discord-crabline-roundtrip
+  surface: channels
+  coverage:
+    primary:
+      - discord.configured-and-runtime-routing
+    secondary:
+      - discord.mention-gating
+      - discord.native-slash-command-registration
+  objective: Verify a provider-native Discord event traverses the real bundled plugin and produces one provider REST reply.
+  successCriteria:
+    - The real Discord plugin completes its Gateway handshake against Crabline.
+    - One mentioned guild message produces one visible reply containing the exact marker.
+    - The reply stays scoped to the originating Discord channel.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/discord.md
+  codeRefs:
+    - extensions/discord/src/monitor/provider.ts
+    - extensions/qa-lab/src/crabline-transport.ts
+  execution:
+    kind: flow
+    channel: discord
+    config:
+      requiredChannelDriver: crabline
+      conversationId: discord-crabline-primary
+      threadId: discord-crabline-thread
+      expectedMarker: DISCORD-CRABLINE-ROUNDTRIP-OK
+    transportPolicy:
+      requireGroupMention: true
+    timeoutMs: 60000
+    suiteIsolation: isolated
+
+flow:
+  steps:
+    - name: completes Discord Gateway readiness
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+    - name: injects an authenticated provider-native Discord event
+      actions:
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            threadId: { ref: config.threadId }
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+          saveAs: inbound
+    - name: observes the real Discord plugin outbound REST request
+      actions:
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            threadId: { ref: config.threadId }
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected one Discord Crabline reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: config.conversationId })}`"
+        - assert:
+            expr: Boolean(inbound.id) && Boolean(outbound.id)
+            message: Discord Crabline roundtrip did not preserve provider message identity
+      detailsExpr: outbound.text

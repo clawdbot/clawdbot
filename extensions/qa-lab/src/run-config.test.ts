@@ -624,6 +624,71 @@ describe("qa run config", () => {
     );
   });
 
+  it("selects only scenarios that declare an explicit external channel", () => {
+    const catalog = readQaScenarioPack();
+    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
+    const selection = normalizeQaRunSelection(
+      {
+        profile: "all",
+        channel: "discord",
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+      },
+      catalog.scenarios,
+      scorecardReport.profiles,
+    );
+
+    const plan = resolveQaLabRunPlan({
+      selection,
+      scenarios: catalog.scenarios,
+      scorecardReport,
+      defaultChannel: "discord",
+      supportsChannel: (channel) => channel === "discord",
+    });
+
+    expect(plan.status).toBe("ready");
+    expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual([
+      "discord-crabline-roundtrip",
+    ]);
+    expect(plan.exclusions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scenarioId: "compaction-retry-mutating-tool",
+          reasons: ["does not declare channel discord"],
+        }),
+      ]),
+    );
+  });
+
+  it("rejects an explicit scenario that does not declare the external channel", () => {
+    const catalog = readQaScenarioPack();
+    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
+    const selection = normalizeQaRunSelection(
+      {
+        profile: "all",
+        channel: "discord",
+        channelDriver: "crabline",
+        providerMode: "mock-openai",
+        scenarioIds: ["compaction-retry-mutating-tool"],
+      },
+      catalog.scenarios,
+      scorecardReport.profiles,
+    );
+
+    const plan = resolveQaLabRunPlan({
+      selection,
+      scenarios: catalog.scenarios,
+      scorecardReport,
+      defaultChannel: "discord",
+      supportsChannel: (channel) => channel === "discord",
+    });
+
+    expect(plan.status).toBe("invalid");
+    expect(plan.errors).toContain(
+      "Explicit QA scenario selection is not runnable: compaction-retry-mutating-tool (does not declare channel discord).",
+    );
+  });
+
   it("fails closed when an explicit scenario conflicts with execution.channel", () => {
     const catalog = readQaScenarioPack();
     const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);

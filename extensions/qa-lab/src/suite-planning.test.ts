@@ -988,8 +988,8 @@ describe("qa suite planning helpers", () => {
         channel: "telegram",
       }).map((scenario) => scenario.id);
 
-    expect(selectForDriver("crabline")).toEqual(["generic", "telegram"]);
-    expect(selectForDriver("live")).toEqual(["generic", "live-only", "telegram"]);
+    expect(selectForDriver("crabline")).toEqual(["telegram"]);
+    expect(selectForDriver("live")).toEqual(["live-only", "telegram"]);
   });
 
   it("rejects explicitly requested scenarios that do not match the current lane", () => {

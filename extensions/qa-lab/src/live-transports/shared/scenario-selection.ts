@@ -41,25 +41,41 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
   return selectedScenarios.map((scenario) => scenario.id);
 }
 
-export function resolveLiveTransportQaScenarioIds(params: {
+export function resolveTransportQaScenarioIds(params: {
   channelId: string;
+  channelDriver: QaScorecardChannelDriver;
   profile?: string;
   primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
   supportsModuleFlows?: boolean;
 }) {
+  if (!params.profile?.trim() && params.channelDriver === "crabline") {
+    return resolveCatalogLiveTransportQaScenarioIds({
+      channelId: params.channelId,
+      channelDriver: params.channelDriver,
+      primaryModel: params.primaryModel,
+      providerMode: params.providerMode,
+      scenarioIds: params.scenarioIds,
+    });
+  }
   return resolveQaProfileScenarios({
     profile: params.profile?.trim() || "release",
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
-    channelDriver: "live",
+    channelDriver: params.channelDriver,
     channel: params.channelId,
     executionKind: "flow",
     requireDeclaredChannel: true,
     resolveModuleFlowSupport: () => params.supportsModuleFlows === true,
     scenarioIds: params.scenarioIds,
   }).scenarios.map((scenario) => scenario.id);
+}
+
+export function resolveLiveTransportQaScenarioIds(
+  params: Omit<Parameters<typeof resolveTransportQaScenarioIds>[0], "channelDriver">,
+) {
+  return resolveTransportQaScenarioIds({ ...params, channelDriver: "live" });
 }
 
 export function listLiveTransportQaScenarios(params: {

@@ -18,6 +18,7 @@ export type LiveTransportQaCommandOptions = {
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
+  channelDriver?: string;
 };
 
 type LiveTransportQaCommanderOptions = {
@@ -35,6 +36,7 @@ type LiveTransportQaCommanderOptions = {
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
+  channelDriver?: string;
 };
 
 export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
@@ -45,6 +47,7 @@ type LiveTransportQaCliRegistrationOptions = {
     sourceDescription?: string;
     roleDescription?: string;
   };
+  channelDriverHelp?: string;
   defaultProviderMode: string;
   description: string;
   providerModeHelp: string;
@@ -88,6 +91,7 @@ function mapCommanderOptions(opts: LiveTransportQaCommanderOptions): LiveTranspo
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
+    channelDriver: opts.channelDriver,
   };
 }
 
@@ -131,6 +135,9 @@ function createSharedLiveTransportQaCliRegistration(
         if (params.credentialOptions.roleDescription) {
           command.option("--credential-role <role>", params.credentialOptions.roleDescription);
         }
+      }
+      if (params.channelDriverHelp) {
+        command.option("--channel-driver <live|crabline>", params.channelDriverHelp);
       }
       command.action(async (opts: LiveTransportQaCommanderOptions) => {
         await params.run(mapCommanderOptions(opts));

@@ -52,6 +52,7 @@ import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evi
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
+  scenarioDeclaresQaChannel,
 } from "./profile-planning.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
@@ -774,15 +775,17 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
       return scenario ? [scenario] : [];
     });
   }
-  return scenarios.filter((scenario) =>
-    scenarioMatchesQaProviderLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      channelDriver: params.channelDriver,
-      channel: params.channel ?? scenario.execution.channel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
+  return scenarios.filter(
+    (scenario) =>
+      (!params.channel || scenarioDeclaresQaChannel(scenario, params.channel)) &&
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        channelDriver: params.channelDriver,
+        channel: params.channel ?? scenario.execution.channel,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }),
   );
 }
 
@@ -950,7 +953,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
         })
       : undefined;
   const hostScenarioIds =
-    runner === "host" && channelDriverChannels.length > 1 && scenarioIds.length === 0
+    runner === "host" && channelDriver === "crabline" && scenarioIds.length === 0
       ? channelDriverScenarios
           .filter((scenario) => scenario.execution.kind === "flow")
           .map((scenario) => scenario.id)

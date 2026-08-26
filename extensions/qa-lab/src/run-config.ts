@@ -16,6 +16,7 @@ import {
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
+  scenarioDeclaresQaChannel,
 } from "./profile-planning.js";
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
@@ -360,8 +361,27 @@ export function resolveQaLabRunPlan(params: {
     const scenario = scenarioById.get(scenarioId);
     return scenario ? [scenario] : [];
   });
+  const requiresDeclaredChannel = Boolean(
+    selection.channel &&
+    selection.channel !== "qa-channel" &&
+    selection.channelDriver !== "qa-channel",
+  );
+  const channelScopedScenarios = requiresDeclaredChannel
+    ? laneScenarios.filter((scenario) => scenarioDeclaresQaChannel(scenario, selection.channel!))
+    : laneScenarios;
+  if (requiresDeclaredChannel) {
+    exclusions.push(
+      ...laneScenarios
+        .filter((scenario) => !channelScopedScenarios.includes(scenario))
+        .map((scenario) => ({
+          scenarioId: scenario.id,
+          executionKind: scenario.execution.kind,
+          reasons: [`does not declare channel ${selection.channel}`],
+        })),
+    );
+  }
   const profileExecution = resolveQaRunProfileExecutionSelection({
-    scenarios: laneScenarios,
+    scenarios: channelScopedScenarios,
     providerMode: selection.providerMode,
     primaryModel: selection.primaryModel,
     channelDriver: selection.channelDriver,

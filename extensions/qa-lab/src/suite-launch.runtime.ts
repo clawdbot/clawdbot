@@ -845,6 +845,9 @@ async function runUnifiedQaSuite(params: {
       const channelDriverFlowRequiresExclusiveWorkers =
         Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
         !channelGroup.isolatesAdapterInstances;
+      const crablineFlowRequiresSuiteExclusiveWorker =
+        params.runParams?.channelDriver === "crabline" ||
+        channelGroup.channelDriverSelection?.channelDriver === "crabline";
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
         : MAX_ISOLATED_FLOW_CONCURRENCY;
@@ -937,11 +940,13 @@ async function runUnifiedQaSuite(params: {
         const task = {
           channel: channelGroup.channel,
           channelId: taskChannelId,
-          // One channel's credential and Gateway state stay serial unless each adapter create()
-          // owns an isolated runtime. Distinct channels may always run together.
-          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
-            : undefined,
+          // Crabline 0.1.13 private publication claims span sibling output ancestors on Windows,
+          // so mixed channels share one key or their readiness publications can contend.
+          exclusiveKey: crablineFlowRequiresSuiteExclusiveWorker
+            ? "crabline-provider-readiness"
+            : channelDriverFlowRequiresExclusiveWorkers
+              ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
+              : undefined,
           scenarios: partition.scenarios,
           weight: partition.concurrency,
           run: async () => {

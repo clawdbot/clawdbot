@@ -38,7 +38,10 @@ export const discordQaCliRegistration: LiveTransportQaCliRegistration =
       roleDescription:
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
+    channelDriverHelp:
+      "Discord transport boundary: live (default) or Crabline local provider server",
+    description: "Run Discord QA through the live service or Crabline local provider server",
+    listScenariosHelp: "Print the selected Discord scenario ids and exit",
     outputDirHelp: "Discord QA artifact directory",
     scenarioHelp: "Run only the named Discord QA scenario (repeatable)",
     sutAccountHelp: "Temporary Discord account id inside the QA gateway config",
