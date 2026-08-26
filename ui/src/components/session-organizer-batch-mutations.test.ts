@@ -173,7 +173,7 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
-  it("uses the legacy-compatible Mark as read payload", async () => {
+  it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();
 
@@ -181,7 +181,11 @@ describe("patchSessionRows", () => {
       "completed",
     );
 
-    expect(harness.patch).toHaveBeenCalledWith(row.key, { unread: false }, { agentId: "main" });
+    expect(harness.patch).toHaveBeenCalledWith(
+      row.key,
+      { unread: false },
+      { agentId: "main", expectedSessionId: row.sessionId },
+    );
   });
 
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {

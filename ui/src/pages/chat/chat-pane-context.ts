@@ -371,7 +371,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         deferBranches: true,
         historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        state.sessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
     }
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
@@ -460,7 +463,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         deferBranches: true,
         historyLoad: resumedHistory,
       });
-      this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
+      this.deferSessionHydrationUntilTranscript(
+        startupSessionKey,
+        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
+      );
       void historyRefresh.finally(() => {
         void finishStartup();
       });

@@ -35,7 +35,11 @@ import {
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId, saveRouteSessionSettings } from "./chat-state-route.ts";
+import {
+  resolveChatAgentId,
+  saveRouteSessionSettings,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
 import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -171,7 +175,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,
-    transcriptLoad: Promise<unknown>,
+    transcriptLoad: Promise<boolean>,
   ): void {
     const state = this.state;
     if (!state) {
@@ -195,13 +199,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       state.connected &&
       state.client === client &&
       state.sessionKey === sessionKey;
-    const scheduleHydration = () => {
+    const scheduleHydration = (historyCommitted: boolean) => {
       if (!isCurrent()) {
         retireIfCurrent();
         return;
       }
       if (!this.presented) {
-        this.pendingDeferredSessionHydration = scheduleHydration;
+        this.pendingDeferredSessionHydration = () => scheduleHydration(historyCommitted);
         return;
       }
       this.pendingDeferredSessionHydration = null;
@@ -210,19 +214,22 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       state.renderLifecycle.afterCommit((complete) => {
         if (isCurrent() && this.presented) {
           this.deferredSessionHydrationActive = false;
+          if (historyCommitted) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
           void loadChatBranches(state);
           void this.probeSessionDiscussion(sessionKey);
           this.hydrateSessionCompanion(sessionKey);
           void this.refreshSessionPullRequests();
         } else if (isCurrent()) {
-          this.pendingDeferredSessionHydration = scheduleHydration;
+          this.pendingDeferredSessionHydration = () => scheduleHydration(historyCommitted);
         } else {
           retireIfCurrent();
         }
         complete();
       });
     };
-    void transcriptLoad.then(scheduleHydration, scheduleHydration);
+    void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
   }
 
   protected resumeDeferredSessionHydration(): boolean {

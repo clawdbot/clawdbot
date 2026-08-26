@@ -52,9 +52,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const state = this.state;
       if (state) {
         this.unreadPatchGuard.beginActivation(state.sessionKey);
-        this.markSessionRead(selectedChatSessionRow(state));
       }
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
+      if (state && !deferredHydrationActive) {
+        this.markSessionRead(selectedChatSessionRow(state));
+      }
       if (
         state &&
         !deferredHydrationActive &&
