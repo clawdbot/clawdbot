@@ -113,7 +113,7 @@ even inside an owner turn. The taint clears on the next user message. The
 remaining gap is declaration coverage: only tools that declare their results
 as network-sourced participate, so output from tools that do not — local file
 reads, for example — does not taint the turn, and assistant text derived from
-it keeps the turn's sender class.
+it keeps its normal turn-derived provenance (`agent` in an owner turn).
 
 ## The write path
 
