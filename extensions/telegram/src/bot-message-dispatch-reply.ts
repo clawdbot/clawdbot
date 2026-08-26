@@ -6,6 +6,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -44,7 +45,6 @@ import type {
 import {
   appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramDroppedControl,
   type TelegramInlineButtons,
 } from "./button-types.js";
@@ -108,7 +108,7 @@ function resolvePayloadTelegramControls(
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-      questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+      questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
   );
   const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
@@ -425,7 +425,7 @@ export async function deliverReply(
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
-            finalizePreview: isAskUserPayload,
+            ...(isAskUserPayload ? { finalizePreview: true } : {}),
             allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,

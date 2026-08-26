@@ -10,7 +10,10 @@ import {
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveAskUserQuestionOptionIndex,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   buildTelegramApprovalCallbackData,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
@@ -50,12 +53,10 @@ export type TelegramDroppedControl = {
   callbackDataBytes?: number;
 };
 
-type TelegramQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
-
 export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
-  questionOptionIndices?: TelegramQuestionOptionIndices;
+  questionOptionIndices?: AskUserQuestionOptionIndices;
 };
 
 export function appendTelegramDroppedControlFallback(
@@ -79,42 +80,6 @@ export function appendTelegramDroppedControlFallback(
 }
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
-
-/** Reads only bounded, unambiguous Gateway-owned question option ordering. */
-export function resolveTelegramQuestionOptionIndices(
-  payload: Pick<ReplyPayload, "channelData">,
-): TelegramQuestionOptionIndices | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
-    return undefined;
-  }
-  const { questionId, optionValues } = askUser as {
-    questionId?: unknown;
-    optionValues?: unknown;
-  };
-  if (
-    typeof questionId !== "string" ||
-    !questionId ||
-    !Array.isArray(optionValues) ||
-    optionValues.length < 2 ||
-    optionValues.length > 4
-  ) {
-    return undefined;
-  }
-
-  const optionIndices = new Map<string, number>();
-  for (const [optionIndex, optionValue] of optionValues.entries()) {
-    if (typeof optionValue !== "string") {
-      return undefined;
-    }
-    const normalizedOptionValue = optionValue.trim().toLowerCase();
-    if (!normalizedOptionValue || optionIndices.has(normalizedOptionValue)) {
-      return undefined;
-    }
-    optionIndices.set(normalizedOptionValue, optionIndex);
-  }
-  return new Map([[questionId, optionIndices]]);
-}
 
 function toTelegramButtonStyle(
   style?: MessagePresentationButton["style"],
@@ -173,10 +138,11 @@ function toTelegramInlineButton(
         ? { text: button.label, callback_data: callbackData, style }
         : recordDroppedControl(button, options, "question_context_unavailable");
     }
-    const normalizedOptionValue = action.optionValue.trim().toLowerCase();
-    const optionIndex = options?.questionOptionIndices
-      ?.get(action.questionId)
-      ?.get(normalizedOptionValue);
+    const optionIndex = resolveAskUserQuestionOptionIndex({
+      questionOptionIndices: options?.questionOptionIndices,
+      questionId: action.questionId,
+      optionValue: action.optionValue,
+    });
     if (optionIndex === undefined) {
       return recordDroppedControl(button, options, "question_context_unavailable");
     }

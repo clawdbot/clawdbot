@@ -1,12 +1,70 @@
 // Telegram question callback feedback tests.
 import { describe, expect, it, vi } from "vitest";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.js";
+import {
+  handleTelegramQuestionCallback,
+  sendTelegramQuestionFeedback,
+  type TelegramCallbackMessageActions,
+} from "./bot-handlers.callback-actions.js";
 
 const callback = {
   questionId: "ask_0123456789abcdef0123456789abcdef",
   intent: "select" as const,
   optionIndex: 1,
 };
+
+function createCallbackActions(): TelegramCallbackMessageActions {
+  const clearCallbackButtons = vi.fn<TelegramCallbackMessageActions["clearCallbackButtons"]>();
+  clearCallbackButtons.mockResolvedValue(true);
+  return {
+    editCallbackMessage: vi.fn<TelegramCallbackMessageActions["editCallbackMessage"]>(),
+    clearCallbackButtons,
+    editCallbackButtons: vi.fn<TelegramCallbackMessageActions["editCallbackButtons"]>(),
+    editCallbackMessageWithButtons:
+      vi.fn<TelegramCallbackMessageActions["editCallbackMessageWithButtons"]>(),
+    deleteCallbackMessage: vi.fn<TelegramCallbackMessageActions["deleteCallbackMessage"]>(),
+    replyToCallbackChat: vi.fn<TelegramCallbackMessageActions["replyToCallbackChat"]>(),
+  };
+}
+
+describe("sendTelegramQuestionFeedback", () => {
+  it("sends the custom-input prompt before retiring question controls", async () => {
+    const actions = createCallbackActions();
+
+    await sendTelegramQuestionFeedback({
+      actions,
+      text: "Reply with your own answer.",
+      mode: "custom-input",
+      isGroup: false,
+      user: { id: 42, is_bot: false, first_name: "Ayaan" },
+    });
+
+    const [replyOrder] = actions.replyToCallbackChat.mock.invocationCallOrder;
+    const [clearOrder] = actions.clearCallbackButtons.mock.invocationCallOrder;
+    expect(replyOrder).toBeDefined();
+    expect(clearOrder).toBeDefined();
+    if (replyOrder === undefined || clearOrder === undefined) {
+      throw new Error("Expected both custom-input feedback operations");
+    }
+    expect(replyOrder).toBeLessThan(clearOrder);
+  });
+
+  it("keeps question controls when Telegram rejects the custom-input prompt", async () => {
+    const actions = createCallbackActions();
+    actions.replyToCallbackChat.mockRejectedValue(new Error("send rejected"));
+
+    await expect(
+      sendTelegramQuestionFeedback({
+        actions,
+        text: "Reply with your own answer.",
+        mode: "custom-input",
+        isGroup: false,
+        user: { id: 42, is_bot: false, first_name: "Ayaan" },
+      }),
+    ).rejects.toThrow("send rejected");
+
+    expect(actions.clearCallbackButtons).not.toHaveBeenCalled();
+  });
+});
 
 describe("handleTelegramQuestionCallback", () => {
   it.each([

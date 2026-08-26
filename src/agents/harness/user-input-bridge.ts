@@ -264,6 +264,12 @@ function normalizeAgentHarnessUserInputAnswers(
     const normalized = normalizeAgentHarnessUserInputAnswer(answer, question);
     return normalized ? [normalized] : [];
   }
+  // A declared label can contain list delimiters. Match it whole before
+  // splitting a reply that selects several options.
+  const declaredAnswer = normalizeAgentHarnessUserInputOption(answer, question);
+  if (declaredAnswer) {
+    return [declaredAnswer];
+  }
   const normalized = answer
     .split(/[,;\n]/u)
     .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
@@ -272,6 +278,21 @@ function normalizeAgentHarnessUserInputAnswers(
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
+  answer: string,
+  question: AgentHarnessUserInputQuestion,
+): string | undefined {
+  const trimmed = answer.trim();
+  const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
+  if (declaredAnswer) {
+    return declaredAnswer;
+  }
+  if ((question.options?.length ?? 0) > 0 && !question.isOther) {
+    return undefined;
+  }
+  return trimmed || undefined;
+}
+
+function normalizeAgentHarnessUserInputOption(
   answer: string,
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
@@ -288,10 +309,7 @@ export function normalizeAgentHarnessUserInputAnswer(
   if (exact) {
     return exact.label;
   }
-  if (options.length > 0 && !question.isOther) {
-    return undefined;
-  }
-  return trimmed || undefined;
+  return undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

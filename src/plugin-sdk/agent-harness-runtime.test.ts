@@ -325,6 +325,24 @@ describe("agent harness user input helpers", () => {
     ).toEqual({ answers: { checks: { answers: ["Unit", "Deploy preview"] } } });
   });
 
+  it("keeps a comma-containing option label as one multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "region",
+            header: "Region",
+            question: "Which region should deploy?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+          },
+        ],
+        "Frankfurt, Germany",
+      ),
+    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
+  });
+
   it("supports runtime-specific text formatting", () => {
     expect(
       formatAgentHarnessUserInputPrompt(

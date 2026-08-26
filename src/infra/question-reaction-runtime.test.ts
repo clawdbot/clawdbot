@@ -68,6 +68,7 @@ describe("question reaction runtime", () => {
       questionId,
       optionValues: ["Staging", "Production"],
     });
+    expect(payload?.text).toContain("Or reply with your own answer.");
   });
 
   it("keeps a one-option prompt reaction-eligible", () => {

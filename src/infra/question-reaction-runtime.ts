@@ -89,9 +89,14 @@ export function prepareQuestionReactionPayloadForDelivery(params: {
   const reactionHint = labels
     .map((label, index) => `${QUESTION_REACTION_EMOJIS[index]} ${label}`)
     .join("\n");
+  const hasCustomInput = buttonBlock.buttons.some((button) => {
+    const action = button.action;
+    return action?.type === "question" && "intent" in action && action.intent === "custom-input";
+  });
+  const customInputHint = hasCustomInput ? "\n\nOr reply with your own answer." : "";
   return {
     ...params.payload,
-    text: `${prompt}\n\nReact with:\n${reactionHint}`,
+    text: `${prompt}\n\nReact with:\n${reactionHint}${customInputHint}`,
     presentation: undefined,
     presentationTextMode: undefined,
     channelData: {
