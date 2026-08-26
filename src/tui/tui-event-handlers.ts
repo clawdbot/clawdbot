@@ -180,9 +180,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     const isSequencedGatewayEvent = Number.isSafeInteger(evt.seq) && (evt.seq ?? -1) >= 0;
+    const isOwnedLocalPendingRun =
+      localMode && state.pendingSubmit?.runId === evt.runId && isLocalRunId?.(evt.runId) === true;
     if (
       runCoordinator.isRetiredOrphanRun(evt.runId) &&
       !isSequencedGatewayEvent &&
+      !isOwnedLocalPendingRun &&
       evt.runId !== getPendingSubmitAcceptedRunId(state)
     ) {
       return;
@@ -247,10 +250,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
     }
-    // Gateway chat envelopes require a non-negative sequence, even when a
-    // legacy peer omits agent lifecycle starts; orphan deltas have none.
+    // Gateway events are sequenced; early embedded events are trustworthy only
+    // when their exact provisional run belongs to the selected local viewport.
     acknowledgeChatRun(evt.runId, {
-      protectStream: isSequencedGatewayEvent,
+      protectStream: isSequencedGatewayEvent || isOwnedLocalPendingRun,
     });
     const isPendingChatRun = getPendingSubmitAcceptedRunId(state) === evt.runId;
     const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;

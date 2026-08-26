@@ -281,9 +281,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     };
   };
 
-  const patchCurrentSession = async (
+  const applySessionSetting = async (
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
-  ): Promise<SessionsPatchResult | null> => {
+    success: string | ((result: SessionsPatchResult) => string),
+    failure: string,
+    after?: (result: SessionsPatchResult) => void | Promise<void>,
+  ) => {
     const { selection, isCurrent } = captureSessionIncarnation();
     try {
       const result = await client.patchSession({
@@ -291,24 +294,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         ...patch,
       });
-      return isCurrent() ? result : null;
-    } catch (err) {
       if (!isCurrent()) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  const applySessionSetting = async (
-    patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
-    success: string | ((result: SessionsPatchResult) => string),
-    failure: string,
-    after?: (result: SessionsPatchResult) => void | Promise<void>,
-  ) => {
-    try {
-      const result = await patchCurrentSession(patch);
-      if (!result) {
         return;
       }
       chatLog.addSystem(typeof success === "function" ? success(result) : success);
@@ -319,7 +305,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await refreshSessionInfo();
       }
     } catch (err) {
-      chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+      if (isCurrent()) {
+        chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+      }
     }
   };
 
@@ -1034,6 +1022,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             state.activeChatRunId = null;
           }
           await loadHistory();
+          if (!isCurrentSendViewport()) {
+            return;
+          }
           if (terminalAckFailure) {
             chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
             setActivityStatus("error");
