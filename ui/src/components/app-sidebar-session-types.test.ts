@@ -6,10 +6,12 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
+  loadStoredSidebarSessionOwnerFilter,
   loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
   storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
+  storeSidebarSessionOwnerFilter,
   storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
@@ -59,6 +61,48 @@ describe("sidebar session status preference", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
     storeSidebarSessionStatusFilter("all");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("all");
+  });
+});
+
+describe("sidebar session owner preference", () => {
+  it("isolates owner and involving-me filters by gateway and authenticated user", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      kind: "owner",
+      ownerId: "profile-bob",
+    });
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace", {
+      kind: "involving-me",
+    });
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      kind: "owner",
+      ownerId: "profile-bob",
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace")).toEqual({
+      kind: "involving-me",
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
+      kind: "all",
+    });
+  });
+
+  it("removes all-owner filters and rejects malformed stored values", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      kind: "owner",
+      ownerId: "profile-bob",
+    });
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+    localStorage.setItem(key ?? "", "owner:");
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      kind: "all",
+    });
+
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", { kind: "all" });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      kind: "all",
+    });
+    expect(localStorage.length).toBe(0);
   });
 });
 
