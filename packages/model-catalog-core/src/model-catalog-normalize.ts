@@ -436,6 +436,17 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
   return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
 }
 
+// Provider-interpreted params are opaque to the catalog. Preserve the record so
+// provider capability keys survive config -> catalog instead of silently doing
+// nothing after successful schema validation.
+function normalizeModelCatalogParams(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value).filter(([, entry]) => entry !== undefined);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -457,6 +468,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);
   const compat = normalizeModelCatalogCompat(value.compat);
+  const modelParams = normalizeModelCatalogParams(value.params);
   const mediaInput = normalizeModelCatalogMediaInput(value.mediaInput);
   const status = normalizeModelCatalogStatus(value.status);
   const statusReason = normalizeOptionalString(value.statusReason) ?? "";
@@ -478,6 +490,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(cost ? { cost } : {}),
     ...(compat ? { compat } : {}),
+    ...(modelParams ? { params: modelParams } : {}),
     ...(mediaInput ? { mediaInput } : {}),
     ...(status ? { status } : {}),
     ...(statusReason ? { statusReason } : {}),
@@ -674,6 +687,7 @@ export function normalizeModelCatalogProviderRows(params: {
     const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(model.thinkingLevelMap);
     const cost = normalizeModelCatalogCost(model.cost);
     const compat = normalizeModelCatalogCompat(model.compat);
+    const modelParams = normalizeModelCatalogParams(model.params);
     const mediaInput = normalizeModelCatalogMediaInput(model.mediaInput);
     const statusReason = normalizeOptionalString(model.statusReason) ?? "";
     const replacedBy = normalizeOptionalString(model.replacedBy) ?? "";
@@ -699,6 +713,7 @@ export function normalizeModelCatalogProviderRows(params: {
       ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
       ...(cost ? { cost } : {}),
       ...(compat ? { compat } : {}),
+      ...(modelParams ? { params: modelParams } : {}),
       ...(mediaInput ? { mediaInput } : {}),
       ...(statusReason ? { statusReason } : {}),
       ...(replaces ? { replaces } : {}),
