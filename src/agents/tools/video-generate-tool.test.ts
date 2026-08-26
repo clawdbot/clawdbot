@@ -742,6 +742,68 @@ describe("createVideoGenerateTool", () => {
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
 
+  it("runs explicit deployment refs and preserves timeout-only video defaults", async () => {
+    const provider = {
+      id: "video-plugin",
+      models: [],
+      capabilities: {},
+      isConfigured: () => true,
+      generateVideo: vi.fn(async () => ({
+        videos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
+      })),
+    };
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      provider,
+    ]);
+    const generateSpy = mockSavedVideoResult("deployment.mp4");
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: { defaults: { videoGenerationModel: { timeoutMs: 180_000 } } },
+        }),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: { videoGenerationProviders: [provider] },
+        } as never,
+      }),
+    );
+
+    const result = await tool.execute("call-explicit-deployment", {
+      prompt: "friendly lobster surfing",
+      model: "video-plugin/deployment",
+    });
+
+    expect(firstMockCallArg(generateSpy)).toMatchObject({
+      modelOverride: "video-plugin/deployment",
+      timeoutMs: 180_000,
+    });
+    expect(resultDetails(result).timeoutMs).toBe(180_000);
+  });
+
+  it("rejects oversized inline reference images before video generation", async () => {
+    mockVideoPluginProvider({ imageToVideo: { enabled: true, maxInputImages: 1 } });
+    const generateSpy = mockSavedVideoResult();
+    const tool = expectVideoGenerateTool(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              mediaMaxMb: 8 / (1024 * 1024),
+              videoGenerationModel: { primary: "video-plugin/vid-v1" },
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(
+      tool.execute("call-oversized-inline-reference", {
+        prompt: "friendly lobster surfing",
+        image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(generateSpy).not.toHaveBeenCalled();
+  });
+
   it("uses the video media cap when mediaMaxMb is not configured", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "qwen",
