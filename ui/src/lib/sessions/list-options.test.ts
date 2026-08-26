@@ -414,6 +414,57 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
+  it("does not preserve another agent's raw-global row through background hydration", async () => {
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        listCallCount === 1
+          ? [
+              {
+                key: "global",
+                kind: "global",
+                updatedAt: 1,
+                owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+                goal: "Ops only",
+                status: "running",
+              },
+            ]
+          : [],
+        listCallCount,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected" as const,
+      sessionKey: "global",
+      assistantAgentId: "ops",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.refresh({ agentId: "ops", force: true });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key: "global",
+      goal: "Ops only",
+    });
+
+    snapshot.assistantAgentId = "research";
+    await sessions.refresh({ agentId: "research", backgroundHydrate: true, force: true });
+
+    expect(sessions.state.agentId).toBe("research");
+    expect(sessions.state.result?.sessions).toEqual([]);
+    sessions.dispose();
+  });
+
   it("does not preserve a derived title across a session reset", async () => {
     const key = "agent:main:dashboard:session";
     let listCallCount = 0;

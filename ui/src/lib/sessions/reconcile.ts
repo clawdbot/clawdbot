@@ -371,6 +371,12 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const { event, source, key, reason } = parsed;
+  // Unqualified rows need an outer agent identity. Without it, the payload can
+  // only invalidate the canonical roster; optimistically merging would assign
+  // a private fallback owner's state to whichever global agent is selected.
+  if (!parsed.agentId && !parseAgentSessionKey(key)) {
+    return { applied: false, key, agentId: null, result };
+  }
   if (reason === "delete" && !result) {
     return {
       applied: true,
