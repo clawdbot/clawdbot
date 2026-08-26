@@ -414,6 +414,7 @@ async function handleFileTransferInvoke(
         command,
         requestedPath,
         canonicalPath,
+        pendingReapprovalSelector: gate.pendingReapprovalSelector,
       });
     } catch (error) {
       standingApprovalWarning =

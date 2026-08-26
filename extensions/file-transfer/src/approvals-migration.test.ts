@@ -39,9 +39,10 @@ describe("file-transfer approval migration", () => {
 
     expect(migrated).toEqual({
       policyVersion: 2,
+      pendingReapprovals: [{ selector: "Shared", kind: "read", path: "/tmp/report-*.txt" }],
       nodes: {
         Shared: {
-          ask: "on-miss",
+          ask: "off",
           allowReadPaths: ["/var/log/**"],
           denyPaths: ["**/.ssh/**"],
         },
@@ -51,6 +52,27 @@ describe("file-transfer approval migration", () => {
       "/tmp/report-*.txt",
       "/var/log/**",
       "/tmp/remove.txt",
+    ]);
+  });
+
+  it("does not widen an off policy while scheduling one exact path for reapproval", () => {
+    const migrated = applyApprovalMigration(
+      {
+        nodes: {
+          node: { ask: "off", allowReadPaths: ["/tmp/report-*.txt"] },
+        },
+      },
+      [
+        {
+          item: { selector: "node", kind: "read", path: "/tmp/report-*.txt" },
+          action: "exact",
+        },
+      ],
+    );
+
+    expect(migrated.nodes).toEqual({ node: { ask: "off", allowReadPaths: [] } });
+    expect(migrated.pendingReapprovals).toEqual([
+      { selector: "node", kind: "read", path: "/tmp/report-*.txt" },
     ]);
   });
 });

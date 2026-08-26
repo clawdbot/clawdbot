@@ -462,6 +462,43 @@ describe("evaluateFilePolicy — node-id resolution", () => {
 });
 
 describe("literal standing grants", () => {
+  it("makes only a migration-selected exact path askable under ask=off", () => {
+    getRuntimeConfigMock.mockReturnValue({
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: {
+              policyVersion: 2,
+              nodes: { Shared: { ask: "off" } },
+              pendingReapprovals: [{ selector: "Shared", kind: "read", path: "/tmp/report-*.txt" }],
+            },
+          },
+        },
+      },
+    });
+
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/report-*.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: true },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "node-a",
+        nodeDisplayName: "Shared",
+        command: "file.fetch",
+        kind: "read",
+        path: "/tmp/unrelated.txt",
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+  });
+
   it.each([
     ["asterisk", "/tmp/report-*.txt", "/tmp/report-secret.txt"],
     ["question mark", "/tmp/report-?.txt", "/tmp/report-a.txt"],
@@ -611,5 +648,48 @@ describe("literal standing grants", () => {
       Shared: { ask: "on-miss", denyPaths: ["**/.ssh/**"] },
     });
     expect(config.literalGrants).toEqual([grant]);
+  });
+
+  it("clears the matching pending reapproval after saving the exact grant", async () => {
+    let captured: Record<string, unknown> | null = null;
+    mutateConfigFileMock.mockImplementation(
+      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        const draft: Record<string, unknown> = {
+          plugins: {
+            entries: {
+              "file-transfer": {
+                config: {
+                  policyVersion: 2,
+                  nodes: { Shared: { ask: "off" } },
+                  pendingReapprovals: [
+                    { selector: "Shared", kind: "read", path: "/tmp/report.txt" },
+                    { selector: "Shared", kind: "read", path: "/tmp/other.txt" },
+                  ],
+                },
+              },
+            },
+          },
+        };
+        mutate(draft);
+        captured = draft;
+      },
+    );
+
+    await persistLiteralGrant({
+      nodeId: "node-a",
+      command: "file.fetch",
+      requestedPath: "/tmp/report.txt",
+      canonicalPath: "/private/tmp/report.txt",
+      pendingReapprovalSelector: "Shared",
+    });
+
+    const config = (
+      captured as unknown as {
+        plugins: { entries: { "file-transfer": { config: Record<string, unknown> } } };
+      }
+    ).plugins.entries["file-transfer"].config;
+    expect(config.pendingReapprovals).toEqual([
+      { selector: "Shared", kind: "read", path: "/tmp/other.txt" },
+    ]);
   });
 });

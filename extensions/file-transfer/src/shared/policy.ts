@@ -64,11 +64,21 @@ export type FilePolicyKind = "read" | "write";
 type FilePolicyAskMode = "off" | "on-miss" | "always";
 export const FILE_TRANSFER_POLICY_VERSION = 2;
 
-export type FileTransferLiteralGrant = {
+type FileTransferLiteralGrant = {
   nodeId: string;
   command: FileTransferNodeInvokeCommand;
   requestedPath: string;
   canonicalPath: string;
+};
+
+type PendingReapproval = {
+  selector: string;
+  kind: FilePolicyKind;
+  path: string;
+};
+
+type PersistLiteralGrantInput = FileTransferLiteralGrant & {
+  pendingReapprovalSelector?: string;
 };
 
 type FilePolicyDecision =
@@ -85,6 +95,7 @@ type FilePolicyDecision =
       askMode: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks: boolean;
+      pendingReapprovalSelector?: string;
     }
   | {
       ok: false;
@@ -94,6 +105,7 @@ type FilePolicyDecision =
       askMode?: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks?: boolean;
+      pendingReapprovalSelector?: string;
     };
 
 type NodeFilePolicyConfig = {
@@ -111,6 +123,7 @@ type FileTransferPolicyConfig = {
   policyVersion?: number;
   nodes?: FilePolicyConfig;
   literalGrants?: unknown;
+  pendingReapprovals?: unknown;
 };
 
 function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
@@ -129,7 +142,41 @@ function readFileTransferConfigFromPluginConfig(
       typeof pluginRecord.policyVersion === "number" ? pluginRecord.policyVersion : undefined,
     nodes: asFilePolicyConfig(pluginRecord.nodes) ?? undefined,
     literalGrants: pluginRecord.literalGrants,
+    pendingReapprovals: pluginRecord.pendingReapprovals,
   };
+}
+
+function readPendingReapprovals(config: FileTransferPolicyConfig): PendingReapproval[] {
+  if (
+    config.policyVersion !== FILE_TRANSFER_POLICY_VERSION ||
+    !Array.isArray(config.pendingReapprovals)
+  ) {
+    return [];
+  }
+  return config.pendingReapprovals.flatMap((value) => {
+    const pending = asNullableRecord(value);
+    if (
+      !pending ||
+      typeof pending.selector !== "string" ||
+      (pending.kind !== "read" && pending.kind !== "write") ||
+      typeof pending.path !== "string"
+    ) {
+      return [];
+    }
+    return [{ selector: pending.selector, kind: pending.kind, path: pending.path }];
+  });
+}
+
+function matchesPendingReapproval(
+  input: FilePolicyInput,
+  policySelector: string,
+  pending: PendingReapproval,
+): boolean {
+  return (
+    pending.kind === input.kind &&
+    pending.path === input.path &&
+    pending.selector === policySelector
+  );
 }
 
 function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
@@ -388,9 +435,20 @@ function evaluateFilePolicyInternal(
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
+  const pendingReapproval = readPendingReapprovals(pluginPolicy).find((pending) =>
+    matchesPendingReapproval(input, resolved.key, pending),
+  );
+
   // 2. ask=always: prompt every time even if matched.
   if (askMode === "always") {
-    return { ok: true, reason: "ask-always", askMode, maxBytes, followSymlinks };
+    return {
+      ok: true,
+      reason: "ask-always",
+      askMode,
+      maxBytes,
+      followSymlinks,
+      pendingReapprovalSelector: pendingReapproval?.selector,
+    };
   }
 
   // 3. Match operator-authored glob policy for this kind.
@@ -422,6 +480,22 @@ function evaluateFilePolicyInternal(
         followSymlinks,
       };
     }
+  }
+
+  // A migration-selected exact path is the only miss that becomes askable.
+  // This preserves the node's authored ask mode while replacing ambiguous
+  // legacy authority with a node- and command-bound approval on first use.
+  if (pendingReapproval) {
+    return {
+      ok: false,
+      code: "POLICY_DENIED",
+      reason: "path requires exact reapproval",
+      askable: true,
+      askMode,
+      maxBytes,
+      followSymlinks,
+      pendingReapprovalSelector: pendingReapproval.selector,
+    };
   }
 
   // 5. No allow match. Either askable on miss or hard-deny.
@@ -460,7 +534,7 @@ export function evaluateFilePolicyConstraints(input: FilePolicyInput): FilePolic
 }
 
 /** Persist an exact standing grant only after node canonical-path validation. */
-export async function persistLiteralGrant(input: FileTransferLiteralGrant): Promise<void> {
+export async function persistLiteralGrant(input: PersistLiteralGrantInput): Promise<void> {
   if (!isFileTransferCommand(input.command)) {
     throw new Error("unsupported file-transfer command");
   }
@@ -490,8 +564,20 @@ export async function persistLiteralGrant(input: FileTransferLiteralGrant): Prom
           grant.command !== input.command ||
           grant.requestedPath !== input.requestedPath,
       );
-      grants.push({ ...input });
+      grants.push({
+        nodeId: input.nodeId,
+        command: input.command,
+        requestedPath: input.requestedPath,
+        canonicalPath: input.canonicalPath,
+      });
       policyConfig.literalGrants = grants;
+      const kind = input.command === "file.write" ? "write" : "read";
+      policyConfig.pendingReapprovals = readPendingReapprovals(policyConfig).filter(
+        (pending) =>
+          pending.kind !== kind ||
+          pending.path !== input.requestedPath ||
+          pending.selector !== input.pendingReapprovalSelector,
+      );
     },
   });
 }

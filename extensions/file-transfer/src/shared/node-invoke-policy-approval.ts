@@ -8,6 +8,7 @@ export type GrantedAuthorization = {
   source: "authored" | "literal" | "approval";
   persist: boolean;
   expectedCanonicalPath?: string;
+  pendingReapprovalSelector?: string;
   followSymlinks: boolean;
   maxBytes?: number;
 };
@@ -162,5 +163,6 @@ export async function requestApproval(input: {
     persist: approvalDecision === "allow-always",
     followSymlinks: decision.followSymlinks ?? false,
     maxBytes: decision.maxBytes,
+    pendingReapprovalSelector: decision.pendingReapprovalSelector,
   };
 }

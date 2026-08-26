@@ -44,6 +44,19 @@
           }
         }
       },
+      "pendingReapprovals": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selector", "kind", "path"],
+          "properties": {
+            "selector": { "type": "string", "minLength": 1 },
+            "kind": { "type": "string", "enum": ["read", "write"] },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
       "nodes": {
         "type": "object",
         "additionalProperties": {

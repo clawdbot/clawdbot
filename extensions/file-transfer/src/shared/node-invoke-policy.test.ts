@@ -363,6 +363,7 @@ describe("file-transfer node invoke policy", () => {
       command: "file.fetch",
       requestedPath: "/tmp/new-*.txt",
       canonicalPath: "/private/tmp/new-*.txt",
+      pendingReapprovalSelector: undefined,
     });
   });
 
@@ -424,6 +425,7 @@ describe("file-transfer node invoke policy", () => {
       command: "file.fetch",
       requestedPath: "/tmp/report-*.txt",
       canonicalPath: "/tmp/other.txt",
+      pendingReapprovalSelector: undefined,
     });
   });
 
@@ -687,6 +689,7 @@ describe("file-transfer node invoke policy", () => {
           command: "dir.fetch",
           requestedPath: "/home/project",
           canonicalPath: "/home/project",
+          pendingReapprovalSelector: undefined,
         });
       }
     },

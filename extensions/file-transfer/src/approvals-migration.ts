@@ -56,6 +56,7 @@ export function applyApprovalMigration(
   const next = structuredClone(original);
   const nodes = asNullableRecord(next.nodes) ?? {};
   next.nodes = nodes;
+  const pendingReapprovals: LegacyApprovalItem[] = [];
   for (const decision of decisions) {
     if (decision.action === "keep-glob") {
       continue;
@@ -69,14 +70,13 @@ export function applyApprovalMigration(
     node[field] = paths.filter((value) => value !== decision.item.path);
     if (decision.action === "exact") {
       // Legacy rows do not contain a node-authoritative canonical path or the
-      // originating command. Remove the ambiguous grant and prompt once on
-      // its next use; that approval records the complete exact tuple.
-      if (node.ask !== "always") {
-        node.ask = "on-miss";
-      }
+      // originating command. Keep only this path askable so its next use can
+      // record the complete exact tuple without changing the node-wide mode.
+      pendingReapprovals.push(decision.item);
     }
   }
 
+  next.pendingReapprovals = pendingReapprovals;
   next.policyVersion = FILE_TRANSFER_POLICY_VERSION;
   return next;
 }
