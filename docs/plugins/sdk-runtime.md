@@ -413,6 +413,42 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     before choosing this path from tools that can also run in standalone agent processes.
 
   </Accordion>
+  <Accordion title="api.runtime.hooks">
+    Dispatch isolated agent turns for untrusted external-content triggers, such
+    as an email watcher. Unlike `api.runtime.subagent.run(...)`, hook dispatch
+    wraps external content, serializes runs for the same session, and uses the
+    Gateway hook execution lane and completion reporting.
+
+    ```typescript
+    const result = await api.runtime.hooks.dispatchHookAgentTurn({
+      name: "IMAP inbox",
+      agentId: "mail",
+      sessionKey: "hook:imap:account:123:456",
+      message: "Summarize the new email and identify any requested actions.",
+      externalContentSource: "email",
+      deliver: true,
+      thinking: "low", // optional
+      timeoutSeconds: 60, // optional
+      idempotencyKey: "account:123:456", // optional
+    });
+
+    if (!result.ok) {
+      api.logger.warn(`Hook agent turn was rejected: ${result.reason}`);
+    }
+    ```
+
+    `agentId` is required, and `sessionKey` must begin with `hook:` and contain
+    no whitespace or control characters. `externalContentSource` currently
+    accepts only `"email"`; external-content wrapping cannot be disabled. Set
+    `deliver` to `false` to record completion without announcing it. Successful
+    admission returns `{ ok: true, runId }`; rejected admission returns
+    `{ ok: false, reason }`.
+
+    This capability is available only to bundled plugins and trusted official
+    plugin installations. It does not require enabling or configuring the HTTP
+    hooks endpoint.
+
+  </Accordion>
   <Accordion title="api.runtime.subagent">
     Launch and manage background subagent runs.
 

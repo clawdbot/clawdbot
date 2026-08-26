@@ -51,6 +51,7 @@ import {
   resolvePluginSubagentRequestedModelRef,
 } from "./server-plugin-subagent-runtime.js";
 import {
+  createGatewayHooksRuntime,
   hasInProcessGatewayContext,
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
@@ -477,9 +478,7 @@ export function createGatewayNodesRuntime(
                 (node as { connected?: unknown } | null)?.connected === true,
             )
           : nodes;
-      return {
-        nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes,
-      };
+      return { nodes: projectGatewayRuntimeNodes(filteredNodes, context) as GatewayRuntimeNodes };
     },
     invoke: invokeNode,
     openDuplex: (params) =>
@@ -491,7 +490,7 @@ function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver | undefined,
   overridePolicies: PluginSubagentOverridePolicies,
 ): {
-  runtime: Pick<PluginRuntime, "gateway" | "nodes" | "subagent"> &
+  runtime: Pick<PluginRuntime, "gateway" | "hooks" | "nodes" | "subagent"> &
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
   retire: () => void;
 } {
@@ -526,6 +525,7 @@ function createGatewayPluginRuntimeBindings(
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
+      hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
       subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
     },

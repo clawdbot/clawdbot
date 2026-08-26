@@ -21,6 +21,7 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -315,6 +316,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       progressCard: this.progressCard.card,
+      progressCardHasActiveRun: Boolean(
+        state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
+      ),
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {

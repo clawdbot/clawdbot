@@ -394,14 +394,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             }, 5);
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
-          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
-            if (isXaiLimitProof) {
+            if (opts.message === "xai limit proof") {
               this.onEvent?.({
                 event: "chat",
                 payload: {
                   runId,
                   sessionKey: opts.sessionKey,
+                  seq: 0,
                   state: "error",
                   errorMessage: xaiLimitError,
                 },

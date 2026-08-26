@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=b0de445838f6401181bbddf3584aeac126d1409ef8fc1c36071e3b86a4b3359d
-+++ discord-group-codex-message-tool.md	sha256=02deff9f51b92a9fcbddab38492f043d5e5e5ecb9fec7310955a5a643afc1d5d
+--- telegram-direct-codex-message-tool.md	sha256=0ffd165216012ff63244b6d9b39269a3a8775bdacbbc1f1bcb52c8a6dfb8b03e
++++ discord-group-codex-message-tool.md	sha256=5d6e349160a987be177164637f54004e67108496f6cc4f511188165b1b917c1f
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -34,26 +34,26 @@
 +    "chars": 55293,
 +    "roughTokens": 13824
 @@ -239,2 +239,2 @@
--    "chars": 3390,
--    "roughTokens": 848
-+    "chars": 4499,
-+    "roughTokens": 1125
+-    "chars": 3518,
+-    "roughTokens": 880
++    "chars": 4627,
++    "roughTokens": 1157
 @@ -243,2 +243,2 @@
--    "chars": 27336,
--    "roughTokens": 6834
-+    "chars": 28816,
-+    "roughTokens": 7204
+-    "chars": 27464,
+-    "roughTokens": 6866
++    "chars": 28944,
++    "roughTokens": 7236
 @@ -247,2 +247,2 @@
--    "chars": 82323,
--    "roughTokens": 20581
-+    "chars": 84111,
-+    "roughTokens": 21028
+-    "chars": 82451,
+-    "roughTokens": 20613
++    "chars": 84239,
++    "roughTokens": 21060
 @@ -251,2 +251,2 @@
 -    "chars": 863,
 -    "roughTokens": 216
 +    "chars": 1234,
 +    "roughTokens": 309
-@@ -460,4 +460,4 @@
+@@ -461,4 +461,4 @@
 -  "channel": "telegram",
 -  "provider": "telegram",
 -  "surface": "telegram",
@@ -62,21 +62,21 @@
 +  "provider": "discord",
 +  "surface": "discord",
 +  "chat_type": "group"
-@@ -468,1 +468,3 @@
+@@ -469,1 +469,3 @@
 -You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
 +You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to this group chat. Be extremely selective: reply only when directly addressed or clearly helpful.
 +
 +Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
-@@ -524,1 +526,1 @@
+@@ -525,1 +527,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"channel:987654321","message_id":"discord-msg-0001","conversation_label":"OpenClaw/#agent-sandbox","sender":{"id":"424242","name":"Pash","username":"pash"},"group_subject":"OpenClaw maintainers","group_channel":"#agent-sandbox","group_space":"OpenClaw","is_group_chat":true,"was_mentioned":true,"history_count":2}
-@@ -527,1 +529,5 @@
+@@ -528,1 +530,5 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Chat history since last reply: ⟦openclaw:ctx⟧
 +Peter: I pushed the Discord-side message-tool bridge.
 +Pash: @OpenClaw please verify the Codex happy path too.
 +
 +can you audit whether this prompt path has conflicting silence instructions?
-@@ -532,1 +538,1 @@
+@@ -533,1 +539,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)

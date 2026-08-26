@@ -253,6 +253,197 @@ it("awaits cumulative Tlon discovery persistence and retries failed writes", asy
   }
 });
 
+it.each([
+  { name: "owner", ship: "~nec", settings: {} },
+  {
+    name: "allowlisted",
+    ship: "~bus",
+    settings: { autoAcceptGroupInvites: true, groupInviteAllowlist: ["~bus"] },
+  },
+])("awaits $name group invite acceptance and retries failed writes", async ({ ship, settings }) => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce(settings);
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const foreignsSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/v1/foreigns");
+    if (!foreignsSubscription) {
+      throw new Error("expected foreigns subscription");
+    }
+    sseClientMock.poke.mockClear();
+
+    let releaseWrite = () => {};
+    sseClientMock.poke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    let settled = false;
+    const firstResult = foreignsSubscription.event({
+      [`${ship}/first`]: { invites: [{ valid: true, from: ship }] },
+    });
+    expect(firstResult).toBeInstanceOf(Promise);
+    const firstProcessing = Promise.resolve(firstResult).then(() => {
+      settled = true;
+    });
+    await setImmediate();
+    expect(sseClientMock.poke).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    releaseWrite();
+    await firstProcessing;
+    expect(settled).toBe(true);
+
+    sseClientMock.poke.mockRejectedValueOnce(new Error("group join failed"));
+    const retryEvent = {
+      [`${ship}/retry`]: { invites: [{ valid: true, from: ship }] },
+    };
+    await expect(foreignsSubscription.event(retryEvent)).rejects.toThrow("group join failed");
+    await foreignsSubscription.event(retryEvent);
+
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      app: "groups",
+      mark: "group-join",
+      json: { flag: `${ship}/retry`, "join-all": true },
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
+it.each([
+  { name: "owner", ship: "~nec", settings: {} },
+  {
+    name: "allowlisted",
+    ship: "~bus",
+    settings: { autoAcceptDmInvites: true, dmAllowlist: ["~bus"] },
+  },
+])(
+  "retries failed $name DM invite acceptance before acknowledgement",
+  async ({ ship, settings }) => {
+    const controller = new AbortController();
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+    settingsManagerMock.load.mockResolvedValueOnce(settings);
+
+    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    try {
+      await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+      const chatSubscription = sseClientMock.subscribe.mock.calls
+        .map(([subscription]) => subscription)
+        .find(({ app, path }) => app === "chat" && path === "/v3");
+      if (!chatSubscription) {
+        throw new Error("expected chat subscription");
+      }
+      sseClientMock.poke.mockClear();
+      ingressMock.receive
+        .mockResolvedValueOnce({ kind: "ignored" })
+        .mockResolvedValueOnce({ kind: "ignored" });
+
+      const inviteEvent = [{ ship }];
+      sseClientMock.poke.mockRejectedValueOnce(new Error("DM invite write failed"));
+      await expect(chatSubscription.event(inviteEvent)).rejects.toThrow("DM invite write failed");
+      await chatSubscription.event(inviteEvent);
+
+      expect(sseClientMock.poke).toHaveBeenCalledTimes(2);
+      expect(sseClientMock.poke.mock.calls[1]?.[0]).toMatchObject({
+        app: "chat",
+        mark: "chat-dm-rsvp",
+        json: { ship, ok: true },
+      });
+    } finally {
+      controller.abort();
+      await monitor;
+    }
+  },
+);
+
+it("persists group invite approval before notification and acknowledgement", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const foreignsSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/v1/foreigns");
+    if (!foreignsSubscription) {
+      throw new Error("expected foreigns subscription");
+    }
+    sseClientMock.poke.mockClear();
+
+    const inviteEvent = {
+      "~bus/private": { invites: [{ valid: true, from: "~bus" }] },
+    };
+    sseClientMock.poke.mockRejectedValueOnce(new Error("approval save failed"));
+    await expect(foreignsSubscription.event(inviteEvent)).rejects.toThrow("approval save failed");
+    await foreignsSubscription.event(inviteEvent);
+
+    const pendingWrites = sseClientMock.poke.mock.calls.filter(
+      ([payload]) => payload.json?.["put-entry"]?.["entry-key"] === "pendingApprovals",
+    );
+    expect(pendingWrites).toHaveLength(2);
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      app: "chat",
+      mark: "chat-dm-action",
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
+it("continues startup after an initial group invite write fails", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce({
+    autoAcceptGroupInvites: true,
+    autoDiscoverChannels: true,
+  });
+  sseClientMock.scry.mockImplementation(async (path) =>
+    path === "/groups-ui/v6/init.json"
+      ? {
+          foreigns: {
+            "~nec/startup": { invites: [{ valid: true, from: "~nec" }] },
+          },
+        }
+      : {},
+  );
+  sseClientMock.poke.mockImplementation(async (payload) => {
+    if (payload.mark === "group-join") {
+      throw new Error("initial group join failed");
+    }
+  });
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    expect(sseClientMock.subscribe.mock.calls.map(([subscription]) => subscription)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ app: "groups", path: "/v1/foreigns" })]),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("initial group join failed"),
+    );
+  } finally {
+    controller.abort();
+    await monitor;
+    sseClientMock.scry.mockReset().mockResolvedValue({});
+    sseClientMock.poke.mockReset().mockResolvedValue(undefined);
+  }
+});
+
 describe("monitorTlonProvider inbound media truth", () => {
   it.each([
     {

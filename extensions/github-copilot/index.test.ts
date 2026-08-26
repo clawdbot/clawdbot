@@ -607,6 +607,26 @@ describe("github-copilot plugin", () => {
     expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
   });
 
+  it("exposes xhigh and max thinking for the bundled Claude Opus 5 model", () => {
+    const provider = registerProviderWithPluginConfig({});
+    const model = expectDefined(
+      manifest.modelCatalog.providers["github-copilot"].models.find(
+        (candidate) => candidate.id === "claude-opus-5",
+      ),
+      "bundled GitHub Copilot Claude Opus 5 model",
+    );
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: model.id,
+      compat: model.compat,
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["xhigh", "max"]),
+    );
+  });
+
   it("exposes max thinking for catalog-supported Copilot reasoning efforts", () => {
     const provider = registerProviderWithPluginConfig({});
 

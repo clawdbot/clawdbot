@@ -31,6 +31,7 @@ import {
 import type { DiscordVoiceReceive } from "./voice-receive.js";
 
 const logger = createSubsystemLogger("discord/voice");
+const REALTIME_PLAYBACK_MAX_MISSED_FRAMES = 100;
 
 function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
   return entry.sessionLifecycle.status === "stopped";
@@ -376,7 +377,12 @@ export class DiscordVoiceSessions {
       `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.speakerVoice ?? voiceConfig?.realtime?.speakerVoiceId ?? "provider-default"}`,
     );
 
-    const player = voiceSdk.createAudioPlayer();
+    // Discord consumes frames every 20 ms; provider jitter must not end a live response after 100 ms.
+    const player = isDiscordRealtimeVoiceMode(voiceMode)
+      ? voiceSdk.createAudioPlayer({
+          behaviors: { maxMissedFrames: REALTIME_PLAYBACK_MAX_MISSED_FRAMES },
+        })
+      : voiceSdk.createAudioPlayer();
     connection.subscribe(player);
     const clearSessionIfCurrent = () => {
       const active = this.params.sessions.get(guildId);
@@ -418,7 +424,8 @@ export class DiscordVoiceSessions {
         generation: realtimeLifecycle.generation,
         reason: optionsLocal.reason,
       };
-      player.stop();
+      // Buffering resources cannot drain silence padding; terminal teardown must reach Idle now.
+      player.stop(true);
       if (optionsLocal.destroyConnection) {
         destroyVoiceConnectionSafely({
           connection,

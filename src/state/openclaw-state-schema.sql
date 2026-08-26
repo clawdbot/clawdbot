@@ -49,14 +49,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
 
-CREATE TABLE IF NOT EXISTS skill_curator_state (
-  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
-  last_attempt_at_ms INTEGER NOT NULL,
-  last_success_at_ms INTEGER,
-  last_error TEXT,
-  last_result_json TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,
@@ -699,15 +691,6 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
 
-CREATE TABLE IF NOT EXISTS onboarding_recommendations (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  inventory_hash TEXT NOT NULL,
-  matches_json TEXT NOT NULL,
-  offered_at_ms INTEGER NOT NULL,
-  accepted_at_ms INTEGER,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
   workspace_path TEXT NOT NULL,
@@ -838,14 +821,6 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
 
-CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
-  key_id TEXT NOT NULL PRIMARY KEY,
-  public_key TEXT NOT NULL,
-  private_key TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
   transport TEXT NOT NULL,
@@ -867,22 +842,6 @@ CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
 CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
   node_id TEXT NOT NULL PRIMARY KEY,
   deleted_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS node_host_config (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  version INTEGER NOT NULL,
-  node_id TEXT NOT NULL,
-  token TEXT,
-  display_name TEXT,
-  gateway_host TEXT,
-  gateway_port INTEGER,
-  gateway_tls INTEGER,
-  gateway_tls_fingerprint TEXT,
-  gateway_context_path TEXT,
-  gateway_cloudflare_access_json TEXT,
-  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
-  updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
 -- Node-host-owned launch journal. The descriptor and its credential remain
@@ -969,74 +928,11 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   container_json TEXT
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS voicewake_triggers (
-  config_key TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  trigger TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (config_key, position)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_voicewake_triggers_trigger
-  ON voicewake_triggers(config_key, trigger);
-
-CREATE TABLE IF NOT EXISTS voicewake_routing_config (
-  config_key TEXT NOT NULL PRIMARY KEY,
-  version INTEGER NOT NULL,
-  default_target_mode TEXT NOT NULL,
-  default_target_agent_id TEXT,
-  default_target_session_key TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
-  config_key TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  trigger TEXT NOT NULL,
-  target_mode TEXT NOT NULL,
-  target_agent_id TEXT,
-  target_session_key TEXT,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (config_key, position),
-  FOREIGN KEY (config_key) REFERENCES voicewake_routing_config(config_key) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_voicewake_routing_routes_trigger
-  ON voicewake_routing_routes(config_key, trigger);
-
-CREATE TABLE IF NOT EXISTS update_check_state (
-  state_key TEXT NOT NULL PRIMARY KEY,
-  last_checked_at TEXT,
-  last_notified_version TEXT,
-  last_notified_tag TEXT,
-  last_available_version TEXT,
-  last_available_tag TEXT,
-  auto_install_id TEXT,
-  auto_first_seen_version TEXT,
-  auto_first_seen_tag TEXT,
-  auto_first_seen_at TEXT,
-  auto_last_attempt_version TEXT,
-  auto_last_attempt_at TEXT,
-  auto_last_success_version TEXT,
-  auto_last_success_at TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS config_health_entries (
   config_path TEXT NOT NULL PRIMARY KEY,
   last_known_good_json TEXT,
   last_promoted_good_json TEXT,
   last_observed_suspicious_signature TEXT,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
-  state_key TEXT NOT NULL PRIMARY KEY,
-  etag TEXT,
-  payload_json TEXT,
-  feed_sequence INTEGER,
-  last_checked_at_ms INTEGER,
-  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
@@ -1511,11 +1407,6 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   PRIMARY KEY (store_key, job_id)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS cron_store_epochs (
-  store_key TEXT PRIMARY KEY,
-  store_epoch INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
 
@@ -1792,15 +1683,6 @@ CREATE TABLE IF NOT EXISTS plugin_binding_approvals (
 CREATE INDEX IF NOT EXISTS idx_plugin_binding_approvals_plugin
   ON plugin_binding_approvals(plugin_id, approved_at DESC);
 
-CREATE TABLE IF NOT EXISTS tui_last_sessions (
-  scope_key TEXT NOT NULL PRIMARY KEY,
-  session_key TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
-  ON tui_last_sessions(session_key, updated_at DESC, scope_key);
-
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,
@@ -2001,13 +1883,6 @@ CREATE TABLE IF NOT EXISTS session_groups (
   created_at INTEGER NOT NULL,
   cwd TEXT,
   worktree INTEGER
-) STRICT;
-
--- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
--- category:<name>; pinned sessions are ordered separately and never stored.
-CREATE TABLE IF NOT EXISTS sidebar_sections (
-  section_id TEXT NOT NULL PRIMARY KEY,
-  position INTEGER NOT NULL
 ) STRICT;
 
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
@@ -2561,17 +2436,6 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS model_catalog_remote (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  bundle_json TEXT NOT NULL,
-  generated_at INTEGER NOT NULL,
-  min_version TEXT,
-  source_url TEXT NOT NULL,
-  etag TEXT,
-  last_modified TEXT,
-  checked_at INTEGER NOT NULL
 ) STRICT;
 
 -- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,

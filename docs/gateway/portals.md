@@ -7,7 +7,7 @@ read_when:
   - Troubleshooting portal access or live reload
 ---
 
-Portals expose a development server running on the Gateway host to the operator's browser. They proxy HTTP and WebSockets for live reload and appear in **Control UI → Portals**.
+Portals expose a development server running on the Gateway host or a node-backed cloud worker to the operator's browser. They proxy HTTP and WebSockets for live reload and appear in **Control UI → Portals**.
 
 ## Quick start
 
@@ -17,6 +17,8 @@ Ask the agent to open a portal:
 - "Start the app in a portal."
 
 The agent opens a portal for the application's port, then starts the development server with a background `exec` call. Opening a portal only creates the proxy listener; it does not inject environment variables into your server. The agent sets `PORT` (the port it opened) and `PUBLIC_URL` (the portal's public base URL) in that `exec` command's own environment, so the app binds the expected port and generates correct absolute URLs.
+
+For a session on a node-backed cloud worker, including the bundled Crabbox provider, the development server runs on the worker. Each portal connection receives its own single-use ticket, which the enrolled node redeems over a TLS-pinned WebSocket to the Gateway before connecting to the selected loopback port. This uses the existing authenticated node channel without exposing the worker to inbound traffic or creating an SSH tunnel. Stopping or replacing the worker closes its portals.
 
 ## Declare development servers
 
@@ -64,6 +66,7 @@ Out of the box:
 - `portal` belongs to `group:ui` and the `coding` profile, so coding agents have it while `messaging` and `minimal` agents do not.
 - Sandboxed sessions never receive it, because opening a portal starts a listener on the Gateway host.
 - It is blocked for HTTP `POST /tools/invoke` and restricted to the session owner, the same treatment `terminal` gets.
+- Cloud-worker sessions receive it only when their enrolled node advertises portal-stream support. Older node bundles without that capability do not receive the tool.
 
 To turn portals off everywhere, deny the tool in the global policy:
 
@@ -91,11 +94,12 @@ Each portal uses a separate origin on its own port and binds to the same interfa
 
 Browser cookies are hostname-scoped rather than port-scoped, so the proxy gives each portal instance a random `oc_portal_<instance>_` cookie-name prefix. Requests forward only cookies with the current portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies from sibling or closed portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
 
-Portals proxy only the selected local development server. They never serve Gateway data, and every portal ends when the Gateway restarts.
+Portals proxy only the selected development server on the Gateway host or a node-backed cloud worker. Worker connections use single-use tickets and the enrolled node's TLS-pinned Gateway connection; they never expose a public worker port or require SSH forwarding. Portals never serve Gateway data, and every portal ends when the Gateway restarts.
 
 ## Limitations
 
-- The development server must run on the Gateway host. Remote worker support is planned.
+- Older node bundles without portal-stream support cannot open worker portals. Update the node bundle, or move the session back to the Gateway with `sessions.move`.
+- SSH-backed `remote-exec` placements, including Codex sessions, do not run the OpenClaw worker tool loop, so the `portal` tool does not apply there. Move the session back to the Gateway with `sessions.move` when a Gateway-hosted portal is needed.
 - A proxy or tunnel in front of the Gateway does not automatically expose portal listener ports. The Control UI detects this and shows a reachable URL with retry guidance instead of mounting a dead iframe.
 - The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. Browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
@@ -103,7 +107,7 @@ Portals proxy only the selected local development server. They never serve Gatew
 
 ### The portal shows a 502 waiting page
 
-The proxy is ready, but the application is not listening on the selected port. The page retries automatically. Check the background process and confirm that the server honors `PORT`.
+The proxy is ready, but the application is not listening on the selected port or its worker node is temporarily disconnected. The page retries automatically. Check the background process, confirm that the server honors `PORT`, and verify that the worker node is connected.
 
 ### The portal is not reachable from this browser
 

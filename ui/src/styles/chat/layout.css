@@ -1127,7 +1127,7 @@ openclaw-chat-page {
 
 .agent-chat__goal-row {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto auto;
   align-items: center;
   min-width: 0;
   column-gap: 8px;
@@ -1137,14 +1137,14 @@ openclaw-chat-page {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: var(--chat-stack-icon-size, 14px);
   height: 18px;
   flex-shrink: 0;
 }
 
 .agent-chat__goal-icon svg {
-  width: 14px;
-  height: 14px;
+  width: var(--chat-stack-icon-size, 14px);
+  height: var(--chat-stack-icon-size, 14px);
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;

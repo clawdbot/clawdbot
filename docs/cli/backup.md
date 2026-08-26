@@ -188,11 +188,12 @@ unrelated files elsewhere in an adopted repository are never staged.
 - `mcp_oauth_pending_authorizations`
 - `mcp_oauth_stores`
 - `native_hook_relay_bridges`
-- `node_host_config`
 - `secret_store_entries`
 - `web_push_subscriptions`
-- `web_push_vapid_keys`
 - `worker_environment_credentials`
+
+It also omits `config_machine_state` rows whose keys begin with `nodeHost.` or
+`webPush.vapidKeys`, while retaining other machine-state rows.
 
 It omits these per-agent tables:
 
@@ -200,8 +201,10 @@ It omits these per-agent tables:
 - `auth_profile_store`
 - `session_suggestions`
 
-Restore reports the omitted tables so a redacted snapshot cannot be mistaken
-for a complete credential backup.
+The backup manifest records omitted tables in `excludedTables` and omitted
+machine-state prefixes in `excludedConfigStateKeyPrefixes`. Restore reports
+omitted tables so a redacted snapshot cannot be mistaken for a complete
+credential backup.
 </Warning>
 
 Inspect or verify history without changing the live databases:

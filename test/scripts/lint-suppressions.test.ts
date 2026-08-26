@@ -234,7 +234,7 @@ describe("production lint suppressions", () => {
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
-        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
         "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",

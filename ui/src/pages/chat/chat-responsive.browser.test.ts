@@ -3919,8 +3919,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="agent-chat__progress-float">
             <details class="session-progress-card session-progress-card--composer" open>
               <summary class="session-progress-card__summary">
+                <span class="session-progress-card__summary-indicator">
+                  <span class="session-run-spinner"></span>
+                </span>
                 <span class="session-progress-card__summary-collapsed">
-                  <span class="session-progress-card__summary-indicator">${iconSvg()}</span>
                   <span class="session-progress-card__current">Abrir a interface</span>
                 </span>
                 <span class="session-progress-card__summary-count session-progress-card__summary-count--collapsed">1/10</span>
@@ -3942,27 +3944,67 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               </div>
             </div>
           </div>
+          <div class="agent-chat__goal-float">
+            <div class="agent-chat__goal agent-chat__goal--active" data-expanded="false">
+              <div class="agent-chat__goal-row">
+                <span class="agent-chat__goal-icon">${iconSvg()}</span>
+                <span class="agent-chat__goal-copy">
+                  <span class="agent-chat__goal-label">Pursuing goal</span>
+                  <span class="agent-chat__goal-objective">Ship the aligned stack</span>
+                </span>
+                <span class="agent-chat__goal-elapsed">14m</span>
+                <span class="agent-chat__goal-actions"></span>
+              </div>
+            </div>
+          </div>
           <div class="agent-chat__input">Composer</div>
         </div>
+        <span id="failed-outcome-probe" class="session-progress-card__summary-count" data-outcome="failed">Failed</span>
+        <span id="danger-color-probe" style="color: var(--danger)">Danger</span>
       </body></html>`);
 
       const summary = page.locator(".session-progress-card__summary");
       const card = page.locator(".session-progress-card--composer");
       const list = page.locator(".session-progress-card__steps");
       const widthBefore = (await card.boundingBox())?.width;
-      const summaryBefore = await summary.evaluate((node) => {
-        const style = getComputedStyle(node);
-        return { background: style.backgroundColor, y: node.getBoundingClientRect().y };
+      const expandedBefore = await page.evaluate(() => {
+        const style = (selector: string) =>
+          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+        const bounds = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        return {
+          cardBackground: style(".session-progress-card--composer").backgroundColor,
+          summaryBackground: style(".session-progress-card__summary").backgroundColor,
+          titleColor: style(".session-progress-card__summary-title").color,
+          actionsColor: style(".session-progress-card__heading-actions").color,
+          chevronColor: style(".session-progress-card__summary-chevron").color,
+          titleLeft: bounds(".session-progress-card__summary-title").left,
+          firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
+          y: bounds(".session-progress-card__summary").y,
+        };
       });
       await summary.hover();
+      await page.waitForTimeout(180);
       const widthAfter = (await card.boundingBox())?.width;
-      const summaryAfter = await summary.evaluate((node) => {
-        const style = getComputedStyle(node);
-        return { background: style.backgroundColor, y: node.getBoundingClientRect().y };
+      const expandedAfter = await page.evaluate(() => {
+        const style = (selector: string) =>
+          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+        return {
+          cardBackground: style(".session-progress-card--composer").backgroundColor,
+          summaryBackground: style(".session-progress-card__summary").backgroundColor,
+          titleColor: style(".session-progress-card__summary-title").color,
+          actionsColor: style(".session-progress-card__heading-actions").color,
+          chevronColor: style(".session-progress-card__summary-chevron").color,
+        };
       });
       expect(widthBefore).toBeCloseTo(760, 1);
       expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
-      expect(summaryAfter.background).toBe(summaryBefore.background);
+      expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
+      expect(expandedAfter.cardBackground).toBe(expandedBefore.cardBackground);
+      expect(expandedAfter.summaryBackground).toBe(expandedBefore.summaryBackground);
+      expect(expandedAfter.titleColor).not.toBe(expandedBefore.titleColor);
+      expect(expandedAfter.actionsColor).not.toBe(expandedBefore.actionsColor);
+      expect(expandedAfter.chevronColor).not.toBe(expandedBefore.chevronColor);
 
       const listLayout = await list.evaluate((node) => {
         const bounds = node.getBoundingClientRect();
@@ -3981,6 +4023,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(listLayout.scrollHeight).toBeGreaterThan(listLayout.clientHeight);
       expect(listLayout.visibleItems).toBeGreaterThanOrEqual(5);
       expect(listLayout.visibleItems).toBeLessThanOrEqual(7);
+      const openStackAxes = await page.evaluate(() => {
+        const centerX = (selector: string) => {
+          const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return rect.left + rect.width / 2;
+        };
+        const left = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().left;
+        return {
+          iconCenters: [
+            ...[
+              ...document.querySelectorAll<HTMLElement>(".session-progress-card__step-marker > *"),
+            ].map((icon) => {
+              const rect = icon.getBoundingClientRect();
+              return rect.left + rect.width / 2;
+            }),
+            centerX(".chat-queue__leading svg"),
+            centerX(".agent-chat__goal-icon svg"),
+          ],
+          contentLefts: [
+            left(".session-progress-card__step-text"),
+            left(".chat-queue__copy"),
+            left(".agent-chat__goal-label"),
+          ],
+        };
+      });
+      expect(
+        Math.max(...openStackAxes.iconCenters) - Math.min(...openStackAxes.iconCenters),
+      ).toBeLessThan(0.5);
+      expect(
+        Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
+      ).toBeLessThan(0.5);
       expect(
         await page
           .locator(".session-progress-card__body")
@@ -3990,7 +4063,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await list.evaluate((node) => {
         node.scrollTop = node.scrollHeight;
       });
-      expect((await summary.boundingBox())?.y).toBeCloseTo(summaryBefore.y, 1);
+      expect((await summary.boundingBox())?.y).toBeCloseTo(expandedBefore.y, 1);
       expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -4005,22 +4078,91 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
       }
 
+      await page.mouse.move(0, 0);
       await card.evaluate((node) => node.removeAttribute("open"));
+      await page.waitForTimeout(180);
+      const collapsedBefore = await page.evaluate(() => {
+        const style = (selector: string) =>
+          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+        return {
+          cardBackground: style(".session-progress-card--composer").backgroundColor,
+          summaryBackground: style(".session-progress-card__summary").backgroundColor,
+          currentColor: style(".session-progress-card__current").color,
+          countColor: style(".session-progress-card__summary-count--collapsed").color,
+          chevronColor: style(".session-progress-card__summary-chevron").color,
+          spinnerBorderColor: spinner.borderColor,
+          spinnerBorderTopColor: spinner.borderTopColor,
+        };
+      });
+      await summary.hover();
+      await page.waitForTimeout(180);
+      const collapsedAfter = await page.evaluate(() => {
+        const style = (selector: string) =>
+          getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+        const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+        return {
+          cardBackground: style(".session-progress-card--composer").backgroundColor,
+          summaryBackground: style(".session-progress-card__summary").backgroundColor,
+          currentColor: style(".session-progress-card__current").color,
+          countColor: style(".session-progress-card__summary-count--collapsed").color,
+          chevronColor: style(".session-progress-card__summary-chevron").color,
+          spinnerBorderColor: spinner.borderColor,
+          spinnerBorderTopColor: spinner.borderTopColor,
+        };
+      });
+      expect(collapsedAfter.cardBackground).toBe(collapsedBefore.cardBackground);
+      expect(collapsedAfter.summaryBackground).toBe(collapsedBefore.summaryBackground);
+      expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);
+      expect(collapsedAfter.countColor).not.toBe(collapsedBefore.countColor);
+      expect(collapsedAfter.chevronColor).not.toBe(collapsedBefore.chevronColor);
+      expect(collapsedAfter.spinnerBorderColor).toBe(collapsedBefore.spinnerBorderColor);
+      expect(collapsedAfter.spinnerBorderTopColor).toBe(collapsedBefore.spinnerBorderTopColor);
       const collapsed = await page.evaluate(() => {
         const rect = (selector: string) =>
           document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
         const current = rect(".session-progress-card__current");
         const count = rect(".session-progress-card__summary-count--collapsed");
         const chevron = rect(".session-progress-card__summary-chevron");
+        const iconCenter = (selector: string) => {
+          const bounds = rect(selector);
+          return bounds.left + bounds.width / 2;
+        };
         return {
           countLeft: count.left,
           countRight: count.right,
           currentRight: current.right,
           chevronLeft: chevron.left,
+          iconCenters: [
+            iconCenter(".session-progress-card__summary-indicator > *"),
+            iconCenter(".chat-queue__leading svg"),
+            iconCenter(".agent-chat__goal-icon svg"),
+          ],
         };
       });
       expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
       expect(collapsed.countRight).toBeLessThanOrEqual(collapsed.chevronLeft);
+      expect(Math.max(...collapsed.iconCenters) - Math.min(...collapsed.iconCenters)).toBeLessThan(
+        0.5,
+      );
+      const closedRowCenters = await page.evaluate(() => {
+        const centerY = (selector: string) => {
+          const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return bounds.top + bounds.height / 2;
+        };
+        return [
+          centerY(".session-progress-card__summary-indicator > *"),
+          centerY(".session-progress-card__current"),
+          centerY(".session-progress-card__summary-count--collapsed"),
+          centerY(".session-progress-card__summary-chevron > svg"),
+        ];
+      });
+      expect(Math.max(...closedRowCenters) - Math.min(...closedRowCenters)).toBeLessThan(0.5);
+      const outcomeColors = await page.evaluate(() => ({
+        danger: getComputedStyle(document.querySelector("#danger-color-probe")!).color,
+        failed: getComputedStyle(document.querySelector("#failed-outcome-probe")!).color,
+      }));
+      expect(outcomeColors.failed).toBe(outcomeColors.danger);
       if (artifactDir) {
         await page.locator(".agent-chat__composer-shell").screenshot({
           animations: "disabled",

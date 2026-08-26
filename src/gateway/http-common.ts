@@ -1,6 +1,7 @@
 // Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
 import { closeRequestAfterResponse } from "../infra/http-body.js";
 import {
@@ -103,6 +104,23 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
   });
+}
+
+export function parseGatewayJsonRequest<T extends z.ZodType>(
+  res: ServerResponse,
+  body: unknown,
+  schema: T,
+): z.output<T> | undefined {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issue = parsed.error.issues[0];
+  sendInvalidRequest(
+    res,
+    issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+  );
+  return undefined;
 }
 
 function buildMissingScopeForbiddenBody(
