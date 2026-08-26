@@ -470,7 +470,7 @@ describe("skill experience review prompt", () => {
       ],
     });
     expect(prompt).toContain("this message starts a review pass");
-    expect(prompt).toContain("NOTHING_TO_LEARN is the correct answer for most turns");
+    expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
     expect(prompt).toContain("One call at most, smallest mutation first");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
