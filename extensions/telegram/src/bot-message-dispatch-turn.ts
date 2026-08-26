@@ -265,9 +265,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,
-            // One commentary owner per turn (Slack/Discord parity, #121009):
-            // core freezes this getter at turn start, so an enabled commentary
-            // draft and the durable path can never both show the same preamble.
+            // Read the current getter after core freezes visibility so draft
+            // and durable commentary cannot both own the same preamble.
             shouldDeliverCommentaryPayloads:
               turn.streamMode === "progress" && turn.commentaryProgressEnabled
                 ? () => turn.verboseProgressActive()

@@ -766,20 +766,39 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     },
   );
 
-  it("omits the durable commentary owner when Telegram commentary progress is disabled", async () => {
+  it.each([
+    {
+      label: "progress commentary is disabled",
+      streamMode: "progress",
+      commentary: false,
+      commentaryPayloadsEnabled: true,
+    },
+    {
+      label: "partial streaming owns the answer preview",
+      streamMode: "partial",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+    {
+      label: "streaming is disabled",
+      streamMode: "off",
+      commentary: true,
+      commentaryPayloadsEnabled: undefined,
+    },
+  ] as const)("omits the durable commentary owner when $label", async (scenario) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+      expect(replyOptions?.commentaryPayloadsEnabled).toBe(scenario.commentaryPayloadsEnabled);
       expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
       return { queuedFinal: false };
     });
 
     await dispatchWithContext({
       context: createContext(),
-      streamMode: "progress",
+      streamMode: scenario.streamMode,
       telegramCfg: {
         streaming: {
-          mode: "progress",
-          progress: { label: "Shelling" },
+          mode: scenario.streamMode,
+          progress: { label: "Shelling", commentary: scenario.commentary },
         },
       },
     });
