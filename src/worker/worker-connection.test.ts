@@ -257,7 +257,7 @@ describe("worker connection endpoint failures", () => {
 });
 
 describe("worker connection reconnect backoff", () => {
-  it("staggers twenty workers recovering from a Gateway restart", async () => {
+  it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(server, "listening");
     const address = server.address();
@@ -266,7 +266,7 @@ describe("worker connection reconnect backoff", () => {
     }
 
     let available = true;
-    let restarted = false;
+    let transportInterrupted = false;
     const unavailableWorkers = new Set<string>();
     const recoveredWorkers = new Set<string>();
     server.on("connection", (socket) => {
@@ -285,7 +285,7 @@ describe("worker connection reconnect backoff", () => {
               ok: false,
               error: {
                 code: "INVALID_REQUEST",
-                message: "gateway restarting",
+                message: "gateway temporarily unavailable",
                 details: { reason: "gateway-unavailable" },
                 retryable: true,
               },
@@ -293,7 +293,7 @@ describe("worker connection reconnect backoff", () => {
           );
           return;
         }
-        if (restarted) {
+        if (transportInterrupted) {
           recoveredWorkers.add(admission.environmentId);
         }
         socket.send(
@@ -361,9 +361,9 @@ describe("worker connection reconnect backoff", () => {
       );
 
       available = false;
-      restarted = true;
+      transportInterrupted = true;
       for (const socket of server.clients) {
-        socket.close(1012, "gateway-shutdown");
+        socket.close(1012, "gateway-unavailable");
       }
       await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
         timeout: 3_000,
