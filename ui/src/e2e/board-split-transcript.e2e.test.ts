@@ -390,6 +390,54 @@ describeControlUiE2e("Board split transcript restore", () => {
     }
   }, 120_000);
 
+  it("does not offer Discussion when the gateway has no discussion provider", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { width: 1400, height: 900 },
+      ...(recordProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1400, height: 900 } } }
+        : {}),
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["board.get", "chat.metadata", "chat.startup", "session.discussion.info"],
+      methodResponses: {
+        "board.get": boardSnapshot("right"),
+        "session.discussion.info": { state: "none" },
+      },
+    });
+
+    try {
+      await showDashboard(page);
+      const sidePanel = page.locator(".side-panel");
+      await sidePanel.waitFor();
+      await expect
+        .poll(() =>
+          gateway.getRequests("session.discussion.info").then((requests) => requests.length),
+        )
+        .toBe(1);
+      await sidePanel.getByRole("button", { name: "Add side panel tab" }).click();
+      await expect
+        .poll(() => sidePanel.locator("wa-dropdown-item").filter({ hasText: "Discussion" }).count())
+        .toBe(0);
+      if (recordProof) {
+        await page.screenshot({ path: path.join(proofDir, "03-discussion-hidden.png") });
+      }
+    } finally {
+      const video = page.video();
+      await context.close();
+      contexts.delete(context);
+      if (recordProof && video) {
+        await video.saveAs(path.join(proofDir, "dashboard-discussion-unavailable.webm"));
+      }
+    }
+  }, 120_000);
+
   it("closes and reopens sole projected Board chat from either close control", async () => {
     const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     contexts.add(context);
