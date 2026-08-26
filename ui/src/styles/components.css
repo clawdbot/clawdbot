@@ -5750,10 +5750,14 @@ td.data-table-key-col {
   align-items: center;
   justify-items: center;
   gap: 6px;
-  /* The PR glyph inks 1px beyond its 14px track; keep that leading edge
-     inside the clipped details endcap without moving the trailing axis. */
-  padding-left: 1px;
   pointer-events: none;
+}
+
+/* The 16px PR glyph inks 1px beyond its 14px track. Inset only that glyph so
+   the other trailing atoms keep their shared axis inside the clipped endcap. */
+.session-row-state [data-session-pr-state] {
+  position: relative;
+  left: 1px;
 }
 
 .sidebar-session-fork-indicator {

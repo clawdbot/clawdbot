@@ -383,6 +383,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      // Rotation expands the spinner element's square DOMRect even though its
+      // circular ink is unchanged; freeze it while asserting endcap geometry.
+      await page.addStyleTag({ content: ".session-run-spinner { animation: none !important; }" });
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
