@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
+import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
-import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
@@ -46,6 +49,9 @@ describe("executeAgentTurn: CLI session routing", () => {
       permissionMode: "guarded",
       sessionRoot: "/workspace/old",
       execHost: "gateway",
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "old-native-session", forceReuse: true },
+      },
     };
     const admittedSessionEntry: SessionEntry = {
       sessionId: "session",
@@ -55,6 +61,9 @@ describe("executeAgentTurn: CLI session routing", () => {
       execHost: "node",
       execNode: "node-a",
       execCwd: "/workspace/project/task",
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "new-native-session", forceReuse: true },
+      },
     };
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const followupRun = createFollowupRun();
@@ -83,6 +92,16 @@ describe("executeAgentTurn: CLI session routing", () => {
       )[0] as RunCliAgentParams;
       expect(run.sessionEntry).toBe(admittedSessionEntry);
       expect(run.sessionEntry?.sessionRoot).toBe("/workspace/project");
+      expect(run.cliSessionId).toBe("new-native-session");
+      expect(run.cliSessionBinding).toMatchObject({
+        sessionId: "new-native-session",
+        forceReuse: true,
+      });
+      const observedCliSessionId = run.cliSessionBinding?.sessionId ?? run.cliSessionId;
+      expect(observedCliSessionId).toBe("new-native-session");
+      if (!observedCliSessionId) {
+        throw new Error("expected admitted CLI session binding");
+      }
       expect(
         buildCliMcpGrantContext({
           run,
@@ -97,6 +116,54 @@ describe("executeAgentTurn: CLI session routing", () => {
         execHost: "node",
         execNode: "node-a",
       });
+
+      const nodeInvoke = vi.fn<typeof executeDeps.invokeNodeClaudeCliRun>(async (request) => {
+        expect(request.nodeId).toBe("node-a");
+        expect(request.argv).toContain("new-native-session");
+        expect(request.argv).not.toContain("old-native-session");
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+        };
+      });
+      const restoreNodeInvoke = executeDeps.invokeNodeClaudeCliRun;
+      const backend = {
+        command: "claude",
+        args: ["-p"],
+        resumeArgs: ["--resume", "{sessionId}"],
+        output: "text" as const,
+        input: "stdin" as const,
+        serialize: true,
+      };
+      const executionContext: PreparedCliRunContext = {
+        params: {
+          ...run,
+          admittedRunContext: createTestAdmittedRunContext(run.runId),
+          skillsSnapshot: undefined,
+        },
+        started: Date.now(),
+        workspaceDir: run.workspaceDir,
+        cwd: run.cwd,
+        backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
+        preparedBackend: { backend, env: {} },
+        reusableCliSession: { mode: "reuse", sessionId: observedCliSessionId },
+        hadSessionFile: false,
+        contextEngineConfig: run.config ?? {},
+        modelId: run.model ?? "claude-sonnet-4-6",
+        normalizedModel: run.model ?? "claude-sonnet-4-6",
+        systemPrompt: "system",
+        systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+        claudeSkillsPluginArgs: [],
+        bootstrapPromptWarningLines: [],
+        authEpochVersion: 2,
+      };
+      executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
+      try {
+        await executePreparedCliRun(executionContext, observedCliSessionId);
+      } finally {
+        executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
+      }
+      expect(nodeInvoke).toHaveBeenCalledOnce();
     } finally {
       restoreAdmission();
     }
@@ -636,14 +703,30 @@ describe("executeAgentTurn: CLI session routing", () => {
       },
     } as unknown as SessionEntry;
     const activeSessionStore = { main: sessionEntry };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
+    let cleanupObservedBeforePlacementRelease = false;
+    const restoreAdmission = installSessionPlacementAdmissionProvider({
+      executeLocalTurn: async (_claim, runLocal) => {
+        const resultLocal = await runLocal();
+        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+        cleanupObservedBeforePlacementRelease = true;
+        return resultLocal;
+      },
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
     });
 
+    let result: Awaited<ReturnType<typeof executeAgentTurn>>;
+    try {
+      result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        activeSessionStore,
+        getActiveSessionEntry: () => sessionEntry,
+      });
+    } finally {
+      restoreAdmission();
+    }
+
     expect(result.kind).toBe("success");
+    expect(cleanupObservedBeforePlacementRelease).toBe(true);
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
       cliSessionId: "existing-cli-session",

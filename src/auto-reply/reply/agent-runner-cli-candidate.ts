@@ -53,10 +53,6 @@ export async function runCliFallbackCandidate(
           storePath: turn.storePath,
         }
       : undefined;
-  const cliSessionBinding = getCliSessionBinding(
-    turn.getActiveSessionEntry(),
-    params.cliExecutionProvider,
-  );
   const cliLifecycleStartedAt = Date.now();
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
@@ -70,7 +66,6 @@ export async function runCliFallbackCandidate(
   const authProfile = resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
     config: params.runtimeConfig,
   });
-  let droppedCliSessionReplacement = false;
   const hookMessageProvider = resolveOriginMessageProvider({
     originatingChannel: turn.followupRun.originatingChannel,
     provider: turn.sessionCtx.Provider,
@@ -136,10 +131,13 @@ export async function runCliFallbackCandidate(
         runId: params.runId,
       },
       async () => {
-        // Admission may wait behind another turn that starts detached media.
-        // Snapshot only after this turn owns the session placement.
+        // Placement admission may wait behind an older turn. Snapshot placement,
+        // permission, and native resume identity only after this turn owns it.
+        const sessionEntry = turn.getActiveSessionEntry();
+        const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
-        return await runCliAgentWithLifecycle({
+        let droppedCliSessionReplacement = false;
+        const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,
@@ -299,9 +297,7 @@ export async function runCliFallbackCandidate(
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
             sessionTarget,
-            // Placement admission may wait behind an older turn. Read the live
-            // session policy only after this candidate owns the local placement.
-            sessionEntry: turn.getActiveSessionEntry(),
+            sessionEntry,
             chatType:
               normalizeChatType(turn.followupRun.originatingChatType) ??
               normalizeChatType(turn.sessionCtx.ChatType) ??
@@ -334,7 +330,7 @@ export async function runCliFallbackCandidate(
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
             modelContextTokens: selectedModelEntry?.contextTokens,
-            contextWindow: turn.getActiveSessionEntry()?.contextWindow,
+            contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,
@@ -407,19 +403,20 @@ export async function runCliFallbackCandidate(
             replyOperation: turn.replyOperation,
           },
         });
+        if (droppedCliSessionReplacement) {
+          await clearCliSessionBindingForRun({
+            provider: params.cliExecutionProvider,
+            expectedSessionId: cliSessionBinding?.sessionId,
+            sessionKey: turn.sessionKey,
+            sessionStore: turn.activeSessionStore,
+            storePath: turn.storePath,
+            activeSessionEntry: turn.getActiveSessionEntry(),
+          });
+        }
+        return candidateResult;
       },
     ),
   );
-  if (droppedCliSessionReplacement) {
-    await clearCliSessionBindingForRun({
-      provider: params.cliExecutionProvider,
-      expectedSessionId: cliSessionBinding?.sessionId,
-      sessionKey: turn.sessionKey,
-      sessionStore: turn.activeSessionStore,
-      storePath: turn.storePath,
-      activeSessionEntry: turn.getActiveSessionEntry(),
-    });
-  }
   return {
     result,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
