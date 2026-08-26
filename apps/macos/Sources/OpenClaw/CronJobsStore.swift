@@ -228,7 +228,7 @@ extension CronJobsStore {
                 wakeMode: .now,
                 payload: .systemEvent(text: "fixture"),
                 delivery: nil,
-                state: CronJobState(nextRunAtMs: now + nextInMinutes * 60_000))
+                state: CronJobState(nextRunAtMs: now + nextInMinutes * 60000))
         }
         self.jobs = [
             job("fixture-1", "Morning Brief", nextInMinutes: 13),

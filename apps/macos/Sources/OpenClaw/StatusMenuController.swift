@@ -363,9 +363,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                         .filter { !$0.isSeparatorItem }.count
                     var keyEvents: [(UInt16, Bool)] = []
                     for _ in 0..<selectableSteps {
-                        keyEvents.append((125, true)); keyEvents.append((125, false))
+                        keyEvents.append((125, true))
+                        keyEvents.append((125, false))
                     }
-                    keyEvents.append((124, true)); keyEvents.append((124, false))
+                    keyEvents.append((124, true))
+                    keyEvents.append((124, false))
                     for (code, down) in keyEvents {
                         guard let event = NSEvent.keyEvent(
                             with: down ? .keyDown : .keyUp,
