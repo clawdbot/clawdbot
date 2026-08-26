@@ -102,7 +102,7 @@ describe("huggingface models", () => {
     ]);
   });
 
-  it("disables tools only when every available route explicitly rejects them", async () => {
+  it("disables tools whenever an available route explicitly rejects them", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -121,6 +121,10 @@ describe("huggingface models", () => {
               providers: [{ supports_tools: false }, { supports_tools: true }],
             },
             {
+              id: "test/reversed-mixed-routes",
+              providers: [{ supports_tools: true }, { supports_tools: false }],
+            },
+            {
               id: "test/unknown-route",
               providers: [{ supports_tools: false }, { context_length: 48000 }],
             },
@@ -131,7 +135,15 @@ describe("huggingface models", () => {
                 { status: "live", context_length: 32000, supports_tools: false },
               ],
             },
+            {
+              id: "test/errored-unsupported-route",
+              providers: [
+                { status: "error", supports_tools: false },
+                { status: "live", supports_tools: true },
+              ],
+            },
             { id: "test/no-routes" },
+            { id: "test/unknown-only", providers: [{}] },
             { id: "test/tools", providers: [{ supports_tools: true }] },
           ],
         }),
@@ -153,13 +165,19 @@ describe("huggingface models", () => {
         id: "test/mixed-routes",
         input: ["text"],
         contextWindow: 131072,
-        compat: undefined,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/reversed-mixed-routes",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: { supportsTools: false },
       },
       {
         id: "test/unknown-route",
         input: ["text"],
         contextWindow: 48000,
-        compat: undefined,
+        compat: { supportsTools: false },
       },
       {
         id: "test/errored-route",
@@ -168,7 +186,19 @@ describe("huggingface models", () => {
         compat: { supportsTools: false },
       },
       {
+        id: "test/errored-unsupported-route",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+      {
         id: "test/no-routes",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+      {
+        id: "test/unknown-only",
         input: ["text"],
         contextWindow: 131072,
         compat: undefined,

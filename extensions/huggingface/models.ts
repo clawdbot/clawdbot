@@ -146,7 +146,7 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
       ...model,
       contextWindow:
         providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
-      ...(providers.length > 0 && providers.every((provider) => provider?.supports_tools === false)
+      ...(providers.some((provider) => provider?.supports_tools === false)
         ? { compat: { ...model.compat, supportsTools: false } }
         : {}),
     });
