@@ -197,7 +197,7 @@ describe("ollama provider models", () => {
   it.each([
     {
       description: "retains authoritative list metadata when model inspection fails",
-      showResponse: () => jsonResponse({ error: "inspection unavailable" }, { status: 503 }),
+      showResponse: () => jsonResponse({ error: "inspection unavailable" }, 503),
       contextWindow: 32_768,
       supportsTools: true,
     },
