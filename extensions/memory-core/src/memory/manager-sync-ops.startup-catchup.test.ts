@@ -1100,10 +1100,8 @@ describe("session startup catch-up", () => {
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
 
-      expect(harness.getPendingArchiveFiles()).toEqual([]);
-      expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([[], []]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }
@@ -1123,8 +1121,7 @@ describe("session startup catch-up", () => {
       await harness.waitForSessionSync();
 
       expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }
