@@ -35,7 +35,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     wa-dialog {
       --width: min(var(--openclaw-modal-width, 540px), calc(100vw - 48px));
       --spacing: 0;
-      --backdrop-filter: blur(4px);
+      --backdrop-filter: var(--openclaw-modal-backdrop-filter, blur(4px));
     }
 
     wa-dialog::part(dialog) {

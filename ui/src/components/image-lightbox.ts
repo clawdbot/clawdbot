@@ -54,56 +54,27 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     openclaw-modal-dialog {
-      --openclaw-modal-width: min(1280px, calc(100vw - 40px));
-      --openclaw-modal-max-width: calc(100vw - 40px);
-      --openclaw-modal-max-height: calc(100dvh - 40px);
+      --openclaw-modal-width: 100vw;
+      --openclaw-modal-max-width: 100vw;
+      --openclaw-modal-max-height: 100dvh;
+      --openclaw-modal-backdrop-filter: none;
     }
 
     .lightbox {
-      width: min(1280px, calc(100vw - 40px));
-      height: min(900px, calc(100dvh - 40px));
+      width: 100vw;
+      height: 100dvh;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
-      border: 1px solid color-mix(in srgb, var(--border-strong) 80%, transparent);
-      border-radius: var(--radius-lg);
-      /* Deliberately darker than any theme surface: the lightbox is a
-         photo-viewer chrome that stays near-black in light mode too, so the
-         white text and white-alpha borders below assume this literal. */
-      background: #07090f;
-      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.6);
     }
 
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      min-height: 54px;
-      padding: 10px 12px 10px 18px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.04);
-      color: #fff;
+    .header,
+    .actions {
+      display: contents;
     }
 
     .title {
-      min-width: 0;
-      overflow: hidden;
-      font-size: 13px;
-      font-weight: 650;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .actions,
-    .zoom-controls {
-      display: inline-flex;
-      align-items: center;
-    }
-
-    .actions {
-      gap: 8px;
-      flex: 0 0 auto;
+      display: none;
     }
 
     .action {
@@ -112,19 +83,19 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       align-items: center;
       justify-content: center;
       padding: 0 12px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 0;
       border-radius: var(--radius-md);
-      background: rgba(255, 255, 255, 0.08);
+      background: transparent;
       color: #fff;
       font: inherit;
       font-size: 12px;
       font-weight: 650;
       text-decoration: none;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
     }
 
     .action:hover {
-      border-color: rgba(255, 255, 255, 0.2);
-      background: rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.1);
     }
 
     .action:focus-visible {
@@ -132,8 +103,21 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       outline-offset: 2px;
     }
 
+    .open-original,
     .close {
-      width: 36px;
+      position: fixed;
+      z-index: 1;
+      top: max(16px, calc(12px + var(--safe-area-top, 0px)));
+    }
+
+    .open-original {
+      right: max(68px, calc(64px + var(--safe-area-right, 0px)));
+    }
+
+    .close {
+      right: max(16px, calc(12px + var(--safe-area-right, 0px)));
+      width: 44px;
+      height: 44px;
       padding: 0;
       color: rgba(255, 255, 255, 0.82);
     }
@@ -157,7 +141,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       display: grid;
       place-items: center;
       box-sizing: border-box;
-      padding: 20px;
+      padding: 20px 20px 72px;
       overflow: hidden;
     }
 
@@ -169,8 +153,6 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       max-height: 100%;
       width: auto;
       height: auto;
-      border-radius: var(--radius-md);
-      background: rgba(255, 255, 255, 0.04);
       object-fit: contain;
       cursor: zoom-in;
       -webkit-user-drag: none;
@@ -181,15 +163,14 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     }
 
     .zoom-controls {
-      justify-self: center;
+      position: fixed;
+      z-index: 1;
+      bottom: max(14px, calc(10px + var(--safe-area-bottom, 0px)));
+      left: 50%;
+      display: inline-flex;
+      align-items: center;
       gap: 4px;
-      margin-bottom: 14px;
-      padding: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: var(--radius-lg);
-      background: rgba(7, 9, 15, 0.82);
-      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(12px);
+      transform: translateX(-50%);
     }
 
     .zoom-control {
@@ -221,29 +202,16 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       .lightbox {
         width: 100vw;
         height: 100dvh;
-        border: 0;
-        border-radius: 0;
-      }
-
-      .header {
-        padding-top: calc(10px + var(--safe-area-top, 0px));
-        padding-right: calc(12px + var(--safe-area-right, 0px));
-        padding-left: calc(16px + var(--safe-area-left, 0px));
       }
 
       .stage {
-        padding: 0 calc(12px + var(--safe-area-right, 0px)) 0
-          calc(12px + var(--safe-area-left, 0px));
+        padding: 0 calc(12px + var(--safe-area-right, 0px))
+          calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));
       }
 
-      .close,
       .zoom-control {
         min-width: 44px;
         min-height: 44px;
-      }
-
-      .zoom-controls {
-        margin-bottom: calc(12px + var(--safe-area-bottom, 0px));
       }
     }
   `;
