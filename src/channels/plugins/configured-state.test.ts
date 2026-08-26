@@ -1,6 +1,7 @@
 // Configured state tests cover channel plugin configured-state detection and summaries.
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasBundledChannelConfiguredState,
   listBundledChannelIdsWithConfiguredState,
@@ -161,7 +162,12 @@ describe("bundled channel configured-state metadata", () => {
       cfg: { channels: { "nextcloud-talk": { baseUrl: "https://cloud.example.test" } } },
       env: { NEXTCLOUD_TALK_BOT_SECRET: "secret" },
     },
-  ])("accepts the owner-specific $name contract", ({ channelId, cfg, env }) => {
+  ] satisfies Array<{
+    name: string;
+    channelId: string;
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+  }>)("accepts the owner-specific $name contract", ({ channelId, cfg, env }) => {
     expect(hasBundledChannelConfiguredState({ channelId, cfg, env })).toBe(true);
   });
 
