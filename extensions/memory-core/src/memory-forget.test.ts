@@ -32,6 +32,7 @@ import {
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
+import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -236,6 +237,143 @@ describe("memory forget", () => {
     }
     expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
   });
+
+  it.each(["merged", "superseded"] as const)(
+    "preserves another workspace agent's deletion lineage when an entry is %s",
+    async (action) => {
+      cfg = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [
+            { id: "alpha", default: true, workspace: workspaceDir },
+            { id: "gamma", workspace: workspaceDir },
+            { id: "vacant", workspace: workspaceDir },
+          ],
+        },
+      } as OpenClawConfig;
+      await upsertSessionEntry({
+        agentId: "gamma",
+        sessionKey: "agent:gamma:private-session",
+        entry: { sessionId: "private-session", updatedAt: 1_000 },
+      });
+      const priorEntry = "- The launch code is violet.";
+      const snippet =
+        action === "merged" ? "The launch code is violet." : "The launch code is cobalt.";
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      await fs.writeFile(
+        memoryPath,
+        [
+          "# Long-Term Memory",
+          ...(action === "superseded" ? ["<!-- openclaw-memory-lineage:launch-code -->"] : []),
+          "<!-- openclaw-memory-promotion:retired-entry -->",
+          priorEntry,
+          "",
+        ].join("\n"),
+      );
+      const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
+      await fs.mkdir(path.dirname(notePath), { recursive: true });
+      await fs.writeFile(notePath, `${snippet}\n`);
+      recordMemoryEntryOrigins({
+        agentId: "gamma",
+        origins: [
+          {
+            entryKey: "retired-entry",
+            agentId: "gamma",
+            sessionId: "private-session",
+            sessionKey: "agent:gamma:private-session",
+            originClass: "owner",
+            observedAt: 1_000,
+          },
+        ],
+      });
+      const vacantDb = openOpenClawAgentDatabase({ agentId: "vacant" }).db;
+      vacantDb.exec("DROP TABLE IF EXISTS memory_entry_origins");
+      const nowMs = Date.parse("2026-08-26T12:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "launch code",
+        signalType: "daily",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-08-26.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+            provenance: {
+              originClass: "owner",
+              sessionKind: "interactive",
+              observedAt: nowMs,
+              ...(action === "superseded" ? { supersedesKey: "launch-code" } : {}),
+            },
+            sessionOrigin: {
+              agentId: "alpha",
+              sessionId: "alpha-session",
+              sessionKey: "agent:alpha:alpha-session",
+            },
+          },
+        ],
+      });
+      const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs,
+        ...thresholds,
+      });
+      const promoted = candidates[0];
+      expect(promoted).toBeDefined();
+      const resultEntry = `- ${promoted!.snippet} Source: ${promoted!.path}#L1-L1 ${buildPromotionRecallAnnotations(promoted!)}`;
+      const output = JSON.stringify({
+        memory: `# Long-Term Memory\n${resultEntry}\n`,
+        operations: [
+          { candidateKey: promoted!.key, action, resultEntry, priorEntries: [priorEntry] },
+        ],
+      });
+      const subagent = {
+        run: vi.fn(async () => ({ runId: "shared-consolidation" })),
+        waitForRun: vi.fn(async () => ({ status: "ok" })),
+        getSessionMessages: vi.fn(async () => ({
+          messages: [{ role: "assistant", content: output }],
+        })),
+        deleteSession: vi.fn(async () => undefined),
+      };
+
+      const applied = await applyShortTermPromotions({
+        agentId: "alpha",
+        workspaceAgentIds: ["vacant", "gamma", "alpha", "gamma"],
+        workspaceDir,
+        candidates,
+        consolidation: { subagent, logger: { info: vi.fn(), warn: vi.fn() } },
+        maxPriorEntryLossFraction: 1,
+        nowMs,
+        ...thresholds,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toMatchObject([
+        { entryKey: promoted!.key, sessionId: "private-session" },
+      ]);
+      expect(
+        vacantDb
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'")
+          .get(),
+      ).toBeUndefined();
+
+      const report = await forgetMemoryEntries({
+        cfg,
+        agentId: "gamma",
+        sessionIds: ["private-session"],
+      });
+      expect(report).toMatchObject({
+        entryKeys: [promoted!.key],
+        artifacts: { memoryEntries: 1, originRows: 1 },
+      });
+      expect(await fs.readFile(memoryPath, "utf8")).not.toContain(snippet);
+      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
+    },
+  );
 
   it("removes a marker-addressable plain-append promotion after budget compaction", async () => {
     await seedSession("target");

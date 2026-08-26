@@ -255,7 +255,7 @@ export function deleteMemoryEntryOrigins(params: {
 }
 
 export function reconcileMemoryEntryOrigins(params: {
-  agentId: string;
+  agentIds: readonly string[];
   previousMemory: string;
   currentMemory: string;
   operations: readonly {
@@ -273,60 +273,61 @@ export function reconcileMemoryEntryOrigins(params: {
       .map((match) => match[1]?.trim())
       .filter((key): key is string => Boolean(key));
   const liveKeys = new Set(promotionKeys(params.currentMemory));
-  const db = openMemoryOriginDatabase(params.agentId);
-  runSqliteImmediateTransactionSync(db, () => {
-    const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
-    for (const operation of params.operations) {
-      const parentKeys = new Set([operation.candidateKey]);
-      for (const entry of operation.priorEntries) {
-        const entryIndex = previousLines.findIndex((line) => line.trim() === entry);
-        const marker = previousLines[entryIndex - 1]?.trim();
-        const parentKey = /^<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->$/u
-          .exec(marker ?? "")?.[1]
-          ?.trim();
-        if (parentKey) {
-          parentKeys.add(parentKey);
-        }
+  const operationParents = params.operations.map((operation) => {
+    const parentKeys = new Set([operation.candidateKey]);
+    for (const entry of operation.priorEntries) {
+      const entryIndex = previousLines.findIndex((line) => line.trim() === entry);
+      const marker = previousLines[entryIndex - 1]?.trim();
+      const parentKey = /^<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->$/u
+        .exec(marker ?? "")?.[1]
+        ?.trim();
+      if (parentKey) {
+        parentKeys.add(parentKey);
       }
-      const rows = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("memory_entry_origins")
-          .selectAll()
-          .where("agent_id", "=", params.agentId)
-          .where("entry_key", "in", [...parentKeys]),
-      ).rows;
-      for (const row of rows) {
-        executeSqliteQuerySync(
+    }
+    return { operation, parentKeys: [...parentKeys] };
+  });
+  const retiredKeys = promotionKeys(params.previousMemory).filter((key) => !liveKeys.has(key));
+  const affectedKeys = [
+    ...new Set([...retiredKeys, ...operationParents.flatMap(({ parentKeys }) => parentKeys)]),
+  ];
+  for (const agentId of [...new Set(params.agentIds)].toSorted()) {
+    if (listMemoryEntryOrigins({ agentId, entryKeys: affectedKeys }).length === 0) {
+      continue;
+    }
+    const db = openMemoryOriginDatabase(agentId);
+    runSqliteImmediateTransactionSync(db, () => {
+      const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
+      for (const { operation, parentKeys } of operationParents) {
+        const rows = executeSqliteQuerySync(
           db,
           kysely
-            .insertInto("memory_entry_origins")
-            .values({ ...row, entry_key: operation.candidateKey })
-            .onConflict((conflict) =>
-              conflict.columns(["entry_key", "agent_id", "session_id"]).doNothing(),
-            ),
-        );
+            .selectFrom("memory_entry_origins")
+            .selectAll()
+            .where("agent_id", "=", agentId)
+            .where("entry_key", "in", parentKeys),
+        ).rows;
+        for (const row of rows) {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .insertInto("memory_entry_origins")
+              .values({ ...row, entry_key: operation.candidateKey })
+              .onConflict((conflict) =>
+                conflict.columns(["entry_key", "agent_id", "session_id"]).doNothing(),
+              ),
+          );
+        }
       }
-      const retiredKeys = [...parentKeys].filter((key) => !liveKeys.has(key));
       if (retiredKeys.length > 0) {
         executeSqliteQuerySync(
           db,
           kysely
             .deleteFrom("memory_entry_origins")
-            .where("agent_id", "=", params.agentId)
+            .where("agent_id", "=", agentId)
             .where("entry_key", "in", retiredKeys),
         );
       }
-    }
-    const retiredKeys = promotionKeys(params.previousMemory).filter((key) => !liveKeys.has(key));
-    if (retiredKeys.length > 0) {
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("memory_entry_origins")
-          .where("agent_id", "=", params.agentId)
-          .where("entry_key", "in", retiredKeys),
-      );
-    }
-  });
+    });
+  }
 }

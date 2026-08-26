@@ -124,7 +124,7 @@ describe("memory entry origins", () => {
     const currentMemory = `# Memory\n<!-- openclaw-memory-promotion:candidate -->\n- The deployment target is staging. Source: memory/a.md#L1-L1\n`;
 
     reconcileMemoryEntryOrigins({
-      agentId: "main",
+      agentIds: ["main"],
       previousMemory,
       currentMemory,
       operations: [
@@ -153,7 +153,7 @@ describe("memory entry origins", () => {
     const currentMemory = `<!-- openclaw-memory-promotion:surviving -->\n- Keep this independent memory.\n<!-- openclaw-memory-lineage:target -->\n<!-- openclaw-memory-promotion:replacement -->\n- The deployment target is production.\n`;
 
     reconcileMemoryEntryOrigins({
-      agentId: "main",
+      agentIds: ["main"],
       previousMemory,
       currentMemory,
       operations: [

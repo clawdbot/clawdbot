@@ -616,7 +616,7 @@ export async function applyShortTermPromotions(
       await writeStore(workspaceDir, latestStore);
       if (options.agentId && committedMemoryContent) {
         reconcileMemoryEntryOrigins({
-          agentId: options.agentId,
+          agentIds: [options.agentId, ...(options.workspaceAgentIds ?? [])],
           previousMemory: existingMemory,
           currentMemory: committedMemoryContent,
           operations:

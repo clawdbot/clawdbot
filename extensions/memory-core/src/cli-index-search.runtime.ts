@@ -1,6 +1,9 @@
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   buildCliMemorySearchSessionKey,
   formatAuditCounts,
@@ -406,6 +409,9 @@ export async function runMemoryPromote(
         try {
           applyResult = await applyShortTermPromotions({
             agentId,
+            workspaceAgentIds: resolveMemoryDreamingWorkspaces(cfg).find(
+              (workspace) => path.resolve(workspace.workspaceDir) === path.resolve(workspaceDir),
+            )?.agentIds,
             workspaceDir,
             candidates,
             limit: opts.limit,

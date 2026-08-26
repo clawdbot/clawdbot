@@ -140,7 +140,8 @@ Writers:
   `{candidateKey, action: added|merged|superseded, resultEntry, priorEntries}`.
   Code unions the parents' origin rows onto the result entry's key on `merged`,
   re-keys on `superseded`, inserts fresh rows on `added`. Origin rows for keys
-  no longer referenced by any live entry are pruned by the same pass.
+  no longer referenced by any live entry are pruned by the same pass. Shared
+  workspaces reconcile every participating agent's existing origin rows.
 
 Operator-curated `MEMORY.md`/`USER.md` edits have no origin rows. Direct agent
 edits also lack deterministic entry lineage, but their existing bounded
