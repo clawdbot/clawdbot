@@ -13,6 +13,7 @@ import {
   completePluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
+  restorePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 
 const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
@@ -684,25 +685,35 @@ describe("plugin metadata snapshot", () => {
     });
   });
 
-  it("freezes a cloned index instead of caller-owned records", () => {
-    const index = makeIndex();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+  it.each([false, true])(
+    "freezes a cloned index instead of caller-owned records (worker: %s)",
+    (worker) => {
+      const index = makeIndex();
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "provided",
+        snapshot: index,
+        diagnostics: [],
+      });
 
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    const callerRecord = index.plugins[0];
-    const snapshotRecord = snapshot.index.plugins[0];
-    if (!callerRecord || !snapshotRecord) {
-      throw new Error("expected metadata records");
-    }
+      const loaded = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
+      const { normalizePluginId: _normalizePluginId, ...transfer } = loaded;
+      const snapshot = worker ? restorePluginMetadataSnapshot(structuredClone(transfer)) : loaded;
+      expect(snapshot.normalizePluginId(" DEMO ")).toBe("demo");
+      expect(snapshot.owners.providers.get("demo")).toEqual(["demo"]);
+      expect(() => (snapshot.owners.providers as Map<string, string[]>).set("other", [])).toThrow(
+        "Plugin metadata snapshots are immutable",
+      );
+      const callerRecord = index.plugins[0];
+      const snapshotRecord = snapshot.index.plugins[0];
+      if (!callerRecord || !snapshotRecord) {
+        throw new Error("expected metadata records");
+      }
 
-    callerRecord.pluginId = "caller-mutated";
-    expect(snapshotRecord.pluginId).toBe("demo");
-    expect(() => {
-      snapshotRecord.pluginId = "snapshot-mutated";
-    }).toThrow();
-  });
+      callerRecord.pluginId = "caller-mutated";
+      expect(snapshotRecord.pluginId).toBe("demo");
+      expect(() => {
+        snapshotRecord.pluginId = "snapshot-mutated";
+      }).toThrow();
+    },
+  );
 });
