@@ -34,6 +34,7 @@
       "build": "node --import tsx ../../scripts/build-diffs-viewer-runtime.mts curated"
     },
     "build": {
+      "bundledDist": false,
       "openclawVersion": "2026.8.1",
       "staticAssets": [
         {
