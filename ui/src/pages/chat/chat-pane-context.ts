@@ -310,7 +310,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
     state.assistantAgentId = snapshot.assistantAgentId;
-    if (!state.connected) {
+    if (wasConnected && !state.connected) {
+      // Only the connected->disconnected transition may reshape loading state;
+      // repeated disconnected snapshots must stay no-ops for pane ownership.
       state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
     }
     const resumedHistory =
