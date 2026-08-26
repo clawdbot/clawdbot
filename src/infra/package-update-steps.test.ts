@@ -245,6 +245,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           };
         },
       );
+      const beforeMutation = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
         installTarget: createNpmTarget(globalRoot),
@@ -254,8 +255,10 @@ describe("runGlobalPackageUpdateSteps", () => {
         runCommand: createRootRunner(globalRoot),
         runStep,
         timeoutMs: 1000,
+        beforeMutation,
       });
 
+      expect(beforeMutation).toHaveBeenCalledOnce();
       expect(result.failedStep).toBeNull();
       expect(result.verifiedPackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");

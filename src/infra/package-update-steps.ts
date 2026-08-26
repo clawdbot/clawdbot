@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
+import { quiesceLocalTuiProcessesBeforeUpdate } from "./local-tui-processes.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -875,10 +876,35 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
+  beforeMutation?: () => Promise<void>;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<PackageUpdateStepsResult> {
+  const steps: PackageUpdateStepResult[] = [];
   let stagedInstall: StagedNpmInstall | null = null;
   let packedInstallDir: string | null = null;
+  let mutationPrepared = false;
+  let tuiUpdateLock: Awaited<ReturnType<typeof quiesceLocalTuiProcessesBeforeUpdate>>;
+  const prepareMutation = async () => {
+    if (mutationPrepared) {
+      return;
+    }
+    await params.beforeMutation?.();
+    const targetRoot = params.packageRoot ?? params.installTarget.packageRoot;
+    if (targetRoot) {
+      tuiUpdateLock = await quiesceLocalTuiProcessesBeforeUpdate(targetRoot);
+      if (tuiUpdateLock?.stopped.length) {
+        steps.push({
+          name: "close active TUI clients",
+          command: "internal",
+          cwd: targetRoot,
+          durationMs: 0,
+          exitCode: 0,
+          stdoutTail: `Closed local TUI clients ${tuiUpdateLock.stopped.join(", ")} before updating.`,
+        });
+      }
+    }
+    mutationPrepared = true;
+  };
 
   try {
     const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
@@ -951,7 +977,6 @@ export async function runGlobalPackageUpdateSteps(params: {
       return packageUpdateFailure(preparedInstall.failedStep, params.packageRoot ?? null);
     }
 
-    const steps: PackageUpdateStepResult[] = [];
     const installCommandTarget = stagedInstall?.installTarget ?? resolvedInstallTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
@@ -985,6 +1010,9 @@ export async function runGlobalPackageUpdateSteps(params: {
           preparedSpec.installCwd ?? process.cwd(),
         )
       : preparedSpec.installSpec;
+    if (!stagedInstall) {
+      await prepareMutation();
+    }
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
@@ -1028,6 +1056,9 @@ export async function runGlobalPackageUpdateSteps(params: {
         npmPreflight.policy ?? undefined,
       );
       if (fallbackArgv) {
+        if (!stagedInstall) {
+          await prepareMutation();
+        }
         const fallbackStep = await params.runStep({
           name: "global update (omit optional)",
           argv: fallbackArgv,
@@ -1204,6 +1235,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
+        await prepareMutation();
         const swapStep = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
@@ -1245,6 +1277,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       failedStep,
     };
   } finally {
+    await tuiUpdateLock?.release();
     await cleanupStagedNpmInstall(stagedInstall);
     if (packedInstallDir) {
       await removePathBestEffort(packedInstallDir);

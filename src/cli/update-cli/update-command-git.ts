@@ -159,7 +159,6 @@ export function createBeforeGitMutation(params: {
   shouldRestart: boolean;
   stopManagedService: (roots: readonly string[]) => Promise<void>;
   getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
-  markSchemaRefusalAfterStop: () => void;
 }): BeforeGitMutation {
   return async (target) => {
     if (target?.metadataUnreadable) {
@@ -182,7 +181,6 @@ export function createBeforeGitMutation(params: {
       preManagedServiceStop?.serviceEnv ?? process.env,
     );
     if (hasSchemaRefusal(postStopSchemas)) {
-      params.markSchemaRefusalAfterStop();
       defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
       throw new UpdateCommandAbort();
     }

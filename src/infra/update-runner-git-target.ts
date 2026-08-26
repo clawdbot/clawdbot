@@ -3,6 +3,7 @@ import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
+import { quiesceLocalTuiProcessesBeforeUpdate } from "./local-tui-processes.js";
 import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -49,6 +50,8 @@ export async function prepareGitMutation(params: {
 }): Promise<{
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  releaseTuiUpdateLock?: () => Promise<void>;
+  stoppedTuiPids?: number[];
 }> {
   const target = await readGitTargetSchemaVersions(params);
   const preparation = await params.beforeGitMutation?.(
@@ -58,7 +61,12 @@ export async function prepareGitMutation(params: {
         : {}
       : { metadataUnreadable: target.reason },
   );
-  return preparation ?? {};
+  const tuiUpdateLock = await quiesceLocalTuiProcessesBeforeUpdate(params.root);
+  return {
+    ...preparation,
+    ...(tuiUpdateLock ? { releaseTuiUpdateLock: tuiUpdateLock.release } : {}),
+    ...(tuiUpdateLock?.stopped.length ? { stoppedTuiPids: tuiUpdateLock.stopped } : {}),
+  };
 }
 
 export async function readBranchName(

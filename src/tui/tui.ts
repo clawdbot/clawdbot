@@ -763,6 +763,16 @@ export async function withEmbeddedTuiStateLock<T>(
 }
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  const { waitForLocalTuiUpdate } = await import("../infra/local-tui-processes.js");
+  const { resolveOpenClawPackageRootSync } = await import("../infra/openclaw-root.js");
+  const targetRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+  });
+  if (!targetRoot) {
+    throw new Error("Unable to identify this OpenClaw installation before TUI startup.");
+  }
+  await waitForLocalTuiUpdate(targetRoot);
   if (opts.local === true && opts.backend === undefined) {
     return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
   }
