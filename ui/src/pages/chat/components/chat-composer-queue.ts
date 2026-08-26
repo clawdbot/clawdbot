@@ -1,5 +1,6 @@
 import { html, nothing, svg } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
@@ -42,6 +43,7 @@ const QUEUE_ROW_CONTROL_SELECTOR =
   "a, button, input, select, textarea, wa-dropdown, wa-dropdown-item";
 const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
+const mountedQueueEditInputs = new WeakSet<HTMLTextAreaElement>();
 const queueWaitingIcon = strokeIcon(svg` <path d="M16 5H3" />
   <path d="M16 12H3" />
   <path d="M9 19H3" />
@@ -112,6 +114,21 @@ function fitQueueEditInput(textarea: HTMLTextAreaElement): void {
   const maxHeight = Number.parseFloat(getComputedStyle(textarea).maxHeight) || 101;
   textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+function mountQueueEditInput(element: Element | undefined, value: string): void {
+  // Seed each mounted editor once so rerenders cannot overwrite user input or selection.
+  if (element instanceof HTMLTextAreaElement && !mountedQueueEditInputs.has(element)) {
+    mountedQueueEditInputs.add(element);
+    element.value = value;
+    queueMicrotask(() => {
+      if (element.isConnected) {
+        fitQueueEditInput(element);
+        element.focus();
+        element.setSelectionRange(value.length, value.length);
+      }
+    });
+  }
 }
 
 function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
@@ -379,15 +396,8 @@ function renderChatQueueItem(
         ? html`<textarea
             class="chat-queue__edit-input"
             rows="1"
-            .value=${props.editingText ?? item.text}
+            ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
             aria-label=${t("chat.queue.editQueuedMessage")}
-            @focus=${(event: FocusEvent) => {
-              if (event.currentTarget instanceof HTMLTextAreaElement) {
-                fitQueueEditInput(event.currentTarget);
-                const end = event.currentTarget.value.length;
-                event.currentTarget.setSelectionRange(end, end);
-              }
-            }}
             @input=${(event: Event) => {
               if (event.currentTarget instanceof HTMLTextAreaElement) {
                 fitQueueEditInput(event.currentTarget);
@@ -407,7 +417,6 @@ function renderChatQueueItem(
                 props.onQueueEditSubmit?.();
               }
             }}
-            autofocus
           ></textarea>`
         : html`<span class="chat-queue__copy">
             <span class="chat-queue__text" title=${text}>${text}</span>
@@ -512,11 +521,6 @@ function renderChatQueueItem(
                     const keyboard = selectedItem.matches(":focus-visible");
                     markQueueEditFocus(row, keyboard);
                     props.onQueueEdit?.(item.id);
-                    if (keyboard) {
-                      queueMicrotask(() =>
-                        row?.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.focus(),
-                      );
-                    }
                   }
                 }}
               >
