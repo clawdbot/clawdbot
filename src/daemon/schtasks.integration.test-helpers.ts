@@ -202,7 +202,7 @@ async function inspectNativeAclDenial(params: {
   batchMarkerPath: string;
   scriptPath: string;
 }): Promise<NativeStartupAclDiagnostics> {
-  const scriptEnv = { ...process.env, OPENCLAW_STARTUP_SCRIPT_PROBE: params.scriptPath };
+  const scriptEnv = { ...process.env, OPENCLAW_TASK_SCRIPT: params.scriptPath };
   const nodeOpen: NativeStartupAclDiagnostics["nodeOpen"] = {
     opened: false,
     readData: false,
@@ -227,20 +227,20 @@ async function inspectNativeAclDenial(params: {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      '$ErrorActionPreference="Stop"; $stream=[System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_SCRIPT_PROBE); try { [void]$stream.ReadByte() } finally { $stream.Dispose() }',
+      '$ErrorActionPreference="Stop"; $stream=[System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT); try { [void]$stream.ReadByte() } finally { $stream.Dispose() }',
     ],
     scriptEnv,
   );
   const cmdType = inspectNativeAclCommand(
     getWindowsCmdExePath(),
-    ["/d", "/s", "/v:off", "/c", '"type "%OPENCLAW_STARTUP_SCRIPT_PROBE%""'],
+    ["/d", "/s", "/v:off", "/c", '"type "%OPENCLAW_TASK_SCRIPT%""'],
     scriptEnv,
     true,
   );
   await fs.rm(params.batchMarkerPath, { force: true });
   const cmdBatchResult = inspectNativeAclCommand(
     getWindowsCmdExePath(),
-    ["/d", "/s", "/v:off", "/c", '""%OPENCLAW_STARTUP_SCRIPT_PROBE%""'],
+    ["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     scriptEnv,
     true,
   );
@@ -264,7 +264,7 @@ export async function proveNativeStartupFallbackLaunch(params: {
 }): Promise<NativeStartupFallbackProof> {
   const proofRoot = path.join(params.rootDir, "startup-fallback-proof");
   const stateDir = path.join(proofRoot, "state & %OPENCLAW_STARTUP_PROBE% !");
-  const env = {
+  const env: GatewayServiceEnv = {
     ...params.env,
     APPDATA: path.join(proofRoot, "appdata"),
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),

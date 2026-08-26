@@ -211,7 +211,7 @@ export async function launchFallbackTaskScript(
   }
   // Preserve native missing-script errors before testing the actual cmd.exe access contract.
   await (await fs.open(scriptPath, "r")).close();
-  const scriptEnv = { ...process.env, OPENCLAW_STARTUP_SCRIPT_PROBE: scriptPath };
+  const scriptEnv = { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath };
   // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
   const scriptProbe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -220,7 +220,7 @@ export async function launchFallbackTaskScript(
       "-NonInteractive",
       "-EncodedCommand",
       Buffer.from(
-        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_STARTUP_SCRIPT_PROBE).Dispose()",
+        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
         "utf16le",
       ).toString("base64"),
     ],
@@ -238,14 +238,7 @@ export async function launchFallbackTaskScript(
   }
   const { child } = await spawnWithFallback({
     // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
-    argv: [
-      getWindowsCmdExePath(),
-      "/d",
-      "/s",
-      "/v:off",
-      "/c",
-      '""%OPENCLAW_STARTUP_SCRIPT_PROBE%""',
-    ],
+    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {
       detached: true,
       env: scriptEnv,

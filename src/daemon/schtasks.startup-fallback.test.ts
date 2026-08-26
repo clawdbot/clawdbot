@@ -440,7 +440,7 @@ describe("Windows startup fallback", () => {
         getWindowsPowerShellExePath(),
         expect.arrayContaining(["-EncodedCommand"]),
         expect.objectContaining({
-          env: expect.objectContaining({ OPENCLAW_STARTUP_SCRIPT_PROBE: scriptPath }),
+          env: expect.objectContaining({ OPENCLAW_TASK_SCRIPT: scriptPath }),
           stdio: "ignore",
           windowsHide: true,
         }),
@@ -484,8 +484,8 @@ describe("Windows startup fallback", () => {
         },
       ];
       expect(command).toBe(getWindowsCmdExePath());
-      expect(args).toEqual(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_STARTUP_SCRIPT_PROBE%""']);
-      expect(options.env.OPENCLAW_STARTUP_SCRIPT_PROBE).toBe(scriptPath);
+      expect(args).toEqual(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']);
+      expect(options.env.OPENCLAW_TASK_SCRIPT).toBe(scriptPath);
       expect(options.detached).toBe(true);
       expect(options.stdio).toBe("ignore");
       expect(options.windowsHide).toBe(true);
