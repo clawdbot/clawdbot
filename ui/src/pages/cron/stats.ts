@@ -1,6 +1,5 @@
 import { html } from "lit";
 import type { CronJob, CronStatus } from "../../api/types.ts";
-import { icon } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 
@@ -30,9 +29,10 @@ export function renderCronStats(props: {
   return html`
     <div class="cron-stats">
       <div class="cron-stat">
-        <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
         <span class="cron-stat__value">${total}</span>
+        <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
       </div>
+      <span class="cron-stat__separator" aria-hidden="true">·</span>
       <button
         type="button"
         class="cron-stat cron-stat--action"
@@ -44,7 +44,6 @@ export function renderCronStats(props: {
           void props.onRunsFiltersChange({ cronRunsStatuses: ["error"] });
         }}
       >
-        <span class="cron-stat__label">${t("cron.stats.failing")}</span>
         <span
           class="cron-stat__value ${typeof failing === "number" && failing > 0
             ? "cron-stat__value--danger"
@@ -52,8 +51,9 @@ export function renderCronStats(props: {
         >
           ${failing ?? t("common.na")}
         </span>
-        <span class="cron-stat__go" aria-hidden="true">${icon("chevronRight")}</span>
+        <span class="cron-stat__label">${t("cron.stats.failing")}</span>
       </button>
+      <span class="cron-stat__separator" aria-hidden="true">·</span>
       <div class="cron-stat">
         <span class="cron-stat__label">${t("cron.stats.nextWake")}</span>
         <span class="cron-stat__value cron-stat__value--time">

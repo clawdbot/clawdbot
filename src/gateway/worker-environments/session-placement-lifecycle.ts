@@ -64,10 +64,10 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   }
 }
 
-function isWorkerPlacementSafeForArchive(
+function isWorkerPlacementSafeForMutation(
   context: SessionWorkerPlacementContext,
   placement: Placement,
-): boolean {
+): placement is RetirablePlacement {
   if (placement.state === "failed") {
     return isFailedWorkerPlacementEnvironmentGone({
       environmentService: context.workerEnvironmentService,
@@ -82,7 +82,7 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
   key: string;
   placement: WorkerSessionPlacementRecord | undefined;
 }): string | undefined {
-  if (!params.placement || isWorkerPlacementSafeForArchive(params.context, params.placement)) {
+  if (!params.placement || isWorkerPlacementSafeForMutation(params.context, params.placement)) {
     return undefined;
   }
   return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
@@ -109,23 +109,13 @@ function resolveSessionWorkerPlacementMutationGuard(
     return { status: "allowed" };
   }
 
-  if (placement.state === "local") {
-    return params.action === "delete" || params.action === "reset"
-      ? retirementGuard(placement)
-      : { status: "allowed" };
-  }
-  if (params.action === "delete" && placement.state === "reclaimed") {
-    return retirementGuard(placement);
-  }
-  if (params.action === "delete" && placement.state === "failed") {
-    // Failed environments retain their lease until teardown is proven, so they stay fenced.
-    if (
-      isFailedWorkerPlacementEnvironmentGone({
-        environmentService: params.context.workerEnvironmentService,
-        placement,
-      })
-    ) {
+  if (isWorkerPlacementSafeForMutation(params.context, placement)) {
+    if (params.action === "delete" || params.action === "reset") {
       return retirementGuard(placement);
+    }
+    // History rewrites rotate the session identity and would strand stopped cloud affinity.
+    if (placement.state === "local" || params.action === "fork") {
+      return { status: "allowed" };
     }
   }
   return {
@@ -158,6 +148,7 @@ export function resolveSessionWorkerPlacementMutationError(
 
 export async function prepareSessionWorkerPlacementForArchive(params: {
   agentId: string;
+  authorize?: () => void;
   context: SessionWorkerPlacementContext;
   reclaimActive: boolean;
   sessionId?: string;
@@ -179,7 +170,7 @@ export async function prepareSessionWorkerPlacementForArchive(params: {
   if (!matches(placement)) {
     throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);
   }
-  if (isWorkerPlacementSafeForArchive(context, placement)) {
+  if (isWorkerPlacementSafeForMutation(context, placement)) {
     return;
   }
   if (placement.state !== "active") {
@@ -191,8 +182,17 @@ export async function prepareSessionWorkerPlacementForArchive(params: {
   if (!context.workerPlacementDispatchService?.reclaim) {
     throw new Error(`Session ${sessionKey} cloud worker reclaim is unavailable.`);
   }
-  const reclaimed: Placement = await context.workerPlacementDispatchService.reclaim(request);
-  if (reclaimed.state !== "reclaimed" || !matches(reclaimed)) {
+  const reclaimed: Placement = params.authorize
+    ? await context.workerPlacementDispatchService.reclaim(request, params.authorize)
+    : await context.workerPlacementDispatchService.reclaim(request);
+  const settled = context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId);
+  if (
+    reclaimed.state !== "reclaimed" ||
+    !matches(reclaimed) ||
+    settled?.state !== "reclaimed" ||
+    !matches(settled) ||
+    settled.generation !== reclaimed.generation
+  ) {
     throw new Error(`Session ${sessionKey} cloud worker reclaim identity changed.`);
   }
 }

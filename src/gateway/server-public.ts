@@ -22,6 +22,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Exact lifecycle generation projected to connected clients. */
+  bootId?: string;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

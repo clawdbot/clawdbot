@@ -169,6 +169,18 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
+  it.each([undefined, false, true])(
+    "preserves prepared GitHub publication capability (%s)",
+    async (githubPublicationAvailable) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.githubPublicationAvailable = githubPublicationAvailable;
+
+      const result = await dispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(githubPublicationAvailable);
+    },
+  );
+
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {

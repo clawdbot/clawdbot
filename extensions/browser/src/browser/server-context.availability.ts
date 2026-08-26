@@ -45,6 +45,7 @@ import {
   ProfileRestartRequiredError,
   registerProfileHandle,
   releaseProfileHandle,
+  withProfileOperationLease,
 } from "./server-context.lifecycle.js";
 import type {
   BrowserServerState,
@@ -181,7 +182,7 @@ export function createProfileAvailability({
     }
     const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
     const current = state();
-    await ensureExtensionRelayForProfile(current, profile);
+    await ensureExtensionRelayForProfile(current, profile, signal);
     signal?.throwIfAborted();
   };
   const isReachable = async (
@@ -451,7 +452,22 @@ export function createProfileAvailability({
     const current = state();
     const remoteCdp = capabilities.isRemote;
     const attachOnly = profile.attachOnly;
-    const httpReachable = await isHttpReachable(undefined, signal);
+    let httpReachable: boolean;
+    if (capabilities.mode === "local-extension") {
+      const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
+      const relay = await ensureExtensionRelayForProfile(current, profile, signal);
+      const connected = await relay.bridge.waitForExtensionConnection(
+        signal,
+        CHROME_MCP_ATTACH_READY_WINDOW_MS,
+      );
+      signal.throwIfAborted();
+      httpReachable =
+        connected &&
+        current.extensionRelays?.get(profile.name) === relay &&
+        (await isHttpReachable(undefined, signal));
+    } else {
+      httpReachable = await isHttpReachable(undefined, signal);
+    }
     const launchOptions = launchOptionsForEnsure(options);
 
     if (!httpReachable) {
@@ -557,6 +573,24 @@ export function createProfileAvailability({
   };
 
   const ensureBrowserAvailable = async (options?: BrowserEnsureOptions): Promise<void> => {
+    if (capabilities.mode === "local-extension") {
+      // Gateway authentication needs a concurrent lease before it can send the
+      // hello this caller-owned, abortable readiness operation is waiting for.
+      await withProfileOperationLease({
+        state: state(),
+        runtime,
+        configRevision,
+        signal: options?.signal,
+        run: async (signal) =>
+          await ensureBrowserAvailableOnce(
+            signal,
+            getProfileLifecycle(runtime).generation,
+            options,
+          ),
+      });
+      return;
+    }
+
     const key = ensureOptionsKey(options);
     for (;;) {
       try {

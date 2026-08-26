@@ -471,6 +471,7 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
+        providerIds: ["openai"],
         resolveProviderAuth: () => ({
           mode: "api_key",
           apiKey: "sk-openai",
@@ -496,6 +497,40 @@ describe("buildOpenAIProvider", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it.each(["azure-openai", "azure-openai-responses"])(
+    "does not resolve OpenAI credentials or fetch for %s-only catalog scope",
+    async (providerId) => {
+      const provider = buildOpenAIProvider();
+      const resolveProviderAuth = vi.fn(() => ({
+        mode: "api_key" as const,
+        apiKey: "sk-openai",
+        source: "profile" as const,
+      }));
+      const resolveProviderApiKey = vi.fn(() => ({ apiKey: "sk-openai" }));
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }));
+
+      try {
+        await expect(
+          provider.catalog?.run({
+            providerIds: [providerId],
+            resolveProviderAuth,
+            resolveProviderApiKey,
+            config: {},
+            env: {},
+          }),
+        ).resolves.toBeNull();
+        expect(resolveProviderAuth).not.toHaveBeenCalled();
+        expect(resolveProviderApiKey).not.toHaveBeenCalled();
+        expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 
   it("falls back to direct API-key catalog discovery when OAuth resolution fails", async () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));
@@ -1764,6 +1799,74 @@ describe("buildOpenAIProvider", () => {
         },
       } as never),
     ).toEqual({ effort: "high", transport: "sse" });
+  });
+
+  it("delegates an unlisted first-party model to its explicitly selected Codex runtime", () => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-future",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-future",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: model?.api,
+          compat: model?.compat,
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toContain("max");
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
+  });
+
+  it("does not invent an unlisted model for authored Platform credentials", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-future",
+        modelRegistry: { find: () => null },
+        agentRuntimeId: "codex",
+        authProfileId: "openai:platform",
+        authProfileMode: "api_key",
+        providerConfig: {
+          auth: "api-key",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: "openai-responses",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).not.toContain("max");
   });
 
   it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {

@@ -121,10 +121,19 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerPromosCli",
     },
     {
-      commandNames: ["infer", "capability"],
-      loadModule: () => import("../capability-cli.js"),
-      exportName: "registerCapabilityCli",
+      commandNames: ["telemetry"],
+      loadModule: () => import("../telemetry-cli.js"),
+      exportName: "registerTelemetryCli",
     },
+  ]),
+  {
+    commandNames: ["infer", "capability"],
+    register: async (program, argv) => {
+      const mod = await import("../capability-cli.js");
+      await mod.registerCapabilityCli(program, argv);
+    },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       // exec-approvals is a commander alias on the approvals command; the lazy
       // router only routes names listed here, so the alias must be owned too.

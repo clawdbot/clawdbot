@@ -22,6 +22,7 @@ export const SKILL_WORKSHOP_ACTIONS = [
   "quarantine",
   "history",
   "restore_collection",
+  "complete",
 ] as const;
 
 export const SKILL_PROPOSAL_STATUSES = [
@@ -43,14 +44,7 @@ export function resolveProposalOnlyActions(updateProposals: boolean, supportsCom
   ];
 }
 
-export function buildSkillWorkshopToolSchema(
-  proposalOnly: boolean,
-  supportsCompletion: boolean,
-  updateProposals: boolean,
-  collectionOnly: boolean,
-  proposalRevision = false,
-) {
-  const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
+export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRevision = false) {
   return Type.Object(
     {
       action: stringEnum(
@@ -58,17 +52,13 @@ export function buildSkillWorkshopToolSchema(
           ? ["inspect", "revise"]
           : collectionOnly
             ? ["read", "reconcile"]
-            : proposalOnly
-              ? proposalActions
-              : [...SKILL_WORKSHOP_ACTIONS],
+            : [...SKILL_WORKSHOP_ACTIONS],
         {
           description: proposalRevision
             ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-            : proposalOnly
-              ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = complete existing live skill when it fits the selected-model budget, otherwise metadata without a partial body (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-              : collectionOnly
-                ? SKILL_COLLECTION_ACTION_DESCRIPTION
-                : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+            : collectionOnly
+              ? SKILL_COLLECTION_ACTION_DESCRIPTION
+              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
         },
       ),
       proposal_id: Type.Optional(

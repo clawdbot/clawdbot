@@ -33,7 +33,9 @@ const controlUiPerformanceBudgets = {
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Composer multiline surface (stack #124301) legitimately grew boot CSS;
+  // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
+  largestCssGzipBytes: 53 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

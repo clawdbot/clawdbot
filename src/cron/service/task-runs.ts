@@ -1,7 +1,10 @@
 /** Detached task-ledger integration for cron runs. */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  createExecutionStartedOwnerBinding,
+  isRetainedExecutionOwnerBinding,
+} from "../../audit/execution-owner-binding.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
@@ -11,7 +14,11 @@ import {
   findTaskByRunId,
   recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.sqlite.js";
+import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
+import {
+  bindTaskRunExecution,
+  listTaskRecordsByRuntimeSourceIdInDatabase,
+} from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
@@ -20,6 +27,10 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
+import {
+  bindCronRunReceiptExecution,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt-store.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
@@ -38,7 +49,7 @@ import type {
   CronRunStatus,
 } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
@@ -52,16 +63,53 @@ function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefin
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
-const activeCronTaskRunId = new AsyncLocalStorage<string>();
-
-/** Keeps the detached task id on the async execution that owns it. */
-export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
-  const normalizedRunId = taskRunId?.trim();
-  return normalizedRunId ? activeCronTaskRunId.run(normalizedRunId, run) : run();
-}
-
-export function getActiveCronTaskRunId(): string | undefined {
-  return activeCronTaskRunId.getStore();
+/** Carries exact admission into the first post-admission owner lifecycle phase. */
+export function createCronOwnerExecutionIdentityAdmission(params: {
+  state: CronServiceState;
+  runReceipt: CronRunReceiptHandle;
+  taskId?: string;
+  flowId?: string;
+}): CronExecutionIdentityAdmission {
+  const ownerBinding = createExecutionStartedOwnerBinding((admitted) => {
+    try {
+      const receiptResult = bindCronRunReceiptExecution({
+        admitted,
+        handle: params.runReceipt,
+      });
+      const taskResult = params.taskId
+        ? isRetainedExecutionOwnerBinding(receiptResult)
+          ? bindTaskRunExecution({ admitted, taskId: params.taskId })
+          : receiptResult
+        : undefined;
+      const flowParentResult = params.taskId ? taskResult : receiptResult;
+      const flowResult = params.flowId
+        ? isRetainedExecutionOwnerBinding(receiptResult) &&
+          isRetainedExecutionOwnerBinding(flowParentResult)
+          ? bindTaskFlowExecution({ admitted, flowId: params.flowId })
+          : flowParentResult
+        : undefined;
+      if (
+        [receiptResult, taskResult, flowResult].some(
+          (result) => result === "mismatch" || result === "missing",
+        )
+      ) {
+        params.state.deps.log.warn(
+          { receiptResult, taskResult, flowResult },
+          "cron: exact execution identity binding was not retained",
+        );
+      }
+    } catch (error) {
+      params.state.deps.log.warn(
+        { error },
+        "cron: failed to retain exact execution identity binding",
+      );
+    }
+  });
+  return {
+    ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+    onPostAdmission: ownerBinding.onPostAdmission,
+    onExecutionStarted: ownerBinding.onExecutionStarted,
+  };
 }
 
 /** Updates an active cron task with the exact transcript identity reported by its runner. */
@@ -88,13 +136,12 @@ export function tryUpdateCronTaskRunSession(
   }
 }
 
-/** Creates a best-effort detached task row keyed to the persisted execution start. */
-export function tryCreateCronTaskRun(params: {
+export function tryCreateCronTaskRunHandle(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
   publicRunId?: string;
-}): string | undefined {
+}): { runId: string; taskId: string; flowId?: string } | undefined {
   const runId = createCronTaskRunId(params.job.id, params.startedAt, params.publicRunId);
   return tryCreateCronTaskRunRecord({
     state: params.state,
@@ -214,7 +261,7 @@ function tryCreateCronTaskRunRecord(params: {
   startedAt: number;
   runId: string;
   childSessionKey?: string;
-}): string | undefined {
+}): { runId: string; taskId: string; flowId?: string } | undefined {
   try {
     const childSessionKey = params.childSessionKey;
     const effectiveJobAgentId = params.job
@@ -252,7 +299,11 @@ function tryCreateCronTaskRunRecord(params: {
       );
       return undefined;
     }
-    return params.runId;
+    return {
+      runId: params.runId,
+      taskId: task.taskId,
+      ...(task.parentFlowId ? { flowId: task.parentFlowId } : {}),
+    };
   } catch (error) {
     params.state.deps.log.warn(
       { jobId: params.jobId, error },
@@ -341,9 +392,9 @@ export function tryFinishCronTaskRun(
     result.taskRunId ?? createCronTaskRunId(entry.jobId, startedAt, entry.runId);
   try {
     const existingCandidate = findTaskByRunId(candidateRunId);
-    const taskRunId =
+    const created =
       existingCandidate?.runtime === "cron"
-        ? candidateRunId
+        ? undefined
         : tryCreateCronTaskRunRecord({
             state,
             job: result.job ?? result.event.job,
@@ -352,6 +403,7 @@ export function tryFinishCronTaskRun(
             runId: candidateRunId,
             childSessionKey: entry.sessionKey,
           });
+    const taskRunId = existingCandidate?.runtime === "cron" ? candidateRunId : created?.runId;
     if (!taskRunId) {
       return;
     }
@@ -414,7 +466,7 @@ export function tryFinishCronTaskRun(
         updated = finalize(taskRunId);
       } else {
         // A terminal event still owns one durable row if its active mirror vanished.
-        const recreatedRunId = tryCreateCronTaskRunRecord({
+        const recreated = tryCreateCronTaskRunRecord({
           state,
           job: result.job ?? result.event.job,
           jobId: entry.jobId,
@@ -422,8 +474,8 @@ export function tryFinishCronTaskRun(
           runId: taskRunId,
           childSessionKey: entry.sessionKey,
         });
-        if (recreatedRunId) {
-          updated = finalize(recreatedRunId);
+        if (recreated) {
+          updated = finalize(recreated.runId);
         }
       }
     }

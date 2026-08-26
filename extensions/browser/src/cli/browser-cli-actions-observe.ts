@@ -9,6 +9,7 @@ import {
   parseBrowserPositiveIntegerOption,
   printBrowserJsonResult,
   runBrowserCliCommand as runBrowserObserve,
+  withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { defaultRuntime, shortenHomePath } from "./core-api.js";
@@ -43,19 +44,15 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ messages: unknown[] }>(
-          parent,
-          {
-            method: "GET",
-            path: "/console",
-            query: {
-              level: normalizeOptionalString(opts.level),
-              targetId: normalizeOptionalString(opts.targetId),
-              profile,
-            },
+        const result = await callBrowserRequest<{ messages: unknown[] }>(parent, {
+          method: "GET",
+          path: "/console",
+          query: {
+            level: normalizeOptionalString(opts.level),
+            targetId: normalizeOptionalString(opts.targetId),
+            profile,
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (printBrowserJsonResult(parent, result)) {
           return;
         }
@@ -71,16 +68,12 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ path: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/pdf",
-            query: profile ? { profile } : undefined,
-            body: { targetId: normalizeOptionalString(opts.targetId) },
-          },
-          { timeoutMs: 20000 },
-        );
+        const result = await callBrowserRequest<{ path: string }>(parent, {
+          method: "POST",
+          path: "/pdf",
+          query: profile ? { profile } : undefined,
+          body: { targetId: normalizeOptionalString(opts.targetId) },
+        });
         if (printBrowserJsonResult(parent, result)) {
           return;
         }
@@ -120,7 +113,7 @@ export function registerBrowserActionObserveCommands(
               maxChars,
             },
           },
-          { timeoutMs: timeoutMs ?? 20000 },
+          { timeoutMs: withBrowserActionTimeoutSlack(timeoutMs) },
         );
         if (printBrowserJsonResult(parent, result)) {
           return;

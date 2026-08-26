@@ -41,6 +41,7 @@ import {
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
+  requestTelemetryConsent,
   resolveQuickstartGatewayDefaults,
   writeWizardConfigFile,
 } from "./setup.shared.js";
@@ -67,10 +68,11 @@ export async function runSetupWizard(
 }
 
 async function runSetupWizardOnce(
-  opts: OnboardOptions,
+  initialOpts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  let opts = initialOpts;
   const runtime = runtimeInput ?? defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   await onboardHelpers.printWizardHeader(runtime);
@@ -119,6 +121,8 @@ async function runSetupWizardOnce(
     runtime.exit(1);
     return;
   }
+
+  baseConfig = await requestTelemetryConsent({ opts, prompter, config: baseConfig });
 
   const compatibilityNotices = snapshot.valid
     ? buildPluginCompatibilitySnapshotNotices({ config: baseConfig })
@@ -462,9 +466,7 @@ async function runSetupWizardOnce(
         ? { edgeAuthOriginUrl: storedRemoteUrl }
         : {}),
     });
-    if (opts.skipBootstrap) {
-      nextConfig = applySkipBootstrapConfig(nextConfig);
-    }
+    nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     prompter.disableBackNavigation?.();
     await writeSetupConfigFile(nextConfig, {
@@ -498,6 +500,18 @@ async function runSetupWizardOnce(
     prompter,
     hasAuthoredRoster,
   });
+  if (opts.authChoice === undefined) {
+    const { inferAuthChoiceFromFlags } =
+      await import("../commands/onboard-non-interactive/local/auth-choice-inference.js");
+    const inferred = inferAuthChoiceFromFlags(opts, { config: baseConfig, workspaceDir });
+    if (inferred.matches.length > 1) {
+      runtime.error(
+        `Multiple provider credential flags (${inferred.matches.map((match) => match.label).join(", ")}). Use one flag or pass --auth-choice explicitly.`,
+      );
+      return runtime.exit(1);
+    }
+    opts = inferred.choice ? { ...opts, authChoice: inferred.choice } : opts;
+  }
   const firstAgent = await firstAgentOnboarding.promptFirstOnboardingAgent(
     hasAuthoredRoster,
     opts.agentName,
@@ -509,18 +523,16 @@ async function runSetupWizardOnce(
     requestedWorkspaceDir,
     { allowWorkspaceChange: allowWorkspaceChange || !hasAuthoredRoster },
   );
-  if (opts.skipBootstrap) {
-    nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
+  nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
   const preModelAuthConfig = nextConfig;
   let stagedModelAuth: SetupModelAuthCandidate | undefined;
-  const hasExplicitAuthSetup = opts.authChoice !== undefined && opts.authChoice !== "skip";
-  if (!keepExistingModelConfig || hasExplicitAuthSetup) {
+  if (!keepExistingModelConfig || (opts.authChoice !== undefined && opts.authChoice !== "skip")) {
     stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      pendingAgent: firstAgent && { ...firstAgent, workspaceDir },
       preserveExistingModelSelection: keepExistingModelConfig,
     });
     nextConfig = stagedModelAuth.config;

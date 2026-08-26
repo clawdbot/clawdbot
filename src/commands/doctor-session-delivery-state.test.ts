@@ -2,14 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listSessionEntriesCore,
+  rewriteDoctorSessionEntries,
+} from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { repairCanonicalSessionDeliveryStates } from "./doctor-session-delivery-state.js";
+import {
+  repairCanonicalSessionDeliveryStates,
+  repairCanonicalSessionResolvedSkills,
+} from "./doctor-session-delivery-state.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 
 const tempDirs = createTempDirTracker();
@@ -65,8 +72,8 @@ function insertSessionRow(
     );
 }
 
-function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string): string {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string, agentId = "main"): string {
+  const database = openOpenClawAgentDatabase({ agentId, env });
   const row = database.db
     .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
     .get(sessionKey) as { entry_json: string };
@@ -596,5 +603,84 @@ describe("doctor canonical session delivery state", () => {
 
     closeOpenClawAgentDatabasesForTest();
     expect(readEntryJson(sourceEnv, "agent:main:legacy")).toBe(sourceLegacyJson);
+  });
+});
+
+describe("doctor canonical session resolved skills", () => {
+  it("repairs all agents without mutating dry-run rows or losing compact snapshots", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-skills-all-agents-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const compactSnapshot = {
+      prompt: "compact skill prompt",
+      skills: [{ name: "demo" }],
+      skillFilter: ["demo"],
+      version: 7,
+    };
+    for (const agentId of ["main", "work"]) {
+      insertSessionRow(
+        env,
+        `agent:${agentId}:runtime-skills`,
+        {
+          sessionId: `${agentId}-runtime-skills`,
+          updatedAt: 42,
+          skillsSnapshot: {
+            ...compactSnapshot,
+            resolvedSkills: [{ name: "demo", description: "x".repeat(20_000) }],
+          },
+        },
+        agentId,
+      );
+      expect(
+        listSessionEntriesCore({ agentId, clone: false, env })[0]?.entry.skillsSnapshot
+          ?.resolvedSkills,
+      ).toBeDefined();
+    }
+
+    expect(
+      rewriteDoctorSessionEntries({
+        scope: {
+          agentId: "main",
+          env,
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env }),
+        },
+        sessionKeys: ["agent:main:runtime-skills"],
+        transform: (entry) => entry,
+      }),
+    ).toBe(0);
+    expect(repairCanonicalSessionResolvedSkills({ apply: false, cfg: {}, env })).toEqual({
+      found: 2,
+      repaired: 0,
+      scannedStores: 2,
+    });
+    expect(
+      JSON.parse(readEntryJson(env, "agent:main:runtime-skills")).skillsSnapshot.resolvedSkills,
+    ).toBeDefined();
+
+    expect(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 2,
+      repaired: 2,
+      scannedStores: 2,
+    });
+    for (const agentId of ["main", "work"]) {
+      const sessionKey = `agent:${agentId}:runtime-skills`;
+      expect(JSON.parse(readEntryJson(env, sessionKey, agentId)).skillsSnapshot).toEqual(
+        compactSnapshot,
+      );
+      expect(
+        listSessionEntriesCore({ agentId, clone: false, env })[0]?.entry.skillsSnapshot,
+      ).toEqual(compactSnapshot);
+    }
+
+    closeOpenClawAgentDatabasesForTest();
+    for (const agentId of ["main", "work"]) {
+      expect(
+        listSessionEntriesCore({ agentId, clone: false, env })[0]?.entry.skillsSnapshot,
+      ).toEqual(compactSnapshot);
+    }
+    expect(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 2,
+    });
   });
 });

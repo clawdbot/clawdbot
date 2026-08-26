@@ -69,6 +69,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
+- **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
+- **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
 - **Onboarding migration menu:** group Claude, Codex, Hermes, and plugin-provided imports under a single **Import from another agent** setup choice while preserving detected source hints, manual paths, and Back navigation before import begins. Fixes #126440. Thanks @shakkernerd.
 - **Onboarding provider hook loading:** scope selected-model hook fallback to the chosen provider so metadata-only setup providers do not load unrelated plugins before configuration completes. Fixes #126408. Thanks @shakkernerd.
 - **Plugin setup diagnostics:** stop treating metadata-only provider setup descriptors as missing runtime registrations while retaining undeclared runtime and CLI drift warnings. Fixes #125506. Thanks @shakkernerd.

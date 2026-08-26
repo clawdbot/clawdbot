@@ -8,6 +8,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -16,9 +17,13 @@ import {
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { ApiKeyCredential } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
+import { persistAuthProfileBatch, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  clearAuthProfileMigrationDiagnostics();
+});
 
 function apiKey(key: string): ApiKeyCredential {
   return { type: "api_key", provider: "openai", key };
@@ -162,6 +167,53 @@ describe("auth profile batch persistence", () => {
         order: { openai: ["openai:existing"] },
       });
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:portable"]).toBeUndefined();
+    });
+  });
+
+  it("reports the migration remediation instead of lock-contention retry advice", async () => {
+    await withAgentDir(async (agentDir) => {
+      // Credentials still living in the retired JSON store: the write can never
+      // succeed, so retry advice would loop the operator forever.
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: { "openai:legacy": apiKey("sk-json-era") },
+        }),
+      );
+
+      const failure = await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:new",
+        credential: apiKey("sk-new"),
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain("requires legacy credential migration");
+      expect(String(failure)).toContain("openclaw doctor --fix");
+      expect(String(failure)).not.toContain("lock may be busy");
+    });
+  });
+
+  it("reports a schema write failure instead of lock-contention retry advice", async () => {
+    await withAgentDir(async (agentDir) => {
+      await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:existing",
+        credential: apiKey("sk-existing"),
+      });
+      openOpenClawAgentDatabase({
+        agentId: "work",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      }).db.exec("ALTER TABLE auth_profile_store DROP COLUMN updated_at");
+
+      const failure = await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:new",
+        credential: apiKey("sk-new"),
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain("no column named updated_at");
+      expect(String(failure)).not.toContain("lock may be busy");
     });
   });
 

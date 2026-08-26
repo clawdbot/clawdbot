@@ -6,8 +6,11 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl1~m:{sha256}       - select an opaque provider/model ref
+ * - mdl1~p:{sha256}:{pg}  - show models for an opaque provider ref
  * - mdl_back              - back to providers list
  */
+import { createHash } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -18,7 +21,9 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
+  | { type: "list-ref"; digest: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "select-ref"; digest: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -44,13 +49,22 @@ export type ModelsKeyboardParams = {
 
 const MODELS_PAGE_SIZE = 8;
 const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
+const LEGACY_PROVIDER_PATTERN = /^[a-z0-9_.-]+$/i;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  opaqueModel: "mdl1~m:",
+  opaqueProvider: "mdl1~p:",
 } as const;
+
+function hashOpaqueCallback(domain: "model" | "provider", ...values: string[]): string {
+  return createHash("sha256")
+    .update(JSON.stringify([`openclaw.telegram.${domain}-callback.v1`, ...values]))
+    .digest("base64url");
+}
 
 /**
  * Parse a model callback_data string into a structured object.
@@ -58,6 +72,17 @@ const CALLBACK_PREFIX = {
  */
 export function parseModelCallbackData(data: string): ParsedModelCallback | null {
   const trimmed = data.trim();
+  const opaqueModelMatch = trimmed.match(/^mdl1~m:([A-Za-z0-9_-]{43})$/);
+  if (opaqueModelMatch?.[1]) {
+    return { type: "select-ref", digest: opaqueModelMatch[1] };
+  }
+  const opaqueProviderMatch = trimmed.match(/^mdl1~p:([A-Za-z0-9_-]{43}):(\d+)$/);
+  if (opaqueProviderMatch?.[1]) {
+    const page = parseStrictPositiveInteger(opaqueProviderMatch[2]);
+    if (page !== undefined && fitsTelegramCallbackData(trimmed)) {
+      return { type: "list-ref", digest: opaqueProviderMatch[1], page };
+    }
+  }
   if (!trimmed.startsWith("mdl_")) {
     return null;
   }
@@ -110,42 +135,87 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
-}): string | null {
+}): string {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (fitsTelegramCallbackData(fullCallbackData)) {
+  if (LEGACY_PROVIDER_PATTERN.test(params.provider) && fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (
+    LEGACY_PROVIDER_PATTERN.test(params.provider) &&
+    fitsTelegramCallbackData(`${CALLBACK_PREFIX.list}${params.provider}_1`) &&
+    fitsTelegramCallbackData(compactCallbackData)
+  ) {
+    return compactCallbackData;
+  }
+  return `${CALLBACK_PREFIX.opaqueModel}${hashOpaqueCallback("model", params.provider, params.model)}`;
+}
+
+function buildProviderListCallbackData(provider: string, page: number): string {
+  const callbackData = `${CALLBACK_PREFIX.list}${provider}_${page}`;
+  return LEGACY_PROVIDER_PATTERN.test(provider) && fitsTelegramCallbackData(callbackData)
+    ? callbackData
+    : `${CALLBACK_PREFIX.opaqueProvider}${hashOpaqueCallback("provider", provider)}:${page}`;
 }
 
 export function resolveModelSelection(params: {
-  callback: Extract<ParsedModelCallback, { type: "select" }>;
+  callback: Extract<ParsedModelCallback, { type: "select" | "select-ref" }>;
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  if (params.callback.provider) {
+  const callback = params.callback;
+  if (callback.type === "select-ref") {
+    const matches = params.providers.flatMap((provider) =>
+      [...(params.byProvider.get(provider) ?? [])]
+        .filter((model) => hashOpaqueCallback("model", provider, model) === callback.digest)
+        .map((model) => ({ provider, model })),
+    );
+    return matches.length === 1
+      ? { kind: "resolved", ...expectDefined(matches[0], "single matching model") }
+      : {
+          kind: "ambiguous",
+          model: callback.digest,
+          matchingProviders: matches.map(({ provider }) => provider),
+        };
+  }
+  if (callback.provider) {
     return {
       kind: "resolved",
-      provider: params.callback.provider,
-      model: params.callback.model,
+      provider: callback.provider,
+      model: callback.model,
     };
   }
   const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
+    params.byProvider.get(id)?.has(callback.model),
   );
   if (matchingProviders.length === 1) {
     return {
       kind: "resolved",
       provider: expectDefined(matchingProviders.at(0), "single matching model provider"),
-      model: params.callback.model,
+      model: callback.model,
     };
   }
   return {
     kind: "ambiguous",
-    model: params.callback.model,
+    model: callback.model,
     matchingProviders,
   };
+}
+
+export function resolveModelListCallback(params: {
+  callback: Extract<ParsedModelCallback, { type: "list" | "list-ref" }>;
+  providers: readonly string[];
+}): { provider: string; page: number } | undefined {
+  const { callback } = params;
+  if (callback.type === "list") {
+    return { provider: callback.provider, page: callback.page };
+  }
+  const matches = params.providers.filter(
+    (provider) => hashOpaqueCallback("provider", provider) === callback.digest,
+  );
+  return matches.length === 1
+    ? { provider: expectDefined(matches[0], "single matching provider"), page: callback.page }
+    : undefined;
 }
 
 function isCurrentModelSelection(params: {
@@ -176,7 +246,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   for (const provider of providers) {
     const button = {
       text: `${provider.id} (${provider.count})`,
-      callback_data: `mdl_list_${provider.id}_1`,
+      callback_data: buildProviderListCallbackData(provider.id, 1),
     };
 
     currentRow.push(button);
@@ -215,11 +285,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
-    if (!callbackData) {
-      continue;
-    }
-
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
@@ -241,19 +306,19 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     if (currentPage > 1) {
       paginationRow.push({
         text: "◀ Prev",
-        callback_data: `${CALLBACK_PREFIX.list}${provider}_${currentPage - 1}`,
+        callback_data: buildProviderListCallbackData(provider, currentPage - 1),
       });
     }
 
     paginationRow.push({
       text: `${currentPage}/${totalPages}`,
-      callback_data: `${CALLBACK_PREFIX.list}${provider}_${currentPage}`, // noop
+      callback_data: buildProviderListCallbackData(provider, currentPage), // noop
     });
 
     if (currentPage < totalPages) {
       paginationRow.push({
         text: "Next ▶",
-        callback_data: `${CALLBACK_PREFIX.list}${provider}_${currentPage + 1}`,
+        callback_data: buildProviderListCallbackData(provider, currentPage + 1),
       });
     }
 

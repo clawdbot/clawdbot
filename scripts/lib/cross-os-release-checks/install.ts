@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
 import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
@@ -22,7 +23,6 @@ import {
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
-  shouldRunBundledPluginPostinstall,
 } from "./config.ts";
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
@@ -35,6 +35,7 @@ export async function prepareCandidate(params: {
   logsDir: string;
 }): Promise<CandidateBuild> {
   logPhase("prepare", "resolve-source-sha");
+  validatePackageSourceDir(params.sourceDir, { allowUnreleasedChangelog: true });
   const packageJson = readPackageJson(params.sourceDir);
   const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
   const sourceSha = (
@@ -398,10 +399,7 @@ export async function installTarballPackage(params: {
     timeoutMs: params.timeoutMs,
     ignoreScripts: params.ignoreScripts,
   });
-  if (
-    params.restoreBundledPluginPostinstall !== false &&
-    shouldRunBundledPluginPostinstall({ lane: params.lane })
-  ) {
+  if (params.restoreBundledPluginPostinstall !== false) {
     await runBundledPluginPostinstall({
       lane: params.lane,
       env: params.env,

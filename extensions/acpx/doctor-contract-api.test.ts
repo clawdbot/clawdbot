@@ -105,6 +105,7 @@ describe("acpx doctor state migration", () => {
   });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 

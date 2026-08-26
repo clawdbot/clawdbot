@@ -24,18 +24,21 @@
 
 openclaw-session-owner-chip {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: none;
 }
 
 .session-owner-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
   border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: hsl(var(--owner-hue) 58% 26%);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
   color: white;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   transition:
@@ -48,18 +51,6 @@ openclaw-session-owner-chip {
   opacity: 0.45;
 }
 
-.session-owner-chip--row {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-}
-
-.session-owner-chip--header {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
-}
-
 .session-owner-chip .viewer-avatar {
   width: 100%;
   height: 100%;
@@ -70,7 +61,7 @@ openclaw-session-owner-chip {
 .session-owner-stack {
   position: relative;
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   height: 20px;
   align-items: center;
   justify-content: flex-end;
@@ -78,20 +69,17 @@ openclaw-session-owner-chip {
 
 .session-owner-stack__back {
   position: absolute;
-  z-index: 0;
   left: 0;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
 }
 
 .session-owner-stack__back .viewer-avatar,
 .session-owner-stack__overflow {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .session-owner-stack__overflow {
@@ -107,6 +95,8 @@ openclaw-session-owner-chip {
 .session-owner-stack__front {
   position: relative;
   z-index: 1;
+  width: 18px;
+  height: 18px;
 }
 
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
@@ -196,29 +186,9 @@ openclaw-session-owner-chip {
   color: var(--accent);
 }
 
-.connect-splash__logo {
-  width: 44px;
-  height: 44px;
-  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
-}
-
-@keyframes connect-splash-wiggle {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .connect-splash {
     opacity: 1;
-    animation: none;
-  }
-
-  .connect-splash__logo {
     animation: none;
   }
 }
@@ -319,6 +289,19 @@ openclaw-session-owner-chip {
   padding-left: 18px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 2px 3px;
+  vertical-align: middle;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .login-gate__failure-steps li + li {
@@ -563,19 +546,19 @@ openclaw-session-owner-chip {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--danger);
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 50%, transparent);
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
 .statusDot.ok {
   background: var(--ok);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent);
   animation: none;
 }
 
 .statusDot.warn {
   background: var(--warn);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent);
   animation: none;
 }
 
@@ -689,7 +672,7 @@ openclaw-session-owner-chip {
 }
 
 .btn.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .btn--sm {
@@ -723,6 +706,59 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+.app-toast--anchored {
+  right: auto;
+  left: var(--app-toast-anchor-center);
+  top: var(--app-toast-anchor-top);
+  transform: translateX(-50%);
+  gap: var(--space-2);
+  max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
+  padding: 8px 12px;
+  border-color: color-mix(in srgb, var(--info) 12%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--info) 12%, var(--popover));
+  transition-property: translate, scale, opacity;
+}
+
+.app-toast--anchored[data-active="true"] {
+  translate: 0 0;
+  scale: 1;
+  opacity: 1;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .app-toast--anchored[data-active="true"] {
+    translate: 0 -100%;
+    scale: 0.95;
+    opacity: 0;
+  }
+}
+
+.app-toast--anchored[data-active="false"] {
+  translate: 0 -100%;
+  scale: 0.95;
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+.app-toast__icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--info);
+}
+
+.app-toast__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -730,6 +766,12 @@ openclaw-session-owner-chip {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     max-width: none;
+  }
+
+  .app-toast--anchored {
+    left: var(--app-toast-anchor-center);
+    right: auto;
+    max-width: calc(var(--app-toast-anchor-width) - 24px);
   }
 }
 
@@ -747,6 +789,25 @@ openclaw-session-owner-chip {
   -webkit-line-clamp: 3;
   line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+.app-toast--anchored .app-toast__message {
+  display: block;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+}
+
+.app-toast--anchored .app-toast__dismiss {
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+}
+
+.app-toast--anchored .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
 }
 
 .app-toast__action,
@@ -773,6 +834,14 @@ openclaw-session-owner-chip {
   color: var(--muted);
   font-size: 20px;
   line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast--anchored,
+  .app-toast--anchored[data-active="true"],
+  .app-toast--anchored[data-active="false"] {
+    transition: none;
+  }
 }
 
 .app-toast__action:hover,
@@ -815,23 +884,73 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .session-progress-hovercard {
+  --session-hovercard-shift-x: 0;
+  --session-hovercard-shift-y: 0;
+
   position: fixed;
   z-index: 1990;
-  width: min(380px, calc(100vw - 24px));
+  width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
-  padding: 14px 16px;
+  padding: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
+  background: var(--session-hovercard-surface);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   pointer-events: none;
+  opacity: 0;
+  transform: translate3d(var(--session-hovercard-shift-x), var(--session-hovercard-shift-y), 0)
+    scale(0.99);
+  transition:
+    opacity 100ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+.session-progress-hovercard[data-side="right"] {
+  --session-hovercard-shift-x: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="left"] {
+  --session-hovercard-shift-x: 4px;
+  transform-origin: top right;
+}
+
+.session-progress-hovercard[data-side="bottom"] {
+  --session-hovercard-shift-y: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="top"] {
+  --session-hovercard-shift-y: 4px;
+  transform-origin: bottom left;
+}
+
+.session-progress-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition-duration: 150ms;
+}
+
+.session-progress-hovercard[data-instant="true"][data-open="true"] {
+  transition: none;
 }
 
 @media (hover: hover) {
-  .session-progress-hovercard {
+  .session-progress-hovercard[data-open="true"] {
     pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-hovercard {
+    transform: none;
+    transition: opacity 80ms linear;
+  }
+
+  .session-progress-hovercard[data-open="true"] {
+    transform: none;
   }
 }
 
@@ -1094,7 +1213,7 @@ openclaw-session-progress-hovercard-provider {
   border-color: transparent;
 }
 
-.btn:disabled {
+.btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1318,102 +1437,10 @@ select.input {
   height: 16px;
 }
 
-/* ===========================================
-   Cron Form
-   =========================================== */
-
-/* Stat strip used by the tasks page. */
-.summary-strip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px 18px;
-  padding: 14px 16px;
-}
-
-.summary-strip__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.summary-stat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.summary-stat__icon {
-  width: 30px;
-  height: 30px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  padding: 6px;
-  flex-shrink: 0;
-}
-
-.summary-stat__icon svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.summary-stat--danger .summary-stat__icon {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
-.summary-stat__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.summary-stat__label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.summary-stat__value {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-@media (max-width: 1100px) {
-  .summary-strip {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .summary-strip__stats {
-    width: 100%;
-    gap: 8px 18px;
-  }
 }
 
 :root[data-theme-mode="light"] .field input,
@@ -1543,43 +1570,6 @@ select.input {
   stroke-linejoin: round;
 }
 
-.scope-upgrade-chip-row {
-  display: flex;
-  min-height: 30px;
-  justify-content: flex-end;
-  align-items: center;
-}
-
-.scope-upgrade-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 5px 11px;
-  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.scope-upgrade-chip:hover {
-  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
-}
-
-.scope-upgrade-chip:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.scope-upgrade-chip__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
 .callout.danger {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
   background: linear-gradient(
@@ -1601,14 +1591,22 @@ select.input {
 }
 
 .callout.info {
-  border-color: rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--info) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--info) 8%, transparent) 0%,
+    color-mix(in srgb, var(--info) 4%, transparent) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
-  border-color: rgba(34, 197, 94, 0.25);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ok) 8%, transparent) 0%,
+    color-mix(in srgb, var(--ok) 4%, transparent) 100%
+  );
   color: var(--ok);
 }
 
@@ -1627,6 +1625,7 @@ select.input {
 .lazy-view-error {
   margin: auto;
   display: grid;
+  align-content: center;
   gap: 8px;
   justify-items: center;
   text-align: center;
@@ -1673,6 +1672,7 @@ select.input {
 }
 
 .lazy-view-error__subtitle {
+  max-width: 40ch;
   font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
@@ -1726,7 +1726,7 @@ select.input {
 
 .compaction-indicator--active {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.35);
+  border-color: color-mix(in srgb, var(--info) 35%, transparent);
 }
 
 .compaction-indicator--active svg {
@@ -1735,17 +1735,17 @@ select.input {
 
 .compaction-indicator--complete {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 .compaction-indicator--fallback {
   color: var(--warn-strong);
-  border-color: rgba(217, 119, 6, 0.35);
+  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
 }
 
 .compaction-indicator--fallback-cleared {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -2119,42 +2119,6 @@ openclaw-chat-session-rail {
   }
 }
 
-.chat-session-rail__composer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 10px 10px 11px 14px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--secondary) 40%, transparent);
-}
-
-.chat-session-rail__prompt {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-session-rail__input {
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-}
-
-.chat-session-rail__input:focus {
-  border-color: var(--border-strong);
-  outline: none;
-}
-
-.chat-session-rail__input::placeholder {
-  color: var(--muted);
-}
-
 /* The docked form: a real column in the pane's flex row. It claims layout space
    instead of painting over the thread, so nothing here may float, shadow, or
    blur — those cues would read as an overlay again. */
@@ -2283,12 +2247,12 @@ openclaw-chat-session-rail {
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
@@ -2550,19 +2514,19 @@ openclaw-chat-session-rail {
 
 .chip-ok {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.3);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
   background: var(--ok-subtle);
 }
 
 .chip-warn {
   color: var(--warn);
-  border-color: rgba(245, 158, 11, 0.3);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
   background: var(--warn-subtle);
 }
 
 .chip-danger {
   color: var(--danger);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
   background: var(--danger-subtle);
 }
 
@@ -2878,7 +2842,7 @@ td.data-table-key-col {
 
 .log-level.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-level.warn {
@@ -2899,7 +2863,7 @@ td.data-table-key-col {
 
 .log-chip.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-chip.warn {
@@ -3603,8 +3567,7 @@ td.data-table-key-col {
   gap: 12px;
 }
 
-/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
-   and the mark says so before any sentence is read. */
+/* The compact ok-tone tile makes the settled outcome visible before its copy. */
 .secret-reveal__status {
   width: 28px;
   height: 28px;
@@ -4276,7 +4239,11 @@ td.data-table-key-col {
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
-    radial-gradient(circle at top right, rgba(255, 92, 92, 0.055), transparent 32%),
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent) 5.5%, transparent),
+      transparent 32%
+    ),
     radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
     linear-gradient(
       180deg,
@@ -5666,7 +5633,24 @@ td.data-table-key-col {
    aside stacks transient state, relative time, and management actions in one
    grid cell, so hovering swaps state for actions without any layout shift. */
 .session-row-host {
+  /* One size and one stroke for every glyph the row draws. Seven different
+     values used to land on the same line, which read as broken alignment.
+     The row-scoped SVG rule below leaves other surfaces at their own sizes. */
+  /* One grid for everything in the trailing column. The 24px action target sets
+     the desktop pitch; 14px endcap glyphs use the remaining 10px as their gap
+     so both lines share one trailing axis. */
+  --row-action-size: 24px;
+  --row-glyph-gap: 10px;
+
+  /* What the title gives up so the actions have somewhere to land: both boxes
+     plus a hair of clearance from the ellipsis. */
+  --row-actions-reserve: calc(var(--row-action-size) * 2 + 3px);
+
   position: relative;
+}
+
+.session-row-host[data-session-row-action-count="1"] {
+  --row-actions-reserve: calc(var(--row-action-size) + 3px);
 }
 
 .session-row-host--draft {
@@ -5738,14 +5722,18 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
+/* One 14px track per glyph puts the 16px PR icon, 11px ring, and 7px unread dot
+   each on the action-icon axis the endcap padding aligns to. Centring them as
+   one box held only for a single glyph: a PR icon ahead of the trailing dot
+   pushed it 3.5px inboard of the dot-only rows. 14px, not the 24px action-button
+   box, which padded a 7px dot with 8.5px a side and broke the 6px rhythm. */
 .session-row-state {
-  display: inline-flex;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 14px;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 24px;
-  min-height: 24px;
-  transition: opacity var(--duration-fast) ease;
+  justify-items: center;
+  gap: var(--row-glyph-gap, 6px);
   pointer-events: none;
 }
 
@@ -5769,7 +5757,7 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--row-glyph-gap, 6px);
   flex: 0 0 auto;
 }
 
@@ -5779,7 +5767,8 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--attention {
+.session-row-badge--attention,
+.session-row-badge--approval {
   gap: 2px;
   color: var(--warn);
   font-size: 10px;
@@ -5795,13 +5784,8 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warn);
-}
-
-.session-row-badge--cloud[data-placement-state="failed"] {
+.session-row-badge--cloud[data-placement-state="failed"],
+.session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
@@ -5816,16 +5800,9 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts] {
-  color: var(--warn);
-}
-
+.session-row-badge--cloud[data-workspace-conflicts],
 .session-row-badge--cloud[data-disk-space-status="warning"] {
   color: var(--warn);
-}
-
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
 }
 
 .session-row-badge svg {
@@ -5840,16 +5817,14 @@ td.data-table-key-col {
 
 .session-row-actions {
   display: inline-flex;
-  align-items: center;
-  gap: 1px;
 }
 
 .session-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--row-action-size);
+  height: var(--row-action-size);
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -5857,13 +5832,9 @@ td.data-table-key-col {
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
-.session-action svg {
+.session-row-host svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -5896,13 +5867,20 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
-  opacity: 0;
-}
+/* Nothing in the row trades places with the actions any more. Two-line rows put
+   them on the title line; single-line rows reserve their width in the text
+   column, which slides the endcap clear. Fading state here used to prevent an
+   overlap that no longer happens, and it took the unread dot with it the moment
+   the pointer arrived — while the badges beside it stayed, which read as a
+   glitch rather than a deliberate swap. */
 
 /* Sidebar rows are now the direct management surface after removing the
    duplicate picker; touch users need pin/menu controls without hover. */
 @media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session.session-row-host {
+    --row-action-size: 44px;
+  }
+
   .sidebar-recent-session .session-action {
     opacity: 1;
     pointer-events: auto;
@@ -5910,22 +5888,6 @@ td.data-table-key-col {
 
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
-  }
-
-  .sidebar-recent-session .session-row-trail {
-    opacity: 0;
-  }
-
-  .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
-    column-gap: 1px;
-  }
-
-  .sidebar-recent-session .session-row-state {
-    grid-area: 1 / 1;
-  }
-
-  .sidebar-recent-session .session-row-actions {
-    grid-area: 1 / 2;
   }
 }
 
@@ -5936,8 +5898,8 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
   border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
   border-top-color: var(--run);
@@ -6117,4 +6079,19 @@ td.data-table-key-col {
   100% {
     transform: rotate(-10deg);
   }
+}
+
+/* Identity links (a name or avatar opening that person's Activity feed) stay neutral
+   until hover so identity chrome keeps its weight in dense surfaces. */
+.person-activity-link {
+  color: inherit;
+}
+
+.person-activity-link:not(:hover, :focus-visible) {
+  text-decoration: none;
+}
+
+.person-activity-avatar-link {
+  display: block;
+  line-height: 0;
 }

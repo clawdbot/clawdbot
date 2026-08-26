@@ -55,6 +55,18 @@ describe("golden failover classification corpus", () => {
 });
 
 describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
+  it.each([
+    ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
+    ["OpenRouter music", "OpenRouter music generation stream ended before completion"],
+    ["MiniMax TTS", "MiniMax music generation stream ended without completion"],
+    ["local SSE reader", "SSE stream ended before next event"],
+    ["OpenCode Go", "opencode-go stream ended without a terminal event"],
+    ["Ollama", "Ollama API stream ended without a final response"],
+  ])("does not classify non-assistant %s lifecycle wording", (_source, message) => {
+    expect(isTimeoutErrorMessage(message)).toBe(false);
+    expect(classifyFailoverSignal({ message })).toBeNull();
+  });
+
   it("ignores an embedded 429 substring outside a status context", () => {
     const message = "request id req-4291 failed";
 

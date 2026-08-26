@@ -74,6 +74,64 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("clears the previous display name when the selected session is unnamed", async () => {
+  const fixture = await startTuiFixture();
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("/session agent:main:mode-source\r", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
+      STARTUP_TIMEOUT_MS,
+    );
+    await fixture.run.waitForOutput("Production incident", STARTUP_TIMEOUT_MS);
+
+    const targetOutputOffset = fixture.run.visibleOutput().length;
+    await fixture.run.write("/session agent:main:mode-target\r", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
+      STARTUP_TIMEOUT_MS,
+    );
+    await fixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
+
+    expect(fixture.run.visibleOutput().slice(targetOutputOffset)).not.toContain(
+      "Production incident",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("keeps the active stream when the current session is selected again", async () => {
+  const fixture = await startTuiFixture();
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("streaming prompt\r", { delay: false });
+    await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt", STARTUP_TIMEOUT_MS);
+    const historyLoadsBefore = (await readFixtureLog(fixture.logPath)).filter(
+      (entry) => entry.method === "loadHistory",
+    ).length;
+
+    await fixture.run.write("/session main\r/think\r", { delay: false });
+    await fixture.run.waitForOutput("usage: /think", STARTUP_TIMEOUT_MS);
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("PTY_STREAMING: streaming prompt")),
+      STARTUP_TIMEOUT_MS,
+    );
+
+    expect(rows.join("\n")).not.toContain("local ready | idle");
+    expect(
+      (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "loadHistory"),
+    ).toHaveLength(historyLoadsBefore);
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
 it("hides a stale approval when startup restores the remembered session", async () => {
   const stateDir = tempDirs.make("openclaw-tui-identity-");
   await seedRememberedSession(stateDir);

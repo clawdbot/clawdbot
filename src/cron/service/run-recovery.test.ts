@@ -15,7 +15,13 @@ import type { CronJob } from "../types.js";
 import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
 import { createCronServiceState } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { tryCreateCronTaskRun, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { tryCreateCronTaskRunHandle, tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+
+function tryCreateCronTaskRun(
+  params: Parameters<typeof tryCreateCronTaskRunHandle>[0],
+): string | undefined {
+  return tryCreateCronTaskRunHandle(params)?.runId;
+}
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 

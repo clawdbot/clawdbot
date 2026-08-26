@@ -115,7 +115,11 @@ suite.define(() => {
       const sessionListCount = (await gateway.getRequests("sessions.list")).length;
       await modelSelect.click();
       const modelsRequest = await gateway.waitForRequest("models.list");
-      expect(modelsRequest.params).toEqual({ view: "configured", agentId: "main" });
+      expect(modelsRequest.params).toEqual({
+        view: "configured",
+        agentId: "main",
+        refresh: true,
+      });
       const refreshedSessionsRequest = await gateway.waitForRequest("sessions.list", {
         after: sessionListCount,
       });
@@ -141,6 +145,28 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           path: path.join(dynamicCatalogProofDir, "03-discovered-thinking-levels.png"),
+        });
+      }
+
+      await page.keyboard.press("Escape");
+      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      const newSessionPage = page.locator("openclaw-new-session-page");
+      await newSessionPage.waitFor();
+      const newSessionModelSelect = newSessionPage.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
+      await newSessionModelSelect.click();
+      const newSessionModel = newSessionPage.locator(
+        '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
+      );
+      await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
+      await expect.poll(() => newSessionModel.isVisible()).toBe(true);
+      if (dynamicCatalogProofDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(dynamicCatalogProofDir, "04-new-session-discovered-context.png"),
         });
       }
     } finally {

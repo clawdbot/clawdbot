@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -101,6 +102,7 @@ function finalizeUpdatedJob(params: {
   now: number;
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
+  explicitTriggerState?: CronJobPatch["state"];
 }) {
   const { job, nextJob, now } = params;
   if (nextJob.schedule.kind === "every") {
@@ -136,6 +138,25 @@ function finalizeUpdatedJob(params: {
   // watcher. Equivalent resaves preserve it; disable/enable and source changes
   // rotate it in the same write that changes the public job definition.
   reconcileStreamSourceIdentity(job, nextJob);
+
+  const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
+  const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;
+  if (!isDeepStrictEqual(job.trigger, nextJob.trigger) || previousScript !== nextScript) {
+    // Trigger and payload scripts share one durable state slot. Exact persisted
+    // definitions own it, matching in-flight ownership; explicit replacements win.
+    for (const field of [
+      "triggerState",
+      "triggerEvalCount",
+      "lastTriggerEvalAtMs",
+      "lastTriggerFireAtMs",
+    ] as const) {
+      if (params.explicitTriggerState && Object.hasOwn(params.explicitTriggerState, field)) {
+        Object.assign(nextJob.state, { [field]: params.explicitTriggerState[field] });
+      } else {
+        delete nextJob.state[field];
+      }
+    }
+  }
 
   // Only advance a recurring job's next run when the schedule/enabled inputs
   // actually changed. An idempotent re-save (same schedule, or re-enabling an
@@ -183,6 +204,13 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
 }) {
   const { state, snapshot, previousJob, nextJob } = params;
+  if (
+    nextJob.state.queuedAtMs !== undefined &&
+    resolveCronJobConfigRevision(previousJob) !== resolveCronJobConfigRevision(nextJob)
+  ) {
+    // Retire the occurrence with its owning edit; A→B→A cannot revive a queued snapshot.
+    delete nextJob.state.queuedAtMs;
+  }
   if (state.store) {
     const index = state.store.jobs.findIndex((entry) => entry.id === nextJob.id);
     if (index >= 0) {
@@ -382,6 +410,7 @@ export async function add(
         now,
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
+        explicitTriggerState: normalizedInput.state,
       });
       await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
@@ -404,6 +433,9 @@ export async function add(
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
+    if (opts?.createdActor) {
+      job.createdActor = structuredClone(opts.createdActor);
+    }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,
@@ -519,6 +551,7 @@ async function updateLoadedJob(params: {
       "trigger" in patch ||
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
+    explicitTriggerState: patch.state,
   });
   const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({

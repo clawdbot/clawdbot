@@ -154,7 +154,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     userTurnRecorder,
   });
   const queuedFollowup = createChatSendTurnAdoptionLifecycle({
+    accountId,
     chatQueuedTurns: context.chatQueuedTurns,
+    context,
     runId: clientRunId,
     controller: activeRunAbort.controller,
     sessionId: backingSessionId ?? clientRunId,
@@ -164,6 +166,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     ownerDeviceId: client?.connect?.device?.id,
     ownerKey: queuedFollowupOwnerKey,
     ...(expectedLeafEntryId !== undefined ? { originatingLeafEntryId: expectedLeafEntryId } : {}),
+    originatingChannel: admission.originatingRoute.originatingChannel,
+    session,
     hasCronCreatorAuthority: cronCreatorAuthority !== undefined,
     retainWorkAdmission: retainGatewayWorkAdmission,
   });
@@ -285,14 +289,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
-                onFollowupQueueDisposition: (reason) => {
-                  context.logGateway.info("chat queue turn intentionally skipped", {
-                    runId: clientRunId,
-                    sessionKey,
-                    outcome: "skipped",
-                    reason,
-                  });
-                },
+                onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
+                onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,
                 turnAdoptionLifecycle: queuedFollowup.lifecycle,
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
@@ -516,6 +514,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await dispatch;
     } finally {
       await dispatchErrorLifecycle.finalize();
+      // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
+      emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.run.settled" });
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media
         // markers — so the prepared inbound media stays unreferenced forever

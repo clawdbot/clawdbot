@@ -18,38 +18,265 @@ const port =
   process.env.MOCK_PORT != null
     ? readTcpPortEnv("MOCK_PORT")
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
+const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+// Absolute record ordinal, stamped at the producer: consumers expose a bounded
+// tail of the log, so entries must carry their own position. The server starts
+// once per run, so the counter spans the whole session.
+let requestLogSeq = 0;
 const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
 const responseControl = process.env.MOCK_RESPONSE_CONTROL;
+const MAX_CONTENT_FACTS = 128;
+const MAX_CONTENT_FACT_FILENAME_LENGTH = 1024;
+const LEGACY_MEDIA_PATTERN =
+  /\[media attached: ([^\]\r\n]+?) \(([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)\)(?: \| [^\]\r\n]+)?\]/giu;
+const MEDIA_DATA_URL_PATTERN =
+  /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
+let scriptState;
 
-function readCurrentResponse() {
-  if (!responseControl) {
-    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
+function parseMediaDataUrl(value) {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  const value = JSON.parse(readFileSync(responseControl, "utf8"));
-  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
-    throw new Error("mock response control text is invalid");
+  const match = MEDIA_DATA_URL_PATTERN.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const encoded = (match[2] ?? "").replace(/\s/gu, "");
+  const valid = /^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) && encoded.length % 4 !== 1;
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  return {
+    byteLength: valid ? Math.floor((encoded.length * 3) / 4) - padding : undefined,
+    mimeType: match[1]?.toLowerCase(),
+  };
+}
+
+function requestContentFact(item) {
+  const type = typeof item.type === "string" ? item.type.slice(0, 64) : undefined;
+  if (!type) {
+    return undefined;
+  }
+  const fact = { type };
+  if (type !== "input_file" && type !== "input_image") {
+    return fact;
+  }
+  const imageUrl =
+    typeof item.image_url === "string"
+      ? item.image_url
+      : item.image_url && typeof item.image_url === "object"
+        ? item.image_url.url
+        : undefined;
+  const dataUrl = parseMediaDataUrl(type === "input_file" ? item.file_data : imageUrl);
+  const filename =
+    typeof item.filename === "string"
+      ? item.filename.slice(0, MAX_CONTENT_FACT_FILENAME_LENGTH)
+      : undefined;
+  const mimeType =
+    (typeof item.mimeType === "string" ? item.mimeType.slice(0, 128) : undefined) ??
+    (typeof item.mime_type === "string" ? item.mime_type.slice(0, 128) : undefined) ??
+    dataUrl?.mimeType;
+  return {
+    ...fact,
+    ...(filename ? { filename } : {}),
+    ...(mimeType ? { mimeType } : {}),
+    ...(dataUrl?.byteLength === undefined ? {} : { byteLength: dataUrl.byteLength }),
+  };
+}
+
+function summarizeRequestContent(body) {
+  const facts = [];
+  let firstFact = 0;
+  let truncated = false;
+  const appendFact = (fact) => {
+    if (facts.length < MAX_CONTENT_FACTS) {
+      facts.push(fact);
+      return;
+    }
+    facts[firstFact] = fact;
+    firstFact = (firstFact + 1) % MAX_CONTENT_FACTS;
+    truncated = true;
+  };
+  const appendLegacyMediaFacts = (text) => {
+    for (const match of text.matchAll(LEGACY_MEDIA_PATTERN)) {
+      appendFact({
+        type: "legacy_media",
+        filename: match[1].trim().slice(0, MAX_CONTENT_FACT_FILENAME_LENGTH),
+        mimeType: match[2].toLowerCase(),
+      });
+    }
+  };
+  const visit = (value) => {
+    if (typeof value === "string") {
+      appendFact({ type: "input_text" });
+      appendLegacyMediaFacts(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    if (value.type === "message" || typeof value.type !== "string") {
+      visit(value.content);
+      return;
+    }
+    const fact = requestContentFact(value);
+    if (!fact) {
+      return;
+    }
+    appendFact(fact);
+    if (
+      (fact.type === "input_text" || fact.type === "output_text") &&
+      typeof value.text === "string"
+    ) {
+      appendLegacyMediaFacts(value.text);
+    }
+  };
+
+  visit(body?.input ?? body?.messages);
+  const contentFacts = truncated
+    ? [...facts.slice(firstFact), ...facts.slice(0, firstFact)]
+    : facts;
+  return { contentFacts, ...(truncated ? { contentFactsTruncated: true } : {}) };
+}
+
+function redactRequestLogMedia(body, bodyText) {
+  let redacted = false;
+  const sanitized = JSON.stringify(body, (_key, value) => {
+    const dataUrl = parseMediaDataUrl(value);
+    if (!dataUrl) {
+      return value;
+    }
+    redacted = true;
+    const bytes = dataUrl.byteLength === undefined ? "unknown" : dataUrl.byteLength;
+    return `data:${dataUrl.mimeType};base64,[redacted:${bytes} bytes]`;
+  });
+  return redacted ? sanitized : bodyText;
+}
+
+function readResponseEntry(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} is invalid`);
   }
   const chunkDelayMs = value.chunkDelayMs ?? 0;
-  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 60_000) {
-    throw new Error("mock response control chunkDelayMs is invalid");
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
+    throw new Error(`${label} chunkDelayMs is invalid`);
   }
+  if (value.fail !== undefined) {
+    if (!value.fail || typeof value.fail !== "object" || Array.isArray(value.fail)) {
+      throw new Error(`${label} fail is invalid`);
+    }
+    const status = value.fail.status ?? 500;
+    if (!Number.isInteger(status) || status < 400 || status > 599) {
+      throw new Error(`${label} fail status is invalid`);
+    }
+    if (value.fail.mode !== undefined && value.fail.mode !== "drop") {
+      throw new Error(`${label} fail mode is invalid`);
+    }
+    if (value.fail.mode === "drop" && value.fail.status !== undefined) {
+      throw new Error(`${label} fail cannot combine status and drop`);
+    }
+    return {
+      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status },
+      chunkDelayMs,
+    };
+  }
+  if (Array.isArray(value.events) && value.events.length > 0) {
+    return { events: value.events, chunkDelayMs };
+  }
+  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
+    throw new Error(`${label} text is invalid`);
+  }
+  return { text: value.text, chunkDelayMs };
+}
+
+function readResponseControl() {
+  if (!responseControl) {
+    return {
+      hold: false,
+      response: { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs },
+    };
+  }
+  const value = JSON.parse(readFileSync(responseControl, "utf8"));
   if (value.hold !== undefined && typeof value.hold !== "boolean") {
     throw new Error("mock response control hold is invalid");
   }
-  return { text: value.text, chunkDelayMs, hold: value.hold ?? false };
+  if (value.responses !== undefined) {
+    if (!Array.isArray(value.responses) || value.responses.length === 0) {
+      throw new Error("mock response control responses are invalid");
+    }
+    const responses = value.responses.map((entry, index) =>
+      readResponseEntry(entry, `mock response control responses[${index}]`),
+    );
+    const defaultResponse =
+      value.default === undefined
+        ? undefined
+        : readResponseEntry(value.default, "mock response control default");
+    const version =
+      typeof value.scriptVersion === "string" && value.scriptVersion
+        ? value.scriptVersion
+        : createHash("sha256")
+            .update(JSON.stringify({ default: value.default, responses: value.responses }))
+            .digest("hex");
+    return { defaultResponse, hold: value.hold ?? false, responses, version };
+  }
+  return {
+    hold: value.hold ?? false,
+    response: readResponseEntry(value, "mock response control"),
+  };
 }
 
-async function currentResponse() {
-  let response = readCurrentResponse();
-  while (response.hold) {
-    await delay(25);
-    response = readCurrentResponse();
+function selectCurrentResponse() {
+  const control = readResponseControl();
+  if (!control.responses) {
+    return { response: control.response };
   }
-  return response;
+  if (scriptState?.version !== control.version) {
+    scriptState = { nextIndex: 0, version: control.version };
+  }
+  const requestIndex = scriptState.nextIndex;
+  scriptState.nextIndex += 1;
+  if (requestIndex < control.responses.length) {
+    return {
+      response: control.responses[requestIndex],
+      scriptEntry: { entryIndex: requestIndex, requestIndex, source: "responses" },
+    };
+  }
+  if (control.defaultResponse) {
+    return {
+      response: control.defaultResponse,
+      scriptEntry: { requestIndex, source: "default" },
+    };
+  }
+  return {
+    response: control.responses.at(-1),
+    scriptEntry: {
+      entryIndex: control.responses.length - 1,
+      requestIndex,
+      source: "last",
+    },
+  };
+}
+
+async function waitForResponseRelease() {
+  while (readResponseControl().hold) {
+    await delay(25);
+  }
+}
+
+function writeInjectedFailure(res, fail) {
+  if (fail.mode === "drop") {
+    res.destroy();
+    return;
+  }
+  writeJson(res, fail.status, { error: { message: "mantis injected fault" } });
 }
 
 function splitResponseText(text) {
@@ -567,6 +794,13 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const scriptedRoute =
+      req.method === "POST" &&
+      (url.pathname === "/v1/responses" || url.pathname === "/v1/chat/completions");
+    // Reserve before body reads or hold waits so concurrent turns consume the script
+    // in arrival order. The explicit version survives hold-only control rewrites.
+    const selectedResponse = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
+
     let bodyText;
     try {
       bodyText = await readBody(req);
@@ -577,23 +811,38 @@ const server = http.createServer((req, res) => {
       }
       throw error;
     }
-    let body;
+    let body = {};
+    let requestLogBody;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
+      requestLogBody = redactRequestLogMedia(body, bodyText);
     } catch {
-      body = {};
+      // Redaction walks the parsed JSON, so an unparseable body would bypass it
+      // and leak raw base64 media into the provider record. Log a bounded
+      // marker instead of the text.
+      requestLogBody = `[unparseable request body redacted: ${Buffer.byteLength(bodyText)} bytes]`;
     }
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
         entry: {
+          seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
-          body: boundedRequestLogBody(bodyText, bodyText),
+          body: boundedRequestLogBody(requestLogBody, requestLogBody),
+          ...summarizeRequestContent(body),
+          ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
     ) {
       return;
+    }
+    if (selectedResponse) {
+      await waitForResponseRelease();
+      if (selectedResponse.response.fail) {
+        writeInjectedFailure(res, selectedResponse.response.fail);
+        return;
+      }
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
@@ -619,7 +868,11 @@ const server = http.createServer((req, res) => {
           return;
         }
       }
-      const response = await currentResponse();
+      const response = selectedResponse?.response ?? selectCurrentResponse().response;
+      if (response.events) {
+        writeResponsesEvents(res, body.stream, response.events);
+        return;
+      }
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
@@ -667,7 +920,7 @@ const server = http.createServer((req, res) => {
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const response = await currentResponse();
+      const response = selectedResponse?.response ?? selectCurrentResponse().response;
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
@@ -710,6 +963,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, bindHost, () => {
   console.log(`mock-openai listening on ${port}`);
 });

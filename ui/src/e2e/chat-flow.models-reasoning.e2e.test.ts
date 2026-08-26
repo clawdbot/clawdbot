@@ -11,6 +11,78 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("patches a selectable Claude CLI context window", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:session-a";
+    const contextWindows = [
+      { id: "200k", label: "200K", contextWindow: 200_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ];
+    const session = {
+      key: sessionKey,
+      kind: "direct",
+      label: "Session A",
+      model: "claude-fable-5",
+      modelProvider: "claude-cli",
+      contextWindow: "1m",
+      contextWindowDefault: "1m",
+      contextWindows,
+      updatedAt: 2,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      models: [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "claude-cli",
+          contextWindow: 1_000_000,
+          contextWindowDefault: "1m",
+          contextWindows,
+        },
+      ],
+      sessionKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const picker = pane.locator(".chat-controls__model-picker");
+      await picker.locator('[data-chat-model-select="true"]').click();
+      const toggle = picker.locator("[data-chat-context-window-toggle]");
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+      await gateway.deferNext("sessions.patch");
+      const patchCount = (await gateway.getRequests("sessions.patch")).length;
+      await toggle.click();
+      const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
+      expect(requireRecord(patch.params)).toMatchObject({
+        key: sessionKey,
+        contextWindow: "200k",
+      });
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
+      );
+      await gateway.resolveDeferred("sessions.patch");
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+      await expect
+        .poll(async () =>
+          (await picker.locator("[data-chat-model-context-badge]").textContent())?.trim(),
+        )
+        .toBe("200K");
+      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("patches the session permission mode and reflects sessions.changed", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -605,7 +677,20 @@ suite.define(() => {
     }
   });
 
-  it("shows a pending send while a model override update is still pending", async () => {
+  it.each([
+    {
+      label: "model override",
+      trigger: '[data-chat-model-select="true"]',
+      option: '[data-chat-model-option="bedrock/claude-opus-4.5"]',
+      patch: { model: "bedrock/claude-opus-4.5" },
+    },
+    {
+      label: "Full Access permission",
+      trigger: '[data-chat-permission-select="true"]',
+      option: '[data-chat-permission-option="full"]',
+      patch: { permissionMode: "full" },
+    },
+  ])("shows a pending send while a $label update is still pending", async (setting) => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -615,7 +700,15 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.patch"],
       methodResponses: {
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            kind: "direct",
+            label: "Session A",
+            permissionMode: "workspace",
+            updatedAt: 2,
+          },
+        ]),
       },
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -628,11 +721,15 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
-      await gateway.waitForRequest("sessions.patch");
+      await main.locator(setting.trigger).click();
+      await main.locator(setting.option).click();
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: "agent:main:session-a",
+        ...setting.patch,
+      });
 
-      const prompt = "send while the model save is pending";
+      const prompt = `send while the ${setting.label} save is pending`;
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 

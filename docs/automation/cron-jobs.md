@@ -75,6 +75,8 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
 | `on-exit` | `--on-exit`        | Fire once when a watched command exits (event trigger; survives turn teardown; optional `--on-exit-cwd`) |
 | `stream`  | `--stream-command` | Fire from batched lines produced by a supervised long-lived command                                      |
 
+These schedule flags work with both `openclaw automations add` and `openclaw automations edit <job-id>`. For example, `openclaw automations edit <job-id> --on-exit "./watch.sh" --on-exit-cwd /srv/app` converts an existing job to an exit-triggered schedule.
+
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
@@ -303,18 +305,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                     | Best for                        |
-| --------------- | ------------------- | --------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
-| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                              | Best for                        |
+| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
+| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
-  <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+  <Accordion title="Main session vs current vs isolated vs custom">
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -323,7 +325,7 @@ Agent-turn jobs default to the creating conversation when the create request car
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `HEARTBEAT_OK` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing and states failures plainly; the scheduler owns retry and failure-alert policy.
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
@@ -343,6 +345,12 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `announce` | Fallback-deliver final text to the target if the agent did not send |
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
+
+For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+
+WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+
+If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -551,6 +559,14 @@ Model override note:
 
 Gateway can expose HTTP webhook endpoints for external triggers. Enable in config:
 
+A configured mapping `id` is retained only as bounded ingress-source
+attribution when that mapping reaches agent admission. It is not an
+authenticated service principal or invoker. Direct `/hooks/agent` and requests
+authenticated only by the shared hook token stay unattributed unless another
+authoritative principal source exists. If a transform returns `null`, the
+request keeps its visible HTTP 204 outcome and stops before creating a run,
+task, execution identity, or audit receipt.
+
 ```json5
 {
   hooks: {
@@ -618,12 +634,12 @@ Query-string tokens are rejected.
     - Supplying both a concrete `channel` and `to` enables direct announce delivery.
     - Set `accountId` with `channel` and `to` to select a configured, enabled account on multi-account channels. Unknown, disabled, or invalid account IDs return `400` and schedule no run.
 
-    The HTTP response waits only for runner admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the run entered its agent runner. Pre-run failures return `{ ok: false, error, runId }` with:
+    The HTTP response waits only for canonical session/global placement admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the execution path acquired that admission; the run may still be preparing its model runtime. Pre-admission failures return `{ ok: false, error, runId }` with:
 
     - `400` when delivery coordinates or account selection are invalid; correct the request before retrying.
     - `409` when the target session changed or otherwise rejects new work; retry after resolving the session conflict.
-    - `502` when Gateway or cron preparation fails before runner entry.
-    - `503` when runner admission does not complete within 15 seconds. Timed-out queued work is canceled and does not start later.
+    - `502` when Gateway or cron preparation fails before placement admission.
+    - `503` when placement admission does not occur within 15 seconds. Timed-out queued work is canceled and does not start later.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
@@ -844,7 +860,7 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import historical `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archive the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.

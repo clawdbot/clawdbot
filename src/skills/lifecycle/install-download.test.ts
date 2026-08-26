@@ -1,5 +1,7 @@
 // Install download tests cover downloading skill archives before extraction.
 import fs from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +93,7 @@ function mockArchiveResponse(buffer: Uint8Array): void {
       status: 200,
       statusText: "OK",
       body: Readable.from([Buffer.from(buffer)]),
+      headers: new Headers(),
     },
     release: async () => undefined,
   });
@@ -107,6 +110,64 @@ function createCancelableBody() {
     },
   });
   return { stream, wasCanceled: () => canceled };
+}
+
+async function withDownloadServer(
+  respond: (response: ServerResponse) => Promise<void> | void,
+  run: (origin: string, release: ReturnType<typeof vi.fn>) => Promise<void>,
+): Promise<void> {
+  const sockets = new Set<Socket>();
+  const server = createServer((_request, response) => {
+    void Promise.resolve(respond(response)).catch((error: unknown) => {
+      response.destroy(error instanceof Error ? error : undefined);
+    });
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected an ephemeral loopback server address");
+  }
+  const origin = `http://127.0.0.1:${address.port}`;
+  const release = vi.fn();
+  const actualFetchGuard = await vi.importActual<typeof import("../../infra/net/fetch-guard.js")>(
+    "../../infra/net/fetch-guard.js",
+  );
+  fetchWithSsrFGuardMock.mockImplementation(async (...args: unknown[]) => {
+    const params = args[0] as Parameters<typeof actualFetchGuard.fetchWithSsrFGuard>[0];
+    const guarded = await actualFetchGuard.fetchWithSsrFGuard({
+      ...params,
+      policy: { allowedOrigins: [origin] },
+    });
+    return {
+      ...guarded,
+      release: async () => {
+        release();
+        await guarded.release();
+      },
+    };
+  });
+
+  try {
+    await run(origin, release);
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }
 
 function runCommandResult(
@@ -167,6 +228,214 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
+  it("rejects oversized advertised HTTP downloads before staging the response body", async () => {
+    let responseCompleted = false;
+    let resolveConnectionClosed: (() => void) | undefined;
+    const connectionClosed = new Promise<void>((resolve) => {
+      resolveConnectionClosed = resolve;
+    });
+
+    await withDownloadServer(
+      (response) => {
+        response.once("close", () => resolveConnectionClosed?.());
+        response.once("finish", () => {
+          responseCompleted = true;
+        });
+        response.writeHead(200, {
+          "content-length": "268435457",
+          "content-type": "application/octet-stream",
+        });
+        response.write(Buffer.from([1]));
+      },
+      async (origin, release) => {
+        const entry = buildEntry("oversized-advertised-http-download");
+        const toolsRoot = resolveSkillToolsRootDir(entry);
+        const result = await installDownloadSpec({
+          entry,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}/oversized.bin`,
+            extract: false,
+            targetDir: "runtime",
+          },
+          timeoutMs: 1_000,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.stderr).toBe(
+          "Skill download exceeds 268435456-byte limit (declared 268435457 bytes)",
+        );
+        await connectionClosed;
+        expect(responseCompleted).toBe(false);
+        expect(release).toHaveBeenCalledOnce();
+        await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
+          false,
+        );
+        await expect(
+          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
+        ).resolves.toEqual([]);
+      },
+    );
+  }, 10_000);
+
+  it.each([
+    {
+      name: "encoded-response-length",
+      headers: new Headers({ "content-encoding": "gzip", "content-length": "268435457" }),
+    },
+    {
+      name: "malformed-response-length",
+      headers: new Headers({ "content-length": "1e9" }),
+    },
+  ])("streams a decoded response with an unusable declared length ($name)", async (testCase) => {
+    const body = Buffer.from("decoded skill artifact");
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200, headers: testCase.headers }),
+      release,
+    });
+    const entry = buildEntry(testCase.name);
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/artifact.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe(`downloaded=${body.byteLength}`);
+    await expect(fs.readFile(path.join(toolsRoot, "runtime", "artifact.bin"))).resolves.toEqual(
+      body,
+    );
+    expect(release).toHaveBeenCalledOnce();
+    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("aborts oversized chunked HTTP downloads and removes partial staging data", async () => {
+    const maxBytes = 256 * 1024 * 1024;
+    const chunk = Buffer.alloc(1024 * 1024);
+    let producedBytes = 0;
+    let producedPlannedTail = false;
+    let resolveConnectionClosed: (() => void) | undefined;
+    const connectionClosed = new Promise<void>((resolve) => {
+      resolveConnectionClosed = resolve;
+    });
+
+    await withDownloadServer(
+      async (response) => {
+        response.once("close", () => resolveConnectionClosed?.());
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+
+        while (producedBytes < maxBytes && !response.destroyed) {
+          const writable = response.write(chunk);
+          producedBytes += chunk.byteLength;
+          if (!writable) {
+            await new Promise<void>((resolve) => {
+              const onDrain = () => {
+                response.off("close", onClose);
+                resolve();
+              };
+              const onClose = () => {
+                response.off("drain", onDrain);
+                resolve();
+              };
+              response.once("drain", onDrain);
+              response.once("close", onClose);
+            });
+          }
+        }
+
+        if (response.destroyed) {
+          return;
+        }
+        response.write(Buffer.from([1]));
+        producedBytes += 1;
+        const tailDeadline = setTimeout(() => {
+          producedPlannedTail = true;
+          response.end(chunk.subarray(0, 64 * 1024));
+        }, 3_000);
+        response.once("close", () => clearTimeout(tailDeadline));
+      },
+      async (origin, release) => {
+        const entry = buildEntry("oversized-http-download");
+        const toolsRoot = resolveSkillToolsRootDir(entry);
+        const result = await installDownloadSpec({
+          entry,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}/oversized.bin`,
+            extract: false,
+            targetDir: "runtime",
+          },
+          timeoutMs: 30_000,
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.stderr).toContain("Skill download exceeds 268435456-byte limit");
+        await connectionClosed;
+        expect(producedBytes).toBe(maxBytes + 1);
+        expect(producedPlannedTail).toBe(false);
+        expect(release).toHaveBeenCalledOnce();
+        await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
+          false,
+        );
+        await expect(
+          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
+        ).resolves.toEqual([]);
+      },
+    );
+  }, 45_000);
+
+  it("installs exact bytes from a chunked HTTP response and releases guarded resources", async () => {
+    const chunks = [Buffer.from("skill "), Buffer.from("artifact"), Buffer.from([0, 255])];
+
+    await withDownloadServer(
+      (response) => {
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        for (const chunk of chunks) {
+          response.write(chunk);
+        }
+        response.end();
+      },
+      async (origin, release) => {
+        const entry = buildEntry("successful-http-download");
+        const toolsRoot = resolveSkillToolsRootDir(entry);
+        const result = await installDownloadSpec({
+          entry,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}/artifact.bin`,
+            extract: false,
+            targetDir: "runtime",
+          },
+          timeoutMs: 30_000,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.stdout).toBe(`downloaded=${Buffer.concat(chunks).byteLength}`);
+        await expect(fs.readFile(path.join(toolsRoot, "runtime", "artifact.bin"))).resolves.toEqual(
+          Buffer.concat(chunks),
+        );
+        expect(release).toHaveBeenCalledOnce();
+        await expect(
+          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
+        ).resolves.toEqual([]);
+      },
+    );
+  });
+
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
     const entry = buildEntry("relative-traversal");
@@ -258,6 +527,7 @@ describe("installDownloadSpec extraction safety", () => {
           ok: true,
           status: 200,
           statusText: "OK",
+          headers: new Headers(),
           body: Readable.from(
             (async function* () {
               yield Buffer.from("payload");

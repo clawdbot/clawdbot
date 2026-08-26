@@ -70,6 +70,7 @@ suite.define(() => {
         const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
+        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
         await menuTrigger.press("Enter");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });

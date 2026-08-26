@@ -93,6 +93,21 @@ describe("session placement recovery", () => {
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
   });
 
+  it("preserves automatic device selection across placement recovery", () => {
+    const automatic = {
+      ...recovery,
+      target: { kind: "auto-device" as const },
+    };
+    expect(writeSessionPlacementRecovery(automatic)).toBe(true);
+    expect(
+      readSessionPlacementRecovery(
+        automatic.gatewayUrl,
+        automatic.recoveryScope,
+        automatic.sessionKey,
+      ),
+    ).toEqual(automatic);
+  });
+
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
     const newScope = "gateway-principal";
@@ -264,6 +279,11 @@ describe("session placement recovery", () => {
         category: "Client work",
         projectId: "openclaw",
         thinkingLevel: "high",
+        toolOverrides: {
+          mcpServers: { github: false },
+          skills: { release: false },
+          webSearch: false,
+        },
         visibility: "draft" as const,
         worktree: true as const,
       },
@@ -299,6 +319,7 @@ describe("session placement recovery", () => {
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
     expect(

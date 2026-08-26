@@ -120,8 +120,7 @@ async function measureDismissMenu(currentPage: Page) {
       menuTop: menuRect.top,
       menuBottom: menuRect.bottom,
       popupIsTopLayer: popupBox ? popupBox.matches(":popover-open") : null,
-      menuSurfaceIsTopLayer:
-        document.querySelector("openclaw-menu-surface")?.matches(":popover-open") ?? null,
+      hasOuterMenuSurface: dropdown.closest("openclaw-menu-surface") !== null,
       hostHeight: hostStyle?.height ?? null,
       hostOverflow: hostStyle?.overflow ?? null,
       itemHeights: [...dropdown.querySelectorAll("wa-dropdown-item")].map(
@@ -185,7 +184,11 @@ suite.define(() => {
 
     // Asserting on the whole measurement so a regression prints the anchor
     // position and resolved max-height that explain it.
-    expect(measurement).toMatchObject({ overflowPx: 0 });
+    expect(measurement).toMatchObject({
+      overflowPx: 0,
+      popupIsTopLayer: true,
+      hasOuterMenuSurface: false,
+    });
   });
 
   // Control: the identical menu content, anchored away from the bottom edge.

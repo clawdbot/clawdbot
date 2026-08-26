@@ -133,7 +133,7 @@ describe("sessions.dispatch authorization", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "mapped" }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
     );
     expect(adminRespond).toHaveBeenCalledWith(
       true,

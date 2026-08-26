@@ -12,6 +12,7 @@ import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpo
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 
 export {
+  assertNodeWorkerLaunchIdentity,
   nodeWorkerPlanHash,
   parseNodeWorkerCancelInput,
   parseNodeWorkerLaunchInput,

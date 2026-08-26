@@ -6,16 +6,18 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
-  CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
   hasDirectSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
 type TestRow = {
@@ -24,6 +26,7 @@ type TestRow = {
   hasActiveSubagentRun?: boolean;
   activeRunIds?: string[];
   status?: string;
+  lastRunId?: string;
   startedAt?: number;
 };
 
@@ -346,6 +349,79 @@ describe("reconcileChatRunLifecycle indicators", () => {
     });
 
     expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
+  });
+});
+
+describe("reconcileChatRunFromSessionRow transient projections", () => {
+  it("clears only the terminal run's tool stream", () => {
+    const runId = "r1";
+    const siblingRunId = "r2";
+    const toolIdentity = buildToolStreamIdentity(runId, "tool-1");
+    const siblingToolIdentity = buildToolStreamIdentity(siblingRunId, "tool-2");
+    const toolMessage = { role: "assistant", runId, toolCallId: "tool-1" };
+    const siblingToolMessage = {
+      role: "assistant",
+      runId: siblingRunId,
+      toolCallId: "tool-2",
+    };
+    const host = makeHost({
+      chatRunId: runId,
+      chatStream: "Final reply",
+      chatStreamSegments: [
+        { text: "run one", ts: 1, runId },
+        { text: "run two", ts: 2, runId: siblingRunId },
+      ],
+      chatToolMessages: [toolMessage, siblingToolMessage],
+      toolStreamById: new Map([
+        [
+          toolIdentity,
+          {
+            message: toolMessage,
+            name: "exec",
+            receivedAt: 1,
+            runId,
+            startedAt: 1,
+            toolCallId: "tool-1",
+          },
+        ],
+        [
+          siblingToolIdentity,
+          {
+            message: siblingToolMessage,
+            name: "read",
+            receivedAt: 2,
+            runId: siblingRunId,
+            startedAt: 2,
+            toolCallId: "tool-2",
+          },
+        ],
+      ]),
+      toolStreamOrder: [toolIdentity, siblingToolIdentity],
+      toolStreamSyncTimer: null,
+      knownAgentRunIds: new Set([runId, siblingRunId]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: siblingRunId }],
+      ]),
+    });
+
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        status: "done",
+      }),
+    ).toBe(true);
+
+    expect(host.chatStreamSegments).toEqual([{ text: "run two", ts: 2, runId: siblingRunId }]);
+    expect(host.chatToolMessages).toEqual([siblingToolMessage]);
+    expect(host.toolStreamById?.has(toolIdentity)).toBe(false);
+    expect(host.toolStreamById?.has(siblingToolIdentity)).toBe(true);
+    expect(host.toolStreamOrder).toEqual([siblingToolIdentity]);
+    expect(host.knownAgentRunIds).toEqual(new Set([siblingRunId]));
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
   });
 });
 
@@ -776,9 +852,40 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
     });
 
-    expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
   });
+
+  it("recovers a missed terminal event from the exact settled session row", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "complete reply",
+      sessionsResult: makeSessionsResult([
+        { key: "s1", hasActiveRun: false, lastRunId: "r1", status: "done" },
+      ]),
+    });
+
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
+  it.each([undefined, "older-run"])(
+    "does not settle a live run from a %s terminal row identity",
+    (lastRunId) => {
+      const host = makeHost({
+        chatRunId: "r1",
+        chatStream: "still running",
+        sessionsResult: makeSessionsResult([
+          { key: "s1", hasActiveRun: false, lastRunId, status: "done" },
+        ]),
+      });
+
+      expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(false);
+      expect(host.chatRunId).toBe("r1");
+      expect(host.chatStream).toBe("still running");
+    },
+  );
 
   it("keeps suppressing repeated stale active refreshes for the completed run", () => {
     const host = makeHost({

@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -137,10 +138,10 @@ describe("outbound message progress companion", () => {
     );
   });
 
-  it("stays absent through startup, reads, and terminal-only writes at schema v9", () => {
+  it("stays absent through startup, reads, and terminal-only writes at schema v10", () => {
     const database = databaseOptions();
     const opened = openOpenClawStateDatabase(database);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(10);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
@@ -218,7 +219,7 @@ describe("outbound message progress companion", () => {
       now: occurredAt,
       limit: 1,
     });
-    expect(first.events).toHaveLength(1);
+    expect(first.entries).toHaveLength(1);
     expect(first.nextCursor).toBeDefined();
     closeOpenClawStateDatabaseForTest();
 
@@ -229,9 +230,19 @@ describe("outbound message progress companion", () => {
       after: first.nextCursor,
       limit: 2,
     });
-    const all = [...first.events, ...second.events];
+    const allEntries = [...first.entries, ...second.entries];
+    const all = allEntries.map((entry) => entry.event);
     expect(all.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
     expect(new Set(all.map((event) => event.eventId)).size).toBe(3);
+    expect(new Set(allEntries.map((entry) => entry.rowId)).size).toBe(3);
+    expect(
+      pageOutboundMessageAuditEventsForRun({
+        runId: "run-progress",
+        database,
+        now: occurredAt,
+        limit: 3,
+      }).entries,
+    ).toEqual(allEntries);
     expect(
       countOutboundMessageAuditEventsForRun({ runId: "run-progress", database, now: occurredAt }),
     ).toBe(3);
@@ -264,6 +275,10 @@ describe("outbound message progress companion", () => {
     openOpenClawStateDatabase(database).db.exec(
       "ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;",
     );
+    // The pinned reader is a v9-era build, so it refuses v10 databases by the
+    // version contract. Project the file back to the exact v9 shape with the
+    // documented 10→9 downgrade so the C04 same-version reader proof survives.
+    openOpenClawStateDatabase(database).db.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();
@@ -349,7 +364,7 @@ describe("outbound message progress companion", () => {
         database,
         now: occurredAt,
         limit: 10,
-      }).events.map((event) => event.outcome),
+      }).entries.map((entry) => entry.event.outcome),
     ).toEqual(["queued", "platform_started", "sent"]);
     // A pinned-SHA worktree plus a cold tsx compile of the audit/state modules costs
     // minutes on a contended runner; the 120s default makes this fail by construction.
@@ -402,7 +417,7 @@ describe("outbound message progress companion", () => {
       offset: 510,
       limit: 4,
     });
-    expect(page.events.map((event) => event.outcome)).toEqual([
+    expect(page.entries.map((entry) => entry.event.outcome)).toEqual([
       "queued",
       "platform_started",
       "queued",
@@ -416,7 +431,7 @@ describe("outbound message progress companion", () => {
         now: occurredAt,
         after: page.nextCursor,
         limit: 2,
-      }).events.map((event) => event.outcome),
+      }).entries.map((entry) => entry.event.outcome),
     ).toEqual(["queued", "platform_started"]);
   });
 
@@ -434,11 +449,11 @@ describe("outbound message progress companion", () => {
       now: occurredAt,
       limit: 2,
     });
-    const progress = first.events.find((event) => event.outcome === "queued");
+    const progress = first.entries.find((entry) => entry.event.outcome === "queued");
     expect(progress).toBeDefined();
     const progressCursor = {
       occurredAt,
-      rowId: progress?.sequence ?? 0,
+      rowId: progress?.rowId ?? 0,
     };
     openOpenClawStateDatabase(database).db.prepare("DELETE FROM outbound_message_progress").run();
 
@@ -457,7 +472,7 @@ describe("outbound message progress companion", () => {
         database,
         now: occurredAt,
         limit: 10,
-      }).events.map((event) => event.outcome),
+      }).entries.map((entry) => entry.event.outcome),
     ).toEqual(["sent"]);
   });
 

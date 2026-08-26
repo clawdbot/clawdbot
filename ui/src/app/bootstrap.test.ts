@@ -427,10 +427,14 @@ describe("normalizeInitialApplicationLocation", () => {
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
+        snapshot: {
+          sessionDefaults: { defaultAgentId: "main", modelConfigured: false },
+        },
       },
     } as Parameters<GatewayListener>[0];
     connectedListener(gateway.snapshot);
-    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
+    expect(request).not.toHaveBeenCalled();
+    expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
@@ -772,7 +776,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const pushState = vi.spyOn(window.history, "pushState");
     const replaceState = vi.spyOn(window.history, "replaceState");
@@ -915,7 +919,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStarted = deferred<void>();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
@@ -937,7 +941,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("resolves runtime startup when the bare default route is not found", async () => {
+  it("resolves runtime startup when the initial route is not found", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -945,7 +949,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/about");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStart = vi
       .spyOn(runtime.router, "start")
@@ -958,6 +962,28 @@ describe("normalizeInitialApplicationLocation", () => {
       runtime.stop();
       saveSettings(previousSettings);
       window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("applies and refreshes the saved accent before the gateway connects", () => {
+    const previousSettings = loadSettings();
+    saveSettings({ ...previousSettings, accent: "#48D6C2" });
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+    try {
+      expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
+      expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#48d6c2");
+      expect(runtime.context.theme.settings.accent).toBe("#48d6c2");
+
+      saveSettings({ ...loadSettings(), accent: "#f4b740" });
+      runtime.context.theme.refresh();
+
+      expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f4b740");
+      expect(runtime.context.theme.settings.accent).toBe("#f4b740");
+    } finally {
+      saveSettings(previousSettings);
+      runtime.context.theme.refresh();
+      runtime.stop();
     }
   });
 

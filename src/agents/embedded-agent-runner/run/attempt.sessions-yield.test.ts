@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
+import { log } from "../logger.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
+import {
+  stripSessionsYieldArtifacts,
+  waitForSessionsYieldAbortSettle,
+} from "./attempt-sessions-yield.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 
@@ -64,6 +69,60 @@ function buildSession(messages: AgentMessage[], sessionManager = SessionManager.
     sessionManager,
   };
 }
+
+describe("waitForSessionsYieldAbortSettle", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("logs the yield-specific warning and clears its timer after timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    const timeoutMs = resolveEmbeddedAbortSettleTimeoutMs();
+    const wait = waitForSessionsYieldAbortSettle({
+      settlePromise: new Promise(() => {}),
+      runId: "run-1",
+      sessionId: "session-1",
+    });
+
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+    await wait;
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `sessions_yield abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${timeoutMs}`,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("logs rejected settlement and clears its pending timer", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    await waitForSessionsYieldAbortSettle({
+      settlePromise: Promise.reject(new Error("settle failed")),
+      runId: "run-1",
+      sessionId: "session-1",
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "sessions_yield abort settle failed: runId=run-1 sessionId=session-1 err=Error: settle failed",
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("skips missing settlement without scheduling a timer", async () => {
+    vi.useFakeTimers();
+
+    await waitForSessionsYieldAbortSettle({
+      settlePromise: null,
+      runId: "run-1",
+      sessionId: "session-1",
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe("stripSessionsYieldArtifacts", () => {
   it("removes the full non-continuable yield suffix", () => {

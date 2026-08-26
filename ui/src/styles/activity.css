@@ -61,9 +61,6 @@ openclaw-activity-page {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
 }
 
 .activity-feed__toolbar {
@@ -72,8 +69,6 @@ openclaw-activity-page {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
 }
 
 .activity-feed__search {
@@ -102,12 +97,14 @@ openclaw-activity-page {
 
 .activity-feed__time-filter {
   flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
 .activity-feed__people-control {
   position: relative;
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 
 .activity-feed__people-trigger,
@@ -118,7 +115,7 @@ openclaw-activity-page {
 
 .activity-feed__people-trigger {
   min-width: 64px;
-  max-width: 220px;
+  max-width: min(220px, 30vw);
   padding: 3px 10px;
 }
 
@@ -454,6 +451,10 @@ openclaw-activity-page {
   white-space: nowrap;
 }
 
+.activity-feed__session-source {
+  white-space: nowrap;
+}
+
 .activity-feed__session-headline,
 .activity-feed__session-owner {
   min-width: 0;
@@ -555,6 +556,25 @@ openclaw-activity-page {
   font-weight: 600;
 }
 
+.activity-feed__device-location {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The credit is a license term for the default database, so it stays visible
+   next to the value it describes rather than living in a settings page. */
+.activity-feed__device-attribution {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__device-attribution:hover,
+.activity-feed__device-attribution:focus-visible {
+  color: var(--text);
+}
+
 .activity-feed__viewing {
   margin-top: var(--space-4);
 }
@@ -581,6 +601,58 @@ openclaw-activity-page {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.activity-live-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.activity-live-autofollow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.activity-live-filter-trigger {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  height: var(--settings-control-height);
+  padding: 0;
+}
+
+.activity-live-filter-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.activity-live-filter-trigger.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.activity-live-filter-popover {
+  --max-width: min(280px, calc(100vw - 32px));
+}
+
+.activity-live-filter-popover::part(body) {
+  padding: 0;
+}
+
+.activity-live-filter-popover__panel {
+  width: min(260px, calc(100vw - 32px));
+  padding: var(--space-3);
+}
+
+.activity-live-filter-popover__panel .settings-select {
+  width: 100%;
 }
 
 .activity-status-filters {
@@ -784,6 +856,28 @@ openclaw-activity-page {
     order: -1;
   }
 
+  .activity-live-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .activity-live-search {
+    flex-basis: 100%;
+    order: -1;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: auto;
+  }
+
+  .activity-feed__time-filter .settings-segmented__btn {
+    font-size: 0;
+  }
+
+  .activity-feed__time-filter .settings-segmented__btn::after {
+    content: attr(data-compact-label);
+    font-size: var(--control-ui-text-sm);
+  }
+
   .activity-feed__main {
     overflow: visible;
     padding: var(--space-4);
@@ -791,6 +885,10 @@ openclaw-activity-page {
 
   .activity-feed__session {
     grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .activity-feed__automation-group {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
   }
 
   .activity-feed__session-time {

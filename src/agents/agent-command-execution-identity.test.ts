@@ -43,6 +43,36 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
 });
 
 describe("Gateway agent command execution identity", () => {
+  it("runs owner binding only after the awaited admission callback settles", async () => {
+    const events: string[] = [];
+    const prepared = prepareAgentCommandExecutionIdentity({
+      opts: {
+        message: "bind after admission",
+        onAdmittedRunContext: async () => {
+          await Promise.resolve();
+          events.push("admitted");
+        },
+        onPostAdmittedRunContext: () => {
+          events.push("owner-bound");
+        },
+      },
+      prepared: {
+        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
+        runId: "run-post-admission",
+        sessionAgentId: "main",
+        sessionId: "session-post-admission",
+      },
+      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+      lifecycleGeneration: "generation-1",
+    });
+
+    const admitted = await prepared.admit("embedded");
+    await prepared.admit("embedded");
+
+    expect(admitted.executionIdentityToken).toBeDefined();
+    expect(events).toEqual(["admitted", "owner-bound"]);
+  });
+
   it("preserves trusted spawn facts across internal option preparation", () => {
     const facts = {
       ingress: {

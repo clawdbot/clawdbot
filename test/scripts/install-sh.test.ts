@@ -1022,6 +1022,7 @@ NODE
       const result = runInstallShell(`
         set -euo pipefail
         source "${SCRIPT_PATH}"
+        env() { /usr/bin/env "$@"; }
         root="$(mktemp -d)"
         repo="$root/repo"
         npm_root="$root/lib/node_modules"
@@ -1065,6 +1066,9 @@ EOF
         install_openclaw
         status=$?
         set -e
+        if (( status == 0 )); then
+          commit_openclaw_bin_backup
+        fi
         cleanup_tmpfiles
         printf 'status=%s version=%s link=%s\n' "$status" "$("$bin/openclaw" --version)" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)"
       `);
@@ -1077,6 +1081,86 @@ EOF
       }
     },
   );
+
+  it("restores the same-bin git wrapper when final npm verification fails", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/fixture"
+      repo="$root/repo"
+      npm_root="$root/lib/node_modules"
+      bin="$HOME/.local/bin"
+      launcher="$npm_root/openclaw/openclaw.mjs"
+      calls="$root/candidate-calls"
+      mkdir -p "$repo/dist" "$npm_root/openclaw" "$bin"
+      printf '%s\n' 'process.stdout.write("git-version\\n")' > "$repo/dist/entry.js"
+      cat > "$bin/openclaw" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${process.execPath} $repo/dist/entry.js "\\$@"
+EOF
+      chmod +x "$bin/openclaw"
+      cat > "$launcher" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "$NPM_CANDIDATE_CALLS" ]] || count="$(cat "$NPM_CANDIDATE_CALLS")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$NPM_CANDIDATE_CALLS"
+(( count < 3 )) || exit 9
+printf 'npm-version\n'
+EOF
+      chmod +x "$launcher"
+      fake_npm="$root/npm"
+      cat > "$fake_npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  --version) printf '12.0.0\n' ;;
+  root) printf '%s\n' "$NPM_FAKE_ROOT" ;;
+  prefix) printf '%s\n' "$NPM_FAKE_PREFIX" ;;
+  config) printf 'null\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+      chmod +x "$fake_npm"
+      npm() { "$fake_npm" "$@"; }
+      npm_command_path() { printf '%s\n' "$fake_npm"; }
+      install_openclaw_npm() { return 0; }
+      bootstrap_gum_temp() { :; }
+      print_installer_banner() { :; }
+      print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }
+      detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }
+      configure_install_stage_total() { :; }
+      ui_stage() { :; }
+      load_nvm_for_node_detection() { :; }
+      check_node() { return 0; }
+      activate_supported_node_on_path() { :; }
+      ensure_default_node_active_shell() { return 0; }
+      check_git() { return 0; }
+      fix_npm_permissions() { :; }
+      ui_info() { :; }
+      ui_warn() { :; }
+      ui_error() { :; }
+      ui_success() { :; }
+      INSTALL_METHOD=npm
+      OPENCLAW_VERSION="$root/candidate.tgz"
+      export NPM_CANDIDATE_CALLS="$calls" NPM_FAKE_ROOT="$npm_root" NPM_FAKE_PREFIX="$HOME/.local"
+      set +e
+      (set -e; main)
+      status=$?
+      set -e
+      version="$("$bin/openclaw" --version 2>/dev/null || printf unavailable)"
+      printf 'status=%s version=%s link=%s calls=%s\n' \
+        "$status" "$version" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)" "$(cat "$calls")"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout, result.stderr).toContain("status=1 version=git-version link=no calls=3");
+  });
 
   it("restores an active shim backup when installation is interrupted", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shim-signal-"));
@@ -1379,6 +1463,84 @@ EOF
     expect(result?.status).toBe(0);
     const output = result?.stdout ?? "";
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
+  });
+
+  it.each([
+    {
+      args: "--install-method git --git-dir /cli-target",
+      envGitDir: "/env-target",
+      expected: "/cli-target",
+      name: "prefers --git-dir over the environment and detected checkout",
+    },
+    {
+      args: "--install-method git --dir '/target with spaces'",
+      expected: "/target with spaces",
+      name: "prefers --dir with spaces over the detected checkout",
+    },
+    {
+      args: "--install-method git",
+      envGitDir: "/env-target",
+      expected: "/env-target",
+      name: "prefers OPENCLAW_GIT_DIR over the detected checkout",
+    },
+    {
+      args: "--install-method git --git-dir /effective-home/openclaw",
+      expected: "/effective-home/openclaw",
+      name: "honors an explicit target equal to the default",
+    },
+    {
+      args: "--install-method git --git-dir /first --dir /last",
+      expected: "/last",
+      name: "uses the last explicit target",
+    },
+    {
+      args: "--install-method git --git-dir './relative target'",
+      expected: "./relative target",
+      name: "preserves an explicit relative target for the install owner",
+    },
+    {
+      args: "--install-method git",
+      expected: "/detected-checkout",
+      name: "uses the detected checkout when no target is explicit",
+    },
+    {
+      args: "--install-method git --git-dir ''",
+      envGitDir: "/env-target",
+      expected: "/detected-checkout",
+      name: "treats an empty CLI target as non-explicit",
+    },
+  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+    const result = runInstallShell(
+      `
+        source "${SCRIPT_PATH}"
+        parse_args ${args}
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_os_or_die() { OS=linux; }
+        detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        load_nvm_for_node_detection() { :; }
+        check_node() { return 0; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        npm() { return 1; }
+        install_openclaw_from_git() {
+          printf 'target=%s\\n' "$1"
+          return 23
+        }
+        main
+      `,
+      {
+        OPENCLAW_GIT_DIR: envGitDir,
+        OPENCLAW_HOME: "/effective-home",
+        TERM: "dumb",
+      },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stdout).toContain(`target=${expected}\n`);
   });
 
   it("uses a blobless partial clone for new git installs", () => {
@@ -2337,7 +2499,7 @@ EOF
       [
         "#!/usr/bin/env bash",
         'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
-        "  sleep 2",
+        "  sleep 3",
         "  exit 0",
         "fi",
         'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
@@ -2354,7 +2516,7 @@ EOF
       const result = runInstallShell(
         [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
         {
-          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1",
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
           PATH: `${tmp}:${process.env.PATH ?? ""}`,
         },
       );

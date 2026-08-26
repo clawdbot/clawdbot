@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -14,7 +15,6 @@ import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
-  normalizeAgentId,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
@@ -29,6 +29,12 @@ import {
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
+import {
+  isSidebarAttentionDismissed,
+  isUpdateAttentionForced,
+  loadDismissals,
+  resolveUpdateAttentionDismissal,
+} from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
@@ -89,13 +95,13 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     activeName: normalizeAgentLabel(agent ?? { id: activeId }, identity),
     agents,
     identities,
-    filter: controller.agentMenuFilter,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
+    openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
     agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
-    agentApprovalCount: (agentId) =>
-      host.sessionData.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
-    onFilterChange: (next) => controller.setAgentMenuFilter(next),
+    onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
+    onPointerLeave: () => controller.handleAgentMenuPointerLeave(),
+    onAfterShow: () => controller.restoreFocusAfterAgentMenuHoverOpen(),
     onSwitchAgent: (agentId) => host.switchChipAgent(agentId),
     onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
     onTabAway: () => trigger?.focus(),
@@ -118,13 +124,37 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
+  const context = host.sessionDataContext;
+  const overlaySnapshot = context?.overlays.snapshot;
+  const updateAttentionDismissal = resolveUpdateAttentionDismissal({
+    gatewayBootId: context?.gateway.snapshot.hello?.server?.bootId,
+    updateAvailable: overlaySnapshot?.updateAvailable,
+    updateSchedule: overlaySnapshot?.updateSchedule,
+  });
+  const updateAttentionDismissed = Boolean(
+    context &&
+    updateAttentionDismissal &&
+    isUpdateActionable(
+      overlaySnapshot?.updateAvailable,
+      overlaySnapshot?.updateSchedule,
+      Boolean(overlaySnapshot?.updateRunning || overlaySnapshot?.updateReconciliationPending),
+    ) &&
+    !overlaySnapshot?.updateRunning &&
+    !overlaySnapshot?.updateReconciliationPending &&
+    overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
+    !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
+    isSidebarAttentionDismissed(
+      loadDismissals(context.gateway.connection.gatewayUrl),
+      updateAttentionDismissal,
+    ),
+  );
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
-    selfName: selfUser?.name ?? undefined,
-    selfEmail: selfUser?.email ?? undefined,
+    updateAttentionDismissed,
+    profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     offline: host.offline,
     themeMode: host.themeMode,
     triggerWidth: position?.width ?? 0,
@@ -380,7 +410,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
-    grouping: host.sessionsGrouping,
+    grouping: host.effectiveSessionsGrouping(),
     sortMode: host.effectiveSessionSortMode(),
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,

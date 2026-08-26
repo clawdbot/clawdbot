@@ -5,10 +5,17 @@
  */
 import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
+
+type ModelContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
 
 /** Normalized model metadata exposed by the agent model catalog. */
 export type ModelCatalogEntry = {
@@ -22,12 +29,16 @@ export type ModelCatalogEntry = {
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;
+  contextWindows?: ModelContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   reasoning?: boolean;
   /** Config-authored reasoning override; internal provenance, never project to clients. */
   configuredReasoning?: boolean;
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */
   thinkingPolicyProvider?: string;
+  /** Provider-owned effort support for this exact physical model route. */
+  thinkingLevelMap?: ThinkingLevelMap;
   input?: ModelInputType[];
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;

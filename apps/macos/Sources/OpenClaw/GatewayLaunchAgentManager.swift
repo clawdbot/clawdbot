@@ -170,8 +170,8 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
-        if enabled, self.isLaunchAgentWriteDisabled() {
-            self.logger.info("launchd enable skipped (disable marker set)")
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd change skipped (disable marker set)")
             return nil
         }
 
@@ -362,7 +362,7 @@ extension GatewayLaunchAgentManager {
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
         let payload = parsed?.text.data(using: .utf8)
             ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
-        let success = ok ?? response.success
+        let success = response.success && (ok ?? true)
         if success {
             return CommandResult(success: true, payload: payload, message: nil)
         }

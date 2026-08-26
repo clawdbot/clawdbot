@@ -1,6 +1,7 @@
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
+import type { AgentCapability } from "../lib/agents/index.ts";
 import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -10,7 +11,6 @@ import {
 
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
-  readonly sessionCreatedOrder: Map<string, number>;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
@@ -19,6 +19,44 @@ type SidebarSessionListOwner = {
   expandedAgentId(): string;
   requestSessionDataUpdate(): void;
 };
+
+function pruneSidebarAgentSessionCaches(
+  owner: SidebarSessionListOwner,
+  agentIds: readonly string[],
+): void {
+  const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
+  for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
+    if (!retainedAgentIds.has(agentId)) {
+      delete owner.sessionResultsByAgent[agentId];
+    }
+  }
+  if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
+    owner.sessionsResult = null;
+    owner.sessionsAgentId = null;
+  }
+}
+
+export function subscribeSidebarAgentSessionCaches(
+  agents: AgentCapability,
+  owner: SidebarSessionListOwner,
+  notify: () => void,
+): () => void {
+  const synchronize = () => {
+    const roster = agents.state.agentsList;
+    // A null roster is transient during reconnect; only a concrete list can evict agent caches.
+    if (roster) {
+      pruneSidebarAgentSessionCaches(
+        owner,
+        roster.agents.map((agent) => agent.id),
+      );
+    }
+  };
+  synchronize();
+  return agents.subscribe(() => {
+    synchronize();
+    notify();
+  });
+}
 
 function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
   return {
@@ -36,11 +74,6 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
-  for (const row of snapshot.result?.sessions ?? []) {
-    if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
-      owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
-    }
-  }
   if (snapshot.result && snapshot.agentId) {
     owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
   }

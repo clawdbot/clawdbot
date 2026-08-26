@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
   peekChatMetadata,
@@ -8,6 +7,7 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
@@ -20,7 +20,6 @@ import {
 } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -192,6 +191,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   try {
     const models = await loadModels(client, {
       agentId,
+      refreshIfDue: true,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {
@@ -254,12 +254,12 @@ async function refreshChat(
     host.sessionsResult = host.sessions.state.result;
     host.sessionsResultAgentId = host.sessions.state.agentId;
     const sessionsResult = host.sessions.state.result;
-    const rosterRow =
-      sessionsResult?.sessions.find(
-        (row) =>
-          areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-          areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
-      ) ?? history.sessionInfo;
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
+    );
+    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
       host.selectedChatSessionArchived = rosterRow.archived === true;
       host.selectedChatSessionIncognito = rosterRow.incognito === true;
@@ -277,11 +277,6 @@ async function refreshChat(
       // timestamp may still describe its prior terminal state during remount.
       return;
     }
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row: GatewaySessionRow) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        row.key === refreshedSessionKey,
-    );
     if (!sessionInfo) {
       return;
     }

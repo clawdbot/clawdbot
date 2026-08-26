@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -400,12 +401,6 @@ function resolvePathThroughExistingAncestor(
   }
 }
 
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
 function escapeControlCharsForTerminal(value: string): string {
   let escaped = "";
   for (const char of value) {
@@ -702,16 +697,14 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
-  // Prefer the resolved target path when available so symlink prefixes do not
-  // misclassify local state dirs as cloud-synced.
-  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
 
-  for (const candidate of candidates) {
-    for (const { storage, root } of roots) {
-      if (isPathUnderRoot(candidate, root)) {
-        return { path: candidate, storage };
-      }
+  for (const { storage, root } of roots) {
+    if (isPathUnderRoot(resolvedStatePath, root)) {
+      return { path: resolvedStatePath, storage };
     }
   }
 

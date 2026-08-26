@@ -1737,27 +1737,27 @@ describe("session_status tool", () => {
     expect(text).not.toContain("finished long ago");
   });
 
-  it("shows recent failure context in session_status output when no task is active", async () => {
+  it("shows blocked completion outcomes in session_status output", async () => {
     const text = await renderTaskStatus(
       [
         {
-          taskId: "task-failed",
+          taskId: "task-blocked",
           runtime: "cron",
           requesterSessionKey: "agent:main:main",
-          task: "failing task",
-          status: "failed",
-          deliveryStatus: "pending",
+          task: "blocked task",
+          status: "succeeded",
+          terminalOutcome: "blocked",
           notifyPolicy: "done_only",
           createdAt: Date.now() - 5_000,
-          error: "permission denied",
+          terminalSummary: "Additional input required.",
         },
       ],
-      "tc-failed",
+      "tc-blocked",
     );
 
-    expect(text).toContain("📌 Tasks: 1 recent failure");
-    expect(text).toContain("failing task");
-    expect(text).toContain("permission denied");
+    expect(text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(text).toContain("blocked task");
+    expect(text).toContain("Additional input required.");
   });
 
   it("truncates long task titles and details in session_status output", async () => {

@@ -2,9 +2,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -20,6 +21,9 @@ import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
+// Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
+// changing this limit is a supported-artifact compatibility decision.
+const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 async function loadExtractModule() {
   return await extractModuleLoader.load();
@@ -107,12 +111,38 @@ async function downloadFile(params: {
       await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
+    const contentEncoding = normalizeOptionalLowercaseString(
+      response.headers.get("content-encoding"),
+    );
+    const declaredBytes =
+      !contentEncoding || contentEncoding === "identity"
+        ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
+        : undefined;
+    if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+      await cancelIgnoredResponseBody(response);
+      throw new Error(
+        `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
+      );
+    }
     const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    let downloadedBytes = 0;
+    const limitedBody = new Transform({
+      transform(chunk, encoding, callback) {
+        downloadedBytes +=
+          typeof chunk === "string" ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
+        if (downloadedBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+          callback(new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(readable, limitedBody, file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);

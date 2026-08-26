@@ -12,6 +12,8 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
+  --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
 
   /* Panel */
   --panel: #0e1015;
@@ -83,6 +85,16 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+  --inbox-attention: #e5243b;
+  --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
+  --inbox-attention-foreground: #ffffff;
+
+  /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
+     #ff4d4d→#991b1b gradient, so dark mode lifts both stops; light mode
+     restores the original artwork below. */
+  --lobster-icon-body: #ff6d5a;
+  --lobster-icon-shade: #c2372b;
+  --lobster-icon-eye: #050810;
 
   /* Link text keeps the accent hue but cannot be --accent: chat paints user
      bubbles from that same token, so a link there fights its own background.
@@ -125,6 +137,25 @@
   --brand-codex: #10a37f;
   --brand-claude: #d97757;
   --brand-google: #4285f4;
+
+  --control-ui-environment-teal: #14b8a6;
+  --control-ui-environment-teal-ink: #5eead4;
+  --control-ui-environment-amber: #f59e0b;
+  --control-ui-environment-amber-ink: #fcd34d;
+  --control-ui-environment-purple: #a855f7;
+  --control-ui-environment-purple-ink: #d8b4fe;
+  --control-ui-environment-coral: #fb7185;
+  --control-ui-environment-coral-ink: #fda4af;
+  --control-ui-environment-pink: #ec4899;
+  --control-ui-environment-pink-ink: #f9a8d4;
+  --control-ui-environment-blue: #3b82f6;
+  --control-ui-environment-blue-ink: #93c5fd;
+  --control-ui-environment-green: #22c55e;
+  --control-ui-environment-green-ink: #86efac;
+  --control-ui-environment-red: #ef4444;
+  --control-ui-environment-red-ink: #fca5a5;
+  --control-ui-environment-gray: #94a3b8;
+  --control-ui-environment-gray-ink: #cbd5e1;
 
   /*
    * Semantic status
@@ -352,7 +383,6 @@
   .chat-tool-card__preview.chat-tool-card__preview,
   .chat-thread.chat-thread,
   .chat-bubble.chat-bubble,
-  .agent-chat__input.agent-chat__input,
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .list-item.list-item,
@@ -370,7 +400,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
+  /* The composer's resting shape is the multiline one; its single-line pill
+     opts back out to a circular corner in chat/layout.css, because the
+     superellipse flattens a fully rounded end. */
+  .option-card.option-card,
+  .agent-chat__input.agent-chat__input {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -485,6 +519,12 @@
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
   --popover-foreground: #211e1a;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 54%,
+    var(--panel-strong) 46%
+  );
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -514,11 +554,26 @@
   --primary: #bd4531;
   --primary-foreground: #ffffff;
 
+  /* Original lobster artwork reads well on light surfaces. */
+  --lobster-icon-body: #ff4d4d;
+  --lobster-icon-shade: #991b1b;
+  --lobster-icon-eye: #050810;
+
   --secondary: #f4f1ec;
   --secondary-foreground: #403c35;
   --accent-2: #0d9488;
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
+
+  --control-ui-environment-teal-ink: #115e59;
+  --control-ui-environment-amber-ink: #92400e;
+  --control-ui-environment-purple-ink: #6b21a8;
+  --control-ui-environment-coral-ink: #9f1239;
+  --control-ui-environment-pink-ink: #9d174d;
+  --control-ui-environment-blue-ink: #1e40af;
+  --control-ui-environment-green-ink: #166534;
+  --control-ui-environment-red-ink: #991b1b;
+  --control-ui-environment-gray-ink: #334155;
 
   /*
    * Semantic status — see the `:root` block for the pairing rule. Light mode
@@ -695,6 +750,12 @@
   --card-highlight: rgba(0, 0, 0, 0.02);
   --popover: #ffffff;
   --popover-foreground: #18181b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
 
   --panel: #f9f9fb;
   --panel-strong: #f2f2f5;
@@ -838,6 +899,12 @@
   --card-highlight: rgba(80, 50, 20, 0.02);
   --popover: #ffffff;
   --popover-foreground: #2c2118;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 48%,
+    var(--panel-strong) 52%
+  );
 
   --panel: #f7f2ec;
   --panel-strong: #f0e8e0;

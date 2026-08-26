@@ -11,7 +11,11 @@ import {
   type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readSessionEntryCount,
+  readSessionEntryStore,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
@@ -75,6 +79,9 @@ function hasStaleSqliteSessionEntryCandidate(
   maxAgeMs: number,
   isCandidate: (key: string, entry: SessionEntry) => boolean,
 ): boolean {
+  if (maxAgeMs <= 0) {
+    return false;
+  }
   const cutoffMs = Date.now() - maxAgeMs;
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
@@ -93,24 +100,6 @@ function hasStaleSqliteSessionEntryCandidate(
     }
     return isCandidate(normalizeStoreSessionKey(row.session_key), entry);
   });
-}
-
-function loadSqliteSessionMaintenanceStore(
-  database: OpenClawAgentDatabase,
-): Record<string, SessionEntry> {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json"]).orderBy("session_key"),
-  ).rows;
-  const store: Record<string, SessionEntry> = {};
-  for (const row of rows) {
-    const entry = parseSessionEntryRow(row);
-    if (entry) {
-      store[row.session_key] = entry;
-    }
-  }
-  return store;
 }
 
 export function applySessionEntryMaintenance(
@@ -200,7 +189,7 @@ export function applySessionEntryMaintenance(
     };
   }
 
-  const store = loadSqliteSessionMaintenanceStore(database);
+  const store = readSessionEntryStore(database);
   const preserveKeys =
     collectSessionMaintenancePreserveKeysForStore({
       storePath: params.storePath,

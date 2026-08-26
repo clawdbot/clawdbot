@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import * as device from "./device-provider.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -11,6 +13,8 @@ import {
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
+  type WorkerDevicePlacementRequirementResolver,
+  type WorkerNodePlacementAuthority,
   type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
@@ -33,9 +37,13 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+import type {
+  WorkerWorkspaceRecoveryFailureReport,
+  WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
@@ -70,6 +78,7 @@ type WorkerPlacementReclaimBarrier = (
     reclaim: (
       localPath: string,
       placement: WorkerDrainingDispatchPlacement,
+      authorize?: WorkerPlacementAuthorization,
     ) => Promise<WorkerReclaimPlacement>;
   },
 ) => Promise<WorkerReclaimPlacement>;
@@ -77,7 +86,7 @@ type WorkerPlacementReclaimBarrier = (
 type WorkerPlacementFailedReclaimBarrier = (
   params: WorkerPlacementReclaimRequest & {
     authorize?: WorkerPlacementAuthorization;
-    reclaim: () => Promise<WorkerReclaimPlacement>;
+    reclaim: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
   },
 ) => Promise<WorkerReclaimPlacement>;
 
@@ -88,7 +97,8 @@ export type WorkerPlacementReclaimBarriers = {
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
+  environments: WorkerDispatchEnvironmentService &
+    Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
   runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
@@ -99,7 +109,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     target: WorkerPlacementMoveRequest["target"],
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
   onActivated?: (request: WorkerPlacementDispatchRequest) => void;
-  onRecoveredMoveTransition?: (placement: WorkerDispatchPlacement) => void;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
@@ -111,6 +120,9 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
       | { paths: string[]; stagedResultRef: string; totalCount: number }
       | { cleared: true }
     ),
+  ) => Promise<void>;
+  reportWorkspaceResultRecoveryFailure?: (
+    recovery: WorkerWorkspaceRecoveryFailureReport,
   ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
     sessionId: string;
@@ -124,6 +136,8 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     claim: import("./placement-store.js").WorkerSessionTurnClaim,
   ) => Promise<void>;
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
+  resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
+  isCurrentNodePlacement?: WorkerNodePlacementAuthority;
 };
 
 function isExactAttachedEnvironment(
@@ -164,6 +178,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     runActivationBarrier: options.runActivationBarrier,
     onActivated: options.onActivated,
     resolveGitAuthor: options.resolveGitAuthor,
+    resolveDevicePlacementRequirement: options.resolveDevicePlacementRequirement,
+    isCurrentNodePlacement: options.isCurrentNodePlacement,
     reportTransition,
   });
 
@@ -173,6 +189,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     placements,
     resolveWorkspacePath: options.resolveWorkspacePath,
     reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
+    ...(options.reportWorkspaceResultRecoveryFailure
+      ? { reportWorkspaceResultRecoveryFailure: options.reportWorkspaceResultRecoveryFailure }
+      : {}),
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     recoverPlacementMoves: () => recoverPlacementMoves(),
     workspaceOperations: options.workspaceOperations,
@@ -190,6 +209,20 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerActiveDispatchPlacement> => {
     let placement: WorkerDispatchPlacement | undefined;
+    const validateDevicePlacement = async () => {
+      if (!request.deviceId) {
+        return;
+      }
+      const eligibility = await resolveDevicePlacementEligibility({
+        environmentService: environments,
+        deviceId: request.deviceId,
+        requirement: request.devicePlacement,
+        config: getRuntimeConfig(),
+      });
+      if (!eligibility.ok) {
+        throw new Error(eligibility.error);
+      }
+    };
     try {
       placement = await options.runLocalBarrier({
         sessionId: request.sessionId,
@@ -208,16 +241,28 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      if (request.deviceId) {
-        const availability = await device.resolveDeviceWorkerAvailability(
-          environments,
-          request.deviceId,
+      if (
+        !request.deviceId &&
+        request.devicePlacement?.requiredNodeCommands.length &&
+        environments.requiresNodeEnrollment?.(
+          request.profileId,
+          request.inheritedProfile?.providerId,
+        )
+      ) {
+        const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig());
+        const deniedCommand = request.devicePlacement.requiredNodeCommands.find(
+          (command) => !allowlist.has(command),
         );
-        if (!availability.available) {
-          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
+        if (deniedCommand) {
+          throw new Error(
+            `cloud worker node command ${deniedCommand} is not enabled; add it to gateway.nodes.commands.allow and approve the command on the node`,
+          );
         }
       }
+      await validateDevicePlacement();
       const localPath = await options.resolveWorkspacePath(request);
+      // Workspace preparation yields; fence the current paired node again before durable provision.
+      await validateDevicePlacement();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
@@ -320,7 +365,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         }
         return draining;
       },
-      reclaim: async (localPath, current) => {
+      reclaim: async (localPath, current, reauthorize) => {
         const journalOwner = {
           sessionId: current.sessionId,
           environmentId: current.environmentId,
@@ -400,9 +445,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         const finishReclaim = async (): Promise<WorkerReclaimPlacement> => {
           const pending = journal.load();
           if (pending) {
+            reauthorize?.();
             await recoverWorkerWorkspaceReconciliation({ root: localPath, journal: pending });
+            reauthorize?.();
             journal.abort();
           }
+          reauthorize?.();
           const tunnel = await environments.startTunnel({
             environmentId: current.environmentId,
             ownerEpoch: current.activeOwnerEpoch,
@@ -410,6 +458,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           const reclaimed = await options.workspaceOperations.run(
             current.environmentId,
             async () => {
+              // Lock acquisition and every remote/filesystem step may yield; stale callers must
+              // fail before the next reclaim effect, not only after teardown has completed.
+              reauthorize?.();
               const owned = placements.get(current.sessionId);
               if (
                 owned?.state !== "draining" ||
@@ -420,9 +471,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               ) {
                 throw new Error("Cloud worker stop lost its placement owner before reconciliation");
               }
+              reauthorize?.();
               const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
               let destroyed = false;
               try {
+                reauthorize?.();
                 const reconciliation = await tunnel.reconcileWorkspace({
                   localPath,
                   remoteWorkspaceDir: current.remoteWorkspaceDir,
@@ -437,6 +490,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 if (reconciliation.changed && !manifestAccepted) {
                   throw new Error("Cloud worker stop did not commit its reconciled workspace");
                 }
+                reauthorize?.();
                 placements.acceptWorkspaceResult(reclaimClaim);
                 const recordedStagedResultRef = placements
                   .listPendingWorkspaceResults()
@@ -457,6 +511,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                     sessionKey: current.sessionKey,
                     agentId: current.agentId,
                   }));
+                reauthorize?.();
                 const finalized = await finalizeWorkspaceResultConflicts({
                   placements,
                   turnClaim: reclaimClaim,
@@ -474,6 +529,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                       ...report,
                     }),
                 });
+                reauthorize?.();
                 return await settleStagedWorkspaceResult({
                   placements,
                   turnClaim: reclaimClaim,
@@ -481,11 +537,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   stagedResultRef: recordedStagedResultRef,
                   conflictRetained: finalized.conflictRetained,
                   beforeComplete: async () => {
+                    reauthorize?.();
                     await environments.destroy(current.environmentId);
                     destroyed = true;
                   },
-                  complete: () =>
-                    moveIntent
+                  complete: () => {
+                    // Destroy is the final privileged effect. Once it commits, durable placement
+                    // completion must finish even if caller authority closes during the await.
+                    return moveIntent
                       ? completeMovedWorkspaceTeardown({
                           placements,
                           turnClaim: reclaimClaim,
@@ -498,7 +557,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                           turnClaim: reclaimClaim,
                           environmentId: current.environmentId,
                           ownerEpoch: current.activeOwnerEpoch,
-                        }),
+                        });
+                  },
                   validateCompleted: (completed) => {
                     const expectedState = moveIntent ? "local" : "reclaimed";
                     if (completed.state !== expectedState) {
@@ -536,6 +596,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           await cancelUnstagedFailedReclaim(
             error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
           ).catch(() => undefined);
+          const pendingReclaimResult = placements
+            .listPendingWorkspaceResults()
+            .find(
+              (pending) =>
+                pending.sessionId === reclaimClaim.sessionId &&
+                pending.claimId === reclaimClaim.claimId &&
+                pending.runId === reclaimClaim.runId,
+            );
+          if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
+            placements.handoffWorkspaceResultRecovery(reclaimClaim);
+            await recovery.reconcileActive(current.environmentId).catch(() => undefined);
+          }
           throw error;
         }
       },
@@ -560,12 +632,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         return await options.runFailedReclaimBarrier({
           ...request,
           authorize,
-          reclaim: async () => {
+          reclaim: async (reauthorize) => {
             const failedPlacement = placements.get(request.sessionId);
             if (failedPlacement?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
             }
-            await failure.retryFailedTeardown(failedPlacement);
+            await failure.retryFailedTeardown(failedPlacement, reauthorize);
             const failed = placements.get(request.sessionId);
             if (failed?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
@@ -622,8 +694,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
-    onRecoveredTransition: (placement) =>
-      reportTransition(options.onRecoveredMoveTransition, placement),
   });
   recoverPlacementMoves = moveService.recoverAll;
 

@@ -13,6 +13,7 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
+  getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
@@ -273,6 +274,73 @@ describe("agent event handler", () => {
       clientRunId: "client-run",
       summary: "edit tool validation failed: edits: must be an array",
     });
+  });
+
+  it("retains standalone warnings and Guardian decisions in the client-owned reconnect snapshot", () => {
+    const { chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+
+    emitAgentEvents(handler, "provider-run", [
+      ["notice", { phase: "warning", message: "Custom execution rules were not applied." }],
+      [
+        "codex_app_server.guardian",
+        { phase: "started", reviewId: "network-review", targetItemId: null, status: "inProgress" },
+      ],
+      [
+        "codex_app_server.guardian",
+        { phase: "completed", reviewId: "network-review", targetItemId: null, status: "denied" },
+      ],
+    ]);
+
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).toMatchObject([
+      {
+        runId: "client-run",
+        sessionKey: "session-1",
+        stream: "notice",
+        data: { phase: "warning", message: "Custom execution rules were not applied." },
+      },
+      {
+        runId: "client-run",
+        sessionKey: "session-1",
+        stream: "codex_app_server.guardian",
+        data: { phase: "completed", reviewId: "network-review", status: "denied" },
+      },
+    ]);
+
+    emitAgentEvent(
+      handler,
+      "provider-run",
+      "codex_app_server.guardian",
+      {
+        phase: "strict_review_required",
+        reviewId: "command-review",
+        targetItemId: "command-item",
+      },
+      { seq: 4 },
+    );
+    expect(
+      chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1)?.data,
+    ).toMatchObject({ phase: "strict_review_required", reviewId: "command-review" });
+
+    emitAgentEvent(
+      handler,
+      "provider-run",
+      "codex_app_server.guardian",
+      {
+        phase: "completed",
+        reviewId: "command-review",
+        targetItemId: "command-item",
+        status: "approved",
+      },
+      { seq: 5 },
+    );
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({ reviewId: "command-review" }),
+        }),
+      ]),
+    );
   });
 
   it("records, replaces, dismisses, and clears normalized plan snapshots", () => {
@@ -2316,6 +2384,34 @@ describe("agent event handler", () => {
     });
   });
 
+  it("persists the linked client run without replacing provider lifecycle ownership", async () => {
+    const { chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-session");
+    registerChatRun(chatRunState, "provider-run", "session-linked", "client-run");
+
+    emitAgentEvent(
+      handler,
+      "provider-run",
+      "lifecycle",
+      { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      { ts: 2_000 },
+    );
+
+    await waitForFast(() => {
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(1);
+    });
+    const params = requireRecord(
+      requireMockArg(persistGatewaySessionLifecycleEventMock, 0, 0, "persist lifecycle params"),
+      "persist lifecycle params",
+    );
+    expect(params.sessionKey).toBe("session-linked");
+    expect(params.event).toMatchObject({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      data: { phase: "end" },
+    });
+  });
+
   it("publishes run lifecycle changes to plugins without websocket subscribers", async () => {
     const sessionKey = "agent:main:headless-run";
     const received = vi.fn();
@@ -2462,6 +2558,21 @@ describe("agent event handler", () => {
       });
     },
   );
+
+  it("loads restart-recovery state only for recognized lifecycle phases", () => {
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+    });
+
+    emitAgentEvent(handler, "run-recovery", "assistant", { text: "streaming" });
+    emitAgentEvent(handler, "run-recovery", "lifecycle", { phase: "retry" }, { seq: 2 });
+
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+
+    emitAgentEvent(handler, "run-recovery", "lifecycle", { phase: "start" }, { seq: 3 });
+
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+  });
 
   it("suppresses late interrupted pre-restart lifecycle events from live projections", () => {
     mockSessionEntry(
@@ -4253,6 +4364,36 @@ describe("agent event handler", () => {
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
 
+  it("forwards restart recovery provenance to terminal persistence", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const { handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+    });
+    registerAgentRunContext("run-recovery", {
+      lifecycleGeneration,
+      mainSessionRestartRecovery: true,
+      sessionKey: "session-recovery",
+    });
+    const stop = onAgentRuntimeEvent(handler);
+
+    emitRuntimeAgentEvent({
+      runId: "run-recovery",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    stop();
+
+    const persistParams = requireRecord(
+      requireMockArg(persistGatewaySessionLifecycleEventMock, 0, 0, "persist lifecycle params"),
+      "persist lifecycle params",
+    );
+    expect(requireRecord(persistParams.event, "persist lifecycle event")).toMatchObject({
+      lifecycleGeneration,
+      mainSessionRestartRecovery: true,
+      runId: "run-recovery",
+    });
+  });
+
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
     ["tool", { phase: "start", name: "read", toolCallId: "owned-tool" }],
@@ -4344,7 +4485,11 @@ describe("agent event handler", () => {
       expect(agentRunSeq.has(runId)).toBe(false);
       expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
         agentId: "work",
-        event: received,
+        event: expect.objectContaining({
+          data,
+          lifecycleGeneration: received.lifecycleGeneration,
+          runId,
+        }),
         sessionKey: "agent:work:shared",
       });
       await waitForFast(() => {

@@ -2,13 +2,16 @@ import { expect, it } from "vitest";
 import {
   PICKED,
   WORKSPACE,
+  captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  newSessionComposerProofArtifactDir,
   pollLocatorText,
+  prepareNewSessionComposerUiProof,
   prepareProjectUiProof,
   projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
@@ -17,10 +20,19 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
+    await prepareNewSessionComposerUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: newSessionComposerProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -49,6 +61,14 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
+      await message.fill("/");
+      const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
+      await pollLocatorText(slashMenu).toContain("/status");
+      expect(await slashMenu.textContent()).not.toContain("/clear");
+      await captureNewSessionComposerUiProof(page, "slash-menu-open.png");
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
       await message.fill("fix the flaky draft test");
 
       // Owner boundary: the New Session page (new-session-page.ts:228) keeps
@@ -202,6 +222,9 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const actionsBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-actions")
+        .boundingBox();
       const attachmentButton = page.getByRole("button", { name: "Add attachment" });
       const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
@@ -210,6 +233,7 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
@@ -240,10 +264,14 @@ suite.define(() => {
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
       expect(
-        (footerBox?.x ?? 0) +
-          (footerBox?.width ?? 0) -
-          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+        (actionsBox?.x ?? 0) - ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
       ).toBeLessThanOrEqual(12);
+      expect((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)).toBeLessThanOrEqual(
+        actionsBox?.x ?? 0,
+      );
+      expect((actionsBox?.x ?? 0) + (actionsBox?.width ?? 0)).toBeLessThanOrEqual(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) + 1,
+      );
       expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);

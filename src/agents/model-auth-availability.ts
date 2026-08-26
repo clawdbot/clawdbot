@@ -19,7 +19,6 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
-import { normalizeExternalCliProfileMetadata } from "./auth-profiles/external-cli-profile-metadata.js";
 import {
   listExternalCliSyncProviderIds,
   resolveExternalCliAuthProfiles,
@@ -302,34 +301,7 @@ export function createModelAuthAvailabilityResolver(
     ...external.map((profile) => profile.profileId),
     ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
   ]);
-  // Runtime-owned CLI credentials are authoritative over legacy config metadata
-  // that described their canonical profile slots before OAuth was imported.
-  // Normalize only those exact marked profiles for read-only selection.
-  let readOnlyAuthProfiles:
-    | NonNullable<NonNullable<OpenClawConfig["auth"]>["profiles"]>
-    | undefined;
-  for (const profileId of externalCliRefreshProfileIds) {
-    const credential = (runtimeStore ?? store).profiles[profileId];
-    const configured = params.cfg.auth?.profiles?.[profileId];
-    const canonicalMetadata = normalizeExternalCliProfileMetadata(profileId, configured);
-    if (
-      credential?.type !== "oauth" ||
-      !configured ||
-      !canonicalMetadata ||
-      (configured.provider === canonicalMetadata.provider &&
-        configured.mode === canonicalMetadata.mode)
-    ) {
-      continue;
-    }
-    readOnlyAuthProfiles ??= { ...params.cfg.auth?.profiles };
-    readOnlyAuthProfiles[profileId] = {
-      ...configured,
-      ...canonicalMetadata,
-    };
-  }
-  const readOnlyAuthConfig = readOnlyAuthProfiles
-    ? { ...params.cfg, auth: { ...params.cfg.auth, profiles: readOnlyAuthProfiles } }
-    : params.cfg;
+  const readOnlyAuthConfig = params.cfg;
   const providerConfig = (provider: string) =>
     resolveMergedModelProviderConfig(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -650,7 +622,9 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
-    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    const preparedRuntimeAuthMode =
+      params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)] ??
+      params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
     if (preparedRuntimeAuthMode) {
       return {
         availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
@@ -1106,6 +1080,10 @@ export function createModelAuthAvailabilityResolver(
       sourcePlan,
       configuredAuthMode: automaticRouteAuthMode,
       ...(syntheticCodexOwnsAuth ? { runtimeAuthOwner: { id: "codex" } } : {}),
+      ...(syntheticCodexOwnsAuth &&
+      resolveMergedModelProviderConfig(params.cfg, provider) === undefined
+        ? { allowNativeAuthOnSingleRoute: true }
+        : {}),
     });
     if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
       return { availability: undefined, routeResolution, evidence: "synthetic" };

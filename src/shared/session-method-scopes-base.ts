@@ -68,6 +68,7 @@ function resolveSessionsCreateRequiredScope(params: unknown): SessionMutationOpe
     (typeof params.parentSessionKey === "string" &&
       isIncognitoSessionKey(params.parentSessionKey)) ||
     Object.hasOwn(params, "execNode") ||
+    Object.hasOwn(params, "toolOverrides") ||
     params.permissionMode === "full"
   ) {
     return "operator.admin";

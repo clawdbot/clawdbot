@@ -42,6 +42,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
+import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -52,6 +53,7 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
@@ -156,6 +158,7 @@ export function buildEmbeddedRunPayloads(params: {
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
+  deferAssistantTimeoutError?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -253,7 +256,12 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
+  const deferAssistantTimeoutError =
+    params.deferAssistantTimeoutError === true &&
+    rawErrorMessage !== undefined &&
+    isTimeoutErrorMessage(rawErrorMessage) &&
+    errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
+  if (errorText && !deferAssistantTimeoutError) {
     replyItems.push({ text: errorText, isError: true });
   }
   const reasoningText =
@@ -529,6 +537,9 @@ export function buildEmbeddedRunPayloads(params: {
           }
           if (item.sourceReplyMirror.idempotencyKey) {
             sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
+          }
+          if (item.sourceReplyMirror.transcriptOwner) {
+            sourceReplyTranscriptMirror.transcriptOwner = true;
           }
           setReplyPayloadMetadata(payload, {
             sourceReplyTranscriptMirror,

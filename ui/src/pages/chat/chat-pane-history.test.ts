@@ -10,6 +10,7 @@ import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { nativeHistoryMessageIdentity } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 type TestChatPane = HTMLElement & {
   catalogCursor: string | undefined;
@@ -307,6 +308,42 @@ describe("chat pane native history pagination", () => {
     expect(pane.transcriptScrollTop).toBe(0);
     expect(pane.historyObserverArmed).toBe(false);
     expect(pane.historyAutoLoadBlocked).toBe(true);
+  });
+
+  it("publishes prepended history to the shared session snapshot", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: false,
+      sessionId: "session-id",
+      totalMessages: 4,
+    }));
+    const { pane, state } = createNativeShowEarlierPane(request);
+    state.chatMessagesBySession = new Map();
+    state.currentSessionId = "session-id";
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        deltaCursor: "delta-cursor",
+        messages: state.chatMessages,
+        pagination: state.chatHistoryPagination,
+        sessionId: "session-id",
+      },
+    );
+
+    await pane.loadOlderMessages();
+
+    expect(
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    ).toMatchObject({
+      deltaCursor: "delta-cursor",
+      messages: state.chatMessages,
+      pagination: state.chatHistoryPagination,
+      sessionId: "session-id",
+    });
   });
 
   it("reveals a final catalog page even when its cursor is exhausted", async () => {

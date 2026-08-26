@@ -79,7 +79,7 @@ import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
+  isTargetedUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
@@ -169,7 +169,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     left.jobId.localeCompare(right.jobId),
   );
   const allowsUnscheduledTarget =
-    isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
+    isTargetedUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
@@ -664,8 +664,8 @@ export async function invokeHeartbeatAgentRun(
     cfg,
   );
   const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
-  if (agentTurnStatus === "superseded") {
-    return { kind: "preempted" } as const;
+  if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
+    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
   }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);

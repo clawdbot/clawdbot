@@ -857,7 +857,7 @@ struct ChatProTab: View {
     }
 
     private var chatUserAccent: Color {
-        OpenClawBrand.accent
+        ColorHexSupport.color(fromHex: self.appModel.gatewayAccentColorHex) ?? OpenClawBrand.accent
     }
 
     private var isAttachmentOwnerPinned: Bool {

@@ -172,6 +172,7 @@ export type SubagentCompletionDeliveryState = {
     | "queue_cap"
     | "parent_run_ended"
     | "sink_unavailable"
+    | "steer_dropped"
     | "dedupe"
     | "waiting_for_requester_turn";
 };

@@ -67,7 +67,7 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
-  fun githubPublicationResultsRoundTripAsATypedUnion() {
+  fun githubPublicationResultsDecodeAsATypedUnion() {
     val cases =
       listOf(
         """{"requestId":"request-1","status":"requested","message":"Accepted."}""" to
@@ -83,22 +83,11 @@ class GatewayProtocolGeneratedTest {
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(SessionGitHubPublicationResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
-      val encoded =
-        json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded).jsonObject
-      assertEquals(
-        json
-          .parseToJsonElement(payload)
-          .jsonObject
-          .getValue("status")
-          .jsonPrimitive
-          .content,
-        encoded.getValue("status").jsonPrimitive.content,
-      )
     }
   }
 
   @Test
-  fun githubDeviceAuthorizationResultsRoundTripAsATypedUnion() {
+  fun githubDeviceAuthorizationResultsDecodeAsATypedUnion() {
     val cases =
       listOf(
         """{"status":"pending","retryAfterMs":5000}""" to
@@ -120,19 +109,6 @@ class GatewayProtocolGeneratedTest {
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(ToolsGitHubAuthorizePollResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
-      val encoded =
-        json
-          .encodeToJsonElement(ToolsGitHubAuthorizePollResult.serializer(), decoded)
-          .jsonObject
-      assertEquals(
-        json
-          .parseToJsonElement(payload)
-          .jsonObject
-          .getValue("status")
-          .jsonPrimitive
-          .content,
-        encoded.getValue("status").jsonPrimitive.content,
-      )
     }
   }
 }

@@ -2,23 +2,17 @@
 // Runs after install to keep packaged dist safe and compatible.
 // Keep packaged dist safe and compatible. Plugin package dependencies are
 // installed only by explicit plugin install/update flows, never postinstall.
-import { randomUUID } from "node:crypto";
 import {
-  chmodSync,
-  closeSync,
   existsSync,
   lstatSync,
   opendirSync,
-  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   rmSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
@@ -36,81 +30,6 @@ const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 // pathological/unbounded trees.
 export const MAX_INSTALLED_DIST_SCAN_ENTRIES = 100_000;
 const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
-const BAILEYS_MEDIA_FILE = join("node_modules", "baileys", "lib", "Utils", "messages-media.js");
-const BAILEYS_MEDIA_HOTFIX_NEEDLE = [
-  "        encFileWriteStream.write(mac);",
-  "        encFileWriteStream.end();",
-  "        originalFileStream?.end?.();",
-  "        stream.destroy();",
-  "        logger?.debug('encrypted data successfully');",
-].join("\n");
-const BAILEYS_MEDIA_HOTFIX_REPLACEMENT = [
-  "        encFileWriteStream.write(mac);",
-  "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-  "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-  "        encFileWriteStream.end();",
-  "        originalFileStream?.end?.();",
-  "        stream.destroy();",
-  "        await Promise.all([encFinishPromise, originalFinishPromise]);",
-  "        logger?.debug('encrypted data successfully');",
-].join("\n");
-const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT = [
-  "        encFileWriteStream.write(mac);",
-  "        const encFinishPromise = once(encFileWriteStream, 'finish');",
-  "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
-  "        encFileWriteStream.end();",
-  "        originalFileStream?.end?.();",
-  "        stream.destroy();",
-  "        await encFinishPromise;",
-  "        await originalFinishPromise;",
-  "        logger?.debug('encrypted data successfully');",
-].join("\n");
-const BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE =
-  /const\s+encFinishPromise\s*=\s*once\(encFileWriteStream,\s*'finish'\);\s*\n[\s\S]*const\s+originalFinishPromise\s*=\s*originalFileStream\s*\?\s*once\(originalFileStream,\s*'finish'\)\s*:\s*Promise\.resolve\(\);/u;
-const BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE =
-  /await\s+Promise\.all\(\[\s*encFinishPromise\s*,\s*originalFinishPromise\s*\]\);/u;
-const BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE =
-  /await\s+encFinishPromise;\s*(?:\/\/[^\n]*\n|\s)*await\s+originalFinishPromise;/u;
-const BAILEYS_MEDIA_DISPATCHER_NEEDLE = [
-  "                const response = await fetch(url, {",
-  "                    dispatcher: fetchAgent,",
-  "                    method: 'POST',",
-].join("\n");
-const BAILEYS_MEDIA_DISPATCHER_REPLACEMENT = [
-  "                const response = await fetch(url, {",
-  "                    method: 'POST',",
-].join("\n");
-const BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE = [
-  "                        'Content-Type': 'application/octet-stream',",
-  "                        Origin: DEFAULT_ORIGIN",
-  "                    },",
-].join("\n");
-const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
-  "                        'Content-Type': 'application/octet-stream',",
-  "                        Origin: DEFAULT_ORIGIN",
-  "                    },",
-  "                    // Baileys passes a generic agent here in some runtimes. Undici's",
-  "                    // `dispatcher` only works with Dispatcher-compatible implementations,",
-  "                    // so only wire it through when the object actually implements",
-  "                    // `dispatch`.",
-  "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
-].join("\n");
-const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE = [
-  "    const response = await fetch(url, {",
-  "        dispatcher: agent,",
-  "        method: 'POST',",
-].join("\n");
-const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT = [
-  "    const response = await fetch(url, {",
-  "        // Baileys may pass a generic agent in some runtimes. Undici's dispatcher",
-  "        // option only accepts Dispatcher-compatible implementations, so only wire",
-  "        // it through when the object actually implements dispatch.",
-  "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
-  "        method: 'POST',",
-].join("\n");
-const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
-const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
-  /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 class InstalledDistScanLimitError extends Error {}
 
 function normalizeRelativePath(filePath) {
@@ -633,175 +552,6 @@ export function pruneInstalledPackageDist(params = {}) {
   return removed;
 }
 
-export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const pathExists = params.existsSync ?? existsSync;
-  const pathLstat = params.lstatSync ?? lstatSync;
-  const readFile = params.readFileSync ?? readFileSync;
-  const resolveRealPath = params.realpathSync ?? realpathSync;
-  const chmodFile = params.chmodSync ?? chmodSync;
-  const openFile = params.openSync ?? openSync;
-  const closeFile = params.closeSync ?? closeSync;
-  const renameFile = params.renameSync ?? renameSync;
-  const removePath = params.rmSync ?? rmSync;
-  const createTempPath =
-    params.createTempPath ??
-    ((unsafeTargetPath) =>
-      join(
-        dirname(unsafeTargetPath),
-        `.${basename(unsafeTargetPath)}.openclaw-hotfix-${randomUUID()}`,
-      ));
-  const writeFile =
-    params.writeFileSync ?? ((filePath, value) => writeFileSync(filePath, value, "utf8"));
-  const targetPath = join(packageRoot, BAILEYS_MEDIA_FILE);
-  const nodeModulesRoot = join(packageRoot, "node_modules");
-
-  function validateTargetPath() {
-    if (!pathExists(targetPath)) {
-      return { ok: false, reason: "missing" };
-    }
-
-    const targetStats = pathLstat(targetPath);
-    if (!targetStats.isFile() || targetStats.isSymbolicLink()) {
-      return { ok: false, reason: "unsafe_target", targetPath };
-    }
-
-    const nodeModulesRootReal = resolveRealPath(nodeModulesRoot);
-    const targetPathReal = resolveRealPath(targetPath);
-    const relativeTargetPath = relative(nodeModulesRootReal, targetPathReal);
-    if (relativeTargetPath.startsWith("..") || isAbsolute(relativeTargetPath)) {
-      return { ok: false, reason: "path_escape", targetPath };
-    }
-
-    return { ok: true, targetPathReal, mode: targetStats.mode & 0o777 };
-  }
-
-  try {
-    const initialTargetValidation = validateTargetPath();
-    if (!initialTargetValidation.ok) {
-      return { applied: false, reason: initialTargetValidation.reason, targetPath };
-    }
-
-    const currentText = readFile(targetPath, "utf8");
-    let patchedText = currentText;
-    let applied = false;
-
-    const encryptedStreamAlreadyPatched =
-      patchedText.includes(BAILEYS_MEDIA_HOTFIX_REPLACEMENT) ||
-      patchedText.includes(BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_REPLACEMENT) ||
-      (BAILEYS_MEDIA_HOTFIX_FINISH_PROMISES_RE.test(patchedText) &&
-        (BAILEYS_MEDIA_HOTFIX_PROMISE_ALL_RE.test(patchedText) ||
-          BAILEYS_MEDIA_HOTFIX_SEQUENTIAL_AWAITS_RE.test(patchedText)));
-    const encryptedStreamPatchable = patchedText.includes(BAILEYS_MEDIA_HOTFIX_NEEDLE);
-
-    let encryptedStreamResolved = encryptedStreamAlreadyPatched;
-    if (!encryptedStreamResolved && encryptedStreamPatchable) {
-      if (!BAILEYS_MEDIA_ONCE_IMPORT_RE.test(patchedText)) {
-        return { applied: false, reason: "missing_once_import", targetPath };
-      }
-      if (!BAILEYS_MEDIA_ASYNC_CONTEXT_RE.test(patchedText)) {
-        return { applied: false, reason: "not_async_context", targetPath };
-      }
-      patchedText = patchedText.replace(
-        BAILEYS_MEDIA_HOTFIX_NEEDLE,
-        BAILEYS_MEDIA_HOTFIX_REPLACEMENT,
-      );
-      applied = true;
-      encryptedStreamResolved = true;
-    }
-
-    const dispatcherAlreadyPatched =
-      patchedText.includes(
-        "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
-      ) ||
-      patchedText.includes(
-        "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
-      ) ||
-      (patchedText.includes(
-        "const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
-      ) &&
-        patchedText.includes("...(dispatcher ? { dispatcher } : {}),"));
-    const legacyDispatcherPatchable =
-      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
-      patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
-    const uploadWithFetchDispatcherPatchable = patchedText.includes(
-      BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE,
-    );
-    let dispatcherResolved = dispatcherAlreadyPatched;
-
-    if (!dispatcherResolved && legacyDispatcherPatchable) {
-      patchedText = patchedText
-        .replace(BAILEYS_MEDIA_DISPATCHER_NEEDLE, BAILEYS_MEDIA_DISPATCHER_REPLACEMENT)
-        .replace(
-          BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE,
-          BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT,
-        );
-      applied = true;
-      dispatcherResolved = true;
-    }
-
-    if (!dispatcherResolved && uploadWithFetchDispatcherPatchable) {
-      patchedText = patchedText.replace(
-        BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE,
-        BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT,
-      );
-      applied = true;
-      dispatcherResolved = true;
-    }
-
-    if (!dispatcherResolved) {
-      return { applied: false, reason: "unexpected_content", targetPath };
-    }
-
-    if (!applied) {
-      return { applied: false, reason: "already_patched" };
-    }
-    const tempPath = createTempPath(targetPath);
-    const tempFd = openFile(tempPath, "wx", initialTargetValidation.mode);
-    let tempFdClosed = false;
-    try {
-      writeFile(tempFd, patchedText, "utf8");
-      closeFile(tempFd);
-      tempFdClosed = true;
-      const finalTargetValidation = validateTargetPath();
-      if (!finalTargetValidation.ok) {
-        return { applied: false, reason: finalTargetValidation.reason, targetPath };
-      }
-      renameFile(tempPath, targetPath);
-      chmodFile(targetPath, initialTargetValidation.mode);
-    } finally {
-      if (!tempFdClosed) {
-        try {
-          closeFile(tempFd);
-        } catch {
-          // ignore failed-open cleanup
-        }
-      }
-      removePath(tempPath, { force: true });
-    }
-    return { applied: true, reason: "patched", targetPath };
-  } catch (error) {
-    return {
-      applied: false,
-      reason: "error",
-      targetPath,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function applyBundledPluginRuntimeHotfixes(params = {}) {
-  const log = params.log ?? console;
-  const baileysResult = applyBaileysEncryptedStreamFinishHotfix(params);
-  if (baileysResult.applied) {
-    log.log("[postinstall] patched baileys runtime hotfixes");
-    return;
-  }
-  if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
-    log.warn(`[postinstall] could not patch baileys runtime hotfixes: ${baileysResult.reason}`);
-  }
-}
-
 function resolveDistModuleUrl(packageRoot, distPath) {
   return pathToFileURL(join(packageRoot, distPath)).href;
 }
@@ -893,20 +643,9 @@ export function pruneBundledPluginSourceNodeModules(params = {}) {
   }
 }
 
-function shouldRunBundledPluginPostinstall(params) {
-  if (params.env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
-    return false;
-  }
-  if (!params.existsSync(params.extensionsDir)) {
-    return false;
-  }
-  return true;
-}
-
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
   if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
@@ -923,13 +662,6 @@ export function runBundledPluginPostinstall(params = {}) {
     } catch (e) {
       log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
     }
-    applyBundledPluginRuntimeHotfixes({
-      packageRoot,
-      existsSync: pathExists,
-      readFileSync: params.readFileSync,
-      writeFileSync: params.writeFileSync,
-      log,
-    });
     return;
   }
   pruneLegacyPluginRuntimeDepsState({
@@ -949,23 +681,6 @@ export function runBundledPluginPostinstall(params = {}) {
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
-    log,
-  });
-  if (
-    !shouldRunBundledPluginPostinstall({
-      env,
-      extensionsDir,
-      packageRoot,
-      existsSync: pathExists,
-    })
-  ) {
-    return;
-  }
-  applyBundledPluginRuntimeHotfixes({
-    packageRoot,
-    existsSync: pathExists,
-    readFileSync: params.readFileSync,
-    writeFileSync: params.writeFileSync,
     log,
   });
 }

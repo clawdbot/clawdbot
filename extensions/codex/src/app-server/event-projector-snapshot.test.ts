@@ -17,6 +17,7 @@ function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessa
     upstreamUserText: undefined,
     reasoningText: "checking memory",
     planText: undefined,
+    asyncMessages: [],
     commentaryMessages: [],
     toolMessages: [
       {

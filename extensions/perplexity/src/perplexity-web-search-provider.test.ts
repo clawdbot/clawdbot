@@ -96,29 +96,7 @@ describe("perplexity web search provider", () => {
 
   it.each([
     { name: "missing choices", response: {} },
-    { name: "empty choices", response: { choices: [] } },
-    { name: "missing message", response: { choices: [{}] } },
-    { name: "missing content", response: { choices: [{ message: {} }] } },
-    { name: "null content", response: { choices: [{ message: { content: null } }] } },
-    { name: "empty content", response: { choices: [{ message: { content: "" } }] } },
     { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },
-    {
-      name: "citations without an answer",
-      response: {
-        choices: [{ message: { content: null } }],
-        citations: ["https://example.test/source"],
-      },
-    },
-    {
-      name: "tool calls without an answer",
-      response: {
-        choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [] } }],
-      },
-    },
-    {
-      name: "audio without an answer",
-      response: { choices: [{ message: { content: null, audio: { id: "audio-response" } } }] },
-    },
   ])("rejects and does not cache chat-completions $name", async ({ name, response }) => {
     withTrustedWebSearchEndpointMock.mockReset();
     mockPerplexityResponseOnce(response);

@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
@@ -94,12 +94,12 @@ export function buildCronEventPrompt(
     if (!deliverToUser) {
       return (
         "A scheduled cron event was triggered, but no event content was found. " +
-        "Handle this internally and reply HEARTBEAT_OK when nothing needs user-facing follow-up."
+        `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`
       );
     }
     return (
       "A scheduled cron event was triggered, but no event content was found. " +
-      "Reply HEARTBEAT_OK."
+      `Reply ${SILENT_REPLY_TOKEN}.`
     );
   }
   if (!deliverToUser) {
@@ -136,7 +136,7 @@ export function buildExecEventPrompt(
     }
     return (
       "An async command completion event was triggered, but no command output was found. " +
-      "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
+      `Reply ${SILENT_REPLY_TOKEN} only. Do not mention, summarize, or reuse output from any earlier run.`
     );
   }
   if (!deliverToUser) {
@@ -149,7 +149,7 @@ export function buildExecEventPrompt(
     }
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."
+      `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only. Do not mention, summarize, or reuse command output.`
     );
   }
   if (hasMissingOutputFailure) {

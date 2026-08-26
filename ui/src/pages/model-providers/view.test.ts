@@ -30,6 +30,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     loading: false,
     refreshing: false,
     error: null,
+    providerUsageFailed: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",
@@ -46,6 +47,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
+    providerUsageStalled: false,
     probeAvailable: true,
     busy: {},
     messages: {},
@@ -118,6 +120,15 @@ function selectSegment(group: SegmentedGroup, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("surfaces a provider-usage failure on the provider list", () => {
+    const container = document.createElement("div");
+    render(renderModelProviders(props({ providerUsageFailed: true })), container);
+
+    expect(container.textContent).toContain(
+      "Provider usage is unavailable; the last request failed. Refresh to retry.",
+    );
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
@@ -543,7 +554,6 @@ describe("renderModelProviders", () => {
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("Model required");
-    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
     expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
       "Credentials configured",

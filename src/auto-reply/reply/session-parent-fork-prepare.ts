@@ -59,6 +59,7 @@ export async function prepareReplySessionParentFork(params: {
     ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     forkSource: {
       sessionKey: params.parentSessionKey,
       sessionId: parentEntry.sessionId,

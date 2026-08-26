@@ -77,24 +77,11 @@ export interface AgentDeletionJournal {
   workspace_dir: string;
 }
 
-export interface AgentModelCatalogs {
-  agent_dir: string;
-  catalog_key: string;
-  raw_json: string;
-  updated_at: number;
-}
-
 export interface AgentProvenance {
   agent_id: string;
   created_at_ms: number;
   created_via: string;
   creator_agent_id: string | null;
-}
-
-export interface AndroidNotificationRecentPackages {
-  package_name: string;
-  sort_order: number;
-  updated_at_ms: number;
 }
 
 export interface ApnsRegistrationTombstones {
@@ -364,16 +351,6 @@ export interface ClawhubPromotionsFeedState {
   payload_json: string | null;
   state_key: string;
   updated_at_ms: number;
-}
-
-export interface CommandLogEntries {
-  action: string;
-  entry_json: string;
-  id: string;
-  sender_id: string;
-  session_key: string;
-  source: string;
-  timestamp_ms: number;
 }
 
 export interface ConfigHealthEntries {
@@ -651,14 +628,6 @@ export interface DiagnosticEvents {
   sequence: Generated<number>;
 }
 
-export interface DiagnosticStabilityBundles {
-  bundle_json: string;
-  bundle_key: string;
-  created_at: number;
-  generated_at: string;
-  reason: string;
-}
-
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -698,6 +667,13 @@ export interface ExecutionIdentityContexts {
   created_at: number;
   execution_id: string;
   run_id: string;
+}
+
+export interface ExecutionOwnerLifecycleBindings {
+  context_id: string;
+  execution_id: string;
+  owner_id: string;
+  owner_kind: string;
 }
 
 export interface FleetCells {
@@ -895,16 +871,6 @@ export interface McpOauthStores {
   updated_at: number;
 }
 
-export interface MediaBlobs {
-  blob: Uint8Array;
-  content_type: string | null;
-  created_at: number;
-  id: string;
-  size_bytes: number;
-  subdir: string;
-  updated_at: number;
-}
-
 export interface MeetingTranscriptSessions {
   created_at_ms: number;
   export_key: string;
@@ -969,23 +935,6 @@ export interface MigrationSources {
   target_table: string;
 }
 
-export interface ModelCapabilityCache {
-  context_window: number;
-  cost_cache_read: number;
-  cost_cache_write: number;
-  cost_input: number;
-  cost_output: number;
-  input_image: number;
-  input_text: number;
-  max_tokens: number;
-  model_id: string;
-  name: string;
-  provider_id: string;
-  reasoning: number;
-  supports_tools: number | null;
-  updated_at_ms: number;
-}
-
 export interface ModelCatalogRemote {
   bundle_json: string;
   checked_at: number;
@@ -1021,6 +970,11 @@ export interface NodeHostConfig {
   token: string | null;
   updated_at_ms: number;
   version: number;
+}
+
+export interface NodeWorkerLaunchContainers {
+  container_json: string | null;
+  launch_id: string;
 }
 
 export interface NodeWorkerLaunches {
@@ -1073,6 +1027,21 @@ export interface OperatorApprovalExecutionIdentities {
   approval_id: string;
   source_context_id: string;
   source_execution_id: string;
+}
+
+export interface OperatorApprovalStandingGrants {
+  agent_id: string;
+  created_at_ms: number;
+  cron_job_id: string;
+  expires_at_ms: number;
+  grant_id: string;
+  job_config_revision: string;
+  last_used_at_ms: number | null;
+  minted_by_approval_id: string;
+  operation_binding: string;
+  revoked_at_ms: number | null;
+  revoked_by: string | null;
+  use_count: Generated<number>;
 }
 
 export interface OperatorApprovals {
@@ -1820,9 +1789,7 @@ export interface DB {
   agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
-  agent_model_catalogs: AgentModelCatalogs;
   agent_provenance: AgentProvenance;
-  android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
@@ -1843,7 +1810,6 @@ export interface DB {
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
-  command_log_entries: CommandLogEntries;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
   config_revision_keys: ConfigRevisionKeys;
@@ -1862,10 +1828,10 @@ export interface DB {
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
-  diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   execution_decision_facts: ExecutionDecisionFacts;
   execution_identity_contexts: ExecutionIdentityContexts;
+  execution_owner_lifecycle_bindings: ExecutionOwnerLifecycleBindings;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
@@ -1879,20 +1845,20 @@ export interface DB {
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
-  media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;
   meeting_transcript_summaries: MeetingTranscriptSummaries;
   meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
-  model_capability_cache: ModelCapabilityCache;
   model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
+  node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
+  operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
   outbound_message_execution_bindings: OutboundMessageExecutionBindings;

@@ -347,6 +347,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         transport: "webrtc",
         clientSecret: token,
         offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
+        offerResponseMaxBytes: 256 * 1024,
         ...(request.gaSideband ? {} : { model, voice }),
         expiresAt,
       };

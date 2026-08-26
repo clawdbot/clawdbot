@@ -409,7 +409,6 @@ export function reconcileSessionChanged(
       deletedKey: existing.key,
     };
   }
-
   const {
     agentId: _agentId,
     clientRunId: _clientRunId,
@@ -438,20 +437,34 @@ export function reconcileSessionChanged(
   if (!kind || (!existing && sessionId === undefined && typeof updatedAt !== "number")) {
     return { applied: false, result };
   }
+  const eventResult = {
+    applied: true as const,
+    key,
+    agentId: parsed.agentId,
+    runId: parsed.runId,
+    clientRunId: parsed.clientRunId,
+    hasActiveRun: parsed.hasActiveRun,
+    status: parsed.status,
+    isChatTurn: parsed.isChatTurn,
+  };
+  // Events are broadcast independently of sessions.list filters and windows.
+  // They may update listed rows, but only a canonical list may admit a new row.
+  if (!existing) {
+    return { ...eventResult, result };
+  }
   const incomingRuntime = recordOrNull(rowFields.agentRuntime);
   const incomingThinkingIdentity: ThinkingMetadataCarrier = {
     modelProvider: stringValue(rowFields.modelProvider),
     model: stringValue(rowFields.model),
     ...(incomingRuntime ? { agentRuntime: { id: stringValue(incomingRuntime.id) ?? "" } } : {}),
   };
-  const existingFields =
-    existing && !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
-      ? stripThinkingMetadata(existing)
-      : existing;
+  const existingFields = !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
+    ? stripThinkingMetadata(existing)
+    : existing;
   const row = {
     ...existingFields,
     ...rowFields,
-    key: existing?.key ?? key,
+    key: existing.key,
     kind,
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
@@ -477,14 +490,14 @@ export function reconcileSessionChanged(
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
   const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
-  const previousOwner = existing?.owner?.actor;
+  const previousOwner = existing.owner?.actor;
   const nextOwner = row.owner?.actor;
   const ownershipChanged =
     (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
     (previousOwner?.type !== nextOwner?.type ||
       previousOwner?.id !== nextOwner?.id ||
       previousOwner?.label !== nextOwner?.label ||
-      existing?.owner?.assignedAt !== row.owner?.assignedAt);
+      existing.owner?.assignedAt !== row.owner?.assignedAt);
   // The facet covers unloaded pages, so an ownership event invalidates it until
   // the session capability's canonical list refresh supplies a complete replacement.
   const reconciledResult = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
@@ -496,14 +509,7 @@ export function reconcileSessionChanged(
     ),
   );
   return {
-    applied: true,
-    key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    isChatTurn: parsed.isChatTurn,
+    ...eventResult,
     row: reconciledRow,
     result: reconciledResult,
   };

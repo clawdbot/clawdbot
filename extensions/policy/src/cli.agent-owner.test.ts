@@ -183,13 +183,6 @@ describe("policy CLI agent ownership", () => {
       hint: "openclaw --profile testprof agents list",
     },
     {
-      name: "watch with an active profile",
-      args: ["watch", "--agent", "ghost", "--once", "--json"],
-      profile: "testprof",
-      container: "",
-      hint: "openclaw --profile testprof agents list",
-    },
-    {
       name: "relative compare with an active container",
       args: ["compare", "--agent", "ghost", "--baseline", "baseline.policy.jsonc", "--json"],
       profile: "testprof",

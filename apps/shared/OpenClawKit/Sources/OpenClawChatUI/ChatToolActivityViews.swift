@@ -224,7 +224,7 @@ struct ChatToolActivityRow: View {
             if let detailLine = self.detailLine {
                 Text(detailLine)
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.62))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }

@@ -364,4 +364,147 @@ suite.define(() => {
       }
     });
   });
+
+  it("retires an empty picker snapshot when the Gateway reconnects", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const routedModel = {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: true,
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.6-luna",
+        models: [routedModel],
+        methodResponses: {
+          "models.list": {
+            sequence: [{ models: [] }, { models: [routedModel] }],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      await pickerTrigger.click();
+      await gateway.waitForRequest("models.list");
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("No models available");
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/01-empty-catalog-before-reconnect.png`,
+        });
+      }
+      await pickerTrigger.click();
+
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      await gateway.setOnline(false);
+      await expect
+        .poll(() => pickerTrigger.locator(".chat-controls__inline-select-label").textContent())
+        .toContain("Offline");
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').count())
+        .toBe(1);
+
+      await pickerTrigger.click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
+        .toBe(true);
+      await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/02-routable-model-after-reconnect.png`,
+        });
+      }
+    });
+  });
+
+  it("refreshes a successful account catalog after the picker cooldown", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const initialTime = new Date("2026-08-21T12:00:00Z");
+      await page.clock.setFixedTime(initialTime);
+      const existingModel = {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: true,
+      };
+      const newlyAvailableModel = {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        provider: "openai",
+        available: true,
+      };
+      const gateway = await installMockGateway(page, {
+        models: [existingModel],
+        methodResponses: {
+          "models.list": {
+            sequence: [
+              { models: [existingModel] },
+              { models: [existingModel, newlyAvailableModel] },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      await pickerTrigger.click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
+        .toBe(true);
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/01-account-catalog-before-refresh.png`,
+        });
+      }
+
+      await pickerTrigger.click();
+      await page.clock.setFixedTime(new Date(initialTime.getTime() + 60_000 + 1));
+      await pickerTrigger.click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-terra"]').count())
+        .toBe(0);
+
+      await pickerTrigger.click();
+      await page.clock.setFixedTime(new Date(initialTime.getTime() + 5 * 60_000 + 1));
+      await pickerTrigger.click();
+
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-terra"]').isVisible())
+        .toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: `${artifactDir}/02-account-catalog-after-refresh.png`,
+        });
+      }
+      for (const request of await gateway.getRequests("models.list")) {
+        expect(request.params).toEqual(
+          expect.objectContaining({ agentId: "main", refresh: true, view: "configured" }),
+        );
+      }
+    });
+  });
 });

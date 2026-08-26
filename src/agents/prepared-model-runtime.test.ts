@@ -335,6 +335,46 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
+  it("limits live discovery to the selected agent's models and authenticated providers", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6" } },
+        list: [
+          {
+            id: "selected",
+            model: { primary: "anthropic/claude-sonnet-5" },
+            modelPolicy: { allow: ["vllm/*"] },
+          },
+          {
+            id: "sibling",
+            model: { primary: "ollama/sibling" },
+            modelPolicy: { allow: ["sibling-only/*"] },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          unrelated: { baseUrl: "https://unrelated.example/v1", models: [] },
+          vllm: { baseUrl: "https://vllm.example/v1", models: [] },
+        },
+      },
+    } as OpenClawConfig;
+
+    await publishPreparedModelRuntimeSnapshot({
+      agentId: "selected",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-selected-provider-scope",
+    });
+
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-model-runtime-selected-provider-scope",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "vllm"],
+      }),
+    );
+  });
+
   it("captures static provider-hook rows in the same lifecycle generation", async () => {
     mocks.loadStaticCatalog.mockResolvedValueOnce([
       {
@@ -390,6 +430,11 @@ describe("prepared model runtime snapshots", () => {
       input: ["text" as const, "image" as const],
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
+      contextWindows: [
+        { id: "250k", label: "250K", contextWindow: 250_000 },
+        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+      ],
+      contextWindowDefault: "1050k",
       maxTokens: 128_000,
     };
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
@@ -444,6 +489,11 @@ describe("prepared model runtime snapshots", () => {
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 1_050_000,
+        contextWindows: [
+          { id: "250k", label: "250K", contextWindow: 250_000 },
+          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+        ],
+        contextWindowDefault: "1050k",
         reasoning: true,
         input: ["text", "image"],
       },

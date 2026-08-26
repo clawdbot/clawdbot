@@ -142,7 +142,7 @@ function createCronSubmitHarness(
     const result = await addCronJob(state);
     return { call: findRequestCall(request.mock.calls, method), result };
   };
-  return { state, submit };
+  return { request, state, submit };
 }
 
 function createCronEditHarness(job: CronJob) {
@@ -333,6 +333,65 @@ describe("cron controller", () => {
     });
 
     expect(normalized.deliveryMode).toBe("announce");
+  });
+
+  it.each([
+    {
+      changed: "payloadKind",
+      form: { sessionTarget: "isolated", payloadKind: "systemEvent" },
+      expected: { sessionTarget: "main", payloadKind: "systemEvent" },
+    },
+    {
+      changed: "payloadKind",
+      form: { sessionTarget: "main", payloadKind: "agentTurn" },
+      expected: { sessionTarget: "isolated", payloadKind: "agentTurn" },
+    },
+    {
+      changed: "sessionTarget",
+      form: { sessionTarget: "main", payloadKind: "agentTurn" },
+      expected: { sessionTarget: "main", payloadKind: "systemEvent" },
+    },
+    {
+      changed: "sessionTarget",
+      form: { sessionTarget: "isolated", payloadKind: "systemEvent" },
+      expected: { sessionTarget: "isolated", payloadKind: "agentTurn" },
+    },
+  ] as const)(
+    "keeps editable actions and sessions compatible when $changed changes",
+    (scenario) => {
+      const normalized = normalizeCronFormState(
+        { ...DEFAULT_CRON_FORM, ...scenario.form },
+        { [scenario.changed]: scenario.form[scenario.changed] },
+      );
+
+      expect(normalized).toMatchObject(scenario.expected);
+      if (normalized.sessionTarget === "main") {
+        expect(normalized.deliveryMode).toBe("none");
+      }
+    },
+  );
+
+  it.each(["current", "session:project-alpha"] as const)(
+    "preserves the supported %s target while editing an agent action",
+    (sessionTarget) => {
+      expect(
+        normalizeCronFormState(
+          { ...DEFAULT_CRON_FORM, sessionTarget },
+          { payloadKind: "agentTurn" },
+        ),
+      ).toMatchObject({ sessionTarget, payloadKind: "agentTurn" });
+    },
+  );
+
+  it("preserves locked main-session script payloads", () => {
+    expect(
+      normalizeCronFormState({
+        ...DEFAULT_CRON_FORM,
+        sessionTarget: "main",
+        payloadKind: "script",
+        payloadLocked: true,
+      }),
+    ).toMatchObject({ sessionTarget: "main", payloadKind: "script", deliveryMode: "none" });
   });
 
   it.each([
@@ -1229,6 +1288,23 @@ describe("cron controller", () => {
     expect(state.cronFieldErrors).toEqual({});
   });
 
+  it.each([
+    {
+      name: "anchored interval",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_725_000_000_123 },
+    },
+    {
+      name: "subsecond cron stagger",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 1_234 },
+    },
+  ] as const)("preserves the exact $name schedule on metadata-only edits", async ({ schedule }) => {
+    const job = createCronJob({ id: "job-exact-schedule", name: "Exact schedule", schedule });
+    const { state, submit } = createCronEditHarness(job);
+    state.cronForm.description = "metadata only";
+
+    expect(requestPatch(await submit())).not.toHaveProperty("schedule");
+  });
+
   it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
     const job = createCronJob({
       id: "job-on-exit",
@@ -1330,6 +1406,46 @@ describe("cron controller", () => {
       bestEffort: true,
     });
   });
+
+  it.each(["cron.add", "cron.update"] as const)(
+    "preserves the trigger draft and inventory when %s rejects its syntax",
+    async (method) => {
+      const existingJob = createCronJob({
+        id: "job-condition-syntax",
+        name: "Conditional job",
+        trigger: { script: "return { fire: true }" },
+      });
+      const { request, state } = createCronSubmitHarness(existingJob.id, {
+        method,
+        jobs: [existingJob],
+        state: { cronCreateOpen: method === "cron.add" },
+        form: {
+          name: "Conditional job",
+          scheduleKind: "every",
+          everyAmount: "1",
+          everyUnit: "minutes",
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "const x = ;",
+        },
+      });
+      const originalInventory = structuredClone(state.cronJobs);
+      const message =
+        "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
+      request.mockRejectedValue(new Error(message));
+
+      await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+      expect(state.cronError).toBe(message);
+      expect(state.cronForm.triggerScript).toBe("const x = ;");
+      expect(state.cronJobs).toEqual(originalInventory);
+      expect(state.cronCreateOpen).toBe(method === "cron.add");
+      if (method === "cron.update") {
+        expect(state.cronEditingJobId).toBe(existingJob.id);
+        expect(state.cronEditingJob?.trigger).toEqual(existingJob.trigger);
+      }
+    },
+  );
 
   it("clears an existing condition trigger from cron.update", async () => {
     const job = createCronJob({
@@ -2017,6 +2133,58 @@ describe("cron controller", () => {
     expect(addCall[1]).toEqual(
       expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
     );
+  });
+
+  it.each([
+    { name: "precise one-shot", schedule: { kind: "at", at: "2030-01-02T03:04:56.789Z" } },
+    {
+      name: "anchored interval",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_725_000_000_123 },
+    },
+    {
+      name: "subsecond cron stagger",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 1_234 },
+    },
+    { name: "process exit", schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
+    {
+      name: "event stream",
+      schedule: { kind: "stream", command: Array.of("node", "events.mjs"), batchMs: 1_234 },
+    },
+  ] as const)("clones the exact $name schedule while its fields remain unchanged", async (item) => {
+    const request = createCronRequest("job-schedule-clone");
+    const sourceJob = createCronJob({
+      id: "job-schedule-source",
+      name: "Source schedule",
+      schedule: item.schedule,
+      delivery: { mode: "none" },
+    });
+    const state = createStateWithRequest(request, { cronJobs: [sourceJob] });
+
+    startCronClone(state, sourceJob);
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "job-schedule-clone" });
+
+    expect(requestPayload(findRequestCall(request.mock.calls, "cron.add")).schedule).toEqual(
+      item.schedule,
+    );
+  });
+
+  it("applies an edited schedule when cloning an existing automation", async () => {
+    const request = createCronRequest("job-schedule-clone");
+    const sourceJob = createCronJob({
+      id: "job-schedule-source",
+      name: "Source schedule",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_725_000_000_123 },
+    });
+    const state = createStateWithRequest(request, { cronJobs: [sourceJob] });
+
+    startCronClone(state, sourceJob);
+    state.cronForm.everyAmount = "2";
+    await addCronJob(state);
+
+    expect(requestPayload(findRequestCall(request.mock.calls, "cron.add")).schedule).toEqual({
+      kind: "every",
+      everyMs: 120_000,
+    });
   });
 
   it("keeps an existing condition trigger when cloning a script into an editable agent task", async () => {
@@ -2775,7 +2943,7 @@ describe("cron every-interval lossless round-trip", () => {
 
       const updateCall = findRequestCall(request.mock.calls, "cron.update");
       const patch = requestPatch(updateCall);
-      expect(patch.schedule).toEqual({ kind: "every", everyMs });
+      expect(patch).not.toHaveProperty("schedule");
     }
   });
 

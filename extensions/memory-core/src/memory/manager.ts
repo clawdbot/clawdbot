@@ -259,13 +259,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           row.source === "memory" || row.source === "sessions" ? [row.source] : [],
         ),
       );
+      this.memorySourceProvenanceRepairPending =
+        this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
         resolveInitialMemoryDirty({
           hasMemorySource: this.sources.has("memory"),
           statusOnly: params.purpose === "status",
           hasIndexedMeta: Boolean(meta),
-        }) ||
-        (this.sources.has("memory") && invalidatedSources.has("memory"));
+        }) || this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
         // Migration cannot map a durable session source path back to one live
         // transcript file. Carry a full-session retry so unchanged and deleted
@@ -481,12 +482,22 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
+    const pendingSyncSources: MemorySource[] = [];
+    if (this.syncing) {
+      if (this.dirty) {
+        pendingSyncSources.push("memory");
+      }
+      if (this.sessionsDirty) {
+        pendingSyncSources.push("sessions");
+      }
+    }
 
     return {
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
+      pendingSyncSources: pendingSyncSources.length > 0 ? pendingSyncSources : undefined,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,

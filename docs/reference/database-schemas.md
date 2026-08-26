@@ -3,6 +3,7 @@ summary: "OpenClaw SQLite database locations, schema versions, integrity checks,
 read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
+  - Proposing a SQLite or persistent-store change
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -38,7 +39,37 @@ operator's explicit offline-device abandonment decision so restart recovery
 cannot accidentally resume remote reconciliation. Older readers ignore the
 column and can reopen the same database safely.
 
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
+User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
+column in state schema 9. Operator-role assignment lazily ensures the column on
+first use. Older readers ignore the column and can reopen the same database
+safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
+
+## Review checkpoint for material changes
+
+Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
+
+Treat a change as material when it introduces or materially changes any of these:
+
+- a table, dedicated database, durable projection, cache, index, or other persisted representation
+- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
+- user-visible persistence semantics, including a second interpretation of existing durable data
+- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
+- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
+- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
+
+The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
+
+The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
+
+For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
 
 ## Preflight a target release
 
@@ -95,6 +126,7 @@ Version 3 was an unshipped development step folded into version 4.
 | 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
 | 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
 | 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
 
 ### State schema 9
 
@@ -150,6 +182,107 @@ The general procedure is:
 2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 10 to 9
+
+Schema 10 removed six dead shared-state tables. A schema 9 build still requires those canonical tables and indexes, so a manual downgrade must recreate their exact empty schemas before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS agent_model_catalogs (
+  catalog_key TEXT NOT NULL PRIMARY KEY,
+  agent_dir TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
+  ON agent_model_catalogs(agent_dir, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
+  package_name TEXT NOT NULL PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
+  ON android_notification_recent_packages(sort_order, package_name);
+
+CREATE TABLE IF NOT EXISTS command_log_entries (
+  id TEXT NOT NULL PRIMARY KEY,
+  timestamp_ms INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  entry_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
+  ON command_log_entries(timestamp_ms DESC, id);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
+  ON command_log_entries(session_key, timestamp_ms DESC, id);
+
+CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
+  bundle_key TEXT NOT NULL PRIMARY KEY,
+  reason TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  bundle_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
+  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
+
+CREATE TABLE IF NOT EXISTS media_blobs (
+  subdir TEXT NOT NULL,
+  id TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes INTEGER NOT NULL,
+  blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (subdir, id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_media_blobs_created
+  ON media_blobs(created_at);
+
+CREATE TABLE IF NOT EXISTS model_capability_cache (
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  input_text INTEGER NOT NULL,
+  input_image INTEGER NOT NULL,
+  reasoning INTEGER NOT NULL,
+  supports_tools INTEGER,
+  context_window INTEGER NOT NULL,
+  max_tokens INTEGER NOT NULL,
+  cost_input REAL NOT NULL,
+  cost_output REAL NOT NULL,
+  cost_cache_read REAL NOT NULL,
+  cost_cache_write REAL NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
+  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
+
+PRAGMA user_version = 9;
+UPDATE schema_meta
+SET schema_version = 9,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+The recreated tables start empty because schema 10 discarded only dead or rebuildable cache rows. A botched downgrade means restore from the verified backup.
 
 ### Example: state schema 9 to 8
 

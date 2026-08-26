@@ -682,6 +682,116 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "before context processing",
+    "during upstream transform",
+    "during afterTurn resolve",
+    "during afterTurn reject",
+    "during ingestBatch resolve",
+    "during ingestBatch reject",
+    "during individual ingest resolve",
+    "during individual ingest reject",
+    "during assemble resolve",
+    "during assemble reject",
+    "when reusing cached assembly",
+    "inside the composed pressure guard",
+  ] as const)("stops before another provider request when cancelled %s", async (stage) => {
+    const controller = new AbortController();
+    const cancellation = new Error(`operator cancelled ${stage}`);
+    const cancel = () => {
+      controller.abort(cancellation);
+      if (stage.endsWith("reject")) {
+        throw new Error("context engine stopped before completing");
+      }
+    };
+    const upstream =
+      stage === "during upstream transform"
+        ? vi.fn(async (messages: AgentMessage[]) => {
+            cancel();
+            return messages;
+          })
+        : undefined;
+    const agent = makeGuardableAgent(upstream);
+    const usesBatchIngest = stage.startsWith("during ingestBatch");
+    const usesIndividualIngest = stage.startsWith("during individual ingest");
+    const engine = makeMockEngine({
+      ...(usesBatchIngest || usesIndividualIngest ? { omitAfterTurn: true } : {}),
+      ...(usesIndividualIngest ? { omitIngestBatch: true } : {}),
+      ...(stage.startsWith("during afterTurn") || stage === "inside the composed pressure guard"
+        ? { afterTurn: async () => cancel() }
+        : {}),
+      ...(usesBatchIngest
+        ? {
+            ingestBatch: async ({ messages }) => {
+              cancel();
+              return { ingestedCount: messages.length };
+            },
+          }
+        : {}),
+      ...(usesIndividualIngest
+        ? {
+            ingest: async () => {
+              cancel();
+              return { ingested: true };
+            },
+          }
+        : {}),
+      ...(stage.startsWith("during assemble")
+        ? {
+            assemble: async ({ messages }) => {
+              cancel();
+              return { messages, estimatedTokens: 0 };
+            },
+          }
+        : {}),
+    });
+    if (stage === "inside the composed pressure guard") {
+      installOwnsCompactionHookWithGuard(agent, engine, { prePromptCount: 1 });
+    } else {
+      installHook(agent, engine, 1);
+    }
+    const messages = [
+      makeUser("first"),
+      makeToolResult("call_1", "result"),
+      ...(usesIndividualIngest ? [makeToolResult("call_2", "later result")] : []),
+    ];
+    if (stage === "when reusing cached assembly") {
+      await callTransform(agent, messages);
+    }
+    if (stage === "before context processing" || stage === "when reusing cached assembly") {
+      controller.abort(cancellation);
+    }
+
+    const requestProvider = vi.fn();
+    const transform = expectDefined(agent.transformContext, "installed transform test invariant");
+    await expect(
+      Promise.resolve(transform(messages, controller.signal)).then(requestProvider),
+    ).rejects.toBe(cancellation);
+
+    expect(requestProvider).not.toHaveBeenCalled();
+    if (stage === "before context processing" || stage === "during upstream transform") {
+      expect(engine.afterTurn).not.toHaveBeenCalled();
+      expect(engine.assemble).not.toHaveBeenCalled();
+    } else if (usesIndividualIngest) {
+      expect(engine.ingest).toHaveBeenCalledTimes(1);
+      expect(engine.assemble).not.toHaveBeenCalled();
+    } else if (!stage.startsWith("during assemble") && stage !== "when reusing cached assembly") {
+      expect(engine.assemble).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps the upstream context-transform contract when no abort signal was supplied", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1);
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transform = expectDefined(agent.transformContext, "installed transform test invariant");
+
+    await expect(Reflect.apply(transform, agent, [messages, undefined])).resolves.toEqual(messages);
+    expect(engine.afterTurn).toHaveBeenCalledOnce();
+    expect(engine.assemble).toHaveBeenCalledOnce();
+  });
+
   it("keeps the pressure guard active around ownsCompaction loop assembly", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();

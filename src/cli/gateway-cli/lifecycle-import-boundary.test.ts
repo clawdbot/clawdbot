@@ -20,11 +20,10 @@ describe("gateway lifecycle hub import boundaries", () => {
     expect(hub).toContain('from "../../gateway/server-reload-contracts.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-handlers.js"');
 
-    // main-session-restart-recovery.ts also re-exports its -runtime sibling,
-    // which the primed hub never calls.
-    expect(hub).toContain(
-      'from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js"',
-    );
+    // Restart marking belongs to server close, after the drain identifies the
+    // exact runs that still need abort. The primed run-loop hub must not regain
+    // the earlier duplicate owner.
+    expect(hub).not.toContain("main-session-restart-recovery");
     expect(hub).not.toContain(
       'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
     );

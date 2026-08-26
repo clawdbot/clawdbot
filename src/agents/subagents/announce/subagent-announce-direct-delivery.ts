@@ -80,6 +80,7 @@ async function runAnnounceAgentCall(params: {
     forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
       params.agentParams.inputProvenance,
     ),
+    operatorRoleActor: { kind: "system" },
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
     timeoutMs: params.timeoutMs,
     resolveGatewayContext: params.resolveGatewayContext,
@@ -230,9 +231,12 @@ export async function sendSubagentAnnounceDirectly(params: {
         onDeliveryResult: params.onDeliveryResult,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
+    // Synthetic requester-settle turns must not inherit a tool-only mode that suppresses the final.
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
-      : undefined;
+      : params.requireVisibleReply && deliveryTarget.deliver
+        ? "automatic"
+        : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -435,6 +439,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
+      requireTerminalContent: true,
     };
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
@@ -525,37 +530,13 @@ export async function sendSubagentAnnounceDirectly(params: {
         requireFinalReply: true,
       }) ||
         (shouldDeliverAgentFinal &&
-          !requiresMessageToolDelivery &&
-          hasVisibleAgentPayload(
-            {
-              payloads: Array.isArray(directAnnounceResult.payloads)
-                ? directAnnounceResult.payloads.filter((payload) => {
-                    const flags = payload as Record<string, unknown>;
-                    return (
-                      flags?.isCommentary !== true &&
-                      flags?.isCompactionNotice !== true &&
-                      flags?.isFallbackNotice !== true &&
-                      flags?.isStatusNotice !== true &&
-                      flags?.visible !== false
-                    );
-                  })
-                : [],
-            },
-            { ...completionPayloadVisibility, includeSilentReplyPayloads: false },
-          ) &&
+          hasVisibleNonSilentGatewayPayload &&
           directAnnounceResult.deliveryStatus?.status !== "suppressed")),
     );
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        Boolean(
-          directAnnounceResult &&
-          (hasMessagingToolDelivery ||
-            hasVisibleAgentPayload(directAnnounceResult, {
-              ...completionPayloadVisibility,
-              includeSilentReplyPayloads: false,
-            })),
-        ));
+        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload));
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (

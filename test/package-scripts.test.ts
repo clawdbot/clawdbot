@@ -139,7 +139,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 3 },
+    { scriptName: "build:docker", expectedCount: 2 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -185,7 +185,7 @@ describe("package scripts", () => {
   it("cleans package builds before validating release contents", () => {
     const scripts = readPackageJson().scripts;
 
-    expect(scripts["build:package"]).toBe("pnpm clean:dist && pnpm build");
+    expect(scripts["build:package"]).toBe("node --import tsx scripts/build-all.mts package");
     expect(scripts["release:check"]).toBe(
       "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
     );

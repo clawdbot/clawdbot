@@ -20,7 +20,7 @@ import {
 } from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
@@ -114,13 +114,34 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
+    let cronExitWatcherHandoff:
+      | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
+      | undefined;
     if (plan.restartCron) {
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
+      if (
+        state.cronState.cronEnabled &&
+        nextState.cronState.cronEnabled &&
+        state.cronState.storePath === nextState.cronState.storePath
+      ) {
+        const [previous, next] = await Promise.all([
+          state.cronState.prepareExitWatcherHandoff?.(),
+          nextState.cronState.prepareExitWatcherHandoff?.(),
+        ]);
+        if (previous && next) {
+          cronExitWatcherHandoff = { previous, next };
+        }
+      }
     }
 
     resetDirectoryCache();
@@ -196,7 +217,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
           params.onCronRestart?.();
-          if (state.cronState.cron.stopAndDrain) {
+          if (cronExitWatcherHandoff) {
+            await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
+            await cronExitWatcherHandoff.previous.stopOwner();
+          } else if (state.cronState.cron.stopAndDrain) {
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
@@ -545,12 +569,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
-        if (!pluginReloadAborted) {
+        if (!pluginReloadAborted && !isLifecycleReloadAborted()) {
           for (const channel of pluginReloadResult.restartChannels) {
             channelsToRestart.add(channel);
           }
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          // Only a successfully published replacement can authoritatively retire channel owners.
+          params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
           resetPreparedModelRuntimeStateForHotReload();
+        } else {
+          pluginReloadAborted = true;
         }
       }
     }

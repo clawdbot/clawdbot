@@ -8,7 +8,16 @@ import { projectWorkerPlacementAgentRuntime } from "../worker-environments/place
 
 type ModelsListEntry = Pick<
   ModelChoice,
-  "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning" | "tags"
+  | "alias"
+  | "contextWindow"
+  | "contextWindowDefault"
+  | "contextWindows"
+  | "id"
+  | "input"
+  | "name"
+  | "provider"
+  | "reasoning"
+  | "tags"
 > & { available?: boolean; supportsTools?: boolean };
 
 /** Keeps concrete route, auth, cost, and provider parameters out of public model rows. */
@@ -20,6 +29,8 @@ export function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsList
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
     ...(contextWindow ? { contextWindow } : {}),
+    ...(entry.contextWindows ? { contextWindows: entry.contextWindows } : {}),
+    ...(entry.contextWindowDefault ? { contextWindowDefault: entry.contextWindowDefault } : {}),
     ...(typeof entry.reasoning === "boolean" ? { reasoning: entry.reasoning } : {}),
     ...(typeof entry.compat?.supportsTools === "boolean"
       ? { supportsTools: entry.compat.supportsTools }

@@ -25,6 +25,7 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
@@ -270,6 +271,7 @@ function providerOrRespond(
 }
 
 async function authorizeCatalogRequest(params: {
+  access: "read" | "mutate";
   request: SessionCatalogLocator & { agentId?: string };
   provider: SessionCatalogProvider;
   respond: RespondFn;
@@ -286,6 +288,7 @@ async function authorizeCatalogRequest(params: {
     return null;
   }
   const authorization = await authorizeSessionCatalogThread({
+    access: params.access,
     agentId: resolvedAgent.agentId,
     client: params.client,
     context: params.context,
@@ -382,7 +385,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     const search = normalizeSessionCatalogSearch(request.search);
     const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
-    const visibility = resolveSessionCatalogVisibility(client);
+    const visibility = resolveSessionCatalogVisibility(client, config);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
     const listKey = sessionCatalogListKey({
@@ -439,6 +442,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             const visibleHost = filterSessionCatalogHost(
               requestEntries.projectHostCreatedActors(host),
               visibility,
+              {
+                config,
+                fallbackAgentId: resolvedAgent.agentId,
+                sessionEntries: requestEntries.sessionEntries,
+              },
             );
             const catalog = catalogResult(provider, [visibleHost], undefined, createSession);
             // Progressive frames are an optimization. The final RPC response remains
@@ -471,7 +479,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             return catalogResult(
               provider,
               hosts.map((host) =>
-                filterSessionCatalogHost(requestEntries.projectHostCreatedActors(host), visibility),
+                filterSessionCatalogHost(
+                  requestEntries.projectHostCreatedActors(host),
+                  visibility,
+                  {
+                    config,
+                    fallbackAgentId: resolvedAgent.agentId,
+                    sessionEntries: requestEntries.sessionEntries,
+                  },
+                ),
               ),
               undefined,
               createSession,
@@ -523,6 +539,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const authorization = await authorizeCatalogRequest({
+        access: "read",
         request,
         provider,
         respond,
@@ -574,6 +591,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const authorization = await authorizeCatalogRequest({
+        access: "mutate",
         request,
         provider,
         respond,
@@ -581,6 +599,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         client,
       });
       if (!authorization) {
+        return;
+      }
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: context.getRuntimeConfig(),
+        client,
+        agentId: authorization.agentId,
+      });
+      if (creationError) {
+        respond(false, undefined, creationError);
         return;
       }
       const { catalogId: _catalogId, ...providerRequest } = request;
@@ -672,6 +699,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const authorization = await authorizeCatalogRequest({
+        access: "mutate",
         request,
         provider,
         respond,

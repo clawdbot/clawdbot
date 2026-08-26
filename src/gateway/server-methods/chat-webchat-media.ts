@@ -53,7 +53,7 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (/^https?:/i.test(trimmed)) {
     return null;
   }
-  if (trimmed.startsWith("file:")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const p = safeFileURLToPath(trimmed);
       if (!path.isAbsolute(p)) {

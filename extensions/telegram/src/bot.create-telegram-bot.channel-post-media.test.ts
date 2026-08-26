@@ -223,9 +223,10 @@ function expectTypeOnlyMediaPayload(kind: string, rawBody = "") {
     media: [expect.objectContaining({ kind })],
     RawBody: rawBody,
   });
-  const media = payload.media as Array<{ path?: string }>;
+  const media = payload.media as Array<{ path?: string; fileName?: string }>;
   expect(media).toHaveLength(1);
   expect(media[0]?.path).toBeUndefined();
+  expect(media[0]?.fileName).toBeUndefined();
 }
 
 function setTelegramIngestGroupConfig(
@@ -1004,6 +1005,10 @@ describe("createTelegramBot channel_post media", () => {
   it("drops the media group when a non-recoverable media error occurs", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
+    saveRemoteMedia.mockResolvedValueOnce({
+      path: "/tmp/fatal-album-first.jpg",
+      contentType: "image/jpeg",
+    });
 
     const runtimeError = vi.fn();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -1031,6 +1036,10 @@ describe("createTelegramBot channel_post media", () => {
           expect.stringContaining("media group handler failed"),
         ),
       );
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("Telegram getFile returned no file_path"),
+      );
+      expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();

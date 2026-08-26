@@ -76,6 +76,7 @@ export const SessionPlacementDiskSpaceSchema = closedObject({
 export const SessionPlacementRunnerSchema = closedObject({
   kind: Type.Literal("device"),
   status: Type.Union([Type.Literal("available"), Type.Literal("offline")]),
+  deviceId: Type.Optional(WorkerIdentifierSchema),
 });
 
 const SessionPlacementDiskSpaceProperties = {
@@ -195,10 +196,11 @@ const WorkerMachineClassSchema = Type.String({
 });
 
 /**
- * Requests one-way dispatch to an explicit device (`operator.write`), an explicit profile
- * (`operator.admin`), or an `operator.admin`-only `cloudWorkers.projectProfiles` lookup when no
- * target is supplied. Explicit targets take precedence. An absent, unmatched, or invalid mapping
- * is rejected with `INVALID_REQUEST` instead of provisioning or falling back to another target.
+ * Requests one-way dispatch to an explicit or automatically selected device (`operator.write`),
+ * an explicit profile (`operator.admin`), or an `operator.admin`-only
+ * `cloudWorkers.projectProfiles` lookup when no target is supplied. Target modes are exclusive.
+ * An absent, unmatched, or invalid mapping is rejected with `INVALID_REQUEST` instead of
+ * provisioning or falling back to another target.
  */
 export const SessionsDispatchParamsSchema = Type.Object(
   {
@@ -206,21 +208,42 @@ export const SessionsDispatchParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     profileId: Type.Optional(NonEmptyString),
     deviceId: Type.Optional(NonEmptyString),
+    autoDevice: Type.Optional(Type.Literal(true)),
     machineClass: Type.Optional(WorkerMachineClassSchema),
   },
   {
     additionalProperties: false,
     oneOf: [
-      { required: ["profileId"], not: { required: ["deviceId"] } },
+      {
+        required: ["profileId"],
+        not: { anyOf: [{ required: ["deviceId"] }, { required: ["autoDevice"] }] },
+      },
       {
         required: ["deviceId"],
-        not: { anyOf: [{ required: ["profileId"] }, { required: ["machineClass"] }] },
+        not: {
+          anyOf: [
+            { required: ["profileId"] },
+            { required: ["autoDevice"] },
+            { required: ["machineClass"] },
+          ],
+        },
+      },
+      {
+        required: ["autoDevice"],
+        not: {
+          anyOf: [
+            { required: ["profileId"] },
+            { required: ["deviceId"] },
+            { required: ["machineClass"] },
+          ],
+        },
       },
       {
         not: {
           anyOf: [
             { required: ["profileId"] },
             { required: ["deviceId"] },
+            { required: ["autoDevice"] },
             { required: ["machineClass"] },
           ],
         },

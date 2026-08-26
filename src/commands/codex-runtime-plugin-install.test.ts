@@ -175,6 +175,7 @@ describe("Codex runtime plugin install repair", () => {
           label: "Codex",
           install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
           trustedSourceLinkedOfficialInstall: true,
+          versionBoundToOpenClaw: true,
         },
       }),
     );

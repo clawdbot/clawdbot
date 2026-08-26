@@ -4,8 +4,18 @@ import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-r
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import {
+  formatUpdateCampaignLabel,
+  formatUpdateTargetLabel,
+} from "../../app/update-overlay-helpers.ts";
+import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  personActivityRouting,
+  type PersonActivityRouting,
+} from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -18,7 +28,6 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -32,6 +41,7 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -47,6 +57,10 @@ import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
+  private personActivityRouting(): PersonActivityRouting {
+    return personActivityRouting(this.context);
+  }
+
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
       return null;
@@ -66,6 +80,64 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
+  }
+
+  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
+    if (!this.narrow) {
+      return [];
+    }
+    const actions: HeaderMenuStatusAction[] = [];
+    const overlay = this.context.overlays.snapshot;
+    if (overlay.controlUiRefreshRequired) {
+      actions.push({
+        id: "refresh",
+        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
+          "chat.sidebar.serverUpdatedRefresh",
+        )}`,
+        icon: icons.refresh,
+        tone: "info",
+        onActivate: () => globalThis.location.reload(),
+      });
+      return actions;
+    }
+
+    const campaignLabel = formatUpdateCampaignLabel(overlay.updateSchedule);
+    const targetLabel = formatUpdateTargetLabel(overlay.updateSchedule, overlay.updateAvailable);
+    const updateBusy = overlay.updateRunning || overlay.updateReconciliationPending;
+    const update = overlay.updateAvailable;
+    const target = overlay.updateSchedule?.target;
+    const updateAvailable = Boolean(
+      update &&
+      !overlay.updateSchedule?.campaign &&
+      !overlay.updateStatusBanner &&
+      (update.latestVersion !== update.currentVersion ||
+        (target?.kind === "git" && target.commitsBehind > 0)),
+    );
+    const updateLabel = overlay.updateStatusBanner?.text
+      ? overlay.updateStatusBanner.text
+      : campaignLabel
+        ? targetLabel
+          ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
+          : campaignLabel
+        : updateBusy
+          ? t("updates.sidebar.updating")
+          : updateAvailable
+            ? t("updates.page.available", { target: targetLabel ?? update?.latestVersion ?? "" })
+            : null;
+    if (updateLabel) {
+      actions.push({
+        id: "update",
+        label: updateLabel,
+        icon: overlay.updateStatusBanner
+          ? icons.alertTriangle
+          : updateBusy
+            ? icons.refresh
+            : icons.download,
+        tone: overlay.updateStatusBanner?.tone ?? (updateBusy ? "info" : "warn"),
+        onActivate: () => this.context.navigate("updates"),
+      });
+    }
+    return actions;
   }
 
   protected renderPaneHeader(
@@ -277,7 +349,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        badge: backgroundTasks.activeCount,
         onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
@@ -336,6 +408,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
     const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const personActivity = this.personActivityRouting();
     const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
@@ -360,6 +433,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       session: row,
       showOwnerChip,
       ownerViewing,
+      personActivity,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -391,6 +465,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionKey=${key}
               .excludeUserId=${renderedOwnerId}
               .maxVisible=${4}
+              .personActivity=${personActivity}
               variant="session"
             ></openclaw-viewer-facepile>`
           : nothing,
@@ -459,7 +534,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionLabel=${normalizeOptionalString(row.label) ??
               normalizeOptionalString(this.paneTitle) ??
               row.key}
-              .worktreePath=${row.execNode ? null : workspace.root}
+              .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .archived=${row.archived === true}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
@@ -468,6 +543,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
+              .statusActions=${this.compactHeaderStatusActions()}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}
               .currentOwnerId=${row.owner?.actor.id ?? null}
@@ -479,6 +555,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
               }}
+              .onOpenCommandPalette=${() =>
+                window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
               .onSettingsChange=${this.state.applySettings}
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`

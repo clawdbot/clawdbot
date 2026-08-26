@@ -688,6 +688,17 @@ describe("scripts/run-vitest", () => {
         "--coverage=false",
       ]),
     ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
   });
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
@@ -1227,30 +1238,6 @@ describe("scripts/run-vitest", () => {
       expect(timeoutSpy).toHaveBeenCalledTimes(1);
       expect(logSpy).toHaveBeenCalledWith(
         "[vitest] no output for 1000ms; terminating stalled Vitest process group.",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("includes the runner label in watchdog logs when provided", () => {
-    vi.useFakeTimers();
-    try {
-      const stdout = new EventEmitter();
-      const logSpy = vi.fn();
-
-      installVitestNoOutputWatchdog({
-        streams: [stdout],
-        timeoutMs: 1000,
-        forceKillAfterMs: 0,
-        label: "run --config test/vitest/vitest.secrets.config.ts",
-        log: logSpy,
-        onTimeout: () => {},
-      });
-
-      vi.advanceTimersByTime(1000);
-      expect(logSpy).toHaveBeenCalledWith(
-        "[vitest] no output for 1000ms; terminating stalled Vitest process group (run --config test/vitest/vitest.secrets.config.ts).",
       );
     } finally {
       vi.useRealTimers();

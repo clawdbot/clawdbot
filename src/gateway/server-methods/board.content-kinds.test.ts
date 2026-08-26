@@ -86,6 +86,8 @@ describe("board registered widget content kinds", () => {
           {
             name: "status",
             contentKind: "plugin",
+            contentOwner: "registered",
+            registeredContentKind: "diagram",
             pluginKind: "diagram:diagram",
             revision: 2,
           },
@@ -104,6 +106,8 @@ describe("board registered widget content kinds", () => {
       }
       const widget = (snapshot as BoardSnapshot).widgets[0]!;
       expect(widget).toMatchObject({
+        contentOwner: "registered",
+        registeredContentKind: "diagram",
         kindLabel: "Diagram",
         frameUrl: expect.stringContaining("/__openclaw__/board/"),
         sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),

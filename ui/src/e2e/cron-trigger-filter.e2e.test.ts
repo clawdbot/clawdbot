@@ -25,6 +25,10 @@ const conditionalJob = {
   name: "Conditional job",
   payload: { kind: "systemEvent", text: "conditional" },
   trigger: { script: "json({ fire: true })" },
+  state: {
+    triggerEvalCount: 42,
+    lastTriggerEvalAtMs: Date.now() - 3 * 60_000,
+  },
 };
 const plainJob = {
   ...baseJob,
@@ -61,7 +65,7 @@ suite.define(() => {
               ],
             },
             "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-            "cron.status": { enabled: true, jobs: 2, nextWakeAtMs: null },
+            "cron.status": { enabled: true, triggersEnabled: false, jobs: 2, nextWakeAtMs: null },
           },
         });
 
@@ -90,6 +94,17 @@ suite.define(() => {
           .poll(async () => page.locator('[data-test-id="cron-row-plain-job"]').count())
           .toBe(0);
         expect(await conditionalRow.count()).toBe(1);
+
+        await conditionalRow.click();
+        await page.getByRole("tab", { name: "Run history", exact: true }).click();
+        const activity = page.locator('[data-test-id="cron-condition-activity"]');
+        await activity.waitFor();
+        await expect.poll(() => activity.textContent()).toContain("42");
+        await expect.poll(() => activity.textContent()).toContain("3m ago");
+        await expect.poll(() => activity.textContent()).toContain("Never");
+        await expect
+          .poll(() => page.locator(".cron-empty-state").textContent())
+          .toContain("No payload runs yet");
       },
     );
   });

@@ -50,6 +50,7 @@ import {
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
+  shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
@@ -67,20 +68,11 @@ function noteGatewayRuntime(
   env: Record<string, string | undefined>,
 ): void {
   const summary = formatGatewayRuntimeSummary(serviceRuntime);
-  const hints = buildGatewayRuntimeHints(serviceRuntime, {
-    platform: process.platform,
-    env,
-  });
-  if (!summary && hints.length === 0) {
-    return;
+  const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
+  const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
+  if (lines.length > 0) {
+    note(lines.join("\n"), "Gateway");
   }
-
-  const lines: string[] = [];
-  if (summary) {
-    lines.push(`Runtime: ${summary}`);
-  }
-  lines.push(...hints);
-  note(lines.join("\n"), "Gateway");
 }
 
 async function maybeRepairLaunchAgentBootstrap(params: {
@@ -90,17 +82,11 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   prompter: DoctorPrompter;
   serviceRepairExternal: boolean;
 }): Promise<LaunchAgentBootstrapDoctorOutcome> {
-  if (process.platform !== "darwin") {
-    return { status: "skipped" };
-  }
-
-  const plistExists = await launchAgentPlistExists(params.env);
-  if (!plistExists) {
-    return { status: "skipped" };
-  }
-
-  const loaded = await isLaunchAgentLoaded({ env: params.env });
-  if (loaded) {
+  if (
+    process.platform !== "darwin" ||
+    !(await launchAgentPlistExists(params.env)) ||
+    (await isLaunchAgentLoaded({ env: params.env }))
+  ) {
     return { status: "skipped" };
   }
 
@@ -110,11 +96,12 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return { status: "not-loaded" };
   }
 
-  const shouldFix = await confirmDoctorServiceRepair(params.prompter, {
-    message: `Repair ${params.title} LaunchAgent bootstrap now?`,
-    initialValue: true,
-  });
-  if (!shouldFix) {
+  if (
+    !(await confirmDoctorServiceRepair(params.prompter, {
+      message: `Repair ${params.title} LaunchAgent bootstrap now?`,
+      initialValue: true,
+    }))
+  ) {
     return { status: "not-loaded" };
   }
 
@@ -136,8 +123,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return { status: "not-loaded" };
   }
 
-  const verified = await isLaunchAgentLoaded({ env: params.env });
-  if (!verified) {
+  if (!(await isLaunchAgentLoaded({ env: params.env }))) {
     params.runtime.error(`${params.title} LaunchAgent still not loaded after repair.`);
     return { status: "not-loaded" };
   }
@@ -172,33 +158,48 @@ function renderEstablishedGatewayConnections(connections: PortConnection[]): str
   ].join("\n");
 }
 
-async function maybeReportEstablishedGatewayClients(params: {
-  cfg: OpenClawConfig;
-  deep: boolean;
-  port?: number;
-}): Promise<void> {
-  if (!params.deep || params.cfg.gateway?.mode === "remote") {
+async function maybeReportEstablishedGatewayClients(
+  cfg: OpenClawConfig,
+  deep: boolean,
+  port?: number,
+): Promise<void> {
+  if (!deep || cfg.gateway?.mode === "remote") {
     return;
   }
-  const port = params.port ?? resolveGatewayPort(params.cfg, process.env);
-  const connections = await inspectPortConnections(port).catch(() => null);
-  const establishedClients = connections?.connections.filter(
-    (connection) => connection.direction !== "server",
-  );
-  if (establishedClients && establishedClients.length > 0) {
-    note(renderEstablishedGatewayConnections(establishedClients), "Gateway clients");
+  const targetPort = port ?? resolveGatewayPort(cfg, process.env);
+  const connections = await inspectPortConnections(targetPort).catch(() => null);
+  const clients = connections?.connections.filter(({ direction }) => direction !== "server");
+  if (clients?.length) {
+    note(renderEstablishedGatewayConnections(clients), "Gateway clients");
   }
+}
+
+async function noteGatewayPortDiagnostics(cfg: OpenClawConfig, deep: boolean): Promise<boolean> {
+  const port = resolveGatewayPort(cfg, process.env);
+  const bindHost = await resolveGatewayBindHost(
+    cfg.gateway?.bind ?? "loopback",
+    cfg.gateway?.customBindHost,
+  );
+  const diagnostics = await inspectPortUsage(port, {
+    probeHosts: resolveGatewayRequiredListenHosts(bindHost),
+  });
+  await maybeReportEstablishedGatewayClients(cfg, deep, port);
+  const conflict =
+    diagnostics.status === "busy" &&
+    !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port);
+  if (conflict) {
+    note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
+  }
+  return conflict;
 }
 
 async function noteGatewayServiceInspectionFailure(
   loadState: Extract<GatewayServiceLoadState, { status: "unknown" }>,
 ): Promise<void> {
   const lines = [`Gateway service status could not be determined: ${loadState.detail}`];
-  if (process.platform === "linux") {
-    const kind = classifySystemdUnavailableDetail(loadState.detail);
-    if (kind) {
-      lines.push(...renderSystemdUnavailableHints({ wsl: await isWSL(), kind }));
-    }
+  const kind = process.platform === "linux" && classifySystemdUnavailableDetail(loadState.detail);
+  if (kind) {
+    lines.push(...renderSystemdUnavailableHints({ wsl: await isWSL(), kind }));
   }
   lines.push(`Run ${formatCliCommand("openclaw gateway status --deep")} and retry doctor.`);
   note(lines.join("\n"), "Gateway");
@@ -224,13 +225,18 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (params.healthOk) {
-    await maybeReportEstablishedGatewayClients({
-      cfg: params.cfg,
-      deep: params.options.deep ?? false,
-    });
+    await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
   if (params.healthSkipped && params.cfg.gateway?.mode === "remote") {
+    return;
+  }
+
+  if (!(await shouldManageGatewayService())) {
+    if (params.cfg.gateway?.mode !== "remote") {
+      await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+    }
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
     return;
   }
 
@@ -239,10 +245,7 @@ export async function maybeRepairGatewayDaemon(params: {
   const service = resolveGatewayService();
   const restartGatewayService = async () => {
     try {
-      return await service.restart({
-        env: process.env,
-        stdout: process.stdout,
-      });
+      return await service.restart({ env: process.env, stdout: process.stdout });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       note(`Gateway service restart failed: ${detail}`, "Gateway");
@@ -317,25 +320,8 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (params.cfg.gateway?.mode !== "remote") {
-    const port = resolveGatewayPort(params.cfg, process.env);
-    const bindHost = await resolveGatewayBindHost(
-      params.cfg.gateway?.bind ?? "loopback",
-      params.cfg.gateway?.customBindHost,
-    );
-    const diagnostics = await inspectPortUsage(port, {
-      probeHosts: resolveGatewayRequiredListenHosts(bindHost),
-    });
-    await maybeReportEstablishedGatewayClients({
-      cfg: params.cfg,
-      deep: params.options.deep ?? false,
-      port,
-    });
-    if (
-      diagnostics.status === "busy" &&
-      !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)
-    ) {
-      note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
-    } else if (loaded && serviceRuntime?.status === "running") {
+    const conflict = await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+    if (!conflict && loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);
       if (lastError) {
         note(`Last gateway error: ${lastError}`, "Gateway");

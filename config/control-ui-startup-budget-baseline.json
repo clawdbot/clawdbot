@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 344531,
-  "reason": "canonical cross-runtime gzip sidecars",
-  "updatedAt": "2026-08-20"
+  "startupJsGzipBytes": 340901,
+  "reason": "refresh after cumulative current-main UI fixes exhausted the startup tolerance",
+  "updatedAt": "2026-08-26"
 }

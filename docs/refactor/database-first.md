@@ -150,9 +150,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   does not read or write the retired workspace JSON and `.attested` sidecars;
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
-  and the CLI are removed. Existing rows and legacy JSON stay untouched and
-  inert until an approved retention and schema-version migration can remove
-  them.
+  and the CLI are removed. The schema 7 migration discards canonical commitment
+  rows. Legacy `commitments.json` stays untouched and inert pending an accepted
+  retention decision.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -202,7 +202,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `7`, and
+- No new file-era runtime stores. The current global schema is version `9`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -226,9 +226,9 @@ proceed with these assumptions:
   SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
   `credentials/oauth.json` files are doctor migration inputs, then removed
   after import.
-- Generated model catalog state is database-backed. Runtime code must not write
-  `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
-  doctor inputs and are removed after import into `agent_model_catalogs`.
+- Generated model catalogs have no runtime-owned SQLite store or `models.json`
+  doctor import. The unused `agent_model_catalogs` table was retired in state
+  schema v10.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
   legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
@@ -299,7 +299,7 @@ The branch already has a real shared SQLite base:
   24.15+, or 25.9+. `package.json`, the CLI runtime guard, installer defaults,
   macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
-  `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
+  `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, and applies
   the build-inlined schema bytes derived from
   `src/state/openclaw-state-schema.sql`.
 - Kysely table types are generated from disposable SQLite databases created
@@ -309,7 +309,7 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The global SQLite schema is at `user_version = 7`. The per-agent schema is at
+- The global SQLite schema is at `user_version = 9`. The per-agent schema is at
   version `17`; their openers apply bounded forward migrations from supported
   older schemas. File-to-database import remains in Doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
@@ -318,10 +318,10 @@ The branch already has a real shared SQLite base:
   transcript events.
 - Current shared tables include `agent_databases`,
   `auth_profile_stores`, `auth_profile_state`,
-  `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
+  `plugin_state_entries`, `plugin_blob_entries`,
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`,
-  `delivery_queue_entries`, `model_capability_cache`,
+  `delivery_queue_entries`,
   `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
   `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
@@ -348,7 +348,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 7`; per-agent DBs use version `17`.
+  currently uses `user_version = 9`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -448,11 +448,11 @@ The branch already has a real shared SQLite base:
 - Legacy auth profile path helpers now live in doctor legacy code. Core auth
   profile path helpers expose SQLite auth-store identity and display locations,
   not `auth-profiles.json` or `auth-state.json` runtime paths.
-- Subagent run recovery and OpenRouter model capability cache runtime modules
-  now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
-  import helpers. OpenRouter capabilities use the typed generic
-  `model_capability_cache` rows under `provider_id = "openrouter"` instead of
-  one opaque cache blob or a provider-specific host table. Subagent run
+- Subagent run recovery keeps SQLite snapshot readers/writers separate from
+  doctor-only legacy JSON import helpers. OpenRouter capabilities use the
+  provider-local in-memory TTL cache in `extensions/openrouter/provider-catalog.ts`;
+  the unused `model_capability_cache` table was retired in state schema v10.
+  Subagent run
   `taskName` is stored in the typed `subagent_runs.task_name` column; the
   `payload_json` copy is replay/debug data, not the source for hot display or
   lookup fields.
@@ -496,9 +496,9 @@ The branch already has a real shared SQLite base:
 - Android device identity and cached device auth remain app-local stores. They
   require a separate Android-owned migration; the host SQLite claims do not
   describe current Android behavior.
-- Android notification recent-package history uses typed
-  `android_notification_recent_packages` rows. Runtime no longer migrates or
-  reads the old SharedPreferences CSV keys.
+- Android notification recent-package history remains app-local Kotlin state;
+  the unused `android_notification_recent_packages` table was retired in state
+  schema v10.
 - Device identity creation fails closed when a legacy `identity/device.json`
   cannot be safely imported, when the SQLite identity row is invalid, or when
   the SQLite identity store cannot be opened. Gateway startup and Doctor both
@@ -975,8 +975,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   opt-in JSONL artifacts. `OPENCLAW_CACHE_TRACE_FILE`,
   `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, `OPENCLAW_RAW_STREAM_PATH`, and
   `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` remain supported path controls. Gateway
-  stability bundles use typed SQLite `diagnostic_stability_bundles` rows and can
-  be materialized into an explicit support export.
+  stability bundles are JSON file exports owned by
+  `src/logging/diagnostic-stability-bundle.ts`; the unused
+  `diagnostic_stability_bundles` table was retired in state schema v10.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -1203,12 +1204,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   durable ACPX runtime records are the SQLite lease and gateway-instance rows;
   the old ACPX `stateDir` config surface is removed because no runtime state is
   written there anymore.
-- Gateway media attachments now use the shared `media_blobs` SQLite table as
-  the canonical byte store. Local paths returned to channel and sandbox
-  compatibility surfaces are temp materializations of the database row, not the
-  durable media store. Runtime media allowlists no longer include legacy
-  `$OPENCLAW_STATE_DIR/media` or config-dir `media` roots; those directories are
-  doctor import sources only.
+- Gateway media attachment bytes remain file-based in `src/media/store.ts`.
+  The unused `media_blobs` table was retired in state schema v10; Doctor does
+  not import media files into SQLite.
 - Shell completion no longer writes `$OPENCLAW_STATE_DIR/completions/*` cache
   files. Install, doctor, update, and release smoke paths use generated
   completion output or profile sourcing instead of durable completion cache
@@ -1439,9 +1437,8 @@ create` validates the written archive by default; `--no-verify` is the
 - The bundled session-memory hook now resolves previous-session context from
   SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
   transcript paths or `workspace/sessions` directories.
-- The bundled command-logger hook now writes command audit rows to the shared
-  SQLite `command_log_entries` table instead of appending
-  `logs/commands.log`.
+- The bundled command-logger hook remains a named log artifact. It writes only
+  `logs/commands.log`; it does not write command audit rows to SQLite.
 - Channel pairing allowlists now expose only SQLite-backed read/write helpers at
   runtime. The deprecated plugin SDK path resolver remains for migration
   compatibility; file readers live only in doctor state migration code.
@@ -1453,11 +1450,8 @@ create` validates the written archive by default; `--no-verify` is the
 - The global schema does not keep an unused `agents` registry table. Agent
   database discovery is the canonical `agent_databases` registry until runtime
   has a real agent-record owner.
-- Generated model catalog config is stored in typed global SQLite
-  `agent_model_catalogs` rows keyed by agent directory. Runtime callers use
-  `ensureOpenClawModelCatalog`; there is no `models.json` compatibility API in
-  runtime code. The implementation writes SQLite and the embedded PI registry is
-  hydrated from that stored payload without creating a `models.json` file.
+- Generated model catalogs have no runtime-owned SQLite store. The rebuildable
+  `agent_model_catalogs` cache table was retired in state schema v10.
 - QMD has no runtime export, collection, SDK, or lease surface. Doctor migrates
   configured QMD paths into builtin `memory.search.extraPaths` and can remove
   retired per-agent QMD indexes, model downloads, collection metadata, and
@@ -1478,8 +1472,8 @@ create` validates the written archive by default; `--no-verify` is the
   runtime `cache/*.json` stores, generic
   `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
   restart and lock sidecars, Voice Wake settings, plugin binding approvals,
-  installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity
-  logs and the old bundled `command-logger` text log. It also bans old
+  installed plugin index JSON, File Transfer audit JSONL, and Memory Wiki
+  activity logs. It also bans old
   root-level doctor legacy module names so
   compatibility code stays under `src/commands/doctor/`. Android debug handlers
   also use logcat/in-memory output instead of staging `camera_debug.log` or
@@ -1507,7 +1501,6 @@ plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_nam
 tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
-media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
@@ -1523,8 +1516,6 @@ workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, upd
 workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
 workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
-model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
-agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
 managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
 gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
 channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
@@ -1784,14 +1775,12 @@ Keep shared coordination state in `state/openclaw.sqlite`:
 - Plugin state
 - Sandbox container/browser registry
 - Cron/scheduler run history
-- Pairing, device, push, update-check, TUI, OpenRouter/model caches, and other
+- Pairing, device, push, update-check, TUI, and other
   small gateway-scoped runtime state
 - Backup and migration metadata
-- Gateway media attachment bytes. Done for runtime writes; direct file paths
-  are temp materializations for compatibility with channel senders and sandbox
-  staging. Runtime allowlists accept SQLite materialization paths, not legacy
-  state/config media roots. Doctor imports legacy media files into
-  `media_blobs` and removes the source files after successful row writes.
+- Gateway media attachment bytes remain file-based in `src/media/store.ts`;
+  the unused `media_blobs` table was retired in state schema v10 and has no
+  Doctor import.
 - Debug proxy capture sessions, events, and payload blobs. Done: captures live
   in the shared state DB and open through the shared state DB bootstrap, schema,
   WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
@@ -1895,7 +1884,7 @@ Backups remain one archive file:
   creation integrity check.
 - Restore copies snapshots back to their target paths without rewriting their
   recorded schema versions. The normal database open then applies bounded
-  forward migrations to the current global version `7` or per-agent version
+  forward migrations to the current global version `9` or per-agent version
   `17` when required.
 
 ### Phase 6: Worker Runtime
@@ -1949,7 +1938,7 @@ status.
 Restore should rebuild the global database and agent database files from the
 archive snapshots without rewriting their recorded schema versions. Normal
 database open applies bounded forward migrations to the current global version
-`7` or per-agent version `17`. Doctor remains the only owner of file-to-database
+`9` or per-agent version `17`. Doctor remains the only owner of file-to-database
 import. The restore command validates the archive first, then replaces each
 manifest asset from the verified extracted payload.
 
@@ -1957,7 +1946,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 7`; per-agent DBs use version
+   - The global schema now uses `user_version = 9`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
@@ -2290,7 +2279,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `gateway.<hash>.lock`
 - `qmd/embed.lock.lock`
 - `agents/<agentId>/qmd-write.lock.lock`
-- `commands.log`
 - `config-health.json`
 - `port-guard.json`
 - `settings/voicewake.json`

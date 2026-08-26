@@ -11,12 +11,14 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { materializeRuntimeCapabilities } from "../../agents/prepared-model-runtime.configured-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -29,6 +31,11 @@ import {
 } from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
 
 const modelPluginMetadataSnapshot = vi.hoisted(() => {
   const plugins = [
@@ -52,6 +59,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       skills: [],
       hooks: [],
       origin: "bundled",
+      enabledByDefault: true,
       rootDir: "/test/anthropic",
       source: "/test/anthropic/index.js",
       manifestPath: "/test/anthropic/openclaw.plugin.json",
@@ -995,6 +1003,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1056,6 +1065,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1108,6 +1118,7 @@ describe("models.list", () => {
                 id: "openclaw",
                 cloudPlacementSupported: true,
                 cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                 devicePlacementSupported: true,
                 source: "implicit",
               },
@@ -1623,94 +1634,82 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps catalog models available through a refresh-owned CLI runtime", async () => {
-    await withoutAnthropicEnvAuth(async () => {
-      await withModelsTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-models-list-cli-runtime-",
-          agentEnv: "main",
-        },
-        async (state) => {
-          const store = {
-            version: 1,
-            profiles: {
-              "anthropic:claude-cli": {
-                type: "oauth",
-                provider: "claude-cli",
-                access: "claude-cli-access",
-                refresh: "claude-cli-refresh",
-                expires: Date.now() - 60_000,
-              },
-            },
-          } as const;
-          await state.writeAuthProfiles(store);
-          replaceRuntimeAuthProfileStoreSnapshots([
-            {
-              agentDir: state.agentDir(),
-              store: Object.assign({}, store, {
-                runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
-              }),
-            },
-          ]);
-
-          const runtimeConfig = {
-            auth: {
-              profiles: {
-                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
-              },
-            },
-            agents: {
-              defaults: {
-                models: {
-                  "anthropic/claude-opus-4-8": {
-                    agentRuntime: { id: "claude-cli" },
+  it.each([
+    { authenticated: true, available: true },
+    { authenticated: false, available: false },
+  ])(
+    "projects native Claude runtime availability when authenticated=$authenticated",
+    async ({ authenticated, available }) => {
+      await withoutAnthropicEnvAuth(async () => {
+        await withModelsTestState(
+          {
+            layout: "state-only",
+            prefix: "openclaw-models-list-cli-runtime-",
+            agentEnv: "main",
+          },
+          async () => {
+            cliBackendsTesting.setDepsForTest({
+              resolveRuntimeCliBackends: () =>
+                [{ id: "claude-cli", modelProvider: "anthropic", pluginId: "anthropic" }] as never,
+            });
+            try {
+              const runtimeConfig = {
+                agents: {
+                  defaults: {
+                    models: {
+                      "anthropic/claude-opus-4-8": {
+                        agentRuntime: { id: "claude-cli" },
+                      },
+                    },
                   },
                 },
-              },
-            },
-          } as unknown as OpenClawConfig;
-          const { request, respond } = requestModelsList({
-            view: "all",
-            runtimeConfig,
-            loadGatewayModelCatalog: vi.fn(() =>
-              Promise.resolve([
-                {
-                  id: "claude-opus-4-8",
-                  name: "Claude Opus 4.8",
-                  provider: "anthropic",
-                },
-              ]),
-            ),
-            reqId: "req-models-list-cli-runtime",
-          });
-          await request;
+              } as unknown as OpenClawConfig;
+              const { request, respond } = requestModelsList({
+                view: "all",
+                runtimeConfig,
+                preparedAuthModes: authenticated ? { "claude-cli": "api_key" } : {},
+                loadGatewayModelCatalog: vi.fn(() =>
+                  Promise.resolve([
+                    {
+                      id: "claude-opus-4-8",
+                      name: "Claude Opus 4.8",
+                      provider: "anthropic",
+                    },
+                  ]),
+                ),
+                reqId: "req-models-list-cli-runtime",
+              });
+              await request;
 
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              models: [
+              expect(respond).toHaveBeenCalledWith(
+                true,
                 {
-                  id: "claude-opus-4-8",
-                  name: "Claude Opus 4.8",
-                  provider: "anthropic",
-                  agentRuntime: {
-                    id: "claude-cli",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "model",
-                  },
-                  available: true,
-                  tags: ["configured"],
+                  models: [
+                    {
+                      id: "claude-opus-4-8",
+                      name: "Claude Opus 4.8",
+                      provider: "anthropic",
+                      agentRuntime: {
+                        id: "claude-cli",
+                        cloudPlacementSupported: false,
+                        devicePlacementSupported: false,
+                        source: "model",
+                      },
+                      available,
+                      tags: ["configured"],
+                    },
+                  ],
                 },
-              ],
-            },
-            undefined,
-          );
-        },
-      );
-    });
-  });
+                undefined,
+              );
+            } finally {
+              cliBackendsTesting.resetDepsForTest();
+            }
+          },
+        );
+      });
+    },
+  );
 
   it("keeps file SecretRef provider availability unknown when read-only auth cannot resolve it", async () => {
     const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];

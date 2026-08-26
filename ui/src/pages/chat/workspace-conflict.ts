@@ -98,13 +98,21 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function workspaceConflictGitCommands(conflict: WorkspaceResultConflict):
+export function workspaceConflictGitCommands(
+  conflict: WorkspaceResultConflict,
+  requestedPath?: string,
+):
   | {
       inspect: string;
       takeCloud: string;
     }
   | undefined {
-  const entryPath = conflict.paths.find((candidate) => !hasTerminalControl(candidate));
+  const entryPath =
+    requestedPath === undefined
+      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
+      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
+        ? requestedPath
+        : undefined;
   if (!entryPath) {
     return undefined;
   }

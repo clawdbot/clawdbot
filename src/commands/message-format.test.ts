@@ -99,6 +99,33 @@ describe("formatMessageCliText displayLimit", () => {
     expect(out).not.toContain("search-15");
   });
 
+  it.each([
+    { displayLimit: 1, expectedRows: 1 },
+    { displayLimit: 75, expectedRows: 75 },
+    { displayLimit: undefined, expectedRows: 50 },
+  ])(
+    "renders $expectedRows reaction rows for displayLimit $displayLimit",
+    ({ displayLimit, expectedRows }) => {
+      const reactions = Array.from({ length: 80 }, (_, index) => ({
+        name: `reaction-${String(index).padStart(2, "0")}`,
+        count: index + 1,
+      }));
+      const result = {
+        kind: "action",
+        channel: "matrix",
+        action: "reactions",
+        handledBy: "plugin",
+        payload: { reactions },
+        dryRun: false,
+      } satisfies MessageActionResult;
+
+      const output = textJoined(formatMessageCliText(result, { displayLimit }));
+
+      expect(output).toContain(`reaction-${String(expectedRows - 1).padStart(2, "0")}`);
+      expect(output).not.toContain(`reaction-${String(expectedRows).padStart(2, "0")}`);
+    },
+  );
+
   it.each([0, 1])(
     "renders an explicit outcome for a search with no results (total: %i)",
     (totalResults) => {
@@ -213,6 +240,58 @@ describe("renderPaginationHint", () => {
 
     expect(out).not.toContain("More results available");
   });
+});
+
+describe("formatMessageCliText send results", () => {
+  it.each([
+    {
+      status: "suppressed" as const,
+      suppressionReason: "cancelled_by_message_sending_hook" as const,
+      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
+    },
+    {
+      status: "failed" as const,
+      error: "provider rejected the message",
+      expected: "provider rejected the message",
+    },
+    {
+      status: "partial_failed" as const,
+      error: "second attachment rejected",
+      messageId: "first-part-1",
+      expected: "second attachment rejected",
+    },
+  ])(
+    "reports a $status delivery without claiming success",
+    ({ status, suppressionReason, error, messageId, expected }) => {
+      const result = {
+        kind: "send",
+        action: "send",
+        channel: "directchat",
+        to: "room-1",
+        handledBy: "core",
+        payload: {},
+        dryRun: false,
+        sendResult: {
+          channel: "directchat",
+          to: "room-1",
+          via: "direct",
+          mediaUrl: null,
+          deliveryStatus: status,
+          ...(suppressionReason ? { suppressionReason } : {}),
+          ...(error ? { error } : {}),
+          ...(messageId ? { result: { channel: "directchat", messageId } } : {}),
+        },
+      } satisfies MessageActionResult;
+
+      const output = textJoined(formatMessageCliText(result));
+
+      expect(output).toContain(expected);
+      expect(output).not.toContain("✅ Sent");
+      if (messageId) {
+        expect(output).toContain(`Message ID: ${messageId}`);
+      }
+    },
+  );
 });
 
 describe("formatMessageCliText poll results", () => {

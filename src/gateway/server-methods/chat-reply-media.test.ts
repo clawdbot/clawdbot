@@ -439,16 +439,78 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(blocks).toHaveLength(2);
   });
 
-  it("does not add a failure warning when a mixed inline image survives", async () => {
+  it.each([
+    {
+      label: "before the inline image",
+      mediaUrls: (imagePath: string, dataUrl: string) => [imagePath, dataUrl],
+    },
+    {
+      label: "after the inline image",
+      mediaUrls: (imagePath: string, dataUrl: string) => [dataUrl, imagePath],
+    },
+  ])("keeps a sanitized failure receipt when unreadable media is $label", async ({ mediaUrls }) => {
     const dataUrl = dataImageUrl();
-    const { stateDir, payload } = await normalizeCodexHomeImage({
+    const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
       allowRead: false,
-      payload: (imagePath) => ({ mediaUrls: [imagePath, dataUrl] }),
+      payload: (imagePath) => ({ mediaUrls: mediaUrls(imagePath, dataUrl) }),
     });
 
-    expect(payload?.text).toBeUndefined();
+    expect(payload?.text).toBe(
+      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
+    expect(payload?.text).not.toContain(sourcePath);
+    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
     expect(payload?.mediaUrl).toBe(dataUrl);
     expect(payload?.mediaUrls).toEqual([dataUrl]);
     await expectOutboundMediaMissing(stateDir);
+  });
+
+  it.each([
+    {
+      label: "a missing attachment before the staged attachment",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        missingPath,
+        imagePath,
+        dataUrl,
+      ],
+    },
+    {
+      label: "a missing attachment after the staged attachment",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        imagePath,
+        missingPath,
+        dataUrl,
+      ],
+    },
+    {
+      label: "multiple missing attachments around surviving media",
+      mediaUrls: (missingPath: string, imagePath: string, dataUrl: string) => [
+        missingPath,
+        imagePath,
+        dataUrl,
+        path.join(path.dirname(imagePath), "private customer report.png"),
+      ],
+    },
+  ])("keeps exactly one failure receipt for $label", async ({ mediaUrls }) => {
+    const dataUrl = dataImageUrl();
+    const { stateDir, sourcePath, payload } = await normalizeCodexHomeImage({
+      allowRead: true,
+      payload: (imagePath) => ({
+        text: "Here is the surviving attachment",
+        mediaUrls: mediaUrls(path.join(path.dirname(imagePath), "missing.png"), imagePath, dataUrl),
+      }),
+    });
+    const normalizedLocalPath = requireString(payload?.mediaUrls?.[0], "normalized local media");
+
+    expect(payload?.text).toBe(
+      "Here is the surviving attachment\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    );
+    expect(payload?.text).not.toContain(sourcePath);
+    expect(payload?.text).not.toContain("private customer report.png");
+    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
+    expect(payload?.mediaUrl).toBe(normalizedLocalPath);
+    expect(payload?.mediaUrls).toEqual([normalizedLocalPath, dataUrl]);
+    expect(normalizedLocalPath).not.toBe(sourcePath);
+    expect(normalizedLocalPath.startsWith(path.join(stateDir, "media"))).toBe(true);
   });
 });

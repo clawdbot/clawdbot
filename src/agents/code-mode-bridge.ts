@@ -26,6 +26,11 @@ import {
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
+import {
+  consumeTrustedToolNoStartError,
+  registerTrustedToolNoStartError,
+} from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,
@@ -179,6 +184,12 @@ export function codeModeReplayIdForToolCall(
 function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   if (!resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled) {
     throw new ToolInputError("code mode swarm globals are disabled.");
+  }
+  // Swarm globals are the sessions_spawn capability: phase/log emit foreground lifecycle
+  // events and agents.run launches collectors. A run that executes only an allowlist
+  // (detached skill review) gets the same refusal as the tool, never the foreground session.
+  if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
+    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
   }
 }
 
@@ -380,6 +391,7 @@ export async function runBridgeRequest(params: {
   parentToolCallId: string;
   codeModeRunId: string;
   maxOutputBytes: number;
+  remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -439,7 +451,24 @@ export async function runBridgeRequest(params: {
         if (!binding) {
           throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
         }
-        const called = await params.runtime.callExactId(binding.id, values[1] ?? {}, {
+        let input = values[1] ?? {};
+        if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          // The shell's 10s default equals Code Mode's default budget. Yield
+          // within the remaining shared deadline so late sequential calls can
+          // still return their process handle and resume the guest inline.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+          };
+        }
+        const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
@@ -561,10 +590,14 @@ export async function runBridgeRequest(params: {
       value: boundCodeModeValue(value, params.maxOutputBytes),
     };
   } catch (error) {
-    return {
+    const settled: SettledBridgeRequest = {
       id: params.request.id,
       ok: false,
       error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
     };
+    if (consumeTrustedToolNoStartError(error)) {
+      registerTrustedToolNoStartError(settled);
+    }
+    return settled;
   }
 }

@@ -22,6 +22,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
@@ -787,6 +788,22 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
+export async function removeManagedOutgoingMediaBlocks(params: {
+  blocks: readonly Record<string, unknown>[];
+  messageId: string;
+  stateDir?: string;
+}): Promise<void> {
+  const stateDir = params.stateDir ?? resolveStateDir();
+  await Promise.all(
+    collectManagedOutgoingAttachmentRefs(params.blocks).map(async ({ attachmentId }) => {
+      const record = readManagedImageRecord(attachmentId, stateDir);
+      if (record?.messageId === params.messageId) {
+        await deleteManagedImageRecordArtifacts(record, stateDir);
+      }
+    }),
+  );
+}
+
 function resolveManagedSessionOwnerAgentId(
   sessionKey: string,
   explicitAgentId?: string,
@@ -845,9 +862,13 @@ function buildManagedImageResizeWarningBlock(params: {
   };
 }
 
-function toRecordFilename(filePath: string) {
-  const name = path.basename(filePath).trim();
-  return name || null;
+function toRecordFilename(filePath: string, attachmentName?: string, fallbackName?: string) {
+  const fallback = fallbackName ?? path.basename(filePath).trim();
+  if (!attachmentName?.trim()) {
+    return fallback || null;
+  }
+  const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
+  return `${path.parse(safeName).name}${path.extname(filePath)}`;
 }
 
 function asArray(value: string[] | undefined | null) {
@@ -1528,10 +1549,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
-          filename:
-            mediaKind === "image"
-              ? toRecordFilename(savedOriginal.path)
-              : attachmentMetadata?.name?.trim() || label,
+          filename: toRecordFilename(
+            savedOriginal.path,
+            attachmentMetadata?.name,
+            mediaKind === "image" ? undefined : label,
+          ),
         },
       };
       let playback: "native" | "transcode" | undefined;

@@ -375,6 +375,17 @@ function selectAgentHarnessDecision(
         });
       }
       if (support.fallbackRuntime === "openclaw") {
+        if (policy.forcedByEnvironment) {
+          log.info(
+            `agent harness selected requested=${runtime} selected=${forced.id} reason=private_qa_forced_runtime`,
+          );
+          return buildSelectionDecision({
+            harness: forced,
+            policy,
+            selectedReason: "forced_plugin",
+            candidates: listHarnessCandidates(pluginHarnesses),
+          });
+        }
         return buildSelectionDecision({
           harness: openClawHarness,
           policy: { ...policy, runtime: "openclaw" },

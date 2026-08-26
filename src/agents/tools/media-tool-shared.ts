@@ -18,13 +18,19 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
-import { classifyMediaReferenceSource } from "../../media/media-reference.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
+import type { WebMediaResult } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import { resolveUserPath } from "../../utils.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { normalizeModelRef } from "../model-selection.js";
 import {
+  createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
   type SandboxedBridgeMediaPathConfig,
 } from "../sandbox-media-paths.js";
@@ -34,7 +40,7 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import type { ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl, ImageModelConfig } from "./image-tool.helpers.js";
 import {
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
@@ -102,36 +108,6 @@ export function applyImageModelConfigDefaults(
 }
 
 /**
- * Applies an image-generation model as the agent default for downstream tool calls.
- */
-export function applyImageGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig);
-}
-
-/**
- * Applies a video-generation model as the agent default for downstream tool calls.
- */
-export function applyVideoGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  videoGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "video", videoGenerationModelConfig);
-}
-
-/**
- * Applies a music-generation model as the agent default for downstream tool calls.
- */
-export function applyMusicGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  musicGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig);
-}
-
-/**
  * Reads an optional generation timeout while preserving common tool parameter validation.
  */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
@@ -149,7 +125,7 @@ export function resolveRemoteMediaSsrfPolicy(
   return cfg?.tools?.web?.fetch?.ssrfPolicy;
 }
 
-function applyAgentDefaultModelConfig(
+export function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
   key: "imageModel" | "image" | "video" | "music",
   modelConfig: ToolModelConfig,
@@ -157,22 +133,15 @@ function applyAgentDefaultModelConfig(
   if (!cfg) {
     return undefined;
   }
-  if (key === "imageModel") {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: { ...cfg.agents?.defaults, imageModel: modelConfig },
-      },
-    };
-  }
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig },
+        ...(key === "imageModel"
+          ? { imageModel: modelConfig }
+          : { mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig } }),
       },
     },
   };
@@ -467,36 +436,24 @@ export function hasGenerationToolAvailability(params: {
   );
 }
 
-function formatQuotedList(values: readonly string[]): string {
-  if (values.length === 1) {
-    return `"${values[0]}"`;
-  }
-  if (values.length === 2) {
-    return `"${values[0]}" or "${values[1]}"`;
-  }
-  return `${values
-    .slice(0, -1)
-    .map((value) => `"${value}"`)
-    .join(", ")}, or "${values[values.length - 1]}"`;
-}
-
 /**
  * Reads a constrained generation action and raises a tool-input error for invalid values.
  */
-export function resolveGenerateAction<TAction extends string>(params: {
-  args: Record<string, unknown>;
-  allowed: readonly TAction[];
-  defaultAction: TAction;
-}): TAction {
-  const raw = readToolStringParam(params.args, "action");
-  if (!raw) {
-    return params.defaultAction;
+export function resolveGenerateAction(
+  args: Record<string, unknown>,
+): "generate" | "status" | "list" {
+  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
+  switch (action) {
+    case undefined:
+    case "generate":
+      return "generate";
+    case "status":
+      return "status";
+    case "list":
+      return "list";
+    default:
+      throw new ToolInputError('action must be "generate", "status", or "list"');
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized && (params.allowed as readonly string[]).includes(normalized)) {
-    return normalized as TAction;
-  }
-  throw new ToolInputError(`action must be ${formatQuotedList(params.allowed)}`);
 }
 
 /**
@@ -640,6 +597,107 @@ export async function resolveMediaToolReferenceAccess(params: {
   };
 }
 
+type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
+
+/** Loads generation references while retaining each tool's distinct transport and sandbox policy. */
+export async function loadMediaToolReferences<T>(params: {
+  inputs: string[];
+  toolName: "image_generate" | "video_generate" | "music_generate";
+  expectedKind: "image" | "video" | "audio";
+  sandbox: SandboxedBridgeMediaPathConfig | null;
+  workspaceDir?: string;
+  maxBytes?: number;
+  ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  mapMedia: (media: LoadedToolReferenceMedia) => T;
+  mapRemote?: (url: string) => T;
+}): Promise<Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }>> {
+  const loaded: Array<{ source: T; resolvedInput: string; rewrittenFrom?: string }> = [];
+  for (const rawInput of params.inputs) {
+    params.signal?.throwIfAborted();
+    const input = normalizeMediaReferenceSource(rawInput.trim().replace(/^@\s*/, ""));
+    if (!input) {
+      throw new ToolInputError(`${params.expectedKind} required (empty string in array)`);
+    }
+    const reference = classifyMediaReferenceSource(input);
+    if (reference.hasUnsupportedScheme) {
+      throw new ToolInputError(
+        `Unsupported ${params.expectedKind} reference: ${rawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+      );
+    }
+    if (params.sandbox && reference.isHttpUrl) {
+      const label = params.toolName === "image_generate" ? "" : `${params.expectedKind} `;
+      throw new ToolInputError(`Sandboxed ${params.toolName} does not allow remote ${label}URLs.`);
+    }
+    const resolvedInput = !params.sandbox && input.startsWith("~") ? resolveUserPath(input) : input;
+    if (reference.isHttpUrl && params.mapRemote) {
+      loaded.push({ source: params.mapRemote(resolvedInput), resolvedInput });
+      continue;
+    }
+    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+      input: resolvedInput,
+      isDataUrl: reference.isDataUrl,
+      workspaceDir: params.workspaceDir,
+      sandbox: params.sandbox,
+    });
+    params.signal?.throwIfAborted();
+    if (reference.isDataUrl && params.expectedKind !== "image") {
+      throw new ToolInputError(
+        `${params.expectedKind} data: URLs are not supported for ${params.toolName}.`,
+      );
+    }
+    let media: LoadedToolReferenceMedia;
+    if (reference.isDataUrl) {
+      const { decodeDataUrl } = await import("./image-tool.helpers.js");
+      params.signal?.throwIfAborted();
+      media = decodeDataUrl(
+        resolvedInput,
+        params.toolName === "image_generate" ? { maxBytes: params.maxBytes } : undefined,
+      );
+    } else {
+      const { loadWebMedia } = await import("../../media/web-media.js");
+      params.signal?.throwIfAborted();
+      const timeout =
+        params.toolName === "music_generate" && !params.sandbox
+          ? buildTimeoutAbortSignal({
+              timeoutMs: params.timeoutMs ?? 30_000,
+              operation: "music-generate.reference-fetch",
+              ...(params.signal ? { signal: params.signal } : {}),
+              ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
+            })
+          : undefined;
+      try {
+        media = await loadWebMedia(resolvedPath ?? resolvedInput, {
+          ...(params.toolName === "music_generate" ? {} : { maxBytes: params.maxBytes }),
+          ...(params.sandbox
+            ? {
+                sandboxValidated: true,
+                readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
+              }
+            : { localRoots, ssrfPolicy: params.ssrfPolicy }),
+          ...(params.toolName === "image_generate" && reference.isHttpUrl
+            ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+            : {}),
+          ...(timeout?.signal || params.signal
+            ? { requestInit: { signal: timeout?.signal ?? params.signal } }
+            : {}),
+        });
+      } finally {
+        timeout?.cleanup();
+      }
+    }
+    params.signal?.throwIfAborted();
+    if (media.kind !== params.expectedKind) {
+      const kind = params.toolName === "image_generate" ? media.kind : (media.kind ?? "unknown");
+      throw new ToolInputError(`Unsupported media type: ${kind}`);
+    }
+    const loadedReference = { source: params.mapMedia(media), resolvedInput };
+    loaded.push(rewrittenFrom ? { ...loadedReference, rewrittenFrom } : loadedReference);
+  }
+  return loaded;
+}
+
 /**
  * Resolves channel-scoped inbound attachment roots separately from host-local roots.
  */
@@ -694,30 +752,6 @@ export function buildTextToolResult(
       attempts: result.attempts,
     },
   };
-}
-
-/**
- * Resolves a catalog model while supporting registries that index model ids with provider prefixes.
- */
-export function resolveModelFromRegistry(params: {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-}): Model {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
-    allowPluginNormalization: false,
-  });
-  let model = params.modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model | null;
-  if (!model && !resolvedRef.model.includes("/")) {
-    model = params.modelRegistry.find(
-      resolvedRef.provider,
-      `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model | null;
-  }
-  if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
-  }
-  return model;
 }
 
 /**

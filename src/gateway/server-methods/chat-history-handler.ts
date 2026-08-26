@@ -1,11 +1,6 @@
 // Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   ErrorCodes,
-  type AgentsListResult,
   errorShape,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -37,7 +32,6 @@ import {
   getSessionDefaults,
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionRow,
-  listAgentsForGateway,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
@@ -54,11 +48,10 @@ import {
   capChatHistoryAroundMessage,
   enrichChatHistoryCompactionMarkers,
   readChatHistoryPage,
-  readChatHistoryMessageSeq,
+  resolveChatHistoryNextOffset,
+  shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
-import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import type { ChatStartupProjectionResult } from "./chat-startup-projection-contract.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
   loadOptionalServerMethodModelCatalogSnapshot,
@@ -119,60 +112,14 @@ async function handleChatMetadataRequest({
 // The UI fills metadata gaps as soon as chat.startup returns, so history never waits
 // beyond this budget for a catalog snapshot that requires slower discovery.
 const CHAT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-  replayOldestRecord?: boolean;
-}): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq !== undefined) {
-    const recordOffset = params.totalMessages - oldestSeq + 1;
-    const replayOffset = recordOffset - 1;
-    if (params.replayOldestRecord && replayOffset > params.offset) {
-      return replayOffset;
-    }
-    // A replay cursor that does not advance strands every older record. Skip
-    // the pathological projected siblings and continue with the next record.
-    return Math.max(params.offset + 1, recordOffset);
-  }
-  return params.offset + params.rawPageMessages;
-}
-
-function shouldReplayOldestChatHistoryRecord(params: {
-  projected: unknown[];
-  bounded: unknown[];
-}): boolean {
-  const oldestSeq = params.bounded
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq === undefined) {
-    return false;
-  }
-  const projectedCount = params.projected.filter(
-    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
-  ).length;
-  const boundedCount = params.bounded.filter(
-    (message) => readChatHistoryMessageSeq(message) === oldestSeq,
-  ).length;
-  return boundedCount < projectedCount;
-}
 
 async function handleChatHistoryRequest({
   params,
   respond,
   context,
-  client,
   method,
-  includeAgentsList,
-  includeMetadata,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
-  includeAgentsList?: boolean;
-  includeMetadata?: boolean;
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
@@ -314,58 +261,28 @@ async function handleChatHistoryRequest({
           return load;
         })()
       : Promise.resolve(undefined);
-  const startupProjectionsPromise =
-    method === "chat.startup"
-      ? (() => {
-          const includeSystem = hasGatewayClientCap(
-            client?.connect.caps,
-            GATEWAY_CLIENT_CAPS.AGENT_KIND,
+  const readStartupProjection = () =>
+    measureDiagnosticsTimelineSpan(
+      `gateway.${method}.startup_projection`,
+      async () => {
+        try {
+          return await context.readChatStartupProjection?.({
+            agentId: sessionAgentId,
+            sessionEntry: entry,
+          });
+        } catch (error) {
+          context.logGateway.debug(
+            `chat.startup continuing without prepared startup projection: ${formatErrorMessage(error)}`,
           );
-          return measureDiagnosticsTimelineSpan(
-            `gateway.${method}.startup_projections`,
-            async () => {
-              const projection = context.readChatStartupProjection
-                ? await context
-                    .readChatStartupProjection({
-                      agentId: sessionAgentId,
-                      sessionEntry: entry,
-                      includeSystem,
-                    })
-                    .catch((error: unknown) => {
-                      context.logGateway.debug(
-                        `chat.startup continuing without prepared startup projection: ${formatErrorMessage(error)}`,
-                      );
-                      return undefined;
-                    })
-                : undefined;
-              const metadata = includeMetadata
-                ? (projection?.metadata ??
-                  (await context
-                    .readChatMetadata({
-                      agentId: sessionAgentId,
-                      sessionEntry: entry,
-                    })
-                    .catch((error: unknown) => {
-                      context.logGateway.debug(
-                        `chat.startup continuing without metadata: ${formatErrorMessage(error)}`,
-                      );
-                      return undefined;
-                    })))
-                : undefined;
-              const agentsList = includeAgentsList
-                ? (projection?.agentsList ??
-                  listAgentsForGateway(cfg, undefined, { includeSystem }))
-                : undefined;
-              return { agentsList, projection, metadata };
-            },
-            {
-              config: cfg,
-              phase: method,
-              attributes: { agentId: sessionAgentId, includeSystem },
-            },
-          );
-        })()
-      : Promise.resolve(undefined);
+          return undefined;
+        }
+      },
+      { config: cfg, phase: method, attributes: { agentId: sessionAgentId } },
+    );
+  const startupProjectionPromise =
+    method === "chat.startup" && entry?.authProfileOverride?.trim()
+      ? readStartupProjection()
+      : undefined;
   const sessionId = requestedSessionId ?? entry?.sessionId;
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
@@ -466,10 +383,11 @@ async function handleChatHistoryRequest({
   const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
   const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
   const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
-  const startupProjections = await startupProjectionsPromise;
-  const startupProjection: ChatStartupProjectionResult | undefined = startupProjections?.projection;
-  const startupMetadata: ChatMetadataResult | undefined = startupProjections?.metadata;
-  const startupAgentsList: AgentsListResult | undefined = startupProjections?.agentsList;
+  const startupProjection =
+    method === "chat.startup"
+      ? await (startupProjectionPromise ?? readStartupProjection())
+      : undefined;
+  const startupMetadata = startupProjection?.metadata;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog ?? modelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog ?? modelCatalog;
   const sessionInfo = measureDiagnosticsTimelineSpanSync(
@@ -535,11 +453,6 @@ async function handleChatHistoryRequest({
     agentId: activeRunAgentId,
     defaultAgentId: compatibilityOwnerAgentId,
   });
-  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
-    snapshot: inFlightRun,
-    messages: capped,
-    maxBytes: maxHistoryBytes,
-  });
   if (cursor !== undefined) {
     if (!sessionId || !storePath || resolveClaudeCliBindingSessionId(entry)) {
       respond(true, { kind: "reset" });
@@ -583,16 +496,26 @@ async function handleChatHistoryRequest({
       return;
     }
     sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
+    const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+      snapshot: inFlightRun,
+      messages: delta.messages,
+      maxBytes: maxHistoryBytes,
+    });
     respond(true, {
       kind: "delta",
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       sessionInfo,
-      ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
     });
     return;
   }
+  const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+    snapshot: inFlightRun,
+    messages: capped,
+    maxBytes: maxHistoryBytes,
+  });
   const payload = {
     sessionKey,
     sessionId,
@@ -612,7 +535,6 @@ async function handleChatHistoryRequest({
     toolOverrides: entry?.toolOverrides,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
-    ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
@@ -623,12 +545,7 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
     await handleChatHistoryRequest({ ...opts, method: "chat.history" });
   },
   "chat.startup": async (opts) => {
-    await handleChatHistoryRequest({
-      ...opts,
-      method: "chat.startup",
-      includeAgentsList: true,
-      includeMetadata: true,
-    });
+    await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
   },
   "chat.metadata": handleChatMetadataRequest,
 };

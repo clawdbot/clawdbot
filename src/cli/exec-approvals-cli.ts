@@ -22,6 +22,7 @@ import {
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
@@ -35,6 +36,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovals,
   updateExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsDefaults,
@@ -367,7 +369,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   }
   if (params.opts.json) {
-    defaultRuntime.writeJson(next, 0);
+    defaultRuntime.writeJson(isFileApprovalsSnapshot(next) ? redactExecApprovals(next) : next, 0);
     return;
   }
   defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
@@ -1011,8 +1013,7 @@ async function saveSnapshot(
 }
 
 function resolveAgentKey(value?: string | null): string {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? trimmed : "*";
+  return value == null ? "*" : requireTrimmedNonEmpty(value, "--agent must not be blank");
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
@@ -1048,6 +1049,15 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   agent: ExecApprovalsAgent;
   allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
 }> {
+  const agentKey = resolveAgentKey(opts.agent);
+  if (agentKey !== "*") {
+    const source = !opts.gateway && !opts.node ? "local" : opts.gateway ? "gateway" : "node";
+    const { config } = await loadConfigForApprovalsTarget({ opts, source });
+    if (!config) {
+      exitWithError("Config unavailable; cannot validate --agent.");
+    }
+    resolveConfiguredAgentId(config, agentKey);
+  }
   const { snapshot, nodeId, source, targetLabel, baseHash, kind } =
     await loadWritableSnapshotTarget(opts);
   if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
@@ -1058,7 +1068,6 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   const file = snapshot.file;
   file.version = 1;
 
-  const agentKey = resolveAgentKey(opts.agent);
   const agent = ensureAgent(file, agentKey);
   const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
 
@@ -1180,7 +1189,8 @@ export function registerExecApprovalsCli(program: Command) {
           nativePolicy,
         });
         if (opts.json) {
-          defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
+          const outputSnapshot = fileSnapshot ? redactExecApprovals(fileSnapshot) : snapshot;
+          defaultRuntime.writeJson({ ...outputSnapshot, effectivePolicy }, 0);
           return;
         }
 

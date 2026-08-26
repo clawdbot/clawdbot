@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
@@ -10,8 +13,10 @@ import {
   sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const sha = "a".repeat(40);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("watch-pr-ci", () => {
   it("parses defaults and overrides", () => {
@@ -77,7 +82,7 @@ describe("watch-pr-ci", () => {
       "-f",
       `head_sha=${sha}`,
       "-f",
-      "per_page=1",
+      "per_page=20",
     ]);
   });
 
@@ -88,6 +93,76 @@ describe("watch-pr-ci", () => {
     expect(selectRunAfter(runs, 102)).toBeUndefined();
     expect(selectRunAfter(runs)).toBe(newer);
   });
+
+  it("skips newer draft runs without weakening the --after boundary", () => {
+    const skipped = { id: 103, conclusion: "skipped" };
+    const successful = { id: 102, conclusion: "success" };
+
+    expect(selectRunAfter([skipped, successful])).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 101)).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 102)).toBeUndefined();
+    expect(selectRunAfter([skipped])).toBeUndefined();
+    for (const conclusion of [null, "failure", "cancelled"]) {
+      const attachable = { id: 102, conclusion };
+      expect(selectRunAfter([skipped, attachable])).toBe(attachable);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "attaches to real CI when a newer draft workflow was skipped",
+    () => {
+      const binDir = tempDirs.make("openclaw-watch-pr-ci-");
+      const ghPath = join(binDir, "gh");
+      writeFileSync(
+        ghPath,
+        `#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
+  "api --method")
+    case " $* " in
+      *" per_page=1 "*) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"}]}\\n' ;;
+      *) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"},{"id":201,"conclusion":"success"}]}\\n' ;;
+    esac
+    ;;
+  "run view")
+    if [ "$3" = "202" ]; then
+      printf '{"status":"completed","conclusion":"skipped"}\\n'
+    else
+      printf '{"status":"completed","conclusion":"success"}\\n'
+    fi
+    ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 2 ;;
+esac
+`,
+      );
+      chmodSync(ghPath, 0o755);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/watch-pr-ci.mjs",
+          "42",
+          sha,
+          "--completion",
+          "ci-run",
+          "--attach-timeout",
+          "1",
+          "--timeout",
+          "1",
+          "--interval",
+          "1",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("ATTACHED run=201");
+      expect(result.stdout).toContain("GREEN");
+    },
+  );
 
   it("sanitizes untrusted check names for terminal output", () => {
     expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");
@@ -319,6 +394,78 @@ describe("watch-pr-ci", () => {
       }),
     ).toEqual({ verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 });
   });
+
+  it.each<{
+    label: string;
+    name?: string;
+    conclusion?: string;
+    event?: string | null;
+    workflowId?: number | null;
+    newerRunId?: number;
+    newerWorkflowId?: number | null;
+    ciStatus?: string;
+    verdict?: string;
+  }>([
+    { label: "pending CI", ciStatus: "IN_PROGRESS", verdict: "PENDING" },
+    { label: "successful CI with a different check name", name: "target guard", verdict: "GREEN" },
+    { label: "latest target cancellation", newerRunId: 100 },
+    { label: "real target failure", conclusion: "FAILURE" },
+    { label: "another event's cancellation", event: "pull_request" },
+    { label: "another workflow", newerWorkflowId: 20 },
+    { label: "unknown event", event: null },
+    { label: "unknown visible workflow identity", workflowId: null },
+    { label: "unknown replacement workflow identity", newerWorkflowId: null },
+  ])(
+    "uses newer same-workflow target-run identity without hiding $label",
+    ({
+      name = "dispatch",
+      conclusion = "CANCELLED",
+      event = "pull_request_target",
+      workflowId = 10,
+      newerRunId = 200,
+      newerWorkflowId = 10,
+      ciStatus = "COMPLETED",
+      verdict = "FAILING",
+    }) => {
+      expect(
+        classifyRollup(
+          {
+            state: "FAILURE",
+            contexts: {
+              nodes: [
+                {
+                  kind: "CheckRun",
+                  name,
+                  status: "COMPLETED",
+                  conclusion,
+                  checkSuite: {
+                    workflowRun: {
+                      databaseId: 100,
+                      event: event ?? undefined,
+                      workflow: { databaseId: workflowId ?? undefined },
+                    },
+                  },
+                },
+                {
+                  kind: "CheckRun",
+                  name: "CI",
+                  status: ciStatus,
+                  conclusion: ciStatus === "COMPLETED" ? "SUCCESS" : null,
+                  checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
+                },
+              ],
+            },
+          },
+          [{ id: newerRunId, workflow_id: newerWorkflowId ?? undefined }],
+        ),
+      ).toEqual({
+        verdict,
+        pendingCount: ciStatus === "IN_PROGRESS" ? 1 : 0,
+        failingNames: verdict === "FAILING" ? [name] : [],
+        supersededCount: verdict === "FAILING" ? 0 : 1,
+      });
+    },
+  );
 
   it("keeps only the newest same-run check attempt while its replacement is pending", () => {
     expect(

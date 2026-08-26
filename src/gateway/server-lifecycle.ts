@@ -85,7 +85,6 @@ export async function prepareGatewayLifecycle(params: {
     watchNodeRequestHandler,
     defaultWorkspaceDir,
     activeTaskCount,
-    residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     nodeDesktopObserveAvailable,
@@ -217,6 +216,7 @@ export async function prepareGatewayLifecycle(params: {
       cfg: cfgAtStart,
       deps,
       broadcast,
+      resolveGatewayContext: runtime.resolvePluginGatewayContext,
     }),
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
@@ -249,11 +249,9 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
     setEarlyRuntimeHandles: (handles: {
-      bonjourStop: typeof runtimeState.bonjourStop;
       getActiveTaskCount: () => number;
       skillsChangeUnsub: typeof runtimeState.skillsChangeUnsub;
     }) => {
-      runtimeState.bonjourStop = handles.bonjourStop;
       activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
@@ -326,20 +324,9 @@ export async function prepareGatewayLifecycle(params: {
     addGatewayLifetimeSidecar: (sidecar: (typeof runtimeState.gatewayLifetimeSidecars)[number]) => {
       runtimeState.gatewayLifetimeSidecars.push(sidecar);
     },
-    setMaintenanceHandles: (handles: {
-      tickInterval: typeof runtimeState.tickInterval;
-      healthInterval: typeof runtimeState.healthInterval;
-      dedupeCleanup: typeof runtimeState.dedupeCleanup;
-      stopMediaCleanup: typeof runtimeState.stopMediaCleanup;
-      worktreeCleanup: typeof runtimeState.worktreeCleanup;
-      skillCuratorCleanup: typeof runtimeState.skillCuratorCleanup;
-    }) => {
-      runtimeState.tickInterval = handles.tickInterval;
-      runtimeState.healthInterval = handles.healthInterval;
-      runtimeState.dedupeCleanup = handles.dedupeCleanup;
+    setMaintenanceHandles: (handles: NonNullable<typeof runtimeState.maintenance>) => {
+      runtimeState.maintenance = handles;
       runtimeState.stopMediaCleanup = handles.stopMediaCleanup;
-      runtimeState.worktreeCleanup = handles.worktreeCleanup;
-      runtimeState.skillCuratorCleanup = handles.skillCuratorCleanup;
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
@@ -349,7 +336,7 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     isConnectionActive,
     onReplace: (connId, sessionKeys) => {
-      const client = [...clients].find((candidate) => candidate.connId === connId);
+      const client = clients.getByConnectionId(connId);
       if (!client?.presenceKey) {
         return;
       }
@@ -514,7 +501,7 @@ export async function prepareGatewayLifecycle(params: {
     const transport = transportBridge.current();
     await transport?.portalService.closeAll();
     await shutdownRuntime.createGatewayCloseHandler({
-      bonjourStop: runtimeState.bonjourStop,
+      bonjourStop: kernel.swapBonjourStop(null),
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
       channelIds,
@@ -526,12 +513,8 @@ export async function prepareGatewayLifecycle(params: {
       stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
       nodePresenceTimers,
       broadcast,
-      tickInterval: runtimeState.tickInterval,
-      healthInterval: runtimeState.healthInterval,
-      dedupeCleanup: runtimeState.dedupeCleanup,
+      maintenance: runtimeState.maintenance,
       stopMediaCleanup: stopMediaCleanupForClose,
-      worktreeCleanup: runtimeState.worktreeCleanup,
-      skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
@@ -599,35 +582,28 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
-  const diagnosticHeartbeatResident = residentRegistry.register({
-    name: "diagnostic-heartbeat",
-    start: () => {
-      // Gateway lifecycle owns both this existing heartbeat timer and the monitor
-      // it samples, so startup failure and normal close tear them down together.
-      startDiagnosticHeartbeat(undefined, {
-        getConfig: getRuntimeConfig,
-        startupGraceMs: 60_000,
-        sampleLiveness: () => {
-          const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-          if (!sample || sample.degradedSinceMs == null) {
-            return null;
-          }
-          return {
-            reasons: sample.reasons,
-            intervalMs: sample.intervalMs,
-            degradedSinceMs: sample.degradedSinceMs,
-            eventLoopDelayP99Ms: sample.delayP99Ms,
-            eventLoopDelayMaxMs: sample.delayMaxMs,
-            eventLoopUtilization: sample.utilization,
-            cpuCoreRatio: sample.cpuCoreRatio,
-          };
-        },
-      });
-    },
-    stop: () => stopDiagnosticHeartbeat(),
-  });
   if (diagnosticsEnabled) {
-    diagnosticHeartbeatResident.start();
+    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // it samples, so startup failure and normal close tear them down together.
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+      sampleLiveness: () => {
+        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!sample || sample.degradedSinceMs == null) {
+          return null;
+        }
+        return {
+          reasons: sample.reasons,
+          intervalMs: sample.intervalMs,
+          degradedSinceMs: sample.degradedSinceMs,
+          eventLoopDelayP99Ms: sample.delayP99Ms,
+          eventLoopDelayMaxMs: sample.delayMaxMs,
+          eventLoopUtilization: sample.utilization,
+          cpuCoreRatio: sample.cpuCoreRatio,
+        };
+      },
+    });
   }
 
   return {

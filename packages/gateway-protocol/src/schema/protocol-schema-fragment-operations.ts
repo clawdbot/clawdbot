@@ -17,6 +17,7 @@ export const OperationsProtocolSchemas = {
   AuditActivityListResult: auditActivity.AuditActivityListResultSchema,
   ExecutionIdentityContextV1: auditRun.ExecutionIdentityContextV1Schema,
   DecisionReceiptV1: auditRun.DecisionReceiptV1Schema,
+  DecisionReceiptDisplayV1: auditRun.DecisionReceiptDisplayV1Schema,
   AuditRunIdentityPresentV1: auditRun.AuditRunIdentityPresentV1Schema,
   AuditRunIdentityUnknownV1: auditRun.AuditRunIdentityUnknownV1Schema,
   AuditRunIdentityUnsupportedV1: auditRun.AuditRunIdentityUnsupportedV1Schema,

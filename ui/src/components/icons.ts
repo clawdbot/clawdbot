@@ -28,6 +28,8 @@ export const icons = {
   activity: strokeIcon(svg` <path d="M22 12h-4l-3 9L9 3l-3 9H2" />`),
   clock: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <polyline points="12 6 12 12 16 14" />`),
+  arrowUpRight: strokeIcon(svg` <path d="M7 17 17 7" />
+    <path d="M7 7h10v10" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />`),
   radio: strokeIcon(svg` <circle cx="12" cy="12" r="2" />
@@ -68,6 +70,8 @@ export const icons = {
     <path d="M2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6" />
     <path d="M12 10V3" />
     <path d="m8 6 4-4 4 4" />`),
+  inbox: strokeIcon(svg` <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+    <path d="m5.45 5.11-3.45 6.89v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89a2 2 0 0 0-1.79-1.11h-9.52a2 2 0 0 0-1.79 1.11z" />`),
   star: strokeIcon(
     svg`<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />`,
   ),
@@ -288,7 +292,6 @@ export const icons = {
     <path d="M13 6h8" />
     <path d="M13 12h8" />
     <path d="M13 18h8" />`),
-
   ...toolIcons,
 } as const;
 

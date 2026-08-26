@@ -1,10 +1,26 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { defaultRuntime } from "../runtime.js";
 import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./one-shot-exit.js";
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
+
+function spyOnExit(onExit?: (code: number) => void) {
+  const exited = createDeferred();
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+    onExit?.(code);
+    exited.resolve();
+  });
+  return {
+    exit,
+    waitForExit: async (code: number) => {
+      await withTestTimeout(exited.promise, 1_000, "one-shot CLI did not exit");
+      expect(exit).toHaveBeenCalledWith(code);
+    },
+  };
+}
 
 describe("one-shot CLI exit", () => {
   afterEach(() => {
@@ -21,7 +37,7 @@ describe("one-shot CLI exit", () => {
     "exits after macOS system CA command completion from %s",
     async (_label, env, execArgv) => {
       const previousExitCode = process.exitCode;
-      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+      const { waitForExit } = spyOnExit();
       try {
         process.exitCode = 3;
         await runCliWithExitFinalization({
@@ -32,7 +48,7 @@ describe("one-shot CLI exit", () => {
           platform: "darwin",
           markers: {},
         });
-        await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(3));
+        await waitForExit(3);
       } finally {
         process.exitCode = previousExitCode;
       }
@@ -61,7 +77,7 @@ describe("one-shot CLI exit", () => {
   });
 
   it("does not finalize a long-lived command until its run promise settles", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
     let finishRun: (() => void) | undefined;
     const runPromise = runCliWithExitFinalization({
       run: async () =>
@@ -82,13 +98,13 @@ describe("one-shot CLI exit", () => {
 
     finishRun?.();
     await runPromise;
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    await waitForExit(0);
   });
 
   it("reports failures and replaces a pending successful exit before draining", async () => {
     const previousExitCode = process.exitCode;
     const order: string[] = [];
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+    const { waitForExit } = spyOnExit((code) => {
       order.push(`exit:${String(code)}`);
     });
 
@@ -112,8 +128,61 @@ describe("one-shot CLI exit", () => {
         markers: {},
       });
 
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(6));
+      await waitForExit(6);
       expect(order).toEqual(["reported", "exit:6"]);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it.each([
+    { name: "successful completion", processExitCode: undefined, expectedExitCode: 0 },
+    { name: "recorded command failure", processExitCode: 1, expectedExitCode: 1 },
+    { name: "integer-string command failure", processExitCode: "9", expectedExitCode: 9 },
+  ])(
+    "preserves the final process outcome for $name",
+    async ({ processExitCode, expectedExitCode }) => {
+      const previousExitCode = process.exitCode;
+      const { waitForExit } = spyOnExit();
+
+      try {
+        process.exitCode = undefined;
+        await runCliWithExitFinalization({
+          run: async () => {
+            requestExitAfterOneShotOutput(defaultRuntime);
+            process.exitCode = processExitCode;
+          },
+          onError: ignoreError,
+          env: {},
+          execArgv: [],
+          platform: "linux",
+          markers: {},
+        });
+
+        await waitForExit(expectedExitCode);
+      } finally {
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
+
+  it.each([0, 7])("preserves an explicit exit override of %i", async (requestedExitCode) => {
+    const previousExitCode = process.exitCode;
+    const { waitForExit } = spyOnExit();
+
+    try {
+      process.exitCode = 9;
+      requestExitAfterOneShotOutput(defaultRuntime, requestedExitCode);
+      await runCliWithExitFinalization({
+        run: successfulRun,
+        onError: ignoreError,
+        env: {},
+        execArgv: [],
+        platform: "linux",
+        markers: {},
+      });
+
+      await waitForExit(requestedExitCode);
     } finally {
       process.exitCode = previousExitCode;
     }
@@ -121,7 +190,7 @@ describe("one-shot CLI exit", () => {
 
   it("normalizes a Node integer-string process exit code", async () => {
     const previousExitCode = process.exitCode;
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { waitForExit } = spyOnExit();
 
     try {
       process.exitCode = "9";
@@ -133,14 +202,14 @@ describe("one-shot CLI exit", () => {
         platform: "darwin",
         markers: {},
       });
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(9));
+      await waitForExit(9);
     } finally {
       process.exitCode = previousExitCode;
     }
   });
 
   it("preserves a command-specific exit code when system CA completion also requests exit", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { waitForExit } = spyOnExit();
 
     requestExitAfterOneShotOutput(defaultRuntime, 7);
     await runCliWithExitFinalization({
@@ -152,11 +221,11 @@ describe("one-shot CLI exit", () => {
       markers: {},
     });
 
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(7));
+    await waitForExit(7);
   });
 
   it("defers a requested exit until the outer finalizer", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
 
     expect(requestExitAfterOneShotOutput(defaultRuntime, 2)).toBe(true);
     await new Promise<void>((resolve) => {
@@ -172,7 +241,7 @@ describe("one-shot CLI exit", () => {
       platform: "linux",
       markers: {},
     });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(2));
+    await waitForExit(2);
   });
 
   it("does not request exits for embedded custom runtimes", async () => {
@@ -196,7 +265,7 @@ describe("one-shot CLI exit", () => {
   });
 
   it("suppresses exits inside Vitest workers but not spawned CLI children", async () => {
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    const { exit, waitForExit } = spyOnExit();
     const inheritedTestEnv = { VITEST: "1", VITEST_WORKER_ID: "1" } as NodeJS.ProcessEnv;
 
     requestExitAfterOneShotOutput(defaultRuntime);
@@ -219,7 +288,7 @@ describe("one-shot CLI exit", () => {
       platform: "linux",
       markers: {},
     });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    await waitForExit(0);
   });
 
   it("waits for stream callbacks even when writableLength is zero", async () => {
@@ -324,6 +393,98 @@ describe("one-shot CLI exit", () => {
     expect(result.signal).toBeNull();
     expect(result.stderr).toBe("");
     expect(result.stdout).toHaveLength(payloadBytes);
+  });
+
+  it.each([
+    {
+      name: "long help spelling consumed as a proxy URL",
+      args: ["--proxy-url", "--help", "--json"],
+      exitCode: 1,
+      failure: true,
+    },
+    {
+      name: "short help spelling consumed as a proxy URL",
+      args: ["--proxy-url", "-h", "--json"],
+      exitCode: 1,
+      failure: true,
+    },
+    {
+      name: "ordinary invalid proxy URL",
+      args: ["--proxy-url", "invalid", "--json"],
+      exitCode: 1,
+      failure: true,
+    },
+    {
+      name: "genuine command help after a boolean option",
+      args: ["--json", "--help"],
+      exitCode: 0,
+      failure: false,
+    },
+  ])("keeps the real proxy command exit truthful for $name", ({ args, exitCode, failure }) => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/dev/null",
+      OPENCLAW_CONFIG_PATH: "/dev/null",
+      TSX_DISABLE_CACHE: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+    const runtimeSnapshotUrl = new URL("../config/runtime-snapshot.ts", import.meta.url).href;
+    const argvInvocationUrl = new URL("./argv-invocation.ts", import.meta.url).href;
+    const proxyCliUrl = new URL("./proxy-cli.ts", import.meta.url).href;
+    const script = `
+      import { Command, CommanderError } from "commander";
+      import { setRuntimeConfigSnapshot } from ${JSON.stringify(runtimeSnapshotUrl)};
+      import { resolveCliArgvInvocation } from ${JSON.stringify(argvInvocationUrl)};
+      import { registerProxyCli } from ${JSON.stringify(proxyCliUrl)};
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
+
+      setRuntimeConfigSnapshot({});
+      const argv = ["node", "openclaw", "proxy", "validate", ...${JSON.stringify(args)}];
+      await runCliWithExitFinalization({
+        run: async () => {
+          const program = new Command().enablePositionalOptions().exitOverride();
+          registerProxyCli(program);
+          try {
+            await program.parseAsync(argv);
+          } catch (error) {
+            if (!(error instanceof CommanderError) || error.exitCode !== 0) {
+              throw error;
+            }
+            process.exitCode = error.exitCode;
+          }
+          if (resolveCliArgvInvocation(argv).hasHelpOrVersion) {
+            requestExitAfterOneShotOutput();
+          }
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      { encoding: "utf8", env, timeout: 30_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(exitCode);
+    if (failure) {
+      expect(JSON.parse(result.stdout)).toEqual(
+        expect.objectContaining({
+          ok: false,
+          config: expect.objectContaining({
+            errors: ["proxyUrl must use http:// or https://"],
+          }),
+        }),
+      );
+    } else {
+      expect(result.stdout).toContain("Usage: openclaw proxy validate");
+    }
   });
 
   it.each([

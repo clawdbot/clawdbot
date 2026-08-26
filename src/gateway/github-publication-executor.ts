@@ -7,6 +7,7 @@ import type { SessionGitHubPublicationResult } from "../../packages/gateway-prot
 import { resolveGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import { runCommandBuffered } from "../process/exec.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -53,6 +54,8 @@ const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = StateDatabase["github_publication_requests"];
 
+class GitHubPublicationAuthorityLostError extends Error {}
+
 export function matchesGitHubPublicationIdentityRow(
   row: PublicationRow,
   identity: PreparedGitHubPublicationIdentity,
@@ -71,7 +74,14 @@ async function runCommand(
 ) {
   return await runCommandBuffered(argv, {
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    env: { ...(options.env ?? process.env), GIT_NO_REPLACE_OBJECTS: "1" },
+    env: {
+      ...(options.env ?? process.env),
+      GIT_NO_REPLACE_OBJECTS: "1",
+      // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: os.devNull,
+    },
     ...(options.input !== undefined ? { input: options.input } : {}),
     timeoutMs: 60_000,
     maxOutputBytes: 256 * 1024,
@@ -201,6 +211,7 @@ export async function executeGitHubPublication(params: {
     headCommit: string;
   }) => PublicationRow;
   complete: (row: PublicationRow, result: SessionGitHubPublicationResult) => PublicationRow;
+  defer?: (row: PublicationRow) => PublicationRow;
 }): Promise<SessionGitHubPublicationResult> {
   const { initial } = params;
   if (initial.status === "published" || initial.status === "failed") {
@@ -220,7 +231,9 @@ export async function executeGitHubPublication(params: {
     });
   const assertAuthority = () => {
     if (!params.validateAuthority()) {
-      throw new Error("GitHub publication session authority changed.");
+      throw new GitHubPublicationAuthorityLostError(
+        "GitHub publication session authority changed.",
+      );
     }
     currentWorktree();
     if (
@@ -453,6 +466,15 @@ export async function executeGitHubPublication(params: {
     const currentTree = await step(
       async () => await requireCommand(["git", "rev-parse", "HEAD^{tree}"], { cwd: worktree.path }),
     );
+    const config = currentGitHubPublicationConfig();
+    const attribution = resolveGitCoauthorAttribution({
+      agentId: row.agent_id,
+      config,
+      excludeAccountId: identity.account.accountId,
+      sessionKey: row.session_key,
+      storePath: loaded.storePath,
+    });
+    const contributorCredit = attribution?.logins.map((login) => `- @${login}`).join("\n");
     const previousBranchHead = headCommit;
     let updateBranchRef: (() => Promise<void>) | undefined;
     if (markerPresent) {
@@ -471,15 +493,11 @@ export async function executeGitHubPublication(params: {
           cwd: worktree.path,
         });
       });
-      const attribution = resolveGitCoauthorAttribution({
-        agentId: row.agent_id,
-        config: currentGitHubPublicationConfig(),
-        excludeAccountId: identity.account.accountId,
-        sessionKey: row.session_key,
-        storePath: loaded.storePath,
-      });
       const title = row.title?.trim() || `Publish ${branch}`;
-      const message = appendGitHubPublicationMessage(title, [
+      const commitBody = contributorCredit
+        ? `${title}\n\nWorked on by:\n${contributorCredit}`
+        : title;
+      const message = appendGitHubPublicationMessage(commitBody, [
         ...(attribution?.trailers ?? []),
         marker,
       ]);
@@ -549,12 +567,7 @@ export async function executeGitHubPublication(params: {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
     };
-    const pushArgs = [
-      "git",
-      "-c",
-      `core.hooksPath=${os.devNull}`,
-      ...githubPublicationPushArgs(httpsRemote, headCommit, branch).slice(1),
-    ];
+    const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
     const observeRemoteHead = async () => {
       const observed = await requireCommand(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
         cwd: worktree.path,
@@ -593,17 +606,27 @@ export async function executeGitHubPublication(params: {
     };
     let pullRequestUrl = await step(findPullRequest);
     if (!pullRequestUrl) {
-      const attribution = resolveGitCoauthorAttribution({
-        agentId: row.agent_id,
-        config: currentGitHubPublicationConfig(),
-        excludeAccountId: identity.account.accountId,
+      const sessionUrl = resolveControlUiSessionUrl(config, {
         sessionKey: row.session_key,
-        storePath: loaded.storePath,
+        fallbackAgentId: row.agent_id,
+        exactKey: true,
       });
-      const participantCredit = attribution?.logins.length
-        ? `\n\n## Participants\n\n${attribution.logins.map((login) => `- @${login}`).join("\n")}`
+      const description = (
+        row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
+      )
+        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
+        .replace(
+          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
+          "",
+        )
+        .trimEnd();
+      const participantCredit = contributorCredit
+        ? `\n\n## Worked on by\n\n${contributorCredit}`
         : "";
-      const body = `${row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."}${participantCredit}\n\n<!-- openclaw-publication:${row.request_id} -->`;
+      const footer = sessionUrl?.startsWith("https://")
+        ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})`
+        : "";
+      const body = `${description}${participantCredit}\n\n${pullRequestMarker}${footer}`;
       identity = await refreshIdentity();
       const created = await step(
         async () =>
@@ -641,6 +664,9 @@ export async function executeGitHubPublication(params: {
   } catch (error) {
     if (error instanceof GitHubPublicationRecoveryPendingError) {
       throw error;
+    }
+    if (error instanceof GitHubPublicationAuthorityLostError && params.defer) {
+      return params.projectResult(params.defer(initial));
     }
     const failure = resolveGitHubPublicationFailure(error);
     const result = params.projectResult(

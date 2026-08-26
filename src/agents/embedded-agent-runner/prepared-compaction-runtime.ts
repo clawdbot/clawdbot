@@ -44,7 +44,6 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
@@ -56,6 +55,7 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import { resolveSessionPermissionExecMode } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   filterProviderNormalizableTools,
@@ -101,10 +101,21 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveCwd,
     effectiveSkillAgentId,
   } = prepared;
-  const sessionPermissionPolicy =
-    params.sessionEntry?.permissionMode && params.sessionEntry.sessionRoot
-      ? { mode: params.sessionEntry.permissionMode, root: params.sessionEntry.sessionRoot }
-      : undefined;
+  const permissionModes = {
+    deny: "read-only",
+    allowlist: "read-only",
+    ask: "guarded",
+    auto: "workspace",
+    full: "full",
+  } as const;
+  const mode = params.execOverrides?.mode
+    ? permissionModes[params.execOverrides.mode]
+    : (params.permissionMode ?? params.sessionEntry?.permissionMode);
+  const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
+  const sessionPermissionPolicy = mode && root ? { mode, root } : undefined;
+  const execOverrides = sessionPermissionPolicy
+    ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
+    : params.execOverrides;
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
@@ -314,7 +325,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     const toolsRaw = toolsEnabled
       ? createOpenClawCodingTools({
           exec: {
-            ...params.execOverrides,
+            ...execOverrides,
             config: params.config,
             elevated: params.bashElevated,
           },
@@ -456,7 +467,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
@@ -513,7 +524,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       sessionKey: params.sessionKey,
       permissionMode: sessionPermissionPolicy?.mode,
       sandboxAvailable: sandbox?.enabled === true,
-      execOverrides: params.execOverrides,
+      execOverrides,
     });
     const sandboxInfo = buildEmbeddedSandboxInfo(
       sandbox,
@@ -590,11 +601,6 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
         reasoningTagHint,
-        heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          defaultAgentId,
-        }),
         skillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,

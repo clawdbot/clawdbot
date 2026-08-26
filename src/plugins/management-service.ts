@@ -75,6 +75,7 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -84,6 +85,10 @@ import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import { isUninstallPathInsideOrEqual } from "./uninstall-config.js";
@@ -257,6 +262,41 @@ type OfficialCatalogResult = Pick<HostedOfficialExternalPluginCatalogLoadResult,
 const officialCatalogLoader = createConfigScopedPromiseLoader(() =>
   loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
 );
+let pluginDependencyDiagnostics = new WeakMap<PluginMetadataSnapshot, PluginDiagnostic[]>();
+
+// Package dependency probes belong to one metadata generation, never each Gateway request.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  pluginDependencyDiagnostics = new WeakMap();
+});
+
+function resolveManagedPluginDiagnostics(snapshot: PluginMetadataSnapshot): PluginDiagnostic[] {
+  const cached = pluginDependencyDiagnostics.get(snapshot);
+  if (cached) {
+    return cached;
+  }
+  const { diagnostics } = projectPluginDependencyHealth({
+    plugins: snapshot.index.plugins.map((record) => {
+      const manifest = snapshot.byPluginId.get(record.pluginId);
+      return {
+        id: record.pluginId,
+        source: manifest?.source ?? record.source ?? record.manifestPath,
+        enabled: record.enabled,
+        status: record.enabled ? ("loaded" as const) : ("disabled" as const),
+        dependencyStatus:
+          record.origin === "bundled"
+            ? undefined
+            : buildPluginDependencyStatus({
+                rootDir: record.rootDir,
+                dependencies: manifest?.packageDependencies,
+                optionalDependencies: manifest?.packageOptionalDependencies,
+              }),
+      };
+    }),
+    diagnostics: [...snapshot.diagnostics],
+  });
+  pluginDependencyDiagnostics.set(snapshot, diagnostics);
+  return diagnostics;
+}
 
 /** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
 export function clearManagedPluginOfficialCatalogCache(): void {
@@ -743,6 +783,7 @@ export async function listManagedPlugins(params: {
     env,
     ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
   });
+  const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata);
   const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
@@ -774,7 +815,7 @@ export async function listManagedPlugins(params: {
         : officialCatalogMetadata
           ? { ...localCatalog, ...officialCatalogMetadata }
           : localCatalog;
-    const error = firstPluginError(metadata.diagnostics, record.pluginId);
+    const error = firstPluginError(pluginDiagnostics, record.pluginId);
     const kind = normalizeKinds(manifest?.kind);
     const category = derivePluginCategory(manifest);
     // Only externally installed plugins (tracked install record, non-bundled) can be removed.
@@ -800,34 +841,56 @@ export async function listManagedPlugins(params: {
       (hostedListingAuthoritative
         ? normalizeOptionalString(officialEntry?.description)
         : undefined) ?? localDescription;
-    return {
+    const plugin: ManagedPluginCatalogEntry = {
       id: record.pluginId,
       name,
-      ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(description ? { description } : {}),
-      ...(record.packageVersion || manifest?.version
-        ? { version: record.packageVersion ?? manifest?.version }
-        : {}),
-      ...(kind ? { kind } : {}),
-      ...(record.origin ? { origin: record.origin } : {}),
       installed: true,
       enabled: record.enabled,
       state: error ? "error" : record.enabled ? "enabled" : "disabled",
-      ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
-      ...(featuredAt !== undefined ? { featuredAt } : {}),
-      ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
-      ...(resolvePluginIconUrlFromCatalogFacts({
+      removable,
+    };
+    if (record.packageName) {
+      plugin.packageName = record.packageName;
+    }
+    if (description) {
+      plugin.description = description;
+    }
+    const version = record.packageVersion ?? manifest?.version;
+    if (version) {
+      plugin.version = version;
+    }
+    if (kind) {
+      plugin.kind = kind;
+    }
+    if (record.origin) {
+      plugin.origin = record.origin;
+    }
+    if (catalog?.featured !== undefined) {
+      plugin.featured = catalog.featured;
+    }
+    if (featuredAt !== undefined) {
+      plugin.featuredAt = featuredAt;
+    }
+    if (catalog?.order !== undefined) {
+      plugin.order = catalog.order;
+    }
+    if (
+      resolvePluginIconUrlFromCatalogFacts({
         metadata,
         officialEntries: officialCatalog.entries,
         bundledOfficialEntries,
         pluginId: record.pluginId,
       })
-        ? { hasIcon: true }
-        : {}),
-      ...(error ? { error } : {}),
-      ...(category ? { category } : {}),
-      removable,
-    };
+    ) {
+      plugin.hasIcon = true;
+    }
+    if (error) {
+      plugin.error = error;
+    }
+    if (category) {
+      plugin.category = category;
+    }
+    return plugin;
   });
   const installedIds = new Set(plugins.map((plugin) => plugin.id));
   const installedPackageNames = new Set(
@@ -883,7 +946,7 @@ export async function listManagedPlugins(params: {
     });
   }
   const diagnostics: unknown[] = appendPluginControlPlaneWorkspaceDiagnostic(
-    metadata.diagnostics,
+    pluginDiagnostics,
     workspace,
   );
   if (officialCatalog.error) {

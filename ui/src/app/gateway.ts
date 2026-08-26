@@ -41,6 +41,7 @@ export type ApplicationGatewayConnectOptions = Partial<ApplicationGatewayConnect
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
+  readonly connectionRevision: number;
   readonly eventLog: readonly EventLogEntry[];
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;

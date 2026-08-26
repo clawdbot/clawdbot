@@ -94,6 +94,8 @@ export const zh_CN = {
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
+      tokenStoreProvisioned:
+        "已生成 Gateway 令牌并以 {name} 存入 OpenClaw 密钥存储。配置中只保留引用；可用 `openclaw secrets store list` 查看。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -447,6 +449,13 @@ export const zh_CN = {
         "如果多个用户能向同一个启用工具的 agent 发消息，他们都能影响它如何使用工具。",
       title: "安全免责声明",
       toolAccess: "如果启用了工具，这个 bot 可以读取文件并执行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用统计",
+      decline: "不用，谢谢",
+      description:
+        "在每日更新检查中分享你使用的功能（频道、提供商、插件数量）。绝不包含消息或标识符。查看实际发送的内容：`openclaw telemetry show`。随时更改：`openclaw telemetry on|off`。",
+      title: "帮助 OpenClaw 变得更好？",
     },
     skills: {
       configure: "现在配置技能？（推荐）",

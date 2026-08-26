@@ -49,7 +49,7 @@ export function createMattermostModelPickerInteractionHandler(
   const { resolveChannelInfo, updateModelPickerPost } = resources;
 
   const runModelPickerCommand = async (params: RunModelPickerCommandParams): Promise<void> => {
-    const { channelDisplay, kind, roomLabel, route, thread, to } = params.eventPlan;
+    const { channelDisplay, channelId, kind, roomLabel, route, thread } = params.eventPlan;
     const fromLabel =
       kind === "direct"
         ? `Mattermost DM from ${params.senderName}`
@@ -68,7 +68,7 @@ export function createMattermostModelPickerInteractionHandler(
       CommandAuthorized: params.commandAuthorized,
       CommandSource: "native" as const,
     });
-    const { deliveryBarrier, replyOptions, replyPipeline, tableMode, textLimit } =
+    const { replyOptions, replyPipeline, tableMode, textLimit } =
       params.eventPlan.createReplyPlan();
     await core.channel.inbound.dispatch({
       cfg,
@@ -92,7 +92,7 @@ export function createMattermostModelPickerInteractionHandler(
             core,
             cfg,
             payload: trimmedPayload,
-            to,
+            channelId,
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostInteractionReplyRootId({
@@ -106,7 +106,6 @@ export function createMattermostModelPickerInteractionHandler(
             // The picker path already converts and trims text before delivery.
             tableMode: "off",
             sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           });
         },
         onError: (err, info) => {
@@ -114,10 +113,6 @@ export function createMattermostModelPickerInteractionHandler(
         },
       },
       replyPipeline,
-      dispatcherOptions: {
-        resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-        onDeliverySettled: deliveryBarrier.markDeliverySettled,
-      },
       replyOptions,
     });
   };

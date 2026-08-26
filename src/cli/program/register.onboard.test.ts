@@ -62,7 +62,8 @@ vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -127,6 +128,32 @@ describe("registerOnboardCommand", () => {
 
     expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { leaf: "read", args: ["--reset", "recommendations"] },
+    { leaf: "acknowledge", args: ["--reset", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--reset", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["--json", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--json", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["recommendations", "--json", "acknowledge"] },
+    { leaf: "refresh", args: ["recommendations", "--json", "refresh"] },
+  ])("rejects inapplicable parent options for recommendations $leaf", async ({ args }) => {
+    await runCli(["onboard", ...args]);
+
+    const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps parent --json supported for reading recommendations", async () => {
+    await runCli(["onboard", "--json", "recommendations"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -225,13 +252,54 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipUi).toBe(true);
   });
 
-  it("rejects conflicting custom model input capabilities", async () => {
-    await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
+  it.each([false, true])(
+    "rejects conflicting custom model input capabilities (json: %s)",
+    async (json) => {
+      await runCli([
+        "onboard",
+        "--custom-image-input",
+        "--custom-text-input",
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Use either --custom-image-input or --custom-text-input, not both.",
-    );
+      const message = "Use either --custom-image-input or --custom-text-input, not both.";
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      rejection: "modern onboarding without risk acknowledgement",
+      args: ["--modern", "--non-interactive"],
+      message: "Non-interactive setup requires explicit risk acknowledgement.",
+    },
+    {
+      rejection: "modern onboarding with unsupported setup flags",
+      args: ["--modern", "--classic"],
+      message: "--modern cannot be combined with: --classic.",
+    },
+  ])("emits one options JSON object for $rejection", async ({ args, message }) => {
+    await runCli(["onboard", "--json", ...args]);
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(message),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

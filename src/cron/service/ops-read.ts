@@ -42,6 +42,7 @@ export async function status(state: CronServiceState) {
     const sqlitePath = resolveOpenClawStateSqlitePath();
     return {
       enabled: state.deps.cronEnabled,
+      triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
       storePath: sqlitePath,
       storage: "sqlite" as const,
       sqlitePath,

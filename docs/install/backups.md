@@ -39,6 +39,8 @@ committed state safely.
 - Regular protection: provision the Gateway-owned backup automation.
 - Continuous, incremental, seconds of data loss: replicate the databases with
   Litestream.
+- Periodic incremental pull to another machine, no object storage:
+  `sqlite3_rsync`.
 
 ## Full archives
 
@@ -200,8 +202,10 @@ storage, with periodic snapshots so restores stay fast. Only changed pages
 leave the machine, which makes it the right tool when backups must not
 re-upload whole databases.
 
-OpenClaw's databases run in WAL mode, which is Litestream's one hard
-requirement. A minimal `litestream.yml` replicating the control-plane
+Litestream's one hard requirement is WAL mode, which OpenClaw uses on local
+filesystems; on network-backed storage such as NFS or SMB, OpenClaw falls
+back to rollback journaling, so verify with `PRAGMA journal_mode;` first.
+A minimal `litestream.yml` replicating the control-plane
 database and one agent database to an S3-compatible bucket:
 
 ```yaml
@@ -226,6 +230,50 @@ Litestream replicates database bytes only. Config, credentials files, and
 workspaces still need one of the file-based paths above, and the replicated
 data is as sensitive as the archives, so apply the same bucket access and
 encryption rules.
+
+## Pull replication with sqlite3_rsync
+
+[`sqlite3_rsync`](https://sqlite.org/rsync.html) is the SQLite project's
+official replication tool, modeled on `rsync`: it compares page hashes
+between an origin and a replica database and ships only changed pages,
+typically over SSH with the same binary installed on both ends. Unlike a raw
+file copy, it takes a read transaction on the origin, so pulling from a live
+database while the Gateway runs produces a consistent replica. WAL mode is
+required on the origin. OpenClaw uses WAL on local filesystems but
+deliberately falls back to rollback journaling on network-backed storage
+such as NFS or SMB, so check the origin before relying on this path:
+
+```bash
+sqlite3 ~/.openclaw/state/openclaw.sqlite "PRAGMA journal_mode;"
+```
+
+If this prints anything other than `wal`, use one of the file-based paths
+above instead.
+
+The tool ships in the `sqlite-tools` binary bundles on the
+[SQLite download page](https://sqlite.org/download.html) and in the full
+source tree; package-manager SQLite builds often omit it. Pull a database to
+another machine you control:
+
+```bash
+sqlite3_rsync 'user@gateway-host:~/.openclaw/state/openclaw.sqlite' ./replica/openclaw.sqlite
+```
+
+Re-running the command is incremental: an unchanged database exchanges only
+a few kilobytes of hashes, and appended data transfers at roughly its own
+size. Treat the replica as read-only and as sensitive as the origin.
+
+Two caveats. First, deltas are page-based, and OpenClaw's databases run
+incremental auto-vacuum on a periodic maintenance timer; a vacuum pass
+relocates pages, so a sync shortly after one (or after large deletions such
+as transcript-archive eviction) can transfer far more than the actual data
+change. Second, this replicates database bytes only, like Litestream:
+config, credentials files, and workspaces still need a file-based path
+above. For continuous replication with predictable upload size, prefer
+Litestream; use `sqlite3_rsync` for scheduled or ad-hoc pulls between
+machines without object storage. To recover, treat the replica like any
+restored database: copy it into place while the Gateway is stopped, then
+follow [Restore a database](#restore-a-database).
 
 ## Restore
 

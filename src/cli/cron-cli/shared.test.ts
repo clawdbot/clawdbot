@@ -28,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
   const runtime = {
-    log: (msg: string) => logs.push(msg),
+    log: (msg: string) => logs.push(...msg.split("\n")),
     error: () => {},
     exit: () => {},
   } as RuntimeEnv;
@@ -393,6 +393,70 @@ describe("printCronList", () => {
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
   });
+
+  it.each([
+    { label: "required", bestEffort: false },
+    { label: "best-effort", bestEffort: true },
+    { label: "default", bestEffort: undefined },
+  ])(
+    "makes $label undelivered automation output visible without changing JSON status",
+    ({ bestEffort }) => {
+      const job = createBaseJob({
+        id: "undelivered-job",
+        delivery: {
+          mode: "announce",
+          ...(bestEffort === undefined ? {} : { bestEffort }),
+        },
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          lastDeliveryError: "primary route rejected",
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (not delivered)");
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, "status: ok (not delivered)");
+      expectLogsToInclude(show.logs, "last delivery error: primary route rejected");
+
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: { lastRunStatus: "ok", lastDeliveryStatus: "not-delivered" },
+      });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: "ok" }],
+      });
+    },
+  );
+
+  it.each([
+    { label: "disabled", enabled: false, runStatus: "ok" as const, expectedStatus: "disabled" },
+    { label: "running", enabled: true, runStatus: "ok" as const, expectedStatus: "running" },
+    { label: "failed", enabled: true, runStatus: "error" as const, expectedStatus: "error" },
+  ])(
+    "does not let prior non-delivery override a $label automation",
+    ({ enabled, runStatus, expectedStatus }) => {
+      const job = createBaseJob({
+        enabled,
+        state: {
+          lastRunStatus: runStatus,
+          lastDeliveryStatus: "not-delivered",
+          ...(expectedStatus === "running" ? { runningAtMs: Date.now() } : {}),
+        },
+      });
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+    },
+  );
 
   it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
     const runFailures = createBaseJob({
