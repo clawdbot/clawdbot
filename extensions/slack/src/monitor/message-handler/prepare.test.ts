@@ -2137,11 +2137,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       );
 
       assertPrepared(prepared);
-      downloadedPaths = prepared.ctxPayload.media?.map((media) => media.path) ?? [];
+      downloadedPaths =
+        prepared.ctxPayload.media?.flatMap((media) => (media.path ? [media.path] : [])) ?? [];
       expect(prepared.ctxPayload.media).toHaveLength(2);
       expect(prepared.ctxPayload.RawBody).toContain("available.png (image/png, fileId: F11)");
       expect(prepared.ctxPayload.RawBody).toContain("server-renamed.png (image/png)");
-      expect(prepared.ctxPayload.RawBody.match(/original-name\.png/g)).toHaveLength(1);
+      expect(prepared.ctxPayload.RawBody?.match(/original-name\.png/g)).toHaveLength(1);
       expect(prepared.ctxPayload.BodyForAgent).toContain(
         "missing-contract.pdf (application/pdf, fileId: F1)",
       );
