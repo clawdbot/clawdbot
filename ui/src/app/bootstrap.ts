@@ -45,7 +45,7 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
-import { applyControlUiAccent } from "./control-ui-presentation.ts";
+import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -96,13 +96,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   syncThemeFontStylesheet(settings.theme);
   syncCustomThemeStyleTag(settings.customTheme);
   applyControlUiAccent(settings.accent);
-  const background = getComputedStyle(root).getPropertyValue("--bg").trim();
-  if (background) {
-    for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
-      meta.content = background;
-      meta.removeAttribute("media");
-    }
-  }
+  syncControlUiSystemChrome();
 }
 
 function createApplicationTheme(

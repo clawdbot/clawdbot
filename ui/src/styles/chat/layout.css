@@ -5273,6 +5273,7 @@ button.chat-pr__diff {
   .chat {
     --chat-thread-gutter: 16px;
     --chat-thread-side-inset: 0px;
+    --chat-mobile-edge-inset: 4px;
   }
 
   .agent-chat__input {
@@ -7078,6 +7079,12 @@ button.chat-pr__diff {
     --chat-composer-top-margin: 6px;
   }
 
+  .chat-main__conversation > .chat-thread {
+    padding-top: calc(
+      var(--chat-mobile-pane-header-height, 48px) + clamp(20px, 3vh, 28px)
+    );
+  }
+
   .chat-inline-approval {
     width: calc(100% - 8px);
   }
@@ -7107,8 +7114,9 @@ button.chat-pr__diff {
   }
 
   .agent-chat__composer-shell {
-    width: calc(100% - 8px);
-    margin: var(--chat-composer-top-margin) 4px calc(14px + var(--safe-area-bottom));
+    width: calc(100% - var(--chat-mobile-edge-inset) - var(--chat-mobile-edge-inset));
+    margin: var(--chat-composer-top-margin) var(--chat-mobile-edge-inset)
+      calc(14px + var(--safe-area-bottom));
     gap: 6px;
   }
 

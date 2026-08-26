@@ -17,6 +17,27 @@ const ACCENT_CSS_VARIABLES = [
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
 
+export function syncControlUiSystemChrome(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const computedStyle = getComputedStyle(root);
+  const pageBackground = computedStyle.getPropertyValue("--bg").trim();
+  const narrow = globalThis.matchMedia?.("(max-width: 768px)").matches === true;
+  const background = narrow
+    ? computedStyle.getPropertyValue("--bg-content").trim() || pageBackground
+    : pageBackground;
+  if (!background) {
+    return;
+  }
+  root.style.setProperty("--control-ui-system-chrome-background", background);
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    meta.content = background;
+    meta.removeAttribute("media");
+  }
+}
+
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
   const root = document.documentElement;
