@@ -4253,6 +4253,7 @@ export const en: TranslationMap = {
   connection: {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
+    restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     sessionOperationCompletedPreviousConnection:

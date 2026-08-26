@@ -3390,18 +3390,6 @@ openclaw-sidebar-attention {
   flex: none;
 }
 
-.sidebar-identity-card__status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 openclaw-tooltip.sidebar-hover-tooltip {
   --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
   --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 100ms var(--ease-out);
@@ -3537,6 +3525,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
+.sidebar-footer-bar__status--restarting,
+.sidebar-footer-bar__status--restarting:hover {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  cursor: default;
+}
+
 .sidebar-footer-bar__status:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -3553,6 +3548,16 @@ openclaw-tooltip.sidebar-hover-tooltip {
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--danger);
+}
+
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  background: var(--warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+    animation: pulse-subtle 1.2s ease-in-out infinite;
+  }
 }
 
 .sidebar-session-group-running {

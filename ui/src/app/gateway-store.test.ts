@@ -528,6 +528,71 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.offlineStable).toBe(true);
   });
 
+  it("publishes shutdown immediately while connected and clears it after the next hello", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onEvent?.(
+      createGatewayEvent("shutdown", { reason: "gateway restart", restartExpectedMs: 8_000 }),
+    );
+
+    expect(gateway.snapshot.phase).toBe("connected");
+    expect(gateway.snapshot.restartPending).toBe(true);
+
+    current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.snapshot.restartPending).toBe(false);
+  });
+
+  it.each([
+    { restartExpectedMs: undefined, deadlineMs: 15_000 },
+    { restartExpectedMs: 8_000, deadlineMs: 24_000 },
+  ])(
+    "degrades an overdue restart to stable offline after $deadlineMs ms",
+    async ({ restartExpectedMs, deadlineMs }) => {
+      vi.useFakeTimers();
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().opts.onHello?.(HELLO);
+      current().opts.onEvent?.(
+        createGatewayEvent("shutdown", {
+          reason: "gateway restart",
+          ...(restartExpectedMs === undefined ? {} : { restartExpectedMs }),
+        }),
+      );
+      current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
+
+      await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+      expect(gateway.snapshot.restartPending).toBe(true);
+      expect(gateway.snapshot.offlineStable).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(gateway.snapshot.restartPending).toBe(false);
+      expect(gateway.snapshot.offlineStable).toBe(true);
+    },
+  );
+
+  it("recognizes the structured restart rejection before the first successful hello", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1013,
+      reason: "gateway restart in progress",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "connect unavailable during gateway restart",
+        details: { reason: "gateway-restarting" },
+      },
+    });
+
+    expect(gateway.snapshot.phase).toBe("connecting");
+    expect(gateway.snapshot.restartPending).toBe(true);
+  });
+
   it("does not publish offline before the gateway starts", async () => {
     vi.useFakeTimers();
     const { gateway } = createStore();
@@ -576,6 +641,20 @@ describe("createApplicationGateway connection phase", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("clears the pending restart deadline when stopped", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    current().opts.onEvent?.(createGatewayEvent("shutdown", { reason: "gateway stopping" }));
+
+    gateway.stop();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.restartPending).toBe(false);
   });
 
   it("drops back to the gate when the client gives up (credential rejection)", () => {

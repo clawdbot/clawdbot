@@ -2373,7 +2373,16 @@ function installControlUiMockGateway(
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   const RoutedWebSocket = function (url: string | URL, protocols?: string | string[]) {
     const resolvedUrl = String(url);
-    if (scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))) {
+    // Vite's dev client must keep its real socket: the mock would fake the
+    // open handshake, and a later setOnline(false) close would make the client
+    // believe the dev server restarted and reload the page mid-test.
+    const isViteHmr = Array.isArray(protocols)
+      ? protocols.includes("vite-hmr")
+      : protocols === "vite-hmr";
+    if (
+      isViteHmr ||
+      scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
+    ) {
       return protocols === undefined
         ? new NativeWebSocket(resolvedUrl)
         : new NativeWebSocket(resolvedUrl, protocols);

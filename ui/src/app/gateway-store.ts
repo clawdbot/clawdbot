@@ -1,7 +1,9 @@
 import {
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
+  resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
+import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -39,6 +41,7 @@ type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfa
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
+const RESTART_INDICATOR_MIN_DURATION_MS = 15_000;
 
 function notifyGatewayObservers<T>(
   listeners: ReadonlySet<(value: T) => void>,
@@ -96,6 +99,7 @@ export function createApplicationGateway(
     client: null,
     phase: "stopped",
     offlineStable: false,
+    restartPending: false,
     hello: null,
     canvasPluginSurfaceUrl: null,
     assistantAgentId: null,
@@ -119,6 +123,7 @@ export function createApplicationGateway(
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
   let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let restartDeadlineTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
@@ -128,6 +133,26 @@ export function createApplicationGateway(
       globalThis.clearTimeout(offlineIndicatorTimer);
       offlineIndicatorTimer = null;
     }
+  };
+  const clearRestartDeadlineTimer = () => {
+    if (restartDeadlineTimer !== null) {
+      globalThis.clearTimeout(restartDeadlineTimer);
+      restartDeadlineTimer = null;
+    }
+  };
+  const scheduleRestartDeadline = (restartExpectedMs?: number) => {
+    clearRestartDeadlineTimer();
+    restartDeadlineTimer = globalThis.setTimeout(
+      () => {
+        restartDeadlineTimer = null;
+        if (!stopped) {
+          setSnapshot({ ...snapshot, restartPending: false });
+        }
+      },
+      resolveSafeTimeoutDelayMs((restartExpectedMs ?? 0) * 3, {
+        minMs: RESTART_INDICATOR_MIN_DURATION_MS,
+      }),
+    );
   };
   const scheduleOfflineIndicator = () => {
     if (
@@ -252,7 +277,22 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "presence") {
+    if (event.event === "shutdown") {
+      const payload = event.payload;
+      const expected =
+        payload && typeof payload === "object" && "restartExpectedMs" in payload
+          ? payload.restartExpectedMs
+          : undefined;
+      scheduleRestartDeadline(
+        typeof expected === "number" && Number.isSafeInteger(expected) && expected >= 0
+          ? expected
+          : undefined,
+      );
+      setSnapshot({ ...snapshot, restartPending: true });
+      if (!isCurrentClient(eventClient)) {
+        return;
+      }
+    } else if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);
       if (entries) {
         const selfUser = resolveSelfPresenceUser(entries, client?.instanceId);
@@ -311,6 +351,7 @@ export function createApplicationGateway(
     // A different Gateway has no established session to keep mounted on failure.
     if (gatewayUrlChanged) {
       everConnected = false;
+      clearRestartDeadlineTimer();
     }
     connection = nextConnection;
     // Trust the connected gateway's origin for avatar route resolution so
@@ -415,10 +456,12 @@ export function createApplicationGateway(
           hello.pluginSurfaceUrls?.canvas,
         );
         const canvasLeaseGeneration = beginCanvasSurfaceLease(nextClient);
+        clearRestartDeadlineTimer();
         setSnapshot({
           ...snapshot,
           client: nextClient,
           phase: "connected",
+          restartPending: false,
           hello,
           canvasPluginSurfaceUrl,
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
@@ -461,6 +504,10 @@ export function createApplicationGateway(
           return;
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        const restartPending = isGatewayRestartUnavailableError(error);
+        if (restartPending && !snapshot.restartPending) {
+          scheduleRestartDeadline();
+        }
         setSnapshot({
           ...snapshot,
           client: nextClient,
@@ -479,6 +526,7 @@ export function createApplicationGateway(
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
+          restartPending: restartPending || snapshot.restartPending === true,
           lastError: startupPending
             ? null
             : error?.message
@@ -529,6 +577,7 @@ export function createApplicationGateway(
       assistantAgentId: null,
       selfUser: null,
       sessionKey: nextSessionKey,
+      restartPending: gatewayUrlChanged ? false : snapshot.restartPending,
       lastError: null,
       lastErrorCode: null,
     });
@@ -566,6 +615,7 @@ export function createApplicationGateway(
     stop: () => {
       stopped = true;
       clearOfflineIndicatorTimer();
+      clearRestartDeadlineTimer();
       stopCanvasSurfaceLease();
       client?.stop();
       client = null;
@@ -575,6 +625,7 @@ export function createApplicationGateway(
         client: null,
         phase: "stopped",
         offlineStable: false,
+        restartPending: false,
         hello: null,
         canvasPluginSurfaceUrl: null,
         assistantAgentId: null,

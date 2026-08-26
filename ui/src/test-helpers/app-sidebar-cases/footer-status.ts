@@ -136,17 +136,28 @@ describe("AppSidebar gateway footer subtitle", () => {
     ).not.toContain("git@e8cbc62");
   });
 
-  it("keeps the reconnecting subtitle while offline", async () => {
+  it("shows the visible offline retry pill instead of a hidden reconnecting subtitle", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onRetryConnect = vi.fn();
     sidebar.offline = true;
+    sidebar.queuedOutboxCount = 3;
+    sidebar.lastError = "connection refused?token=footer-secret";
+    sidebar.onRetryConnect = onRetryConnect;
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
+    const status = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
+    expect(status?.textContent).toContain("Offline");
+    expect(status?.textContent).toContain("Reconnecting…");
+    expect(status?.textContent).toContain("3 queued");
+    expect(
+      (status?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
+    ).toBe("connection refused?[redacted-credential]");
+    status?.click();
+    expect(onRetryConnect).toHaveBeenCalledOnce();
+    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account: Reconnecting…",
@@ -154,6 +165,19 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(
       sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
     ).not.toContain("git@e8cbc62");
+  });
+
+  it("prioritizes an announced restart over the stable offline state", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.offline = true;
+    sidebar.restartPending = true;
+    await sidebar.updateComplete;
+
+    const status = sidebar.querySelector(".sidebar-footer-bar__status--restarting");
+    expect(status?.textContent).toBe("Restarting…");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(sidebar.querySelector("button.sidebar-footer-bar__status")).toBeNull();
   });
 
   it("updates when the native gateway snapshot changes", async () => {
