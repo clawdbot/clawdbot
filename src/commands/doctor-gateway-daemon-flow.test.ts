@@ -12,7 +12,6 @@ import {
 } from "./doctor-service-repair-policy.js";
 
 const service = vi.hoisted(() => ({
-  hasInstalledDefinition: vi.fn(),
   isLoaded: vi.fn(),
   readRuntime: vi.fn(),
   restart: vi.fn(),
@@ -40,6 +39,11 @@ const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => 
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
+const findInstalledSystemdGatewayScope = vi.hoisted(() =>
+  vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(
+    async () => null,
+  ),
+);
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
@@ -87,6 +91,11 @@ vi.mock("../daemon/service.js", async () => {
     resolveGatewayService: () => service,
   };
 });
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd.js")>()),
+  findInstalledSystemdGatewayScope,
+}));
 
 vi.mock("../daemon/systemd-hints.js", () => ({
   renderSystemdUnavailableHints,
@@ -172,7 +181,7 @@ describe("maybeRepairGatewayDaemon", () => {
     vi.clearAllMocks();
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
-    service.hasInstalledDefinition.mockResolvedValue(false);
+    findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
@@ -370,7 +379,7 @@ describe("maybeRepairGatewayDaemon", () => {
       expect(inspectPortUsage).toHaveBeenCalledOnce();
       expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
       expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
-      expect(service.hasInstalledDefinition).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
+      expect(findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
       expect(service.isLoaded).not.toHaveBeenCalled();
       expect(service.readRuntime).not.toHaveBeenCalled();
       expect(service.readCommand).not.toHaveBeenCalled();
@@ -383,7 +392,11 @@ describe("maybeRepairGatewayDaemon", () => {
   it("inspects an installed OpenClaw service through a reachable Docker systemd manager", async () => {
     setPlatform("linux");
     isContainerEnvironment.mockReturnValue(true);
-    service.hasInstalledDefinition.mockResolvedValue(true);
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
 
     await runNonInteractiveRepair();
 

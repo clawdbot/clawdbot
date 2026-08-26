@@ -27,15 +27,14 @@ export async function shouldManageGatewayService(
     return false;
   }
   try {
-    const { resolveGatewayService } = await import("../daemon/service.js");
-    const service = resolveGatewayService();
-    const args = { env, timeoutMs: GATEWAY_SERVICE_MANAGER_TIMEOUT_MS };
-    // Container placement is not lifecycle ownership; Doctor may use native service
-    // paths only when the OpenClaw definition and its manager both exist.
-    if (!(await service.hasInstalledDefinition?.(args))) {
+    const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
+    // Container placement is not ownership; user Doctor can repair only its
+    // installed user unit through a reachable systemd user manager.
+    if ((await findInstalledSystemdGatewayScope(env))?.scope !== "user") {
       return false;
     }
-    await service.isLoaded(args);
+    const { resolveGatewayService } = await import("../daemon/service.js");
+    await resolveGatewayService().isLoaded({ env, timeoutMs: GATEWAY_SERVICE_MANAGER_TIMEOUT_MS });
     return true;
   } catch {
     return false;

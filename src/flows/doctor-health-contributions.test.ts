@@ -196,8 +196,10 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
-  findInstalledSystemdGatewayScope: vi.fn(async () => ({
-    scope: "user" as "user" | "system",
+  findInstalledSystemdGatewayScope: vi.fn<
+    (typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]
+  >(async () => ({
+    scope: "user",
     unitName: "openclaw-gateway.service",
     unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
   })),
@@ -1951,10 +1953,6 @@ describe("doctor health contributions", () => {
 
   it("repairs an installed Gateway service during an authorized update inside Docker", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
-    mocks.resolveGatewayService.mockReturnValue({
-      hasInstalledDefinition: vi.fn(async () => true),
-      isLoaded: mocks.gatewayServiceIsLoaded,
-    });
 
     await withProcessPlatform("linux", async () => {
       const ctx = createDoctorContext({
@@ -1974,6 +1972,7 @@ describe("doctor health contributions", () => {
 
   it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = createDoctorContext({
       cfg: { gateway: { mode: "local" } },
@@ -2535,11 +2534,6 @@ describe("doctor health contributions", () => {
 
   it("skips user lingering for a reachable system-scoped Gateway service in a container", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
-    const hasInstalledDefinition = vi.fn(async () => true);
-    mocks.resolveGatewayService.mockReturnValue({
-      hasInstalledDefinition,
-      isLoaded: mocks.gatewayServiceIsLoaded,
-    });
     mocks.findInstalledSystemdGatewayScope.mockResolvedValue({
       scope: "system",
       unitName: "openclaw-gateway.service",
@@ -2561,7 +2555,8 @@ describe("doctor health contributions", () => {
       });
     });
 
-    expect(hasInstalledDefinition).toHaveBeenCalledTimes(2);
+    expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(2);
+    expect(mocks.gatewayServiceIsLoaded).not.toHaveBeenCalled();
     expect(mocks.isSystemdUserServiceAvailable).not.toHaveBeenCalled();
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
     expect(lintResult).toMatchObject({ checksRun: 1, findings: [] });
@@ -2570,6 +2565,7 @@ describe("doctor health contributions", () => {
 
   it("never probes systemd linger inside a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     const checks = await resolveDoctorContributionHealthChecks();
     const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
     expect(lingerCheck).toBeDefined();

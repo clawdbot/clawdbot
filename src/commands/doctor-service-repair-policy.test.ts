@@ -8,7 +8,13 @@ import {
 } from "./doctor-service-repair-policy.js";
 
 const mocks = vi.hoisted(() => ({
-  hasInstalledDefinition: vi.fn(async () => true),
+  findInstalledSystemdGatewayScope: vi.fn<
+    (typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]
+  >(async () => ({
+    scope: "user",
+    unitName: "openclaw-gateway.service",
+    unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+  })),
   isContainerEnvironment: vi.fn(() => false),
   isLoaded: vi.fn(async () => false),
   resolveGatewayService: vi.fn(),
@@ -22,13 +28,20 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: mocks.resolveGatewayService,
 }));
 
+vi.mock("../daemon/systemd.js", () => ({
+  findInstalledSystemdGatewayScope: mocks.findInstalledSystemdGatewayScope,
+}));
+
 describe("doctor gateway service repair policy", () => {
   beforeEach(() => {
-    mocks.hasInstalledDefinition.mockReset().mockResolvedValue(true);
+    mocks.findInstalledSystemdGatewayScope.mockReset().mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
     mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.isLoaded.mockReset().mockResolvedValue(false);
     mocks.resolveGatewayService.mockReset().mockReturnValue({
-      hasInstalledDefinition: mocks.hasInstalledDefinition,
       isLoaded: mocks.isLoaded,
     });
     mockProcessPlatform("linux");
@@ -66,15 +79,7 @@ describe("doctor gateway service repair policy", () => {
       container: true,
       installed: false,
       expected: false,
-      probes: "definition",
-    },
-    {
-      name: "Docker without installed-definition capability",
-      env: {},
-      container: true,
-      missingCapability: true,
-      expected: false,
-      probes: "missing-capability",
+      probes: "scope",
     },
     {
       name: "Docker with an installed but unloaded service and reachable manager",
@@ -82,6 +87,14 @@ describe("doctor gateway service repair policy", () => {
       container: true,
       expected: true,
       probes: "manager",
+    },
+    {
+      name: "Docker with an installed system-scoped OpenClaw service",
+      env: {},
+      container: true,
+      scope: "system" as const,
+      expected: false,
+      probes: "scope",
     },
     {
       name: "Docker with an installed service and unavailable manager",
@@ -92,12 +105,12 @@ describe("doctor gateway service repair policy", () => {
       probes: "manager",
     },
     {
-      name: "Docker with a failed installed-definition probe",
+      name: "Docker with failed installed-scope discovery",
       env: {},
       container: true,
-      failedDefinition: true,
+      failedScope: true,
       expected: false,
-      probes: "definition",
+      probes: "scope",
     },
     {
       name: "non-Linux container",
@@ -112,14 +125,20 @@ describe("doctor gateway service repair policy", () => {
     if (scenario.platform) {
       mockProcessPlatform(scenario.platform);
     }
+    if (scenario.scope === "system") {
+      mocks.findInstalledSystemdGatewayScope.mockResolvedValue({
+        scope: "system",
+        unitName: "openclaw-gateway.service",
+        unitPath: "/etc/systemd/system/openclaw-gateway.service",
+      });
+    }
     if (scenario.installed === false) {
-      mocks.hasInstalledDefinition.mockResolvedValue(false);
+      mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
     }
-    if (scenario.failedDefinition) {
-      mocks.hasInstalledDefinition.mockRejectedValue(new Error("service discovery failed"));
-    }
-    if (scenario.missingCapability) {
-      mocks.resolveGatewayService.mockReturnValue({ isLoaded: mocks.isLoaded });
+    if (scenario.failedScope) {
+      mocks.findInstalledSystemdGatewayScope.mockRejectedValue(
+        new Error("service discovery failed"),
+      );
     }
     if (scenario.unavailableManager) {
       mocks.isLoaded.mockRejectedValue(new Error("systemd user manager unavailable"));
@@ -128,17 +147,16 @@ describe("doctor gateway service repair policy", () => {
     await expect(shouldManageGatewayService(scenario.env)).resolves.toBe(scenario.expected);
 
     if (scenario.probes === "none") {
+      expect(mocks.findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
       expect(mocks.resolveGatewayService).not.toHaveBeenCalled();
-      expect(mocks.hasInstalledDefinition).not.toHaveBeenCalled();
-    } else if (scenario.probes !== "missing-capability") {
-      expect(mocks.hasInstalledDefinition).toHaveBeenCalledWith({
-        env: scenario.env,
-        timeoutMs: 5_000,
-      });
+    } else {
+      expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledWith(scenario.env);
     }
     if (scenario.probes === "manager") {
+      expect(mocks.resolveGatewayService).toHaveBeenCalledOnce();
       expect(mocks.isLoaded).toHaveBeenCalledWith({ env: scenario.env, timeoutMs: 5_000 });
     } else {
+      expect(mocks.resolveGatewayService).not.toHaveBeenCalled();
       expect(mocks.isLoaded).not.toHaveBeenCalled();
     }
   });
