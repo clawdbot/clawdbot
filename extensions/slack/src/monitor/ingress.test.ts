@@ -611,7 +611,9 @@ describe("Slack durable ingress", () => {
             "Ev-migration-after-route",
           ]);
         });
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(starts).toEqual(["message"]);
 
         releaseMessage();
