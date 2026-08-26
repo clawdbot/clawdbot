@@ -11,6 +11,7 @@ import {
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
 } from "./bundled-plugin-metadata.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 
 type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
 import { resolveGatewayStartupPluginIdsFromRegistry } from "./gateway-startup-plugin-ids.js";
@@ -568,7 +569,9 @@ describe("bundled plugin metadata", () => {
     const expectedPluginIds = [
       ...manifestRegistry.plugins
         .filter(
-          (plugin) => plugin.enabledByDefault === true && plugin.activation?.onStartup === true,
+          (plugin) =>
+            isPluginEnabledByDefaultForPlatform(plugin, "linux") &&
+            plugin.activation?.onStartup === true,
         )
         .map((plugin) => plugin.id),
       ...EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS,
@@ -583,6 +586,33 @@ describe("bundled plugin metadata", () => {
         platform: "linux",
       }),
     ).toEqual(expectedPluginIds);
+  });
+
+  it("includes Linux-only default plugins in empty-config Gateway startup", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const seed = manifestRegistry.plugins[0];
+    if (!seed) {
+      throw new Error("expected bundled plugin manifest fixture");
+    }
+    manifestRegistry.plugins.push({
+      ...seed,
+      id: "linux-only-default-test",
+      name: "Linux-only default test",
+      enabledByDefault: undefined,
+      enabledByDefaultOnPlatforms: ["linux"],
+      activation: { ...seed.activation, onStartup: true },
+    });
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {},
+        env: {},
+        index,
+        manifestRegistry,
+        platform: "linux",
+      }),
+    ).toContain("linux-only-default-test");
   });
 
   it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
