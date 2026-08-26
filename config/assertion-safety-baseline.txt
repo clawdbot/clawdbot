@@ -3564,7 +3564,7 @@ src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	3
 src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	17
-src/plugins/loader-cli-registry.ts	4
+src/plugins/loader-cli-registry.ts	2
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	5
 src/plugins/loader-module-runtime.ts	13
@@ -3645,7 +3645,7 @@ src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
 src/plugins/session-catalog-history-import.ts	2
 src/plugins/setup-registry-loader-state.ts	1
-src/plugins/setup-registry.ts	13
+src/plugins/setup-registry.ts	12
 src/plugins/slots.ts	3
 src/plugins/toggle-config.ts	3
 src/plugins/tool-descriptor-cache.ts	4
