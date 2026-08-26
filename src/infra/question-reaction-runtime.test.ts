@@ -10,15 +10,16 @@ const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway: hoisted.callGateway }));
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
+const optionButtons = ["Staging", "Production"].map((label) => ({
+  label,
+  action: { type: "question" as const, questionId, optionValue: label },
+}));
 const presentation = {
   blocks: [
     { type: "text" as const, text: "Deploy where?" },
     {
       type: "buttons" as const,
-      buttons: ["Staging", "Production"].map((label) => ({
-        label,
-        action: { type: "question" as const, questionId, optionValue: label },
-      })),
+      buttons: optionButtons,
     },
   ],
 };
@@ -47,7 +48,7 @@ describe("question reaction runtime", () => {
         {
           type: "buttons" as const,
           buttons: [
-            ...presentation.blocks[1]!.buttons,
+            ...optionButtons,
             {
               label: "Other…",
               action: { type: "question" as const, questionId, intent: "custom-input" as const },
