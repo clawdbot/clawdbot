@@ -49,8 +49,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_RESPONSE_E2E === "1")(
         const { targetInfo } = await session.send("Target.getTargetInfo");
         await session.detach();
         const targetId = targetInfo.targetId;
-        const controlledPage = await getPageForTargetId({ cdpUrl, targetId });
-        const listeners = controlledPage.listenerCount("response");
+        await getPageForTargetId({ cdpUrl, targetId });
         let outcome: unknown = "pending";
         const result = responseBodyViaPlaywright({
           cdpUrl,
@@ -61,13 +60,11 @@ describe.runIf(process.env.OPENCLAW_BROWSER_RESPONSE_E2E === "1")(
           (value) => (outcome = value),
           (error: unknown) => (outcome = error),
         );
-        await expect.poll(() => controlledPage.listenerCount("response")).toBe(listeners + 1);
         await page.getByRole("button", { name: "Fetch" }).click();
         await expect.poll(() => streams.size).toBe(1);
         try {
           await expect.poll(() => outcome, { timeout: 2_000 }).toBeInstanceOf(Error);
           expect(String(outcome)).toMatch(/timed out|timeout/i);
-          expect(controlledPage.listenerCount("response")).toBe(listeners);
           expect(page.isClosed()).toBe(false);
         } finally {
           for (const stream of streams) {

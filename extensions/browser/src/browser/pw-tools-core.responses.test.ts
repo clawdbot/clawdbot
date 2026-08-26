@@ -62,7 +62,7 @@ describe("response body operation lifecycle", () => {
   it.each(["headers", "body"])("honors caller cancellation while waiting for %s", async (phase) => {
     const controller = new AbortController();
     const reason = new Error("response request cancelled");
-    const body = vi.fn(async () => Buffer.from("late response"));
+    const body = vi.fn(async (): Promise<Buffer> => Buffer.from("late response"));
     let finishBody!: (body: Buffer) => void;
     if (phase === "body") {
       body.mockImplementation(
