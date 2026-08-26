@@ -2,7 +2,6 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -29,6 +28,16 @@ import {
   type SyncedPrefKey,
   type SyncedPrefValue,
 } from "./server-prefs-state.ts";
+import {
+  LAST_SEEN_KEY,
+  PENDING_KEY,
+  parseStoredPrefs,
+  readRetainedLocalKeys,
+  readStorage,
+  readStoredPrefs,
+  writeRetainedLocalKeys,
+  writeStorage,
+} from "./server-prefs-storage.ts";
 import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -100,16 +109,6 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
-// Last server value this client reconciled against, persisted per gateway scope. Applying only on
-// a server delta keeps an unpushable local edit (viewer scope) from being reverted by every later
-// snapshot, including the first snapshot after reload or reconnect carrying the same old value.
-const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
-// Pending keys are local edits not yet acknowledged by the gateway. They shadow reconciliation so
-// snapshots cannot revert unacked edits, and persist so offline edits replay after reload/reconnect.
-const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
-// Connected read-only edits never enter the replay outbox. Retain only their keys until the next
-// snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
-const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
 const requestedServerUiPrefResets = new Set<SyncedPrefKey>();
@@ -139,74 +138,6 @@ function clearConflictRedrain(): void {
     conflictRedrainTimer = null;
   }
   consecutiveConflictRedrains = 0;
-}
-function readStorageState(
-  root: string,
-  scope: string,
-): { available: boolean; value: string | null } {
-  try {
-    const storage = globalThis.localStorage;
-    if (!storage) {
-      return { available: false, value: null };
-    }
-    return { available: true, value: storage.getItem(`${root}:${scope}`) };
-  } catch {
-    return { available: false, value: null };
-  }
-}
-function readStorage(root: string, scope: string): string | null {
-  return readStorageState(root, scope).value;
-}
-function writeStorage(root: string, scope: string, value: string | null): boolean {
-  try {
-    const storage = globalThis.localStorage;
-    if (!storage) {
-      return false;
-    }
-    const key = `${root}:${scope}`;
-    if (value === null) {
-      storage.removeItem(key);
-    } else {
-      storage.setItem(key, value);
-    }
-    return true;
-  } catch {
-    // Quota/security failures degrade to in-memory tracking for this session.
-    return false;
-  }
-}
-function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
-  try {
-    const prefs = asRecord(JSON.parse(raw ?? "null"));
-    return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
-  } catch {
-    return null;
-  }
-}
-function readStoredPrefs(
-  root: string,
-  scope: string,
-): { available: boolean; prefs: ServerUiPrefs | null } {
-  const stored = readStorageState(root, scope);
-  return {
-    available: stored.available,
-    prefs: parseStoredPrefs(stored.value),
-  };
-}
-function readRetainedLocalKeys(scope: string): Set<SyncedPrefKey> {
-  const stored = parseStoredPrefs(readStorage(RETAINED_LOCAL_KEY, scope));
-  return new Set(
-    stored
-      ? (Object.keys(stored).filter((key) => Object.hasOwn(SYNCED_PREFS, key)) as SyncedPrefKey[])
-      : [],
-  );
-}
-function writeRetainedLocalKeys(scope: string, keys: ReadonlySet<SyncedPrefKey>): void {
-  writeStorage(
-    RETAINED_LOCAL_KEY,
-    scope,
-    keys.size ? JSON.stringify(Object.fromEntries([...keys].map((key) => [key, true]))) : null,
-  );
 }
 function updateRetainedLocalKeys(
   scope: string,
@@ -390,11 +321,9 @@ export function applyServerUiPrefs(
     return false;
   }
   // Last-seen state is per profile scope but the rendered settings are a
-  // singleton, so after an identity switch (A→B→A on a shared browser) an
-  // unchanged last-seen snapshot does not mean the DOM shows this profile's
-  // values — force a full reconcile on a switch between two known scopes.
-  // Boot (empty lastReconciledScope) keeps the shortcut: the mirror already
-  // holds this scope's last-rendered state.
+  // singleton: after an identity switch (A→B→A) an unchanged last-seen does not
+  // mean the DOM shows this profile's values, so a switch between two known
+  // scopes forces a full reconcile. Boot keeps the shortcut (mirror is current).
   const scopeChanged = lastReconciledScope !== "" && scope !== lastReconciledScope;
   const recordReconciledObject = () => {
     lastReconciledScope = scope;
