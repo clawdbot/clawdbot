@@ -200,49 +200,63 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+  function activateCronOff(
+    cfgAtStart: Parameters<typeof activateGatewayScheduledServices>[0]["cfgAtStart"],
+  ) {
     vi.useFakeTimers();
     const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
     activateGatewayScheduledServices({
       minimalTestGateway: false,
-      cfgAtStart: {} as never,
+      cfgAtStart,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
       cronState: createTestCronState(createTestCron(), false),
       cronReconciliation: createTestCronReconciliation(),
       logCron: { error: vi.fn() },
-      log,
+      log: {
+        child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
+        error: vi.fn(),
+      },
     });
+    return warn;
+  }
+
+  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+    const warn = activateCronOff({ skills: { workshop: { autonomous: { mode: "off" } } } });
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
   });
 
   it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
-    vi.useFakeTimers();
-    const warn = vi.fn();
-    const log = {
-      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-      error: vi.fn(),
-    };
-
-    activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: { agents: { defaults: { heartbeat: { every: "0m" } } } } as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronState: createTestCronState(createTestCron(), false),
-      cronReconciliation: createTestCronReconciliation(),
-      logCron: { error: vi.fn() },
-      log,
+    const warn = activateCronOff({
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+      skills: { workshop: { autonomous: { mode: "off" } } },
     });
 
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["auto", true],
+    ["off", false],
+    ["propose", false],
+  ] as const)(
+    "reports cron-disabled automatic skill collection reviews for mode %s",
+    (mode, shouldWarn) => {
+      const warn = activateCronOff({
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        skills: { workshop: { autonomous: { mode } } },
+      });
+
+      if (shouldWarn) {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("scheduled skill collection reviews are disabled"),
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("runs cron start, watcher reconciliation, and hook completion in order", async () => {
     const order: string[] = [];
