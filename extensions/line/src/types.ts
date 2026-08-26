@@ -31,6 +31,7 @@ interface LineAccountBaseConfig {
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
   mediaMaxMb?: number;
+  historyLimit?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;

@@ -52,6 +52,9 @@ const TwitchConfigBaseShape = {
   configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema.optional(),
   defaultAccount: z.string().optional(),
+  // Both union branches are closed, so the root override has to live in the
+  // shared base or a multi-account config rejects `channels.twitch.historyLimit`.
+  historyLimit: z.number().int().min(0).optional(),
 };
 
 /**
