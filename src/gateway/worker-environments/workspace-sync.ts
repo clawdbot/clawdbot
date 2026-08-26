@@ -51,6 +51,7 @@ import {
   parseRemoteWorkspaceSetup,
   probeWorkspaceGitMode,
   readTransferredManifest,
+  resolveWorkerWorkspaceGitAuthor,
   resolveRemoteWorkspaceManifest,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
@@ -298,20 +299,15 @@ export function createWorkerWorkspaceActions(
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
-        const [detectedAuthorName, detectedAuthorEmail] = await Promise.all(
-          ["user.name", "user.email"].map(async (key) => {
-            const result = await runTask(
-              ["git", "-C", gitRoot, "config", "--get", key],
-              workerSshCommandOptions({
-                timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
-                signal: options.ownerSignal,
-              }),
-            );
-            return success(result) ? result.stdout.trim() : "";
-          }),
+        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
+          runTask(
+            argv,
+            workerSshCommandOptions({
+              timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
+              signal: options.ownerSignal,
+            }),
+          ),
         );
-        const authorName = request.gitAuthor?.name ?? detectedAuthorName;
-        const authorEmail = request.gitAuthor?.email ?? detectedAuthorEmail;
         const seeded = await runWorkspaceCommand({
           transportRetry: "never",
           argv: [
@@ -321,8 +317,8 @@ export function createWorkerWorkspaceActions(
             remoteWorkspaceDir,
             path.posix.join(remoteWorkspaceDir, REMOTE_GIT_PACK_NAME),
             baseCommit,
-            authorName ?? "",
-            authorEmail ?? "",
+            author.name,
+            author.email,
           ],
           input: REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
         });
