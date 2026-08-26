@@ -227,6 +227,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("cancels an unread webhook response before releasing its guard", async () => {
     const cleanupOrder: string[] = [];
+    const onDeliveryAttempt = vi.fn();
     const response = new Response(
       new ReadableStream({
         cancel() {
@@ -255,9 +256,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       channel: "last",
       mode: "webhook",
       to: "https://example.invalid/cron",
+      onDeliveryAttempt,
     });
 
     expect(cleanupOrder).toEqual(["cancel", "release"]);
+    expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("releases Gateway admission when webhook response cancellation never settles", async () => {
@@ -303,6 +306,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   });
 
   it("preserves the primary topic on scheduler-authorized alerts", async () => {
+    const onDeliveryAttempt = vi.fn();
     const job = createWebhookJob({
       mode: "announce",
       channel: "telegram",
@@ -322,10 +326,12 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       accountId: "bot-a",
       threadId: 42,
       mode: "announce",
+      onDeliveryAttempt,
     });
 
     expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
       expect.objectContaining({
+        onDeliveryAttempt,
         target: expect.objectContaining({
           channel: "telegram",
           to: "-1001234567890",

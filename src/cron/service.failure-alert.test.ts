@@ -182,6 +182,68 @@ describe("CronService failure alerts", () => {
     );
   });
 
+  it.each([
+    {
+      name: "suppressed before reaching the recipient",
+      recipientReached: false,
+      rejects: false,
+      fallbackCalls: 1,
+    },
+    {
+      name: "suppressed after the recipient may have received it",
+      recipientReached: true,
+      rejects: false,
+      fallbackCalls: 0,
+    },
+    {
+      name: "failed after reaching the recipient",
+      recipientReached: true,
+      rejects: true,
+      fallbackCalls: 0,
+    },
+    {
+      name: "failed before reaching the recipient",
+      recipientReached: false,
+      rejects: true,
+      fallbackCalls: 1,
+    },
+    {
+      name: "rejected before a delivery attempt",
+      recipientReached: undefined,
+      rejects: true,
+      fallbackCalls: 1,
+    },
+  ])("falls back exactly once only when an alert $name", async (testCase) => {
+    await withFailureAlertCron(
+      { failureAlert: { enabled: true, after: 1 } },
+      async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
+        sendCronFailureAlert.mockImplementationOnce(
+          async (alert: { onDeliveryAttempt?: (reachedRecipient: boolean) => void }) => {
+            if (testCase.recipientReached !== undefined) {
+              alert.onDeliveryAttempt?.(testCase.recipientReached);
+            }
+            if (testCase.rejects) {
+              throw new Error("failure alert delivery failed");
+            }
+          },
+        );
+        const job = await addJob("recipient custody", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
+
+        const deliveryAttempt = alertCallArg(sendCronFailureAlert).onDeliveryAttempt;
+        expect(typeof deliveryAttempt).toBe("function");
+        if (typeof deliveryAttempt === "function") {
+          deliveryAttempt(false);
+        }
+        expect(enqueueSystemEvent).toHaveBeenCalledTimes(testCase.fallbackCalls);
+      },
+    );
+  });
+
   it("alerts after configured consecutive failures and honors cooldown", async () => {
     await withFailureAlertCron(
       {

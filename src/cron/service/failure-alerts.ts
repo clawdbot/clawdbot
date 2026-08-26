@@ -221,7 +221,13 @@ function transportFailureAlert(
     route: ResolvedFailureAlert;
   },
 ): void {
-  const fallback = () => enqueueFailureAlertFallback(state, params.job, params.payload.text ?? "");
+  let pendingFallback = true;
+  const fallback = (reachedRecipient = false) => {
+    if (pendingFallback && !reachedRecipient) {
+      enqueueFailureAlertFallback(state, params.job, params.payload.text ?? "");
+    }
+    pendingFallback = false;
+  };
   if (!state.deps.sendCronFailureAlert) {
     fallback();
     return;
@@ -237,6 +243,7 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
+      onDeliveryAttempt: fallback,
     })
     .catch((err: unknown) => {
       state.deps.log.warn(

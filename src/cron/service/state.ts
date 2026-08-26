@@ -267,6 +267,7 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
+    onDeliveryAttempt?: (reachedRecipient: boolean) => void;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
