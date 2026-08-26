@@ -289,20 +289,39 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(false);
   });
 
+  it("preserves thresholds supplied by external memory providers", () => {
+    expect(
+      resolveMemoryFlushThreshold({
+        contextWindowTokens: 100,
+        reserveTokensFloor: 10,
+        softThresholdTokens: 80,
+      }),
+    ).toBe(10);
+
+    const disabled = {
+      entry: { totalTokens: 8_000, totalTokensFresh: true, totalTokensVersion: 1 as const },
+      contextWindowTokens: 32_000,
+      reserveTokensFloor: 50_000,
+      softThresholdTokens: 4_000,
+    };
+    expect(shouldRunMemoryFlush(disabled)).toBe(false);
+    expect(shouldRunPreflightCompaction(disabled)).toBe(false);
+  });
+
   it.each([
-    [8_000, 2_000],
-    [16_000, 4_000],
-    [24_000, 4_000],
-    [32_000, 8_000],
-    [128_000, 104_000],
-    [200_000, 176_000],
+    [8_000, 4_000, 2_000, 2_000],
+    [16_000, 8_000, 4_000, 4_000],
+    [24_000, 16_000, 4_000, 4_000],
+    [32_000, 20_000, 4_000, 8_000],
+    [128_000, 20_000, 4_000, 104_000],
+    [200_000, 20_000, 4_000, 176_000],
   ])(
-    "preserves a usable %i-token model window with a %i-token maintenance threshold",
-    (contextWindowTokens, threshold) => {
+    "preserves a usable %i-token model window with provider-owned maintenance budgets",
+    (contextWindowTokens, reserveTokensFloor, softThresholdTokens, threshold) => {
       const params = {
         contextWindowTokens,
-        reserveTokensFloor: 20_000,
-        softThresholdTokens: 4_000,
+        reserveTokensFloor,
+        softThresholdTokens,
       };
 
       expect(resolveMemoryFlushThreshold(params)).toBe(threshold);
