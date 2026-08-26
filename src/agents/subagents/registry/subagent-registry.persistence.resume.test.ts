@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import "./subagent-registry.mocks.shared.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -320,11 +321,22 @@ describe("subagent registry persistence resume", () => {
         sendRecoveryNotice: vi.fn(),
       };
       let firstLifecycleOpen = true;
-      const resolveGatewayContext = vi.fn(() =>
-        firstLifecycleOpen ? ({ recoveryRuntime } as never) : undefined,
+      const gatewayContext = {
+        recoveryRuntime,
+        resolveGatewayContext: vi.fn(),
+      };
+      gatewayContext.resolveGatewayContext.mockImplementation(() =>
+        firstLifecycleOpen ? (gatewayContext as never) : undefined,
       );
+      const resolveGatewayContext = vi.fn(() => gatewayContext as never);
       mod.activateSubagentRegistry(resolveGatewayContext);
       mod.activateSubagentRegistry(resolveGatewayContext);
+      const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
+      expect(restoredRun).toBeDefined();
+      const restoredGatewayContextResolver = getGatewayContextResolver(restoredRun!);
+      expect(restoredGatewayContextResolver).toBeDefined();
+      expect(restoredGatewayContextResolver).not.toBe(resolveGatewayContext);
+      expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
       await vi.waitFor(() => {
         expect(wakeRequester).toHaveBeenCalledOnce();
@@ -336,7 +348,9 @@ describe("subagent registry persistence resume", () => {
       );
 
       firstLifecycleOpen = false;
-      expect(resolveGatewayContext()).toBeUndefined();
+      expect(resolveGatewayContext()).toBe(gatewayContext);
+      expect(gatewayContext.resolveGatewayContext()).toBeUndefined();
+      expect(restoredGatewayContextResolver?.()).toBeUndefined();
       const replacementRuntime = {
         dispatchAgent: vi.fn(),
         waitForAgent: vi.fn(async () => ({ status: "pending" })),
@@ -345,6 +359,7 @@ describe("subagent registry persistence resume", () => {
       const resolveReplacementContext = () => ({ recoveryRuntime: replacementRuntime }) as never;
       mod.activateSubagentRegistry(resolveReplacementContext);
       mod.activateSubagentRegistry(resolveReplacementContext);
+      expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
       expect(wakeRequester).toHaveBeenCalledOnce();
       expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
       expect(replacementRuntime.waitForAgent).not.toHaveBeenCalled();

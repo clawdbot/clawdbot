@@ -11,8 +11,7 @@ import { getInProcessGatewayRequestContext } from "./server-plugin-in-process-di
 export function hasInProcessGatewayContext(
   resolveGatewayContext?: GatewayContextResolver,
 ): boolean {
-  const scope = getPluginRuntimeGatewayRequestScope();
-  return Boolean(resolveGatewayContext?.() ?? scope?.resolveGatewayContext?.() ?? scope?.context);
+  return Boolean(getInProcessGatewayRequestContext(resolveGatewayContext));
 }
 
 /** Opens one lifecycle-fenced binary channel through the canonical node invocation owner. */

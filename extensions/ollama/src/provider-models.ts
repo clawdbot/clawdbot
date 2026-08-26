@@ -25,7 +25,9 @@ export type OllamaTagModel = {
   size?: number;
   digest?: string;
   remote_host?: string;
+  capabilities?: string[];
   details?: {
+    context_length?: number;
     family?: string;
     parameter_size?: string;
     quantization_level?: string;
@@ -43,11 +45,7 @@ type OllamaRunningModel = {
 
 type OllamaModelRow = OllamaTagModel | OllamaRunningModel;
 
-export type OllamaModelWithContext = OllamaTagModel & {
-  contextWindow?: number;
-  capabilities?: string[];
-  showInspectionFailed?: boolean;
-};
+export type OllamaModelWithContext = OllamaTagModel & OllamaModelShowInfo;
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
@@ -94,6 +92,16 @@ export type OllamaModelShowInfo = {
   /** Distinguishes a failed request from a successful response that omitted capabilities. */
   showInspectionFailed?: boolean;
 };
+
+export const mergeOllamaModelShowInfo = (
+  model: OllamaModelWithContext,
+  info: OllamaModelShowInfo,
+): OllamaModelWithContext => ({
+  ...model,
+  ...info,
+  contextWindow: info.contextWindow ?? model.contextWindow ?? model.details?.context_length,
+  capabilities: info.capabilities ?? model.capabilities,
+});
 
 const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
   showInspectionFailed: true,
@@ -297,7 +305,7 @@ export async function enrichOllamaModelsWithContext(
     const batchResults = await Promise.all(
       batch.map(async (model) => {
         const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return Object.assign({}, model, showInfo);
+        return mergeOllamaModelShowInfo(model, showInfo);
       }),
     );
     enriched.push(...batchResults);
@@ -371,8 +379,7 @@ export function buildOllamaModelDefinition(
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking"));
   const compat = {
-    supportsTools:
-      opts?.showInspectionFailed === true ? false : (capabilities?.includes("tools") ?? true),
+    supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
     supportsUsageInStreaming: true,
     supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
   };
@@ -479,12 +486,7 @@ export async function fetchOllamaModels(
   opts?: OllamaModelRequestOptions,
   deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
-  const result = await fetchOllamaModelRows({
-    baseUrl,
-    endpoint: "tags",
-    opts,
-    deps,
-  });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "tags", opts, deps });
   return {
     reachable: result.reachable,
     models: result.models.filter(
@@ -498,12 +500,7 @@ export async function fetchLoadedOllamaModelNames(
   opts?: OllamaModelRequestOptions,
   deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: string[] }> {
-  const result = await fetchOllamaModelRows({
-    baseUrl,
-    endpoint: "ps",
-    opts,
-    deps,
-  });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "ps", opts, deps });
   return {
     reachable: result.reachable,
     models: result.models

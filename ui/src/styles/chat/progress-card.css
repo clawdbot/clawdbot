@@ -417,13 +417,6 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-.session-progress-card--rail {
-  flex: 0 0 auto;
-  margin: 10px 14px 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 .session-progress-card--board {
   padding: var(--space-3);
 }

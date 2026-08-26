@@ -323,6 +323,7 @@ export async function runSubagentAnnounceFlow(params: {
         announceId,
         isChildSessionEffectsAllowed: childSessionEffectsAllowed,
         hasUsableSessionEntry,
+        resolveGatewayContext: params.resolveGatewayContext,
         deps: {
           callGateway: subagentAnnounceDeps.callGateway,
           dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,

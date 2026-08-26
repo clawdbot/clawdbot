@@ -1,5 +1,3 @@
-// Subagent registry lifecycle tests cover completion, cleanup, announce retry,
-// detached task status, and resource retirement around child-run endings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import {
@@ -8,6 +6,9 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+// Subagent registry lifecycle tests cover completion, cleanup, announce retry,
+// detached task status, and resource retirement around child-run endings.
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -557,6 +558,33 @@ describe("subagent registry lifecycle hardening", () => {
       );
     },
   );
+
+  it.each([
+    { label: "bound", hasOwner: true },
+    { label: "unbound", hasOwner: false },
+  ])("uses only the $label run owner for announce dispatch", async ({ hasOwner }) => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const liveContext = { marker: "live-context" };
+    const resolveGatewayContext = () => liveContext;
+    if (hasOwner) {
+      bindGatewayContextResolver(entry, resolveGatewayContext as never);
+    }
+    const runSubagentAnnounceFlow = vi.fn(
+      async (_announceParams: { resolveGatewayContext?: () => unknown }) =>
+        "delivered" as AnnounceFlowOutcome,
+    );
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+
+    const announceParams = runSubagentAnnounceFlow.mock.calls[0]?.[0];
+    expect(announceParams?.resolveGatewayContext).toBe(
+      hasOwner ? resolveGatewayContext : undefined,
+    );
+  });
 
   it("merges late visible reply evidence into an already-terminal completion", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
