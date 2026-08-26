@@ -2450,7 +2450,11 @@ describe("google transport stream", () => {
     expect(getFirstModelTurn(params.contents).parts[0]?.functionCall).toMatchObject({
       id: "provider_call_42",
     });
-    expect(params.contents[1]?.parts?.[0]?.functionResponse).toMatchObject({
+    const responseTurn = expectDefined(
+      params.contents[1],
+      "matching Google tool response turn",
+    ) as GoogleTestContentTurn;
+    expect(responseTurn.parts[0]?.functionResponse).toMatchObject({
       id: "provider_call_42",
     });
   });
