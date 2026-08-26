@@ -255,7 +255,9 @@ describe("agents set-identity command", () => {
   });
 
   it("reads identity from an explicit IDENTITY.md path", async () => {
-    const { workspace } = await createIdentityWorkspace();
+    const { root, workspace } = await createIdentityWorkspace();
+    const storedWorkspace = path.join(root, "stored");
+    await fs.mkdir(storedWorkspace, { recursive: true });
     const identityPath = await writeIdentityFile(workspace, [
       "- **Name:** C-3PO",
       "- **Creature:** Flustered Protocol Droid",
@@ -263,10 +265,9 @@ describe("agents set-identity command", () => {
       "- **Avatar:** avatars/c3po.png",
       "",
     ]);
-
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
+      config: { agents: { entries: { main: { workspace: storedWorkspace } } } },
     });
 
     const jsonRuntime = createCapturingTestRuntime();
@@ -275,15 +276,34 @@ describe("agents set-identity command", () => {
       jsonRuntime.runtime,
     );
 
-    expect(getWrittenMainIdentity()).toEqual({
-      name: "C-3PO",
-      theme: "Flustered Protocol Droid",
-      emoji: "🤖",
-      avatar: "avatars/c3po.png",
+    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+    expect(written).toMatchObject({
+      agents: {
+        entries: {
+          main: {
+            workspace: storedWorkspace,
+            identity: {
+              name: "C-3PO",
+              theme: "Flustered Protocol Droid",
+              emoji: "🤖",
+              avatar: "avatars/c3po.png",
+            },
+          },
+        },
+      },
     });
-    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toMatchObject({
+    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toEqual({
+      agentId: "main",
+      identity: {
+        name: "C-3PO",
+        theme: "Flustered Protocol Droid",
+        emoji: "🤖",
+        avatar: "avatars/c3po.png",
+      },
+      workspace,
+      storedWorkspace,
       identityFile: identityPath,
-      identitySource: path.dirname(identityPath),
+      identitySource: workspace,
     });
   });
 
