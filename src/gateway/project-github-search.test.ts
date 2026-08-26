@@ -159,6 +159,24 @@ describe("project GitHub search", () => {
     expect(result.projects.map((project) => project.fullName)).toEqual(["acme/missing-exact"]);
   });
 
+  it("degrades optional lanes to global results when their requests reject in transport", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/repos/") || url.includes("/user/repos")) {
+        throw new TypeError("fetch failed");
+      }
+      return json({ items: [repository("acme/still-works", "2026-08-10T00:00:00Z")] });
+    });
+
+    const result = await searchRemoteProjects("acme/still-works", {
+      env: { GH_TOKEN: "test-github-token" },
+      fetchImpl,
+      now: 600,
+    });
+
+    expect(result.projects.map((project) => project.fullName)).toEqual(["acme/still-works"]);
+  });
+
   it("caches normalized queries for 60 seconds and refetches after expiry", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

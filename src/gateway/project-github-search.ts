@@ -5,7 +5,6 @@ import type {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseProjectGitUrl } from "../projects/project-git-url.js";
 import {
-  ControlUiGitHubError,
   fetchGitHubApi,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
@@ -90,13 +89,12 @@ async function loadExactRepository(
   token: string | undefined,
 ): Promise<RemoteProject | null> {
   const url = new URL(`/repos/${query}`, GITHUB_API_ORIGIN);
+  // Optional enrichment lane: a miss, API error, or transport rejection must
+  // degrade to search-only results, never sink the whole picker query.
   try {
     return parseRepository(await fetchGitHubJson(url.href, fetchImpl, token));
-  } catch (error) {
-    if (error instanceof ControlUiGitHubError) {
-      return null;
-    }
-    throw error;
+  } catch {
+    return null;
   }
 }
 
@@ -109,14 +107,13 @@ async function loadAffiliatedRepositories(
   url.searchParams.set("sort", "updated");
   url.searchParams.set("direction", "desc");
   url.searchParams.set("per_page", String(AFFILIATED_RESULT_LIMIT));
+  // Optional enrichment lane: see loadExactRepository — failures degrade to
+  // global-search-only results instead of failing the picker query.
   try {
     const response = await fetchGitHubApi(url.href, fetchImpl, token);
     return repositoryArray(await readGitHubJsonResponse(response));
-  } catch (error) {
-    if (error instanceof ControlUiGitHubError) {
-      return [];
-    }
-    throw error;
+  } catch {
+    return [];
   }
 }
 
