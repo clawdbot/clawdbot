@@ -519,6 +519,7 @@ describe("telegramMessageActions", () => {
       reactionSchema?.properties.emoji as { description?: string } | undefined
     )?.description;
 
+    expect(discovery?.actions).toEqual(expect.arrayContaining(["react", "emoji-list"]));
     expect(reactionSchema?.actions).toEqual([]);
     expect(reactionSchema?.properties.emoji).toMatchObject({
       type: "string",
@@ -542,7 +543,9 @@ describe("telegramMessageActions", () => {
       : disabledDiscovery?.schema
         ? [disabledDiscovery.schema]
         : [];
-    expect(disabledContributions.find((entry) => entry.actions?.includes("react"))).toBeUndefined();
+    expect(disabledDiscovery?.actions).not.toContain("react");
+    expect(disabledDiscovery?.actions).not.toContain("emoji-list");
+    expect(disabledContributions.find((entry) => "emoji" in entry.properties)).toBeUndefined();
   });
 
   it("matches runtime account-key normalization during SecretRef-tolerant discovery", () => {
