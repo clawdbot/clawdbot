@@ -1,4 +1,3 @@
-import JSON5 from "json5";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
@@ -8,6 +7,81 @@ export type ParsedConcreteConfigPath = {
   quotedNumericSegments: ReadonlySet<number>;
 };
 
+function parseQuotedBracketPathSegment(value: string): unknown {
+  const quote = value.startsWith('"') ? '"' : "'";
+  if (quote === '"') {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      // Quoted config paths also accept the JSON5 string escapes used by shipped CLI paths.
+    }
+  }
+  if (!value.endsWith(quote)) {
+    throw new SyntaxError("Unterminated quoted path segment");
+  }
+
+  let normalized = '"';
+  for (let index = 1; index < value.length - 1; index += 1) {
+    const character = value[index];
+    if (character === quote) {
+      throw new SyntaxError("Unexpected quote in path segment");
+    }
+    if (character === '"') {
+      normalized += '\\"';
+      continue;
+    }
+    if (character === "\\") {
+      const escaped = value[index + 1];
+      if (escaped === undefined || index + 1 >= value.length - 1) {
+        throw new SyntaxError("Unterminated escape in path segment");
+      }
+      index += 1;
+      if (escaped === "\n" || escaped === "\u2028" || escaped === "\u2029") {
+        continue;
+      }
+      if (escaped === "\r") {
+        if (value[index + 1] === "\n") {
+          index += 1;
+        }
+        continue;
+      }
+      if (escaped === "x") {
+        const hex = value.slice(index + 1, index + 3);
+        if (!/^[\da-f]{2}$/i.test(hex)) {
+          throw new SyntaxError("Invalid hexadecimal escape in path segment");
+        }
+        normalized += `\\u00${hex}`;
+        index += 2;
+        continue;
+      }
+      if (escaped === "0") {
+        if (/\d/.test(value[index + 1] ?? "")) {
+          throw new SyntaxError("Invalid numeric escape in path segment");
+        }
+        normalized += "\\u0000";
+        continue;
+      }
+      if (escaped === "v") {
+        normalized += "\\u000b";
+        continue;
+      }
+      if (/[1-9]/.test(escaped)) {
+        throw new SyntaxError("Invalid numeric escape in path segment");
+      }
+      if (escaped === "'") {
+        normalized += "'";
+      } else if ('"\\/bfnrtu'.includes(escaped)) {
+        normalized += `\\${escaped}`;
+      } else {
+        normalized += escaped;
+      }
+      continue;
+    }
+    normalized += character;
+  }
+  return JSON.parse(`${normalized}"`) as unknown;
+}
+
 function parseBracketPathSegment(raw: string, fullPath: string): ConcreteConfigPathSegment {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -15,7 +89,7 @@ function parseBracketPathSegment(raw: string, fullPath: string): ConcreteConfigP
   }
   if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
     try {
-      const parsed = JSON5.parse(trimmed) as unknown;
+      const parsed = parseQuotedBracketPathSegment(trimmed);
       if (typeof parsed === "string" && parsed.trim()) {
         return parsed;
       }
