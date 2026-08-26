@@ -2,6 +2,9 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import type { AgentTurnParams } from "../auto-reply/reply/agent-runner-execution.types.js";
+import { createAgentTurnPresentation } from "../auto-reply/reply/agent-runner-presentation.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import {
@@ -43,7 +46,7 @@ function createContext(
     onAgentEvent?: (event: unknown) => void | Promise<void>;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBeforeTerminalDelivery?: () => void | Promise<void>;
-    onBlockReply?: ((payload: unknown) => void) | undefined;
+    onBlockReply?: ((payload: unknown) => void | Promise<void>) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
     resolveTerminalStopReason?: () => string | undefined;
   },
@@ -950,6 +953,52 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it.each([
+    { name: "ordinary image", mediaUrl: "/tmp/private.png", audioAsVoice: false, deliveries: 0 },
+    { name: "voice exception", mediaUrl: "/tmp/voice.opus", audioAsVoice: true, deliveries: 1 },
+  ])("applies silent-turn policy when lifecycle flushes orphaned $name", async (testCase) => {
+    const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+    const turn = {
+      followupRun: { run: { silentExpected: true } },
+      isHeartbeat: false,
+      opts: { onBlockReply: delivered },
+      sessionCtx: {},
+      applyReplyToMode: (payload: ReplyPayload) => payload,
+      typingSignals: { signalTextDelta: async () => {} },
+      blockStreamingEnabled: true,
+      blockReplyPipeline: null,
+    } as unknown as AgentTurnParams;
+    const presentation = createAgentTurnPresentation({
+      turn,
+      replyMediaContext: { normalizePayload: async (payload) => payload },
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
+      heartbeatState: { didLogStrip: false },
+    });
+    const ctx = createContext(undefined, {
+      onBlockReply: (payload) => presentation.blockReplyHandler?.(payload as ReplyPayload),
+    });
+    ctx.params.silentExpected = true;
+    ctx.state.pendingToolMediaUrls = [testCase.mediaUrl];
+    ctx.state.pendingToolAudioAsVoice = testCase.audioAsVoice;
+    const lifecycleDelivery = createReplyDelivery({
+      params: ctx.params,
+      state: ctx.state,
+      log: ctx.log,
+    });
+    vi.mocked(ctx.emitBlockReply).mockImplementation(lifecycleDelivery.emitBlockReply);
+
+    await handleAgentEnd(ctx);
+    await Promise.all(lifecycleDelivery.pendingBlockReplyTasks);
+
+    expect(delivered).toHaveBeenCalledTimes(testCase.deliveries);
+    if (testCase.deliveries) {
+      expect(delivered).toHaveBeenCalledWith(
+        expect.objectContaining({ mediaUrls: [testCase.mediaUrl], audioAsVoice: true }),
+      );
+    }
   });
 
   it("preserves orphaned tool media when no block reply callback is configured", async () => {

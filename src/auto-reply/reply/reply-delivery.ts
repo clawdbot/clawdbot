@@ -93,6 +93,7 @@ export function createBlockReplyDeliveryHandler(params: {
   typingSignals: TypingSignaler;
   reasoningPayloadsEnabled?: boolean;
   commentaryPayloadsEnabled?: boolean;
+  silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
@@ -108,7 +109,10 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !hasOutboundReplyContent({ ...payload, text: undefined })) {
+    if (
+      skip &&
+      (params.silentExpected || !hasOutboundReplyContent({ ...payload, text: undefined }))
+    ) {
       return;
     }
 

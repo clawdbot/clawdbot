@@ -15,6 +15,7 @@ import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { shouldKeepPayloadDuringSilentTurn } from "./reply-payloads-base.js";
 
 type AgentTurnPresentation = {
   classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
@@ -38,10 +39,11 @@ export function createAgentTurnPresentation(params: {
   directlySentBlockPayloads: Array<ReplyPayload | undefined>;
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
+  const silentExpected = params.turn.followupRun.run.silentExpected;
   const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload);
-    if (params.turn.followupRun.run.silentExpected) {
+    if (silentExpected && !shouldKeepPayloadDuringSilentTurn(payload)) {
       return { skip: true };
     }
     if (!params.turn.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -124,6 +126,7 @@ export function createAgentTurnPresentation(params: {
         typingSignals: params.turn.typingSignals,
         reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
         commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
+        silentExpected,
         blockStreamingEnabled: params.turn.blockStreamingEnabled,
         blockReplyPipeline,
         directlySentBlockKeys: params.directlySentBlockKeys,

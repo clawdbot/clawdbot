@@ -29,6 +29,7 @@ import {
   applyReplyThreading,
   isRenderablePayload,
   resolveReplyThreadingPayloads,
+  shouldKeepPayloadDuringSilentTurn,
 } from "./reply-payloads-base.js";
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
@@ -106,13 +107,6 @@ async function normalizeSentMediaUrlsForDedupe(params: {
   }
 
   return normalizedUrls;
-}
-
-function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
-  if (payload.isError) {
-    return true;
-  }
-  return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 function sanitizeFinalReplyText(

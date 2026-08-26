@@ -95,6 +95,15 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   });
 }
 
+/** Only failures and playable voice messages remain visible during silent turns. */
+export function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    (payload.audioAsVoice === true &&
+      hasReplyPayloadContent({ mediaUrl: payload.mediaUrl, mediaUrls: payload.mediaUrls }))
+  );
+}
+
 /** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
