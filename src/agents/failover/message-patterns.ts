@@ -250,7 +250,10 @@ const ERROR_PATTERNS = {
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
     /\bcurrent\s+subscription\s+plan\b.*\b(?:does\s+not|doesn't|not)\b.*\binclude\s+access\b/i,
-    /\bmodel\b.*\bnot\s+available\b.*\bcurrent\s+plan\b/i,
+    // Equivalent plan-entitlement phrasing: "not available" and bare "is
+    // unavailable" (#130389 ClawSweeper re-review) both describe the same
+    // condition when scoped to "current plan" wording.
+    /\bmodel\b.*\b(?:not\s+available|is\s+unavailable)\b.*\bcurrent\s+plan\b/i,
   ],
   authPermanent: HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS,
   auth: [

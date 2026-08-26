@@ -196,6 +196,18 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
   });
 
+  it("classifies bare plan-entitlement prose (no Z.ai code marker) as billing, not model_not_found", () => {
+    // ClawSweeper (#130389 re-review): the billing plan-entitlement pattern
+    // only recognized "not available ... current plan"; "is unavailable ...
+    // current plan" is the same equivalent plan-entitlement wording but,
+    // without a "code":1311 (or similar) marker, previously fell through
+    // billing entirely and was picked up by the widened generic model regex.
+    const message = "The model is unavailable in your current plan";
+    const classification = classifyFailoverSignal({ message });
+
+    expect(classification).toEqual({ kind: "reason", reason: "billing" });
+  });
+
   it("keeps billing/plan-entitlement precedence over the literal bare model-unavailable phrase", () => {
     // This phrase contains the exact literal substring the bare-unavailable
     // fix matches ("model" ... "is unavailable"), so it is the phrase that

@@ -43,6 +43,45 @@ describe("GENERIC_MODEL_NOT_FOUND_RE (#19 bare-unavailable RCA)", () => {
   });
 });
 
+describe("classify.ts full pipeline: A-F required cases (#130389 ClawSweeper re-review)", () => {
+  it("A: bare plan-entitlement prose (no Z.ai code marker) classifies as billing", () => {
+    expect(classifyFailoverReason("The model is unavailable in your current plan")).toBe("billing");
+  });
+
+  it("B: original 'not available ... current plan' wording classifies as billing", () => {
+    expect(
+      classifyFailoverReason("The model you requested is not available in your current plan"),
+    ).toBe("billing");
+  });
+
+  it("C: Z.ai code:1311 JSON with 'is unavailable' wording classifies as billing", () => {
+    expect(
+      classifyFailoverReason(
+        '{"code":1311,"message":"The model is unavailable in your current plan"}',
+      ),
+    ).toBe("billing");
+  });
+
+  it("D: bare 'Model is unavailable.' classifies as model_not_found", () => {
+    expect(classifyFailoverReason("Model is unavailable.")).toBe("model_not_found");
+  });
+
+  it("E: exact production body classifies as model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "400 Error from provider (Console): Upstream request failed: Model is unavailable.",
+      ),
+    ).toBe("model_not_found");
+  });
+
+  it("F: unrelated service/provider-unavailable wording is not model_not_found", () => {
+    expect(classifyFailoverReason("503 service unavailable")).not.toBe("model_not_found");
+    expect(classifyFailoverReason("The model service is temporarily unavailable")).not.toBe(
+      "model_not_found",
+    );
+  });
+});
+
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
