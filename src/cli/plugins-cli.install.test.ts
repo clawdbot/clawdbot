@@ -1610,23 +1610,29 @@ describe("plugins cli install", () => {
     expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
   });
 
-  it("falls back to the operator selector when no beta ClawHub release exists", async () => {
+  it("does not install a stable ClawHub release when no beta release exists", async () => {
     primeSuccessfulClawHubPluginInstall();
     parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/brave-plugin" });
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
       update: { channel: "beta" },
     } as OpenClawConfig);
-    installPluginFromClawHubMock.mockResolvedValueOnce({
+    installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       error: "Version not found on ClawHub: @openclaw/brave-plugin@beta.",
       code: "version_not_found",
     });
 
-    await runPluginsCommand(["plugins", "install", "clawhub:@openclaw/brave-plugin"]);
+    await expect(
+      runPluginsCommand(["plugins", "install", "clawhub:@openclaw/brave-plugin"]),
+    ).rejects.toThrow("__exit__:1");
 
     expect(clawHubInstallCall(0).spec).toBe("clawhub:@openclaw/brave-plugin@beta");
-    expect(clawHubInstallCall(1).spec).toBe("clawhub:@openclaw/brave-plugin");
+    expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(1);
+    expect(configWriteMock).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "No clawhub:@openclaw/brave-plugin@beta release is published for this gateway",
+    );
   });
 
   it("leaves a non-official ClawHub install on the operator selector", async () => {
@@ -1993,27 +1999,27 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("falls back to the operator selector when no beta artifact is published", async () => {
+  it("does not install the stable release when no beta artifact is published", async () => {
     primeSuccessfulPluginPersistence("brave");
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
       update: { channel: "beta" },
     } as OpenClawConfig);
     findBundledPluginSourceMock.mockReturnValue(undefined);
-    installPluginFromNpmSpecMock
-      .mockResolvedValueOnce({
-        ok: false,
-        error: "npm error code ETARGET No matching version found for @openclaw/brave-plugin@beta",
-        code: "npm_package_not_found",
-      })
-      .mockResolvedValue(createNpmPluginInstallResult("brave"));
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "npm error code ETARGET No matching version found for @openclaw/brave-plugin@beta",
+      code: "npm_package_not_found",
+    });
 
-    await runPluginsCommand(["plugins", "install", "brave"]);
+    await expect(runPluginsCommand(["plugins", "install", "brave"])).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@beta");
-    expect(npmInstallCall(1).spec).toBe("@openclaw/brave-plugin");
-    expect(persistedInstallRecord("brave").spec).toBe("@openclaw/brave-plugin");
-    expect(runtimeLogsContain("No @openclaw/brave-plugin@beta release is published")).toBe(true);
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(configWriteMock).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "No @openclaw/brave-plugin@beta release is published for this gateway",
+    );
   });
 
   it("passes third-party external catalog integrity with catalog install trust", async () => {

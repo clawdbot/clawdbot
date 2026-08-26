@@ -109,18 +109,6 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
       fallbackLabel: "@openclaw/codex@beta",
     });
   });
-
-  it("targets the release cohort when the core carries a correction suffix", () => {
-    expect(
-      resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/codex",
-        updateChannel: "stable",
-        officialPackageName: "@openclaw/codex",
-        coreVersion: "2026.7.1-2",
-        versionBoundToCore: true,
-      }).installSpec,
-    ).toBe("@openclaw/codex@2026.7.1");
-  });
 });
 
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {

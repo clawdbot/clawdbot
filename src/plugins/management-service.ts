@@ -36,7 +36,6 @@ import {
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
-  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
@@ -1234,11 +1233,16 @@ async function persistManagedSourceInstall(params: {
  * already resolve. Resolving here keeps every managed install path — CLI,
  * chat command, and any future caller — on one answer instead of letting the
  * registry default land a plugin the gateway then reports as drifted.
+ *
+ * Only the beta stream resolves here. The version-bound stable tracks key off a
+ * per-plugin `versionBoundToOpenClaw` descriptor that a managed install request
+ * does not carry, and answering for them from this boundary would pin plugins
+ * the policy never opted in.
  */
-function resolveOfficialManagedInstallSpecs(params: {
+function resolveOfficialManagedInstallSpec(params: {
   request: Extract<ManagedPluginSourceInstallRequest, { source: "official" | "npm" | "clawhub" }>;
   config: OpenClawConfig;
-}): { spec: string; fallbackSpec?: string } | null {
+}): string | null {
   const { request } = params;
   if (request.source === "npm" && request.trustedSourceLinkedOfficialInstall !== true) {
     return null;
@@ -1258,24 +1262,14 @@ function resolveOfficialManagedInstallSpecs(params: {
     configChannel: normalizeUpdateChannel(params.config.update?.channel),
     currentVersion: VERSION,
   });
+  if (updateChannel !== "beta") {
+    return null;
+  }
   const specs =
     request.source === "clawhub"
       ? resolveClawHubInstallSpecsForUpdateChannel({ spec: request.spec, updateChannel })
-      : resolveNpmInstallSpecsForUpdateChannel({
-          spec: request.spec,
-          updateChannel,
-          officialPackageName: packageName,
-          coreVersion: VERSION,
-        });
-  if (specs.installSpec === request.spec) {
-    return null;
-  }
-  return {
-    spec: specs.installSpec,
-    ...(specs.fallbackSpec && specs.fallbackSpec !== specs.installSpec
-      ? { fallbackSpec: specs.fallbackSpec }
-      : {}),
-  };
+      : resolveNpmInstallSpecsForUpdateChannel({ spec: request.spec, updateChannel });
+  return specs.installSpec === request.spec ? null : specs.installSpec;
 }
 
 type ManagedPluginSourceInstallParams = {
@@ -1290,11 +1284,12 @@ type ManagedPluginSourceInstallParams = {
 };
 
 /**
- * Installs official plugins from the release stream the gateway runs, then
- * falls back to the operator's own selector when that release has no published
- * artifact. Resolving here keeps every managed install path — CLI, chat
- * command, and any future caller — on one answer instead of letting the
- * registry default land a plugin the gateway then reports as drifted.
+ * Installs official plugins from the release stream the gateway runs. When that
+ * stream has no published artifact the install reports it instead of widening
+ * back to the registry default: widening would resolve `latest` and land exactly
+ * the cross-release plugin this boundary exists to prevent, and a fresh install
+ * has nothing to preserve, so failing with the reason costs the operator only a
+ * retry with an explicit version.
  */
 export async function installManagedPluginSource(
   params: ManagedPluginSourceInstallParams,
@@ -1303,29 +1298,31 @@ export async function installManagedPluginSource(
   if (request.source !== "official" && request.source !== "npm" && request.source !== "clawhub") {
     return await installResolvedManagedPluginSource(params);
   }
-  const officialSpecs = resolveOfficialManagedInstallSpecs({
+  const installSpec = resolveOfficialManagedInstallSpec({
     request,
     config: params.snapshot.config,
   });
-  if (!officialSpecs) {
+  if (!installSpec) {
     return await installResolvedManagedPluginSource(params);
   }
-  const recordSpec = request.recordSpec ?? request.spec;
-  return await installWithChannelFallback({
-    installSpec: officialSpecs.spec,
-    fallbackSpec: officialSpecs.fallbackSpec,
-    install: async (spec) =>
-      await installResolvedManagedPluginSource({
-        ...params,
-        request: { ...request, spec, recordSpec },
-      }),
-    isRetryable: (result) =>
-      !result.ok &&
-      (request.source === "clawhub"
-        ? isUnavailableClawHubTarget(result)
-        : isUnavailableNpmTarget(result)),
-    onFallback: (message) => params.logger?.warn?.(message),
+  const result = await installResolvedManagedPluginSource({
+    ...params,
+    request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
   });
+  if (result.ok) {
+    return result;
+  }
+  const isUnavailableTarget =
+    request.source === "clawhub"
+      ? isUnavailableClawHubTarget(result)
+      : isUnavailableNpmTarget(result);
+  if (!isUnavailableTarget) {
+    return result;
+  }
+  return {
+    ...result,
+    error: `No ${installSpec} release is published for this gateway. Installing ${request.spec} would resolve a build from another release; pass an explicit version to install one anyway.`,
+  };
 }
 
 /** Execute one resolved plugin source through the shared install-and-persist pipeline. */
