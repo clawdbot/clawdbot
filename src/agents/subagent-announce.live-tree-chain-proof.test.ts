@@ -550,7 +550,7 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     expect.soft(delegateRun.controllerSessionKey).toBe(originChildSessionKey);
     expect.soft(listTaskFlowsForOwnerKey(rootSessionKey)).toHaveLength(0);
     reloadTaskFlowRegistryFromStore();
-    expect(listTaskFlowsForOwnerKey(originChildSessionKey)).toEqual([
+    expect.soft(listTaskFlowsForOwnerKey(originChildSessionKey)).toEqual([
       expect.objectContaining({
         flowId: flow.flowId,
         ownerKey: originChildSessionKey,
