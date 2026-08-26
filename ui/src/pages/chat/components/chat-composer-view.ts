@@ -325,7 +325,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       ${disabledBanner} ${progressCard} ${queue} ${goalCard}
       ${showComposerInput
         ? html`<div
-            class="agent-chat__input agent-chat__input--chat ${props.offline
+            class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
               : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
             @wa-show=${handleChatComposerDropdownShow}

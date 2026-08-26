@@ -677,7 +677,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           ? "new-session-page--incognito"
           : ""}"
       >
-        ${renderNewSessionIncognitoControl(this.submission)}
+        ${renderNewSessionIncognitoControl(
+          this.submission,
+          this.submission.capabilities.canStartAsDraft(this.context),
+        )}
         <div
           class="new-session-page__scroll"
           ?inert=${this.submission.submitting}
